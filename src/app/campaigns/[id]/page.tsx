@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -13,12 +14,16 @@ import {
   Calendar,
   Download,
   Users,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { initialCampaigns } from "@/lib/campaignData";
-import { getContactsByCampaignId, ContactStatus } from "@/lib/contactData";
+import { getContactsByCampaignId, ContactStatus, Contact } from "@/lib/contactData";
 import StatusBadge from "@/components/StatusBadge";
 
-// ── Contact status badge ────────────────────────────────────────────────────
+const PAGE_SIZE = 8;
+
+// ── Contact status badge ─────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<ContactStatus, string> = {
   Unreached: "bg-amber-100 text-amber-700 border border-amber-200",
@@ -32,15 +37,13 @@ const STATUS_STYLES: Record<ContactStatus, string> = {
 
 function ContactStatusBadge({ status }: { status: ContactStatus }) {
   return (
-    <span
-      className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${STATUS_STYLES[status]}`}
-    >
+    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${STATUS_STYLES[status]}`}>
       {status}
     </span>
   );
 }
 
-// ── Progress bar segment colours ────────────────────────────────────────────
+// ── Progress bar colours ──────────────────────────────────────────────────────
 
 const STATUS_BAR_COLOR: Record<ContactStatus, string> = {
   Interested: "bg-green-500",
@@ -62,7 +65,6 @@ const STATUS_DOT_COLOR: Record<ContactStatus, string> = {
   Unreached: "bg-orange-400",
 };
 
-// Ordered for display consistency
 const STATUS_ORDER: ContactStatus[] = [
   "Interested",
   "Sent SMS",
@@ -73,11 +75,38 @@ const STATUS_ORDER: ContactStatus[] = [
   "Unreached",
 ];
 
-// ── Page ────────────────────────────────────────────────────────────────────
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+function exportToCSV(contacts: Contact[], filename: string) {
+  const headers = ["Name", "Phone", "Attempts", "Last Attempt", "Call Duration", "Status"];
+  const rows = contacts.map((c) => [
+    c.name,
+    c.phone,
+    String(c.attempts),
+    c.lastAttempt,
+    c.callDuration,
+    c.status,
+  ]);
+  const csv = [headers, ...rows]
+    .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CampaignDetailPage() {
   const params = useParams();
   const id = Number(params.id);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const campaign = initialCampaigns.find((c) => c.id === id);
 
@@ -85,10 +114,7 @@ export default function CampaignDetailPage() {
     return (
       <div className="p-6 flex flex-col gap-4">
         <p className="text-gray-500 text-sm">Campaign not found.</p>
-        <Link
-          href="/campaigns"
-          className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
-        >
+        <Link href="/campaigns" className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:underline">
           <ArrowLeft size={14} />
           Back to Campaigns
         </Link>
@@ -96,21 +122,38 @@ export default function CampaignDetailPage() {
     );
   }
 
-  const contactList = getContactsByCampaignId(id);
+  const allContacts = getContactsByCampaignId(id);
 
-  // Count by status
+  // Status counts for progress bar (all contacts)
   const statusCounts: Partial<Record<ContactStatus, number>> = {};
-  for (const c of contactList) {
+  for (const c of allContacts) {
     statusCounts[c.status] = (statusCounts[c.status] ?? 0) + 1;
   }
-  const total = contactList.length || 1;
-
-  // Active legend items
+  const totalContacts = allContacts.length || 1;
   const legendItems = STATUS_ORDER.filter((s) => (statusCounts[s] ?? 0) > 0);
 
+  // Filtered by search
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return allContacts;
+    return allContacts.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)
+    );
+  }, [allContacts, searchQuery]);
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  function handleSearch(q: string) {
+    setSearchQuery(q);
+    setCurrentPage(1);
+  }
+
   return (
-    <div className="p-4 sm:p-6 w-full max-w-7xl mx-auto">
-      {/* ── Back link ── */}
+    <div className="p-4 sm:p-6 w-full">
+      {/* Back link */}
       <Link
         href="/campaigns"
         className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-600 transition-colors mb-5"
@@ -119,9 +162,8 @@ export default function CampaignDetailPage() {
         Back to Campaigns
       </Link>
 
-      {/* ── Header row ── */}
+      {/* Header */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
-        {/* Icons */}
         <div className="flex items-center gap-1 shrink-0">
           <span className="w-7 h-7 rounded bg-blue-50 flex items-center justify-center">
             <ArrowUpRight size={14} className="text-blue-500" />
@@ -130,16 +172,10 @@ export default function CampaignDetailPage() {
             <Phone size={14} className="text-gray-500" />
           </span>
         </div>
-
-        {/* Campaign name */}
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight flex-1 min-w-0">
           {campaign.name}
         </h1>
-
-        {/* Status */}
         <StatusBadge status={campaign.status} />
-
-        {/* Action buttons */}
         <div className="flex items-center gap-2 shrink-0 ml-auto">
           <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
             <Pencil size={13} />
@@ -156,72 +192,64 @@ export default function CampaignDetailPage() {
         </div>
       </div>
 
-      {/* ── Stats section ── */}
+      {/* Stats */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
-        {/* Left: contact progress */}
+        {/* Contact progress */}
         <div className="flex-1 bg-white rounded-xl border border-gray-200 p-4">
           <div className="flex items-baseline justify-between mb-3">
             <span className="text-sm text-gray-500 font-medium">Total contacts:</span>
-            <span className="text-3xl font-bold text-gray-900">{contactList.length}</span>
+            <span className="text-3xl font-bold text-gray-900">{allContacts.length}</span>
           </div>
-
-          {/* Progress bar */}
           <div className="flex h-3 rounded-full overflow-hidden mb-3 gap-px bg-gray-100">
             {STATUS_ORDER.map((s) => {
               const count = statusCounts[s] ?? 0;
               if (count === 0) return null;
-              const pct = (count / total) * 100;
               return (
                 <div
                   key={s}
                   className={`${STATUS_BAR_COLOR[s]} transition-all`}
-                  style={{ width: `${pct}%` }}
+                  style={{ width: `${(count / totalContacts) * 100}%` }}
                   title={`${s}: ${count}`}
                 />
               );
             })}
           </div>
-
-          {/* Legend */}
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {legendItems.map((s) => (
               <div key={s} className="flex items-center gap-1.5 text-xs text-gray-600">
                 <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${STATUS_DOT_COLOR[s]}`} />
-                <span>{s}</span>
+                <span>{s}:</span>
                 <span className="font-semibold text-gray-800">{statusCounts[s]}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Right: stats card */}
+        {/* Stats card */}
         <div className="w-full sm:w-56 bg-white rounded-xl border border-gray-200 p-4 shrink-0">
           <p className="text-sm font-semibold text-gray-700 mb-3">
-            Total Calls:{" "}
-            <span className="text-gray-900">{campaign.totalCalls.toLocaleString()}</span>
+            Total Calls: <span className="text-gray-900">{campaign.totalCalls.toLocaleString()}</span>
           </p>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <p className="text-xs text-gray-500 mb-1">Connect Rate</p>
               <p className="text-lg font-bold text-gray-900">{campaign.connectRate}</p>
               <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                <Users size={11} />
-                <span>{campaign.connectCount}</span>
+                <Users size={11} /><span>{campaign.connectCount}</span>
               </div>
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1">Success Rate</p>
               <p className="text-lg font-bold text-gray-900">{campaign.successRate}</p>
               <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                <Users size={11} />
-                <span>{campaign.successCount}</span>
+                <Users size={11} /><span>{campaign.successCount}</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Contacts section ── */}
+      {/* Contacts table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {/* Toolbar */}
         <div className="flex items-center gap-3 p-4 border-b border-gray-100">
@@ -229,15 +257,17 @@ export default function CampaignDetailPage() {
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
-              placeholder="Search contacts..."
+              placeholder="Search Contacts"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
               className="w-full pl-9 pr-10 py-2 text-sm border border-gray-200 rounded-lg placeholder-gray-400 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
             />
-            <Calendar
-              size={14}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 cursor-pointer"
-            />
+            <Calendar size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 cursor-pointer" />
           </div>
-          <button className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors whitespace-nowrap shrink-0">
+          <button
+            onClick={() => exportToCSV(filtered, `${campaign.name}-contacts.csv`)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors whitespace-nowrap shrink-0"
+          >
             <Download size={13} />
             Export contacts
           </button>
@@ -248,39 +278,27 @@ export default function CampaignDetailPage() {
           <table className="w-full min-w-[700px] text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Name &amp; Phone Number
-                </th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Attempts
-                </th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Last Attempt
-                </th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Call Duration
-                </th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Status
-                </th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Events
-                </th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name &amp; Phone Number</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Attempts</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Last Attempt</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Call Duration</th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Events</th>
               </tr>
             </thead>
             <tbody>
-              {contactList.length === 0 ? (
+              {paginated.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-400">
-                    No contacts found for this campaign.
+                    {searchQuery ? "No contacts match your search." : "No contacts found for this campaign."}
                   </td>
                 </tr>
               ) : (
-                contactList.map((contact, index) => (
+                paginated.map((contact, index) => (
                   <tr
                     key={contact.id}
                     className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                      index === contactList.length - 1 ? "border-b-0" : ""
+                      index === paginated.length - 1 ? "border-b-0" : ""
                     }`}
                   >
                     <td className="px-4 py-3 min-w-[200px]">
@@ -288,15 +306,9 @@ export default function CampaignDetailPage() {
                       <p className="text-xs text-gray-400 mt-0.5">{contact.phone}</p>
                     </td>
                     <td className="px-4 py-3 text-right text-gray-700">{contact.attempts}</td>
-                    <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">
-                      {contact.lastAttempt}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">
-                      {contact.callDuration}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <ContactStatusBadge status={contact.status} />
-                    </td>
+                    <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{contact.lastAttempt}</td>
+                    <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{contact.callDuration}</td>
+                    <td className="px-4 py-3 text-center"><ContactStatusBadge status={contact.status} /></td>
                     <td className="px-4 py-3 text-center">
                       <button className="text-xs text-blue-600 hover:underline">View</button>
                     </td>
@@ -306,6 +318,42 @@ export default function CampaignDetailPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+            <p className="text-xs text-gray-500">
+              Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length} contacts
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft size={15} />
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setCurrentPage(p)}
+                  className={`w-7 h-7 text-xs rounded-md font-medium transition-colors ${
+                    p === safePage ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

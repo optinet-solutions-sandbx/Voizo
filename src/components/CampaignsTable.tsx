@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy, Archive } from "lucide-react";
+import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy, Trash2 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { Campaign } from "@/lib/campaignData";
 
@@ -143,7 +143,7 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
                             }}
                             className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
                           >
-                            <Archive size={14} />
+                            <Trash2 size={14} />
                             Archive
                           </button>
                         </div>
