@@ -135,6 +135,20 @@ export default function CampaignsPage() {
     setDeleteGroupConfirm(null);
   }
 
+  function handleDuplicateCampaign(id: number) {
+    const src = campaigns.find((c) => c.id === id);
+    if (!src) return;
+    const newId = Math.max(...campaigns.map((c) => c.id)) + 1;
+    setCampaigns((prev) => [
+      ...prev,
+      { ...src, id: newId, name: src.name + " (Copy)" },
+    ]);
+  }
+
+  function handleDeleteCampaign(id: number) {
+    setCampaigns((prev) => prev.filter((c) => c.id !== id));
+  }
+
   const tabs = [{ label: "All", group: "All" }, ...allGroups.map((g) => ({ label: g, group: g }))];
 
   return (
@@ -254,7 +268,11 @@ export default function CampaignsPage() {
 
       {/* ── Table ── */}
       <div className="rounded-xl border border-gray-200 overflow-hidden">
-        <CampaignsTable campaigns={paginated} />
+        <CampaignsTable
+          campaigns={paginated}
+          onDuplicate={handleDuplicateCampaign}
+          onDelete={handleDeleteCampaign}
+        />
       </div>
 
       {/* ── Pagination ── */}
