@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { Search, Plus } from "lucide-react";
+import { Search, Plus, X } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis
 } from "recharts";
@@ -127,6 +127,12 @@ export default function CampaignsPage() {
     setShowAddGroupModal(false);
   }
 
+  function handleDeleteGroup(name: string) {
+    setCustomGroups((prev) => prev.filter((g) => g !== name));
+    if (activeTab === name) setActiveTab("All");
+    setCurrentPage(1);
+  }
+
   const tabs = [{ label: "All", group: "All" }, ...allGroups.map((g) => ({ label: g, group: g }))];
 
   return (
@@ -146,28 +152,44 @@ export default function CampaignsPage() {
       </div>
 
       {/* ── Tab bar ── */}
-      <div className="mb-5 border-b border-gray-200 overflow-x-auto">
+      <div className="mb-5 border-b border-gray-200 overflow-x-auto hide-scrollbar">
         <div className="flex items-center min-w-max">
-          {tabs.map((tab) => (
-            <button
-              key={tab.group}
-              onClick={() => handleTabChange(tab.group)}
-              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
-                activeTab === tab.group
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              {tab.label}
-              <span
-                className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${
-                  activeTab === tab.group ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500"
-                }`}
-              >
-                {tabCounts[tab.group] ?? 0}
-              </span>
-            </button>
-          ))}
+          {tabs.map((tab) => {
+            const isCustom = customGroups.includes(tab.group);
+            const isActive = activeTab === tab.group;
+            return (
+              <div key={tab.group} className="group relative flex items-center">
+                <button
+                  onClick={() => handleTabChange(tab.group)}
+                  className={`flex items-center gap-1.5 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+                    isCustom ? "pl-3 sm:pl-4 pr-1" : "px-3 sm:px-4"
+                  } ${
+                    isActive
+                      ? "border-blue-600 text-blue-600"
+                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                  }`}
+                >
+                  {tab.label}
+                  <span
+                    className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${
+                      isActive ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500"
+                    }`}
+                  >
+                    {tabCounts[tab.group] ?? 0}
+                  </span>
+                </button>
+                {isCustom && (
+                  <button
+                    onClick={() => handleDeleteGroup(tab.group)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 mr-2 p-0.5 rounded-full hover:bg-gray-200 text-gray-400 hover:text-gray-600 -mb-px"
+                    title={`Remove ${tab.label}`}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
           <button
             onClick={() => setShowAddGroupModal(true)}
             className="flex items-center gap-1 px-3 sm:px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors border-b-2 border-transparent -mb-px whitespace-nowrap"
