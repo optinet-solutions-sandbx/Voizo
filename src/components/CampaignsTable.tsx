@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy, Trash2 } from "lucide-react";
+import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { Campaign } from "@/lib/campaignData";
 
@@ -12,10 +12,9 @@ interface CampaignsTableProps {
   onDelete?: (id: number) => void;
 }
 
-export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: CampaignsTableProps) {
+export default function CampaignsTable({ campaigns, onDuplicate }: CampaignsTableProps) {
   const router = useRouter();
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,8 +34,6 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
       </div>
     );
   }
-
-  const deleteTarget = campaigns.find((c) => c.id === deleteConfirmId);
 
   return (
     <>
@@ -111,17 +108,6 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
                     >
                       <ExternalLink size={14} />
                     </button>
-                    {/* Trash — visible on row hover */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteConfirmId(campaign.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md"
-                      title="Archive"
-                    >
-                      <Trash2 size={14} />
-                    </button>
                     {/* More (Duplicate only) */}
                     <div className="relative">
                       <button
@@ -158,36 +144,6 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
         </table>
       </div>
 
-      {/* Delete confirmation modal */}
-      {deleteConfirmId && deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
-            <h2 className="text-base font-semibold text-gray-900 mb-2">
-              Are you sure you want to delete this campaign?
-            </h2>
-            <p className="text-sm text-gray-400 mb-6 leading-relaxed">
-              This action will remove all associated information permanently. This action cannot be undone.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setDeleteConfirmId(null)}
-                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  onDelete?.(deleteConfirmId);
-                  setDeleteConfirmId(null);
-                }}
-                className="flex-1 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-full text-sm font-medium transition-colors"
-              >
-                Yes, Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
