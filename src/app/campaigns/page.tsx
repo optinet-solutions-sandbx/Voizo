@@ -72,7 +72,8 @@ export default function CampaignsPage() {
 
   const filtered = useMemo(() => {
     let list = campaigns;
-    if (activeTab !== "All") list = list.filter((c) => c.group === activeTab);
+    if (activeTab === "All") list = list.filter((c) => c.group !== "Archived");
+    else list = list.filter((c) => c.group === activeTab);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter((c) => c.name.toLowerCase().includes(q));
@@ -85,7 +86,7 @@ export default function CampaignsPage() {
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const tabCounts = useMemo(() => {
-    const counts: Record<string, number> = { All: campaigns.length };
+    const counts: Record<string, number> = { All: campaigns.filter((c) => c.group !== "Archived").length };
     for (const g of allGroups) {
       counts[g] = campaigns.filter((c) => c.group === g).length;
     }
