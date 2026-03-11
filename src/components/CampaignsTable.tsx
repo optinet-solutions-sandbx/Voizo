@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, Phone, ExternalLink, MoreHorizontal, Copy } from "lucide-react";
+import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy, Archive } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { Campaign } from "@/lib/campaignData";
 
@@ -61,15 +61,11 @@ export default function CampaignsTable({ campaigns, onDuplicate, onArchive }: Ca
                   index === campaigns.length - 1 ? "border-b-0" : ""
                 }`}
               >
-                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                <td className="px-4 py-3">
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => onArchive?.(campaign.id)}
-                      className="w-6 h-6 rounded bg-red-50 flex items-center justify-center flex-shrink-0 hover:bg-red-100 transition-colors"
-                      title="Archive campaign"
-                    >
-                      <Trash2 size={12} className="text-red-400" />
-                    </button>
+                    <span className="w-6 h-6 rounded bg-blue-50 flex items-center justify-center flex-shrink-0">
+                      <ArrowUpRight size={12} className="text-blue-500" />
+                    </span>
                     <span className="w-6 h-6 rounded bg-gray-100 flex items-center justify-center flex-shrink-0">
                       <Phone size={12} className="text-gray-500" />
                     </span>
@@ -138,6 +134,17 @@ export default function CampaignsTable({ campaigns, onDuplicate, onArchive }: Ca
                           >
                             <Copy size={14} className="text-gray-400" />
                             Duplicate
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onArchive?.(campaign.id);
+                              setOpenMenuId(null);
+                            }}
+                            className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <Archive size={14} className="text-gray-400" />
+                            Archive
                           </button>
                         </div>
                       )}
