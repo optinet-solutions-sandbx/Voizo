@@ -16,6 +16,7 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 import { initialCampaigns } from "@/lib/campaignData";
 import { getContactsByCampaignId, ContactStatus, Contact } from "@/lib/contactData";
@@ -107,6 +108,7 @@ export default function CampaignDetailPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const campaign = initialCampaigns.find((c) => c.id === id);
 
@@ -188,6 +190,13 @@ export default function CampaignDetailPage() {
           <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
             <UserPlus size={13} />
             Add Contact
+          </button>
+          <button
+            onClick={() => setShowDeleteModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 hover:border-red-200 transition-colors"
+            title="Archive campaign"
+          >
+            <Trash2 size={13} />
           </button>
         </div>
       </div>
@@ -355,6 +364,33 @@ export default function CampaignDetailPage() {
           </div>
         )}
       </div>
+      {/* Archive confirmation modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">
+              Are you sure you want to delete this campaign?
+            </h2>
+            <p className="text-sm text-gray-400 mb-6 leading-relaxed">
+              This action will remove all associated information permanently. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-full text-sm font-medium transition-colors"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
