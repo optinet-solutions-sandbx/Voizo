@@ -140,8 +140,8 @@ export default function CampaignsPage() {
     if (!src) return;
     const newId = Math.max(...campaigns.map((c) => c.id)) + 1;
     setCampaigns((prev) => [
+      { ...src, id: newId, name: src.name + " (Copy)", isDuplicate: true },
       ...prev,
-      { ...src, id: newId, name: src.name + " (Copy)" },
     ]);
   }
 

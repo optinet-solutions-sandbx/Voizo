@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowUpRight, Phone, ExternalLink, MoreHorizontal, Copy, Archive } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { Campaign } from "@/lib/campaignData";
@@ -12,6 +13,7 @@ interface CampaignsTableProps {
 }
 
 export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: CampaignsTableProps) {
+  const router = useRouter();
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -71,7 +73,14 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
                   </div>
                 </td>
                 <td className="px-4 py-3 text-gray-900 font-medium hover:text-blue-600 transition-colors min-w-[200px]">
-                  {campaign.name}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span>{campaign.name}</span>
+                    {campaign.isDuplicate && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200 shrink-0">
+                        Duplicate
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">
                   {campaign.totalContacts.toLocaleString()}
@@ -96,6 +105,7 @@ export default function CampaignsTable({ campaigns, onDuplicate, onDelete }: Cam
                 <td className="px-3 py-3">
                   <div className="flex items-center justify-end gap-1">
                     <button
+                      onClick={() => router.push('/campaigns/' + campaign.id)}
                       className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
                       title="Open"
                     >

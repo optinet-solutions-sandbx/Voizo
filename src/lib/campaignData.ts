@@ -12,6 +12,7 @@ export interface Campaign {
   successCount: number;
   status: Status;
   group: Group;
+  isDuplicate?: boolean;
 }
 
 export const initialCampaigns: Campaign[] = [
