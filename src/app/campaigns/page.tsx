@@ -259,8 +259,8 @@ export default function CampaignsPage() {
         </div>
       </div>
 
-      {/* ── Stats ── 2 cols mobile / 4 cols desktop */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5">
+      {/* ── Stats ── 2 cols mobile / 4 cols desktop (hidden on Archived tab) */}
+      <div className={`grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5 ${activeTab === "Archived" ? "hidden" : ""}`}>
         {/* Total Contacts */}
         <StatCard
           title="Total Contacts"
@@ -318,17 +318,15 @@ export default function CampaignsPage() {
           onArchive={handleArchiveCampaign}
           onRecover={handleRecoverCampaign}
         />
-        {totalPages > 1 && (
-          <div className="border-t border-gray-100 px-4 py-3">
-            <Pagination
-              currentPage={safePage}
-              totalPages={totalPages}
-              totalItems={filtered.length}
-              pageSize={PAGE_SIZE}
-              onPageChange={setCurrentPage}
-            />
-          </div>
-        )}
+        <div className="border-t border-gray-100 px-4 py-3">
+          <Pagination
+            currentPage={safePage}
+            totalPages={totalPages}
+            totalItems={filtered.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setCurrentPage}
+          />
+        </div>
       </div>
 
       {showNewModal && (
