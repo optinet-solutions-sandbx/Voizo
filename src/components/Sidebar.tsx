@@ -11,6 +11,8 @@ import {
   BookOpen,
   Phone,
 } from "lucide-react";
+
+const CampaignIcon = Megaphone;
 import { useNotifications } from "@/lib/notificationsContext";
 
 const navItems = [
@@ -55,32 +57,53 @@ function NotificationBell({ size = 18 }: { size?: number }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+        <div className="absolute left-0 top-full mt-2 z-50 w-80 bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
+          {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <span className="text-sm font-semibold text-gray-900">Notifications</span>
-            {notifications.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900">Notifications</span>
+              {unreadCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-red-500 text-white">
+                  {unreadCount}
+                </span>
+              )}
+            </div>
+            {notifications.length > 0 && unreadCount > 0 && (
               <button
                 onClick={markAllRead}
-                className="text-xs text-blue-600 hover:underline"
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium"
               >
                 Mark all read
               </button>
             )}
           </div>
+
+          {/* Body */}
           {notifications.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-gray-400">No notifications yet.</p>
+            <div className="flex flex-col items-center justify-center px-4 py-10 gap-2">
+              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                <Bell size={18} className="text-gray-300" />
+              </div>
+              <p className="text-xs text-gray-400 font-medium">No notifications yet</p>
+              <p className="text-[11px] text-gray-300 text-center">New campaign activity will appear here</p>
+            </div>
           ) : (
-            <ul className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+            <ul className="max-h-80 overflow-y-auto">
               {notifications.map((n) => (
                 <li
                   key={n.id}
-                  className={`flex items-start gap-3 px-4 py-3 ${n.read ? "" : "bg-blue-50"}`}
+                  className={`flex items-start gap-3 px-4 py-3 border-b border-gray-50 last:border-b-0 transition-colors ${n.read ? "bg-white" : "bg-blue-50/60"}`}
                 >
-                  <span className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${n.read ? "bg-gray-300" : "bg-blue-500"}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-800 leading-snug">{n.message}</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">{n.time}</p>
+                  <div className={`mt-0.5 w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.read ? "bg-gray-100" : "bg-blue-100"}`}>
+                    <CampaignIcon size={14} className={n.read ? "text-gray-400" : "text-blue-500"} />
                   </div>
+                  <div className="flex-1 min-w-0 pt-0.5">
+                    <p className={`text-xs leading-snug ${n.read ? "text-gray-600" : "text-gray-800 font-medium"}`}>{n.message}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">{n.time}</p>
+                  </div>
+                  {!n.read && (
+                    <span className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                  )}
                 </li>
               ))}
             </ul>

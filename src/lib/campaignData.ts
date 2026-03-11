@@ -38,7 +38,7 @@ export async function fetchCampaigns(): Promise<Campaign[]> {
   const { data, error } = await supabase
     .from("campaigns")
     .select("*")
-    .order("id", { ascending: true });
+    .order("id", { ascending: false });
   if (error) throw error;
   return (data ?? []).map(rowToCampaign);
 }
