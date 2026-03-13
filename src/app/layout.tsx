@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import Header from "@/components/Header";
 import Providers from "@/components/Providers";
 
 const geistSans = Geist({
@@ -21,14 +22,18 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} antialiased bg-gray-50`}>
+      <body className={`${geistSans.variable} antialiased bg-[var(--bg-app)]`}>
         <Providers>
           <div className="flex h-screen overflow-hidden">
             <Sidebar />
-            {/* pt-14 offsets mobile top bar, pb-16 offsets mobile bottom nav */}
-            <main className="flex-1 overflow-y-auto bg-gray-50 pt-14 pb-16 md:pt-0 md:pb-0">
-              {children}
-            </main>
+            {/* right column: header + scrollable content */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <Header />
+              {/* pt-14 offsets mobile top bar, pb-16 offsets mobile bottom nav */}
+              <main className="flex-1 overflow-y-auto bg-[var(--bg-app)] pt-14 pb-16 md:pt-0 md:pb-0">
+                {children}
+              </main>
+            </div>
           </div>
         </Providers>
       </body>

@@ -18,45 +18,30 @@ export default function AddGroupModal({ onClose, onAdd }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Modal */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6">
-        {/* Header */}
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">Create and save</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+          <h2 className="text-base font-semibold text-[var(--text-1)]">Create Group</h2>
+          <button onClick={onClose} className="p-1 text-[var(--text-2)] hover:text-[var(--text-1)] rounded-lg hover:bg-[var(--bg-elevated)] transition-colors">
             <X size={18} />
           </button>
         </div>
-
-        {/* Name input */}
         <div className="mb-6">
-          <input
-            type="text"
-            value={name}
+          <input type="text" value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSave()}
-            placeholder="Name"
+            placeholder="Group name"
             autoFocus
-            className="w-full px-4 py-2.5 border-2 border-blue-500 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none"
+            className="w-full px-4 py-2.5 bg-[var(--bg-app)] border-2 border-blue-500 rounded-xl text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none"
           />
         </div>
-
-        {/* Actions */}
         <div className="flex gap-3">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={onClose}
+            className="flex-1 px-4 py-2.5 border border-[var(--border)] rounded-full text-sm font-medium text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
             Cancel
           </button>
-          <button
-            onClick={handleSave}
-            disabled={!name.trim()}
-            className="flex-1 px-4 py-2.5 rounded-full text-sm font-medium transition-colors disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-700 text-white"
-          >
+          <button onClick={handleSave} disabled={!name.trim()}
+            className="flex-1 px-4 py-2.5 rounded-full text-sm font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20">
             Save
           </button>
         </div>

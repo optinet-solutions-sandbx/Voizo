@@ -30,9 +30,9 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   if (!active || !payload?.length) return null;
   const { date, pct } = payload[0].payload ?? {};
   return (
-    <div className="bg-gray-900 text-white text-xs rounded-lg px-2.5 py-1.5 shadow-lg pointer-events-none">
-      <p className="font-semibold">{date}</p>
-      <p className="text-gray-300">{pct}% of month</p>
+    <div className="bg-[var(--bg-card)] border border-[var(--border)] text-xs rounded-lg px-2.5 py-1.5 shadow-xl pointer-events-none">
+      <p className="font-semibold text-[var(--text-1)]">{date}</p>
+      <p className="text-[var(--text-2)]">{pct}% of month</p>
     </div>
   );
 }
@@ -191,7 +191,7 @@ export default function CampaignsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -202,17 +202,17 @@ export default function CampaignsPage() {
       {/* ── Page header ── */}
       <div className="flex items-start sm:items-center justify-between mb-5 gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-            <MegaphoneIcon size={18} className="text-blue-500" />
+          <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
+            <MegaphoneIcon size={17} className="text-blue-400" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold text-gray-900">Campaigns</h1>
-            <p className="text-xs text-gray-400 mt-0.5">{campaigns.filter((c) => c.group !== "Archived").length} active campaigns</p>
+            <h1 className="text-lg sm:text-xl font-bold text-[var(--text-1)]">Campaigns</h1>
+            <p className="text-xs text-[var(--text-3)] mt-0.5">{campaigns.filter((c) => c.group !== "Archived").length} active campaigns</p>
           </div>
         </div>
         <button
           onClick={() => setShowNewModal(true)}
-          className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full transition-colors shadow-sm flex-shrink-0"
+          className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0"
         >
           <Plus size={15} />
           <span className="hidden sm:inline">New Campaign</span>
@@ -221,7 +221,7 @@ export default function CampaignsPage() {
       </div>
 
       {/* ── Tab bar ── */}
-      <div className="mb-5 border-b border-gray-200 overflow-x-auto hide-scrollbar">
+      <div className="mb-5 border-b border-[var(--border)] overflow-x-auto hide-scrollbar">
         <div className="flex items-center min-w-max">
           {tabs.map((tab) => {
             const isDeletable = tab.group !== "All";
@@ -234,35 +234,29 @@ export default function CampaignsPage() {
                     isDeletable ? "pl-3 sm:pl-4 pr-1" : "px-3 sm:px-4"
                   } ${
                     isActive
-                      ? "border-blue-600 text-blue-600"
-                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                      ? "border-blue-500 text-blue-400"
+                      : "border-transparent text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-[var(--border-2)]"
                   }`}
                 >
                   {tab.label}
-                  <span
-                    className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${
-                      isActive ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500"
-                    }`}
-                  >
+                  <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${
+                    isActive ? "bg-blue-500/20 text-blue-400" : "bg-[var(--bg-elevated)] text-[var(--text-2)]"
+                  }`}>
                     {tabCounts[tab.group] ?? 0}
                   </span>
                 </button>
                 {isDeletable && (
-                  <button
-                    onClick={() => setDeleteGroupConfirm(tab.group)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 mr-2 p-0.5 rounded-full hover:bg-gray-200 text-gray-400 hover:text-gray-600 -mb-px"
-                    title={`Remove ${tab.label}`}
-                  >
+                  <button onClick={() => setDeleteGroupConfirm(tab.group)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 mr-2 p-0.5 rounded-full hover:bg-[var(--bg-elevated)] text-[var(--text-3)] hover:text-[var(--text-2)] -mb-px"
+                    title={`Remove ${tab.label}`}>
                     <X size={12} />
                   </button>
                 )}
               </div>
             );
           })}
-          <button
-            onClick={() => setShowAddGroupModal(true)}
-            className="flex items-center gap-1 px-3 sm:px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors border-b-2 border-transparent -mb-px whitespace-nowrap"
-          >
+          <button onClick={() => setShowAddGroupModal(true)}
+            className="flex items-center gap-1 px-3 sm:px-4 py-2.5 text-sm font-medium text-[var(--text-3)] hover:text-[var(--text-2)] transition-colors border-b-2 border-transparent -mb-px whitespace-nowrap">
             <Plus size={13} />
             Add Group
           </button>
@@ -308,34 +302,19 @@ export default function CampaignsPage() {
       {/* ── Search ── */}
       <div className="mb-4">
         <div className="relative w-full max-w-md">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search Campaigns"
-            value={searchQuery}
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
+          <input type="text" placeholder="Search Campaigns" value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            className="w-full pl-9 pr-4 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
           />
         </div>
       </div>
 
       {/* ── Table + Pagination ── */}
-      <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-        <CampaignsTable
-          campaigns={paginated}
-          onDuplicate={handleDuplicateCampaign}
-          onDelete={handleDeleteCampaign}
-          onArchive={handleArchiveCampaign}
-          onRecover={handleRecoverCampaign}
-        />
-        <div className="border-t border-gray-100 px-4 py-3">
-          <Pagination
-            currentPage={safePage}
-            totalPages={totalPages}
-            totalItems={filtered.length}
-            pageSize={PAGE_SIZE}
-            onPageChange={setCurrentPage}
-          />
+      <div className="rounded-xl border border-[var(--border)] overflow-hidden">
+        <CampaignsTable campaigns={paginated} onDuplicate={handleDuplicateCampaign} onDelete={handleDeleteCampaign} onArchive={handleArchiveCampaign} onRecover={handleRecoverCampaign} />
+        <div className="border-t border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
+          <Pagination currentPage={safePage} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setCurrentPage} />
         </div>
       </div>
 
@@ -356,23 +335,19 @@ export default function CampaignsPage() {
 
       {/* ── Delete group confirmation modal ── */}
       {deleteGroupConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-1">Delete Group</h2>
-            <p className="text-sm text-gray-500 mb-6">
-              Are you sure you want to delete the <span className="font-medium text-gray-700">{deleteGroupConfirm}</span> group?
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-[var(--text-1)] mb-1">Delete Group</h2>
+            <p className="text-sm text-[var(--text-2)] mb-6">
+              Are you sure you want to delete the <span className="font-medium text-[var(--text-1)]">{deleteGroupConfirm}</span> group?
             </p>
             <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setDeleteGroupConfirm(null)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
+              <button onClick={() => setDeleteGroupConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-[var(--text-2)] bg-[var(--bg-elevated)] hover:bg-[var(--border-2)] rounded-lg transition-colors">
                 No
               </button>
-              <button
-                onClick={() => handleDeleteGroup(deleteGroupConfirm)}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
-              >
+              <button onClick={() => handleDeleteGroup(deleteGroupConfirm)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-500/90 hover:bg-red-500 rounded-lg transition-colors">
                 Yes, Delete
               </button>
             </div>
@@ -396,33 +371,22 @@ interface StatCardProps {
 function StatCard({ title, value, change, label, chart }: StatCardProps) {
   const isPositive = change >= 0;
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-3 overflow-hidden">
-      {/* Title */}
-      <p className="text-xs font-semibold text-gray-500 truncate">{title}</p>
-
-      {/* Chart */}
+    <div className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4 flex flex-col gap-3 overflow-hidden">
+      <p className="text-xs font-semibold text-[var(--text-2)] truncate">{title}</p>
       <div className="h-14 sm:h-16 w-full">
         <ResponsiveContainer width="100%" height="100%">
           {chart as React.ReactElement}
         </ResponsiveContainer>
       </div>
-
-      {/* Metric + change */}
       <div className="flex items-end justify-between gap-2">
-        <p className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight tracking-tight">
-          {value}
-        </p>
+        <p className="text-xl sm:text-2xl font-bold text-[var(--text-1)] leading-tight tracking-tight">{value}</p>
         <div className="flex flex-col items-end shrink-0">
-          <span
-            className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${
-              isPositive
-                ? "bg-green-50 text-green-600"
-                : "bg-red-50 text-red-500"
-            }`}
-          >
+          <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${
+            isPositive ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+          }`}>
             {isPositive ? "↑" : "↓"}{Math.abs(change)}%
           </span>
-          <span className="text-[10px] text-gray-400 mt-0.5 text-right">{label}</span>
+          <span className="text-[10px] text-[var(--text-3)] mt-0.5 text-right">{label}</span>
         </div>
       </div>
     </div>
