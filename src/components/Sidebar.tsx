@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Bell, Search, Megaphone, PhoneOff, BookOpen, Phone, X,
-  LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon,
+  LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2,
 } from "lucide-react";
 
 const CampaignIcon = Megaphone;
@@ -28,7 +28,8 @@ const allPages = [
   { label: "Analytics",      href: "/analytics",       icon: BarChart2,      description: "Reports and analytics" },
   { label: "App Center",     href: "/app-center",      icon: AppWindow,      description: "Integrations and apps" },
   { label: "Settings",       href: "/settings",        icon: Settings,       description: "Account settings" },
-  { label: "Dashboard",      href: "/",                icon: LayoutDashboard,description: "Home dashboard" },
+  { label: "Dashboard",        href: "/",                 icon: LayoutDashboard, description: "Home dashboard" },
+  { label: "Deleted History",  href: "/deleted-history",  icon: Trash2,          description: "Archived and deleted items" },
 ];
 
 const staticKnowledgeBases = [

@@ -84,5 +84,15 @@ export async function updateCampaignName(id: number, name: string): Promise<void
   if (error) throw error;
 }
 
+export async function fetchArchivedCampaigns(): Promise<Campaign[]> {
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("*")
+    .eq("group_name", "Archived")
+    .order("id", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(rowToCampaign);
+}
+
 // Kept as empty fallback so existing imports don't break
 export const initialCampaigns: Campaign[] = [];

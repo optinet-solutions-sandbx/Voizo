@@ -56,3 +56,13 @@ export async function deleteKnowledgeBase(id: number): Promise<void> {
   const { error } = await supabase.from("knowledge_bases").delete().eq("id", id);
   if (error) throw error;
 }
+
+export async function fetchArchivedKnowledgeBases(): Promise<KnowledgeBase[]> {
+  const { data, error } = await supabase
+    .from("knowledge_bases")
+    .select("*")
+    .eq("archived", true)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(rowToKB);
+}

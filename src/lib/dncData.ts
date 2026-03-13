@@ -127,3 +127,13 @@ export async function deleteDncEntry(id: number): Promise<void> {
   }
   lsSave(lsLoad().filter((e) => e.id !== id));
 }
+
+export async function fetchArchivedDncEntries(): Promise<DncEntry[]> {
+  const { data, error } = await supabase
+    .from("do_not_call")
+    .select("*")
+    .eq("archived", true)
+    .order("added_at", { ascending: false });
+  if (error) return [];
+  return (data ?? []).map(rowToEntry);
+}
