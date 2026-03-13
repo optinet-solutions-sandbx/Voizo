@@ -80,11 +80,29 @@ insert into contacts (campaign_id, name, phone, attempts, last_attempt, call_dur
 select setval('campaigns_id_seq', (select max(id) from campaigns));
 select setval('contacts_id_seq', (select max(id) from contacts));
 
+-- Create knowledge_bases table
+create table if not exists knowledge_bases (
+  id           serial primary key,
+  name         text not null,
+  data_sources integer default 0,
+  created_at   timestamptz default now(),
+  archived     boolean default false
+);
+
+alter table knowledge_bases enable row level security;
+create policy "Allow all knowledge_bases" on knowledge_bases for all using (true) with check (true);
+
+insert into knowledge_bases (name, data_sources, created_at, archived) values
+('Lucky 7 RND campaign',                 10, '2025-11-06', false),
+('Lucky7even (FAQ / Objection Handling)',  0, '2025-11-11', false),
+('Test',                                  0, '2026-02-04', false);
+
 -- Create do_not_call table
 create table if not exists do_not_call (
   id serial primary key,
   phone_number text not null unique,
-  added_at timestamptz default now()
+  added_at timestamptz default now(),
+  archived boolean default false
 );
 
 -- Enable Row Level Security

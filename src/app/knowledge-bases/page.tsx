@@ -1,64 +1,86 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Plus, X, Trash2, BookOpen, Archive, RotateCcw, Search } from "lucide-react";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
-
-interface KnowledgeBase {
-  id: number;
-  name: string;
-  dataSources: number;
-  dateOfCreation: string;
-  archived: boolean;
-}
-
-const initialKnowledgeBases: KnowledgeBase[] = [
-  { id: 1, name: "Lucky 7 RND campaign", dataSources: 10, dateOfCreation: "Nov 6, 2025", archived: false },
-  { id: 2, name: "Lucky7even (FAQ / Objection Handling)", dataSources: 0, dateOfCreation: "Nov 11, 2025", archived: false },
-  { id: 3, name: "Test", dataSources: 0, dateOfCreation: "Feb 4, 2026", archived: false },
-];
-
-function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
+import {
+  KnowledgeBase,
+  fetchKnowledgeBases,
+  insertKnowledgeBase,
+  archiveKnowledgeBase,
+  restoreKnowledgeBase,
+  deleteKnowledgeBase,
+} from "@/lib/knowledgeBaseData";
 
 export default function KnowledgeBasesPage() {
   const { showToast } = useToast();
   const { addNotification } = useNotifications();
-  const [items, setItems] = useState<KnowledgeBase[]>(initialKnowledgeBases);
+  const [items, setItems] = useState<KnowledgeBase[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [tab, setTab] = useState<"active" | "archived">("active");
   const [searchQuery, setSearchQuery] = useState("");
 
-  function handleCreate() {
-    if (!newName.trim()) return;
+  useEffect(() => {
+    fetchKnowledgeBases()
+      .then(setItems)
+      .catch(() => showToast("Failed to load knowledge bases.", "error"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleCreate() {
+    if (!newName.trim() || saving) return;
     const name = newName.trim();
-    setItems((prev) => [{ id: Date.now(), name, dataSources: 0, dateOfCreation: formatDate(new Date()), archived: false }, ...prev]);
-    setNewName("");
-    setShowModal(false);
-    const msg = `Knowledge base "${name}" created successfully!`;
-    showToast(msg);
-    addNotification(msg);
+    setSaving(true);
+    try {
+      const created = await insertKnowledgeBase(name);
+      setItems((prev) => [created, ...prev]);
+      setNewName("");
+      setShowModal(false);
+      const msg = `Knowledge base "${name}" created successfully!`;
+      showToast(msg);
+      addNotification(msg);
+    } catch {
+      showToast("Failed to create knowledge base.", "error");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleArchive(id: number) {
-    setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: true } : i));
-    showToast("Knowledge base moved to archive.");
+  async function handleArchive(id: number) {
+    try {
+      await archiveKnowledgeBase(id);
+      setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: true } : i));
+      showToast("Knowledge base moved to archive.");
+    } catch {
+      showToast("Failed to archive.", "error");
+    }
   }
 
-  function handleRestore(id: number) {
-    setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: false } : i));
-    showToast("Knowledge base restored.");
+  async function handleRestore(id: number) {
+    try {
+      await restoreKnowledgeBase(id);
+      setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: false } : i));
+      showToast("Knowledge base restored.");
+    } catch {
+      showToast("Failed to restore.", "error");
+    }
   }
 
-  function handleDelete(id: number) {
+  async function handleDelete(id: number) {
     const item = items.find((i) => i.id === id);
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    setDeleteConfirmId(null);
-    if (item) showToast(`"${item.name}" permanently deleted.`, "error");
+    try {
+      await deleteKnowledgeBase(id);
+      setItems((prev) => prev.filter((i) => i.id !== id));
+      setDeleteConfirmId(null);
+      if (item) showToast(`"${item.name}" permanently deleted.`, "error");
+    } catch {
+      showToast("Failed to delete.", "error");
+    }
   }
 
   const activeItems = useMemo(() => items.filter((i) => !i.archived), [items]);
@@ -114,117 +136,127 @@ export default function KnowledgeBasesPage() {
         })}
       </div>
 
-      {/* Search */}
-      {(tab === "active" ? activeItems : archivedItems).length > 0 && (
-        <div className="mb-4 relative max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
-          <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search knowledge bases…"
-            className="w-full pl-8 pr-8 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
-          />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-2)]"><X size={13} /></button>
-          )}
+      {/* Loading */}
+      {loading ? (
+        <div className="flex items-center justify-center py-24 gap-2">
+          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm text-[var(--text-3)]">Loading…</span>
         </div>
-      )}
-
-      {/* Mobile cards */}
-      <div className="sm:hidden space-y-3">
-        {filtered.length === 0 && searchQuery ? (
-          <p className="text-[var(--text-3)] text-sm text-center py-12">No results for &ldquo;{searchQuery}&rdquo;</p>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-2">
-            <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
-              {tab === "active" ? <BookOpen size={20} className="text-[var(--text-3)]" /> : <Archive size={20} className="text-[var(--text-3)]" />}
+      ) : (
+        <>
+          {/* Search */}
+          {(tab === "active" ? activeItems : archivedItems).length > 0 && (
+            <div className="mb-4 relative max-w-xs">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
+              <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search knowledge bases…"
+                className="w-full pl-8 pr-8 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-2)]"><X size={13} /></button>
+              )}
             </div>
-            <p className="text-sm text-[var(--text-3)]">{tab === "active" ? "No knowledge bases yet" : "No archived knowledge bases"}</p>
-          </div>
-        ) : filtered.map((item) => (
-          <div key={item.id} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--border-2)] transition-colors">
-            <div className="flex items-start justify-between gap-2">
-              <p className={`font-semibold text-sm mb-2 ${tab === "archived" ? "text-[var(--text-3)] line-through" : "text-[var(--text-1)]"}`}>{item.name}</p>
-              <div className="flex gap-1 flex-shrink-0">
-                {tab === "active" ? (
-                  <button onClick={() => handleArchive(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-colors" title="Archive"><Archive size={13} /></button>
-                ) : (
-                  <>
-                    <button onClick={() => handleRestore(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors" title="Restore"><RotateCcw size={13} /></button>
-                    <button onClick={() => setDeleteConfirmId(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Delete"><Trash2 size={13} /></button>
-                  </>
-                )}
+          )}
+
+          {/* Mobile cards */}
+          <div className="sm:hidden space-y-3">
+            {filtered.length === 0 && searchQuery ? (
+              <p className="text-[var(--text-3)] text-sm text-center py-12">No results for &ldquo;{searchQuery}&rdquo;</p>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-2">
+                <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
+                  {tab === "active" ? <BookOpen size={20} className="text-[var(--text-3)]" /> : <Archive size={20} className="text-[var(--text-3)]" />}
+                </div>
+                <p className="text-sm text-[var(--text-3)]">{tab === "active" ? "No knowledge bases yet" : "No archived knowledge bases"}</p>
               </div>
-            </div>
-            <div className="flex items-center justify-between text-xs text-[var(--text-3)]">
-              <span>{item.dataSources} data source{item.dataSources !== 1 ? "s" : ""}</span>
-              <span>{item.dateOfCreation}</span>
-            </div>
+            ) : filtered.map((item) => (
+              <div key={item.id} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--border-2)] transition-colors">
+                <div className="flex items-start justify-between gap-2">
+                  <p className={`font-semibold text-sm mb-2 ${tab === "archived" ? "text-[var(--text-3)] line-through" : "text-[var(--text-1)]"}`}>{item.name}</p>
+                  <div className="flex gap-1 flex-shrink-0">
+                    {tab === "active" ? (
+                      <button onClick={() => handleArchive(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-colors" title="Archive"><Archive size={13} /></button>
+                    ) : (
+                      <>
+                        <button onClick={() => handleRestore(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors" title="Restore"><RotateCcw size={13} /></button>
+                        <button onClick={() => setDeleteConfirmId(item.id)} className="p-1.5 text-[var(--text-3)] hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Delete"><Trash2 size={13} /></button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-xs text-[var(--text-3)]">
+                  <span>{item.dataSources} data source{item.dataSources !== 1 ? "s" : ""}</span>
+                  <span>{item.dateOfCreation}</span>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {/* Desktop table */}
-      <div className="hidden sm:block">
-        {filtered.length === 0 && searchQuery ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-2">
-            <p className="text-sm text-[var(--text-3)]">No results for &ldquo;{searchQuery}&rdquo;</p>
+          {/* Desktop table */}
+          <div className="hidden sm:block">
+            {filtered.length === 0 && searchQuery ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-2">
+                <p className="text-sm text-[var(--text-3)]">No results for &ldquo;{searchQuery}&rdquo;</p>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 gap-2">
+                <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
+                  {tab === "active" ? <BookOpen size={20} className="text-[var(--text-3)]" /> : <Archive size={20} className="text-[var(--text-3)]" />}
+                </div>
+                <p className="text-sm text-[var(--text-3)]">{tab === "active" ? "No knowledge bases yet" : "No archived knowledge bases"}</p>
+                {tab === "active" && <p className="text-xs text-[var(--text-3)]">Create one to get started</p>}
+              </div>
+            ) : (
+              <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
+                      <th className="text-left px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide w-1/2">Knowledge Base</th>
+                      <th className="text-center px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Data Sources</th>
+                      <th className="text-center px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Created</th>
+                      <th className="w-20 text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((item, index) => (
+                      <tr key={item.id}
+                        className={`hover:bg-[var(--bg-hover)] transition-colors cursor-pointer group ${index < filtered.length - 1 ? "border-b border-[var(--border)]" : ""}`}>
+                        <td className="px-6 py-4">
+                          <span className={`font-semibold ${tab === "archived" ? "text-[var(--text-3)] line-through" : "text-[var(--text-1)]"}`}>{item.name}</span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                            {item.dataSources}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center text-[var(--text-3)] text-xs">{item.dateOfCreation}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {tab === "active" ? (
+                              <button onClick={(e) => { e.stopPropagation(); handleArchive(item.id); }} title="Archive"
+                                className="p-1.5 text-[var(--text-3)] hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-colors"><Archive size={13} /></button>
+                            ) : (
+                              <>
+                                <button onClick={(e) => { e.stopPropagation(); handleRestore(item.id); }} title="Restore"
+                                  className="p-1.5 text-[var(--text-3)] hover:text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors"><RotateCcw size={13} /></button>
+                                <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(item.id); }} title="Delete permanently"
+                                  className="p-1.5 text-[var(--text-3)] hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"><Trash2 size={13} /></button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="px-6 py-2.5 border-t border-[var(--border)] bg-[var(--bg-card)]">
+                  <p className="text-xs text-[var(--text-3)]">{filtered.length} knowledge base{filtered.length !== 1 ? "s" : ""}</p>
+                </div>
+              </div>
+            )}
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 gap-2">
-            <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
-              {tab === "active" ? <BookOpen size={20} className="text-[var(--text-3)]" /> : <Archive size={20} className="text-[var(--text-3)]" />}
-            </div>
-            <p className="text-sm text-[var(--text-3)]">{tab === "active" ? "No knowledge bases yet" : "No archived knowledge bases"}</p>
-            {tab === "active" && <p className="text-xs text-[var(--text-3)]">Create one to get started</p>}
-          </div>
-        ) : (
-          <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
-                  <th className="text-left px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide w-1/2">Knowledge Base</th>
-                  <th className="text-center px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Data Sources</th>
-                  <th className="text-center px-6 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Created</th>
-                  <th className="w-20 text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((item, index) => (
-                  <tr key={item.id}
-                    className={`hover:bg-[var(--bg-hover)] transition-colors cursor-pointer group ${index < filtered.length - 1 ? "border-b border-[var(--border)]" : ""}`}>
-                    <td className="px-6 py-4">
-                      <span className={`font-semibold ${tab === "archived" ? "text-[var(--text-3)] line-through" : "text-[var(--text-1)]"}`}>{item.name}</span>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                        {item.dataSources}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-center text-[var(--text-3)] text-xs">{item.dateOfCreation}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {tab === "active" ? (
-                          <button onClick={(e) => { e.stopPropagation(); handleArchive(item.id); }} title="Archive"
-                            className="p-1.5 text-[var(--text-3)] hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-colors"><Archive size={13} /></button>
-                        ) : (
-                          <>
-                            <button onClick={(e) => { e.stopPropagation(); handleRestore(item.id); }} title="Restore"
-                              className="p-1.5 text-[var(--text-3)] hover:text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors"><RotateCcw size={13} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(item.id); }} title="Delete permanently"
-                              className="p-1.5 text-[var(--text-3)] hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"><Trash2 size={13} /></button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="px-6 py-2.5 border-t border-[var(--border)] bg-[var(--bg-card)]">
-              <p className="text-xs text-[var(--text-3)]">{filtered.length} knowledge base{filtered.length !== 1 ? "s" : ""}</p>
-            </div>
-          </div>
-        )}
-      </div>
+        </>
+      )}
 
       {/* Create modal */}
       {showModal && (
@@ -253,9 +285,9 @@ export default function KnowledgeBasesPage() {
                 className="flex-1 px-4 py-2.5 border border-[var(--border)] rounded-full text-sm font-medium text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
                 Cancel
               </button>
-              <button onClick={handleCreate} disabled={!newName.trim()}
+              <button onClick={handleCreate} disabled={!newName.trim() || saving}
                 className="flex-1 px-4 py-2.5 rounded-full text-sm font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20">
-                Create
+                {saving ? "Creating…" : "Create"}
               </button>
             </div>
           </div>
