@@ -37,27 +37,31 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
 
       {/* Toast container */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none px-4">
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border text-sm font-medium animate-slide-up min-w-[260px] max-w-sm ${
+            className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl border text-sm font-medium animate-slide-up min-w-[260px] max-w-sm backdrop-blur-sm ${
               toast.type === "success"
-                ? "bg-white border-green-100 text-gray-800"
-                : "bg-white border-red-100 text-gray-800"
+                ? "bg-white/95 border-emerald-100 text-gray-800"
+                : "bg-white/95 border-red-100 text-gray-800"
             }`}
           >
-            {toast.type === "success" ? (
-              <CheckCircle size={18} className="text-green-500 flex-shrink-0" />
-            ) : (
-              <AlertCircle size={18} className="text-red-500 flex-shrink-0" />
-            )}
-            <span className="flex-1">{toast.message}</span>
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
+              toast.type === "success" ? "bg-emerald-50" : "bg-red-50"
+            }`}>
+              {toast.type === "success" ? (
+                <CheckCircle size={15} className="text-emerald-500" />
+              ) : (
+                <AlertCircle size={15} className="text-red-500" />
+              )}
+            </div>
+            <span className="flex-1 leading-snug">{toast.message}</span>
             <button
               onClick={() => dismiss(toast.id)}
-              className="text-gray-300 hover:text-gray-500 transition-colors flex-shrink-0"
+              className="w-5 h-5 rounded-full flex items-center justify-center text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors flex-shrink-0"
             >
-              <X size={14} />
+              <X size={11} />
             </button>
           </div>
         ))}

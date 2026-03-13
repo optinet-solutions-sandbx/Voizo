@@ -4,15 +4,18 @@ export interface DncEntry {
   id: number;
   phoneNumber: string;
   addedAt: string;
+  archived: boolean;
 }
 
-const LS_KEY = "dnc_entries_v2";
+const LS_KEY = "dnc_entries_v3";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function lsLoad(): DncEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    return JSON.parse(localStorage.getItem(LS_KEY) ?? "[]");
+    const raw = JSON.parse(localStorage.getItem(LS_KEY) ?? "[]");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return raw.map((e: any) => ({ ...e, archived: e.archived ?? false }));
   } catch {
     return [];
   }
@@ -33,6 +36,7 @@ function rowToEntry(row: any): DncEntry {
       day: "numeric",
       year: "numeric",
     }),
+    archived: row.archived ?? false,
   };
 }
 
@@ -55,11 +59,11 @@ export async function fetchDncEntries(): Promise<DncEntry[]> {
 
     if (!error && data) {
       const entries = data.map(rowToEntry);
-      lsSave(entries); // keep local cache in sync
+      lsSave(entries);
       return entries;
     }
   } catch {
-    // Supabase unavailable — fall through to local
+    // fall through to local
   }
   return lsLoad();
 }
@@ -68,7 +72,7 @@ export async function insertDncEntries(phoneNumbers: string[]): Promise<DncEntry
   const trimmed = phoneNumbers.map((n) => n.trim()).filter(Boolean);
 
   try {
-    const rows = trimmed.map((n) => ({ phone_number: n }));
+    const rows = trimmed.map((n) => ({ phone_number: n, archived: false }));
     const { data, error } = await supabase
       .from("do_not_call")
       .upsert(rows, { onConflict: "phone_number", ignoreDuplicates: true })
@@ -76,7 +80,6 @@ export async function insertDncEntries(phoneNumbers: string[]): Promise<DncEntry
 
     if (!error && data) {
       const inserted = data.map(rowToEntry);
-      // Merge into local cache
       const cached = lsLoad();
       const existingNums = new Set(cached.map((e) => e.phoneNumber));
       const fresh = inserted.filter((e) => !existingNums.has(e.phoneNumber));
@@ -84,7 +87,7 @@ export async function insertDncEntries(phoneNumbers: string[]): Promise<DncEntry
       return inserted;
     }
   } catch {
-    // Supabase unavailable — fall through to local
+    // fall through to local
   }
 
   // Local fallback
@@ -93,16 +96,34 @@ export async function insertDncEntries(phoneNumbers: string[]): Promise<DncEntry
   const now = formatDate();
   const fresh: DncEntry[] = trimmed
     .filter((n) => !existingNums.has(n))
-    .map((n, i) => ({ id: Date.now() + i, phoneNumber: n, addedAt: now }));
+    .map((n, i) => ({ id: Date.now() + i, phoneNumber: n, addedAt: now, archived: false }));
   lsSave([...fresh, ...existing]);
   return fresh;
+}
+
+export async function archiveDncEntry(id: number): Promise<void> {
+  try {
+    await supabase.from("do_not_call").update({ archived: true }).eq("id", id);
+  } catch {
+    // ignore — update locally regardless
+  }
+  lsSave(lsLoad().map((e) => (e.id === id ? { ...e, archived: true } : e)));
+}
+
+export async function restoreDncEntry(id: number): Promise<void> {
+  try {
+    await supabase.from("do_not_call").update({ archived: false }).eq("id", id);
+  } catch {
+    // ignore
+  }
+  lsSave(lsLoad().map((e) => (e.id === id ? { ...e, archived: false } : e)));
 }
 
 export async function deleteDncEntry(id: number): Promise<void> {
   try {
     await supabase.from("do_not_call").delete().eq("id", id);
   } catch {
-    // ignore Supabase errors — always remove locally
+    // ignore
   }
   lsSave(lsLoad().filter((e) => e.id !== id));
 }

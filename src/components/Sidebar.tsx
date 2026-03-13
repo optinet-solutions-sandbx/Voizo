@@ -22,10 +22,10 @@ import { useNotifications } from "@/lib/notificationsContext";
 import { fetchCampaigns } from "@/lib/campaignData";
 
 const navItems = [
-  { label: "Campaigns", href: "/campaigns", icon: Megaphone },
-  { label: "Do Not Call", href: "/do-not-call", icon: PhoneOff },
-  { label: "Knowledge", href: "/knowledge-bases", icon: BookOpen },
-  { label: "Phone Number", href: "/phone-numbers", icon: Phone },
+  { label: "Campaigns", href: "/campaigns", icon: Megaphone, color: "text-blue-500", bg: "bg-blue-50" },
+  { label: "Do Not Call", href: "/do-not-call", icon: PhoneOff, color: "text-red-400", bg: "bg-red-50" },
+  { label: "Knowledge", href: "/knowledge-bases", icon: BookOpen, color: "text-indigo-500", bg: "bg-indigo-50" },
+  { label: "Phone Number", href: "/phone-numbers", icon: Phone, color: "text-emerald-500", bg: "bg-emerald-50" },
 ];
 
 // All searchable pages
@@ -363,27 +363,34 @@ function NotificationBell({ size = 18 }: { size?: number }) {
                 <Bell size={18} className="text-gray-300" />
               </div>
               <p className="text-xs text-gray-400 font-medium">No notifications yet</p>
-              <p className="text-[11px] text-gray-300 text-center">New campaign activity will appear here</p>
+              <p className="text-[11px] text-gray-300 text-center">Activity will appear here</p>
             </div>
           ) : (
-            <ul className="max-h-80 overflow-y-auto">
-              {notifications.map((n) => (
-                <li
-                  key={n.id}
-                  className={`flex items-start gap-3 px-4 py-3 border-b border-gray-50 last:border-b-0 transition-colors ${n.read ? "bg-white" : "bg-blue-50/60"}`}
-                >
-                  <div className={`mt-0.5 w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.read ? "bg-gray-100" : "bg-blue-100"}`}>
-                    <CampaignIcon size={14} className={n.read ? "text-gray-400" : "text-blue-500"} />
-                  </div>
-                  <div className="flex-1 min-w-0 pt-0.5">
-                    <p className={`text-xs leading-snug ${n.read ? "text-gray-600" : "text-gray-800 font-medium"}`}>{n.message}</p>
-                    <p className="text-[10px] text-gray-400 mt-1">{n.time}</p>
-                  </div>
-                  {!n.read && (
-                    <span className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                  )}
-                </li>
-              ))}
+            <ul className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+              {notifications.map((n) => {
+                const isDnc = n.message.toLowerCase().includes("dnc") || n.message.toLowerCase().includes("phone number");
+                const isKb = n.message.toLowerCase().includes("knowledge");
+                const Icon = isDnc ? PhoneOff : isKb ? BookOpen : CampaignIcon;
+                const iconColor = isDnc ? "text-red-400" : isKb ? "text-indigo-500" : "text-blue-500";
+                const iconBg = isDnc ? "bg-red-50" : isKb ? "bg-indigo-50" : "bg-blue-50";
+                return (
+                  <li
+                    key={n.id}
+                    className={`flex items-start gap-3 px-4 py-3 transition-colors ${n.read ? "bg-white" : "bg-blue-50/40"}`}
+                  >
+                    <div className={`mt-0.5 w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.read ? "bg-gray-100" : iconBg}`}>
+                      <Icon size={13} className={n.read ? "text-gray-400" : iconColor} />
+                    </div>
+                    <div className="flex-1 min-w-0 pt-0.5">
+                      <p className={`text-xs leading-snug ${n.read ? "text-gray-500" : "text-gray-800 font-medium"}`}>{n.message}</p>
+                      <p className="text-[10px] text-gray-400 mt-1">{n.time}</p>
+                    </div>
+                    {!n.read && (
+                      <span className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -426,13 +433,15 @@ function SidebarContent() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-gray-900 text-white"
                       : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
                   }`}
                 >
-                  <Icon size={16} className={isActive ? "text-white" : "text-gray-500"} />
+                  <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
+                    <Icon size={13} className={isActive ? "text-white" : item.color} />
+                  </div>
                   {item.label}
                 </Link>
               </li>
@@ -482,7 +491,7 @@ function MobileBottomNav() {
             key={item.href}
             href={item.href}
             className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${
-              isActive ? "text-blue-600" : "text-gray-400 hover:text-gray-600"
+              isActive ? item.color : "text-gray-400 hover:text-gray-600"
             }`}
           >
             <Icon size={20} />
