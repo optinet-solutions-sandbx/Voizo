@@ -139,7 +139,9 @@ export default function CampaignDetailPage() {
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
   const [calYear, setCalYear] = useState(new Date().getFullYear());
   const [activeDateFilter, setActiveDateFilter] = useState<string | null>(null);
+  const [calPos, setCalPos] = useState<{ top: number; right: number } | null>(null);
   const calendarRef = useRef<HTMLDivElement>(null);
+  const calBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     Promise.all([fetchCampaigns(), fetchContactsByCampaignId(id)])
@@ -354,80 +356,23 @@ export default function CampaignDetailPage() {
       <div className="bg-[var(--bg-app)] rounded-xl border border-[var(--border)] overflow-hidden w-full">
         {/* Toolbar */}
         <div className="flex items-center gap-3 p-4 border-b border-[var(--border)] bg-[var(--bg-card)]">
-          <div className="relative flex-1" ref={calendarRef}>
+          <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
             <input type="text" placeholder="Search Contacts" value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
               className="w-full pl-9 pr-10 py-2 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg placeholder-[var(--text-3)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
             />
-            <button onClick={() => setCalendarOpen((v) => !v)}
+            <button ref={calBtnRef}
+              onClick={() => {
+                if (!calendarOpen && calBtnRef.current) {
+                  const rect = calBtnRef.current.getBoundingClientRect();
+                  setCalPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+                }
+                setCalendarOpen((v) => !v);
+              }}
               className={`absolute right-3 top-1/2 -translate-y-1/2 transition-colors ${calendarOpen ? "text-blue-500" : "text-[var(--text-3)] hover:text-[var(--text-2)]"}`}>
               <Calendar size={14} />
             </button>
-            {/* Calendar dropdown */}
-            {calendarOpen && (
-              <div className="absolute top-full left-0 right-0 sm:right-auto mt-2 z-50 bg-white border border-gray-200 rounded-2xl shadow-2xl flex overflow-hidden min-w-[500px]">
-                {/* Quick filters */}
-                <div className="w-44 border-r border-gray-100 py-3 shrink-0">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 mb-2">Filter by last attempt</p>
-                  {["Today","Yesterday","Last 7 Days","Last 30 Days","Last 90 Days","Last 12 Months","This Week","This Month"].map((opt) => (
-                    <button key={opt} onClick={() => { setActiveDateFilter(activeDateFilter === opt ? null : opt); }}
-                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeDateFilter === opt ? "text-blue-600 font-medium bg-blue-50" : "text-gray-700 hover:bg-gray-50"}`}>
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-                {/* Calendar */}
-                <div className="p-4 flex-1">
-                  {/* Month/Year nav */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-1">
-                      <select value={calMonth} onChange={(e) => setCalMonth(Number(e.target.value))}
-                        className="text-sm font-semibold text-gray-800 bg-transparent border-none outline-none cursor-pointer pr-1">
-                        {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m,i) => (
-                          <option key={m} value={i}>{m}</option>
-                        ))}
-                      </select>
-                      <select value={calYear} onChange={(e) => setCalYear(Number(e.target.value))}
-                        className="text-sm font-semibold text-gray-800 bg-transparent border-none outline-none cursor-pointer">
-                        {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map((y) => (
-                          <option key={y} value={y}>{y}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => { const d = new Date(calYear, calMonth - 1); setCalMonth(d.getMonth()); setCalYear(d.getFullYear()); }}
-                        className="p-1 rounded hover:bg-gray-100 text-gray-600 transition-colors">
-                        <ChevronLeft size={15} />
-                      </button>
-                      <button onClick={() => { const d = new Date(calYear, calMonth + 1); setCalMonth(d.getMonth()); setCalYear(d.getFullYear()); }}
-                        className="p-1 rounded hover:bg-gray-100 text-gray-600 transition-colors">
-                        <ChevronRight size={15} />
-                      </button>
-                    </div>
-                  </div>
-                  {/* Day grid */}
-                  <div className="grid grid-cols-7 gap-y-1">
-                    {["Su","Mo","Tu","We","Th","Fr","Sa"].map((d) => (
-                      <div key={d} className="text-center text-[11px] font-semibold text-gray-400 pb-1">{d}</div>
-                    ))}
-                    {Array.from({ length: new Date(calYear, calMonth, 1).getDay() }, (_, i) => (
-                      <div key={`empty-${i}`} />
-                    ))}
-                    {Array.from({ length: new Date(calYear, calMonth + 1, 0).getDate() }, (_, i) => {
-                      const day = i + 1;
-                      const isToday = day === new Date().getDate() && calMonth === new Date().getMonth() && calYear === new Date().getFullYear();
-                      return (
-                        <button key={day}
-                          className={`h-7 w-7 mx-auto flex items-center justify-center rounded-full text-xs transition-colors ${isToday ? "bg-blue-600 text-white font-semibold" : "text-gray-700 hover:bg-gray-100"}`}>
-                          {day}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
           <button onClick={() => exportToCSV(filtered, `${campaign.name}-contacts.csv`)}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-[var(--border)] rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors whitespace-nowrap shrink-0">
@@ -682,6 +627,70 @@ export default function CampaignDetailPage() {
             </div>
       </>)}
           </div>
+
+      {/* ── Calendar filter dropdown (fixed, outside table) ── */}
+      {calendarOpen && calPos && (
+        <div ref={calendarRef}
+          style={{ position: "fixed", top: calPos.top, right: Math.max(8, calPos.right) }}
+          className="z-[9999] bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden
+                     w-[calc(100vw-16px)] max-w-[520px]
+                     flex flex-col sm:flex-row">
+          {/* Quick filters */}
+          <div className="sm:w-44 sm:border-r border-b sm:border-b-0 border-gray-100 py-3 shrink-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 mb-1">Filter by last attempt</p>
+            <div className="flex flex-wrap sm:flex-col gap-1 sm:gap-0 px-2 sm:px-0">
+              {["Today","Yesterday","Last 7 Days","Last 30 Days","Last 90 Days","Last 12 Months","This Week","This Month"].map((opt) => (
+                <button key={opt} onClick={() => setActiveDateFilter(activeDateFilter === opt ? null : opt)}
+                  className={`sm:w-full text-left px-3 sm:px-4 py-1.5 sm:py-2 text-sm rounded-lg sm:rounded-none transition-colors whitespace-nowrap
+                    ${activeDateFilter === opt ? "text-blue-600 font-medium bg-blue-50" : "text-gray-700 hover:bg-gray-50"}`}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Calendar */}
+          <div className="p-4 flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-1">
+                <select value={calMonth} onChange={(e) => setCalMonth(Number(e.target.value))}
+                  className="text-sm font-semibold text-gray-800 bg-transparent border-none outline-none cursor-pointer pr-1">
+                  {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m,i) => (
+                    <option key={m} value={i}>{m}</option>
+                  ))}
+                </select>
+                <select value={calYear} onChange={(e) => setCalYear(Number(e.target.value))}
+                  className="text-sm font-semibold text-gray-800 bg-transparent border-none outline-none cursor-pointer">
+                  {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => { const d = new Date(calYear, calMonth - 1); setCalMonth(d.getMonth()); setCalYear(d.getFullYear()); }}
+                  className="p-1 rounded hover:bg-gray-100 text-gray-600 transition-colors"><ChevronLeft size={15} /></button>
+                <button onClick={() => { const d = new Date(calYear, calMonth + 1); setCalMonth(d.getMonth()); setCalYear(d.getFullYear()); }}
+                  className="p-1 rounded hover:bg-gray-100 text-gray-600 transition-colors"><ChevronRight size={15} /></button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-y-0.5">
+              {["Su","Mo","Tu","We","Th","Fr","Sa"].map((d) => (
+                <div key={d} className="text-center text-[11px] font-semibold text-gray-400 pb-1">{d}</div>
+              ))}
+              {Array.from({ length: new Date(calYear, calMonth, 1).getDay() }, (_, i) => <div key={`e-${i}`} />)}
+              {Array.from({ length: new Date(calYear, calMonth + 1, 0).getDate() }, (_, i) => {
+                const day = i + 1;
+                const isToday = day === new Date().getDate() && calMonth === new Date().getMonth() && calYear === new Date().getFullYear();
+                return (
+                  <button key={day} className={`h-7 w-7 mx-auto flex items-center justify-center rounded-full text-xs transition-colors
+                    ${isToday ? "bg-blue-600 text-white font-semibold" : "text-gray-700 hover:bg-gray-100"}`}>
+                    {day}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Test Call slide panel ── */}
       <div onClick={() => setTestCallPanelOpen(false)}
