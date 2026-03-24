@@ -635,7 +635,7 @@ export default function CampaignDetailPage() {
           style={calPos.isMobile
             ? { position: "fixed", top: calPos.top, left: 8, right: 8 }
             : { position: "fixed", top: calPos.top, right: Math.max(8, calPos.right) }}
-          className="z-[9999] bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col sm:flex-row sm:w-[500px]">
+          className="z-[9999] bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col sm:flex-row sm:w-[500px] overflow-y-auto max-h-[calc(100vh-80px)]">
           {/* Quick filters */}
           <div className="border-b sm:border-b-0 sm:border-r border-gray-100 py-3 shrink-0 sm:w-44">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-4 mb-2">Filter by last attempt</p>
@@ -679,14 +679,14 @@ export default function CampaignDetailPage() {
             {/* Day grid */}
             <div className="grid grid-cols-7 gap-y-0.5">
               {["Su","Mo","Tu","We","Th","Fr","Sa"].map((d) => (
-                <div key={d} className="text-center text-[11px] font-semibold text-gray-400 pb-1">{d}</div>
+                <div key={d} className="text-center text-[11px] font-semibold text-gray-400 pb-1 w-full">{d}</div>
               ))}
               {Array.from({ length: new Date(calYear, calMonth, 1).getDay() }, (_, i) => <div key={`e-${i}`} />)}
               {Array.from({ length: new Date(calYear, calMonth + 1, 0).getDate() }, (_, i) => {
                 const day = i + 1;
                 const isToday = day === new Date().getDate() && calMonth === new Date().getMonth() && calYear === new Date().getFullYear();
                 return (
-                  <button key={day} className={`h-8 w-8 mx-auto flex items-center justify-center rounded-full text-sm transition-colors
+                  <button key={day} className={`h-8 w-full flex items-center justify-center rounded-full text-sm transition-colors
                     ${isToday ? "bg-blue-600 text-white font-semibold" : "text-gray-700 hover:bg-gray-100"}`}>
                     {day}
                   </button>
