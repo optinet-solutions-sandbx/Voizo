@@ -307,8 +307,8 @@ function CampaignEditorInner({ onClose, onSave, nextId, availableGroups, initial
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<ScriptNodeData>>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [wfNodes, , onWfNodesChange] = useNodesState<Node<WfNodeData>>(initialWorkflowNodes);
-  const scriptFlowRef = useRef<ReactFlowInstance | null>(null);
-  const wfFlowRef = useRef<ReactFlowInstance | null>(null);
+  const scriptFlowRef = useRef<ReactFlowInstance<Node<ScriptNodeData>, Edge> | null>(null);
+  const wfFlowRef = useRef<ReactFlowInstance<Node<WfNodeData>, Edge> | null>(null);
   const [scriptZoom, setScriptZoom] = useState(100);
   const [wfZoom, setWfZoom] = useState(75);
   const [wfEdges, , onWfEdgesChange] = useEdgesState(initialWorkflowEdges);
