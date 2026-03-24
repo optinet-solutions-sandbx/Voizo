@@ -257,31 +257,37 @@ export default function CampaignDetailPage() {
       </Link>
 
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        <div className="flex items-center gap-1 shrink-0">
-          <span className="w-7 h-7 rounded-md bg-blue-500/10 flex items-center justify-center">
-            <ArrowUpRight size={13} className="text-blue-400" />
-          </span>
-          <span className="w-7 h-7 rounded-md bg-[var(--bg-elevated)] flex items-center justify-center">
-            <Phone size={13} className="text-[var(--text-2)]" />
-          </span>
+      <div className="mb-6">
+        {/* Title row */}
+        <div className="flex items-start gap-2 mb-3">
+          <div className="flex items-center gap-1 shrink-0 mt-1">
+            <span className="w-7 h-7 rounded-md bg-blue-500/10 flex items-center justify-center">
+              <ArrowUpRight size={13} className="text-blue-400" />
+            </span>
+            <span className="w-7 h-7 rounded-md bg-[var(--bg-elevated)] flex items-center justify-center">
+              <Phone size={13} className="text-[var(--text-2)]" />
+            </span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-1)] leading-tight flex-1 min-w-0">
+            {campaign.name}
+          </h1>
         </div>
-        <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-1)] leading-tight flex-1 min-w-0">
-          {campaign.name}
-        </h1>
-        <StatusBadge status={campaign.status} />
-        <div className="flex items-center gap-2 shrink-0 ml-auto flex-wrap">
-          <button onClick={() => { setEditName(campaign.name); setShowEdit(true); }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-[var(--border)] rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
-            <Pencil size={13} /> Edit
-          </button>
-          <button className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-[var(--border)] rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
-            <PhoneCall size={13} /> Test Call
-          </button>
-          <button onClick={() => setShowAdd(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-md shadow-blue-600/20">
-            <UserPlus size={13} /><span className="hidden sm:inline">Add Contact</span><span className="sm:hidden">Add</span>
-          </button>
+        {/* Actions row */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <StatusBadge status={campaign.status} />
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <button onClick={() => { setEditName(campaign.name); setShowEdit(true); }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-[var(--border)] rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
+              <Pencil size={13} /> Edit
+            </button>
+            <button className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-[var(--border)] rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors">
+              <PhoneCall size={13} /> Test Call
+            </button>
+            <button onClick={() => setShowAdd(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-md shadow-blue-600/20">
+              <UserPlus size={13} /><span className="hidden sm:inline">Add Contact</span><span className="sm:hidden">Add</span>
+            </button>
+          </div>
         </div>
       </div>
 

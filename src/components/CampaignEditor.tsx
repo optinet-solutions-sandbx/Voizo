@@ -12,6 +12,7 @@ import {
   Position,
   type Node,
   type Edge,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Campaign, Group } from "@/lib/campaignData";
@@ -306,6 +307,10 @@ function CampaignEditorInner({ onClose, onSave, nextId, availableGroups, initial
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<ScriptNodeData>>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [wfNodes, , onWfNodesChange] = useNodesState<Node<WfNodeData>>(initialWorkflowNodes);
+  const scriptFlowRef = useRef<ReactFlowInstance | null>(null);
+  const wfFlowRef = useRef<ReactFlowInstance | null>(null);
+  const [scriptZoom, setScriptZoom] = useState(100);
+  const [wfZoom, setWfZoom] = useState(75);
   const [wfEdges, , onWfEdgesChange] = useEdgesState(initialWorkflowEdges);
 
   const openScriptPanel = useCallback(() => {
@@ -685,13 +690,15 @@ function CampaignEditorInner({ onClose, onSave, nextId, availableGroups, initial
             panOnScroll zoomOnScroll
             nodesDraggable nodesConnectable={false} elementsSelectable={false}
             proOptions={{ hideAttribution: true }}
+            onInit={(instance) => { scriptFlowRef.current = instance; }}
+            onMoveEnd={(_, vp) => setScriptZoom(Math.round(vp.zoom * 100))}
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#D1D5DB" />
           </ReactFlow>
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white rounded-full border border-gray-200 shadow-sm gap-1 px-1 py-1 z-10">
-            <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">+</button>
-            <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">−</button>
-            <span className="text-sm text-gray-600 px-2 min-w-[48px] text-center">100%</span>
+          <div className="hidden md:flex absolute bottom-6 left-1/2 -translate-x-1/2 items-center bg-white rounded-full border border-gray-200 shadow-sm gap-1 px-1 py-1 z-10">
+            <button onClick={() => { scriptFlowRef.current?.zoomIn(); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">+</button>
+            <button onClick={() => { scriptFlowRef.current?.zoomOut(); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">−</button>
+            <span className="text-sm text-gray-600 px-2 min-w-[48px] text-center">{scriptZoom}%</span>
           </div>
         </div>
 
@@ -783,13 +790,15 @@ function CampaignEditorInner({ onClose, onSave, nextId, availableGroups, initial
               panOnScroll zoomOnScroll
               nodesDraggable nodesConnectable={false} elementsSelectable={false}
               proOptions={{ hideAttribution: true }}
+              onInit={(instance) => { wfFlowRef.current = instance; }}
+              onMoveEnd={(_, vp) => setWfZoom(Math.round(vp.zoom * 100))}
             >
               <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#D1D5DB" />
             </ReactFlow>
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white rounded-full border border-gray-200 shadow-sm gap-1 px-1 py-1 z-10">
-              <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">+</button>
-              <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">−</button>
-              <span className="text-sm text-gray-600 px-2 min-w-[48px] text-center">75%</span>
+            <div className="hidden md:flex absolute bottom-6 left-1/2 -translate-x-1/2 items-center bg-white rounded-full border border-gray-200 shadow-sm gap-1 px-1 py-1 z-10">
+              <button onClick={() => { wfFlowRef.current?.zoomIn(); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">+</button>
+              <button onClick={() => { wfFlowRef.current?.zoomOut(); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-700 text-lg font-medium">−</button>
+              <span className="text-sm text-gray-600 px-2 min-w-[48px] text-center">{wfZoom}%</span>
             </div>
           </div>
         )}
