@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from "react";
+import Link from "next/link";
 import { useNotifications } from "@/lib/notificationsContext";
-import { Search, Plus, X, Megaphone as MegaphoneIcon } from "lucide-react";
+import { Search, Plus, X, Megaphone as MegaphoneIcon, Sparkles } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis
 } from "recharts";
@@ -42,7 +43,6 @@ import AddGroupModal from "@/components/AddGroupModal";
 import Pagination from "@/components/Pagination";
 import { fetchCampaigns, insertCampaign, deleteCampaign, archiveCampaign, recoverCampaign, Campaign, Group } from "@/lib/campaignData";
 import { useToast } from "@/lib/toastContext";
-import { fetchAllContacts, Contact } from "@/lib/contactData";
 
 const BUILTIN_GROUPS: Group[] = ["Canada", "RND", "Reactivation", "Archived"];
 const PAGE_SIZE = 5;
@@ -51,14 +51,12 @@ export default function CampaignsPage() {
   const { addNotification } = useNotifications();
   const { showToast } = useToast();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([fetchCampaigns(), fetchAllContacts()])
-      .then(([camps, contacts]) => {
+    fetchCampaigns()
+      .then((camps) => {
         setCampaigns(camps);
-        setAllContacts(contacts);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -209,14 +207,24 @@ export default function CampaignsPage() {
             <p className="text-xs text-[var(--text-3)] mt-0.5">{campaigns.filter((c) => c.group !== "Archived").length} active campaigns</p>
           </div>
         </div>
-        <button
-          onClick={() => { setShowNewModal(true); }}
-          className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0"
-        >
-          <Plus size={15} />
-          <span className="hidden sm:inline">New Campaign</span>
-          <span className="sm:hidden">New</span>
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Link
+            href="/campaigns/v2/new"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 border border-[var(--border)] bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-2)] text-sm font-medium rounded-full transition-colors"
+          >
+            <Sparkles size={15} />
+            <span className="hidden sm:inline">New Campaign V2</span>
+            <span className="sm:hidden">V2</span>
+          </Link>
+          <button
+            onClick={() => { setShowNewModal(true); }}
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0"
+          >
+            <Plus size={15} />
+            <span className="hidden sm:inline">New Campaign</span>
+            <span className="sm:hidden">New</span>
+          </button>
+        </div>
       </div>
 
       {/* ── Tab bar ── */}

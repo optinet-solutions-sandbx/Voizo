@@ -41,3 +41,12 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+.gitnexus
+
+# internal project docs (not for repo)
+.agent/
+docs/
+.mcp.json
+.claude/
+CLAUDE.md
+AGENTS.md
