@@ -84,7 +84,7 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
     originator: MOBIVATE_SENDER_ID,
     recipient,
     reference: args.reference || undefined,
-    shortenUrls: false,
+    shortenUrls: true, // confirmed with Maria 2026-04-17 — always on
     excludeOptouts: true, // safety net per manifesto §1 compliance
   };
 
