@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bot, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
-import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
+import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
 
@@ -23,6 +23,30 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function SmsStatusCell({ sms }: { sms: Row | undefined }) {
+  if (!sms) return <span className="text-[var(--text-3)]">—</span>;
+  const status = (sms.status as string) || "queued";
+  const label: Record<string, string> = {
+    queued: "Queued",
+    sent: "Sent",
+    delivered: "Delivered",
+    failed: "Failed",
+    undelivered: "Undelivered",
+  };
+  const cls: Record<string, string> = {
+    queued: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+    sent: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+    delivered: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+    failed: "bg-red-500/15 text-red-400 border-red-500/25",
+    undelivered: "bg-amber-500/15 text-amber-400 border-amber-500/25",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls[status] ?? cls.queued}`}>
+      {label[status] ?? status}
+    </span>
+  );
+}
+
 type Tab = "numbers" | "calls" | "settings";
 
 export default function CampaignV2DetailPage() {
@@ -30,6 +54,7 @@ export default function CampaignV2DetailPage() {
   const [campaign, setCampaign] = useState<Row | null>(null);
   const [numbers, setNumbers] = useState<Row[]>([]);
   const [calls, setCalls] = useState<Row[]>([]);
+  const [smsByPhone, setSmsByPhone] = useState<Map<string, Row>>(new Map());
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("numbers");
   const [acting, setActing] = useState(false);
@@ -38,14 +63,23 @@ export default function CampaignV2DetailPage() {
     if (!id) return;
     (async () => {
       try {
-        const [c, n, cl] = await Promise.all([
+        const [c, n, cl, sms] = await Promise.all([
           fetchCampaignV2(id),
           fetchCampaignNumbersV2(id),
           fetchCallsV2(id).catch(() => []),
+          fetchSmsMessagesV2(id).catch(() => []),
         ]);
         setCampaign(c);
         setNumbers(n);
         setCalls(cl);
+        // Build phone -> most-recent SMS map. Rows arrive ordered newest-first,
+        // so the first one we see per phone is the latest.
+        const map = new Map<string, Row>();
+        for (const row of sms) {
+          const phone = row.to_phone_e164 as string | undefined;
+          if (phone && !map.has(phone)) map.set(phone, row);
+        }
+        setSmsByPhone(map);
       } catch (err) {
         console.error("Failed to load campaign:", err);
       } finally {
@@ -195,6 +229,7 @@ export default function CampaignV2DetailPage() {
                   <th className="text-left px-5 py-3 font-semibold">Phone</th>
                   <th className="text-left px-5 py-3 font-semibold">Outcome</th>
                   <th className="text-left px-5 py-3 font-semibold">Attempts</th>
+                  <th className="text-left px-5 py-3 font-semibold">SMS</th>
                   <th className="text-left px-5 py-3 font-semibold">Last Attempted</th>
                 </tr>
               </thead>
@@ -204,6 +239,7 @@ export default function CampaignV2DetailPage() {
                     <td className="px-5 py-3 text-[var(--text-1)] font-mono">{n.phone_e164 as string}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
+                    <td className="px-5 py-3"><SmsStatusCell sms={smsByPhone.get(n.phone_e164 as string)} /></td>
                     <td className="px-5 py-3 text-[var(--text-3)]">{n.last_attempted_at ? new Date(n.last_attempted_at as string).toLocaleString() : "—"}</td>
                   </tr>
                 ))}

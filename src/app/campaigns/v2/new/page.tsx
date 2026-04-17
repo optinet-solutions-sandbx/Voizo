@@ -156,12 +156,36 @@ export default function NewCampaignV2Page() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <FieldLabel>Timezone</FieldLabel>
-              <input
+              <select
                 value={timezone}
                 onChange={(e) => setTimezone(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="America/Toronto"
-              />
+                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <optgroup label="Americas">
+                  <option value="America/Toronto">America/Toronto</option>
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="America/Chicago">America/Chicago</option>
+                  <option value="America/Denver">America/Denver</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles</option>
+                  <option value="America/Vancouver">America/Vancouver</option>
+                  <option value="America/Mexico_City">America/Mexico_City</option>
+                </optgroup>
+                <optgroup label="Europe">
+                  <option value="Europe/London">Europe/London</option>
+                  <option value="Europe/Athens">Europe/Athens</option>
+                  <option value="Europe/Paris">Europe/Paris</option>
+                  <option value="Europe/Berlin">Europe/Berlin</option>
+                  <option value="Europe/Madrid">Europe/Madrid</option>
+                </optgroup>
+                <optgroup label="Asia / Pacific">
+                  <option value="Asia/Manila">Asia/Manila</option>
+                  <option value="Asia/Singapore">Asia/Singapore</option>
+                  <option value="Asia/Tokyo">Asia/Tokyo</option>
+                  <option value="Asia/Dubai">Asia/Dubai</option>
+                  <option value="Australia/Sydney">Australia/Sydney</option>
+                </optgroup>
+                <option value="UTC">UTC</option>
+              </select>
             </div>
             <div />
             <div>
@@ -198,10 +222,13 @@ export default function NewCampaignV2Page() {
         </section>
 
         <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-1">
             <MessageSquareText size={16} className="text-blue-400" />
             <h2 className="text-base font-semibold text-[var(--text-1)]">Post-Call SMS</h2>
           </div>
+          <p className="text-xs text-[var(--text-3)] mb-4">
+            Sent automatically to the called number right after a successful call. &quot;Successful&quot; means the AI determined the conversation met the campaign&apos;s goal.
+          </p>
           <div className="grid gap-4">
             <label className="inline-flex items-center gap-3 text-sm text-[var(--text-2)]">
               <input
@@ -210,7 +237,7 @@ export default function NewCampaignV2Page() {
                 onChange={(e) => setSmsEnabled(e.target.checked)}
                 className="w-4 h-4 rounded border-[var(--border)] text-blue-500 focus:ring-blue-500"
               />
-              Enable SMS when goal_reached = true
+              Send SMS only when the call is successful
             </label>
             <textarea
               value={smsTemplate}
@@ -245,8 +272,8 @@ export default function NewCampaignV2Page() {
             value={numbersText}
             onChange={(e) => setNumbersText(e.target.value)}
             rows={7}
-            className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y font-mono text-sm"
-            placeholder={"+14035550100\n+14035550101\n+14035550102"}
+            className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)]/60 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y font-mono text-sm"
+            placeholder={"Paste or type numbers here, one per line\nExample:  +14035550100"}
           />
           <p className="text-xs text-[var(--text-3)] mt-2">
             Parsed numbers: <span className="text-[var(--text-2)] font-semibold">{parsedNumbers.length}</span>

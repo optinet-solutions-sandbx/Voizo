@@ -133,6 +133,16 @@ export async function fetchCallsV2(campaignId: string) {
   return data ?? [];
 }
 
+export async function fetchSmsMessagesV2(campaignId: string) {
+  const { data, error } = await supabase
+    .from("sms_messages_v2")
+    .select("*")
+    .eq("campaign_id", campaignId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function updateCampaignV2Status(id: string, status: string) {
   const { data, error } = await supabase
     .from("campaigns_v2")
