@@ -32,9 +32,9 @@ const MOBIVATE_SENDER_ID = process.env.MOBIVATE_SENDER_ID;
  * Returns a descriptive error message if not configured, or null if ready.
  */
 export function getMobivateConfigError(): string | null {
-  if (!MOBIVATE_API_KEY) return "MOBIVATE_API_KEY is not set in .env.local";
-  if (!MOBIVATE_API_HOST) return "MOBIVATE_API_HOST is not set in .env.local";
-  if (!MOBIVATE_SENDER_ID) return "MOBIVATE_SENDER_ID is not set in .env.local";
+  if (!MOBIVATE_API_KEY) return "MOBIVATE_API_KEY is not set";
+  if (!MOBIVATE_API_HOST) return "MOBIVATE_API_HOST is not set";
+  if (!MOBIVATE_SENDER_ID) return "MOBIVATE_SENDER_ID is not set";
   return null;
 }
 
