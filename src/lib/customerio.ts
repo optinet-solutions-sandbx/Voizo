@@ -27,7 +27,7 @@ const BASE_URL = REGION === "eu" ? "https://api-eu.customer.io" : "https://api.c
 
 /** Pre-flight check. Returns error message if not configured, null if ready. */
 export function getCustomerIOConfigError(): string | null {
-  if (!APP_API_KEY) return "CUSTOMERIO_APP_API_KEY is not set in .env.local";
+  if (!APP_API_KEY) return "CUSTOMERIO_APP_API_KEY is not set";
   if (REGION !== "us" && REGION !== "eu") {
     return `CUSTOMERIO_API_REGION must be 'us' or 'eu' (got '${REGION}')`;
   }
