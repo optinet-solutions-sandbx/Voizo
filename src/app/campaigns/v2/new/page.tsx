@@ -1,14 +1,41 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Bot, CalendarDays, ListChecks, MessageSquareText, Phone, Save, Sparkles } from "lucide-react";
-import { createCampaignV2, formatDefaultCallWindowsJson, parsePhoneList } from "@/lib/campaignV2Data";
+import { ArrowLeft, Bot, CalendarDays, ListChecks, Loader2, MessageSquareText, Phone, Save, Sparkles } from "lucide-react";
+import { createCampaignV2, defaultCallWindows, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">{children}</label>;
+}
+
+type Assistant = { id: string; name: string };
+
+type Day = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+type ScheduleRow = { day: Day; enabled: boolean; start: string; end: string };
+
+const DAYS: { key: Day; label: string }[] = [
+  { key: "sun", label: "Sunday" },
+  { key: "mon", label: "Monday" },
+  { key: "tue", label: "Tuesday" },
+  { key: "wed", label: "Wednesday" },
+  { key: "thu", label: "Thursday" },
+  { key: "fri", label: "Friday" },
+  { key: "sat", label: "Saturday" },
+];
+
+function initialScheduleRows(): ScheduleRow[] {
+  // Seed from defaultCallWindows(); any day missing from defaults is disabled
+  // with a reasonable 09:00–17:00 placeholder the operator can toggle on.
+  const defaults = new Map(defaultCallWindows().map((w) => [w.day, w]));
+  return DAYS.map(({ key }) => {
+    const match = defaults.get(key);
+    return match
+      ? { day: key, enabled: true, start: match.start, end: match.end }
+      : { day: key, enabled: false, start: "09:00", end: "17:00" };
+  });
 }
 
 export default function NewCampaignV2Page() {
@@ -16,11 +43,12 @@ export default function NewCampaignV2Page() {
   const [name, setName] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [vapiAssistantId, setVapiAssistantId] = useState("");
-  const [vapiAssistantName, setVapiAssistantName] = useState("");
+  const [assistants, setAssistants] = useState<Assistant[] | null>(null);
+  const [assistantsError, setAssistantsError] = useState<string | null>(null);
   const [timezone, setTimezone] = useState("America/Toronto");
   const [startAt, setStartAt] = useState("");
   const [endAt, setEndAt] = useState("");
-  const [callWindowsJson, setCallWindowsJson] = useState(formatDefaultCallWindowsJson());
+  const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>(initialScheduleRows);
   const [smsEnabled, setSmsEnabled] = useState(false);
   const [smsTemplate, setSmsTemplate] = useState("");
   const [numbersText, setNumbersText] = useState("");
@@ -30,6 +58,29 @@ export default function NewCampaignV2Page() {
 
   const parsedNumbers = useMemo(() => parsePhoneList(numbersText), [numbersText]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/vapi/assistants");
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setAssistantsError(body.error || `Failed to load assistants (${res.status})`);
+          setAssistants([]);
+          return;
+        }
+        const body = await res.json();
+        setAssistants(body.assistants ?? []);
+      } catch (err) {
+        setAssistantsError(err instanceof Error ? err.message : "Network error");
+        setAssistants([]);
+      }
+    })();
+  }, []);
+
+  function updateRow(day: Day, patch: Partial<ScheduleRow>) {
+    setScheduleRows((prev) => prev.map((r) => (r.day === day ? { ...r, ...patch } : r)));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -37,18 +88,25 @@ export default function NewCampaignV2Page() {
 
     if (!name.trim()) return setError("Campaign name is required.");
     if (!systemPrompt.trim()) return setError("Prompt is required.");
-    if (!vapiAssistantId.trim()) return setError("Vapi assistant ID is required.");
+    if (!vapiAssistantId.trim()) return setError("Pick a Vapi assistant.");
     if (parsedNumbers.length === 0) return setError("Add at least one valid E.164 phone number.");
 
-    let callWindows;
-    try {
-      callWindows = JSON.parse(callWindowsJson);
-      if (!Array.isArray(callWindows) || callWindows.length === 0) {
-        throw new Error("Call windows must be a non-empty JSON array.");
-      }
-    } catch {
-      return setError("Call windows must be valid JSON.");
+    const enabledRows = scheduleRows.filter((r) => r.enabled);
+    if (enabledRows.length === 0) {
+      return setError("Enable at least one day in the schedule.");
     }
+    for (const r of enabledRows) {
+      if (r.start >= r.end) {
+        return setError(`${r.day.toUpperCase()} start time must be before end time.`);
+      }
+    }
+    const callWindows: CallWindow[] = enabledRows.map((r) => ({
+      day: r.day,
+      start: r.start,
+      end: r.end,
+    }));
+
+    const selectedAssistant = assistants?.find((a) => a.id === vapiAssistantId);
 
     setSaving(true);
     try {
@@ -56,7 +114,7 @@ export default function NewCampaignV2Page() {
         name: name.trim(),
         systemPrompt: systemPrompt.trim(),
         vapiAssistantId: vapiAssistantId.trim(),
-        vapiAssistantName: vapiAssistantName.trim() || undefined,
+        vapiAssistantName: selectedAssistant?.name,
         timezone: timezone.trim(),
         startAt: startAt ? new Date(startAt).toISOString() : null,
         endAt: endAt ? new Date(endAt).toISOString() : null,
@@ -127,23 +185,33 @@ export default function NewCampaignV2Page() {
                 placeholder="Write the system prompt that Vapi should follow during the call."
               />
             </div>
-            <div>
-              <FieldLabel>Vapi Assistant ID</FieldLabel>
-              <input
-                value={vapiAssistantId}
-                onChange={(e) => setVapiAssistantId(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="669a0235-40bf-4989-8781-406e00899c9d"
-              />
-            </div>
-            <div>
-              <FieldLabel>Vapi Assistant Name</FieldLabel>
-              <input
-                value={vapiAssistantName}
-                onChange={(e) => setVapiAssistantName(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="Chris - Voice Agent"
-              />
+            <div className="sm:col-span-2">
+              <FieldLabel>Vapi Assistant</FieldLabel>
+              {assistants === null && !assistantsError ? (
+                <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-3)]">
+                  <Loader2 size={14} className="animate-spin" /> Loading assistants from Vapi…
+                </div>
+              ) : assistantsError ? (
+                <div className="px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+                  {assistantsError}
+                </div>
+              ) : (
+                <select
+                  value={vapiAssistantId}
+                  onChange={(e) => setVapiAssistantId(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">— Select an assistant —</option>
+                  {assistants!.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {vapiAssistantId && (
+                <p className="text-xs text-[var(--text-3)] mt-2 font-mono">{vapiAssistantId}</p>
+              )}
             </div>
           </div>
         </section>
@@ -153,7 +221,7 @@ export default function NewCampaignV2Page() {
             <CalendarDays size={16} className="text-blue-400" />
             <h2 className="text-base font-semibold text-[var(--text-1)]">Schedule</h2>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2 mb-5">
             <div>
               <FieldLabel>Timezone</FieldLabel>
               <select
@@ -189,7 +257,7 @@ export default function NewCampaignV2Page() {
             </div>
             <div />
             <div>
-              <FieldLabel>Start At</FieldLabel>
+              <FieldLabel>Start Date</FieldLabel>
               <input
                 type="datetime-local"
                 value={startAt}
@@ -198,7 +266,7 @@ export default function NewCampaignV2Page() {
               />
             </div>
             <div>
-              <FieldLabel>End At</FieldLabel>
+              <FieldLabel>End Date</FieldLabel>
               <input
                 type="datetime-local"
                 value={endAt}
@@ -206,19 +274,44 @@ export default function NewCampaignV2Page() {
                 className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
             </div>
-            <div className="sm:col-span-2">
-              <FieldLabel>Call Windows JSON</FieldLabel>
-              <textarea
-                value={callWindowsJson}
-                onChange={(e) => setCallWindowsJson(e.target.value)}
-                rows={8}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
-              />
-              <p className="text-xs text-[var(--text-3)] mt-2">
-                The default JSON matches the Callers.ai schedule. We can replace this with a friendly editor next.
-              </p>
-            </div>
           </div>
+
+          <FieldLabel>Weekly Call Hours</FieldLabel>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-app)] divide-y divide-[var(--border)]">
+            {scheduleRows.map((row) => (
+              <div key={row.day} className="flex items-center gap-3 px-4 py-3">
+                <label className="flex items-center gap-2 text-sm text-[var(--text-2)] min-w-[9rem] shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={row.enabled}
+                    onChange={(e) => updateRow(row.day, { enabled: e.target.checked })}
+                    className="w-4 h-4 rounded border-[var(--border)] text-blue-500 focus:ring-blue-500"
+                  />
+                  {DAYS.find((d) => d.key === row.day)?.label}
+                </label>
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="time"
+                    value={row.start}
+                    onChange={(e) => updateRow(row.day, { start: e.target.value })}
+                    disabled={!row.enabled}
+                    className="px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-40"
+                  />
+                  <span className="text-xs text-[var(--text-3)]">to</span>
+                  <input
+                    type="time"
+                    value={row.end}
+                    onChange={(e) => updateRow(row.day, { end: e.target.value })}
+                    disabled={!row.enabled}
+                    className="px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-40"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-[var(--text-3)] mt-2">
+            Calls only dial during these hours, in the campaign&apos;s timezone. Uncheck a day to skip it entirely.
+          </p>
         </section>
 
         <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 shadow-sm">
@@ -258,9 +351,6 @@ export default function NewCampaignV2Page() {
 
           <SegmentImporter
             onImport={(phones) => {
-              // Append imported phones to the textarea. Dedup happens at parse
-              // time (parsePhoneList uses Set), so duplicates from prior pastes
-              // or prior imports are silently removed on submit.
               setNumbersText((prev) => {
                 const sep = prev.trim().length > 0 && !prev.endsWith("\n") ? "\n" : "";
                 return prev + sep + phones.join("\n");
