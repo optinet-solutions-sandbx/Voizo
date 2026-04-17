@@ -74,13 +74,35 @@ export async function findNextNumber(campaignId: string) {
   if (!eligible) return null;
 
   // Suppression check (Manifesto §6: before every calls.create, no exceptions)
-  const { data: suppressed } = await supabaseAdmin
+  //
+  // Two tables coexist during V1→V2 transition (architecture doc §3.8):
+  //   - suppression_list (V2): used by the Campaign V2 dialer, richer schema
+  //   - do_not_call (V1): used by the /do-not-call dashboard page, seeded data
+  //
+  // Both must be checked. A number in EITHER table is suppressed.
+  // Consolidation (migrating V1 rows into V2, deprecating do_not_call) is
+  // planned for post-demo. Until then, dual-check is the compliance gate.
+  //
+  // Performance: both tables have UNIQUE index on their phone column.
+  // Two indexed lookups = ~2ms total. Negligible even at 100k calls/day.
+
+  const { data: suppressedV2 } = await supabaseAdmin
     .from("suppression_list")
     .select("id")
     .eq("phone_e164", eligible.phone_e164)
     .limit(1);
 
-  if (suppressed && suppressed.length > 0) {
+  const { data: suppressedV1 } = await supabaseAdmin
+    .from("do_not_call")
+    .select("id")
+    .eq("phone_number", eligible.phone_e164)
+    .limit(1);
+
+  const isSuppressed =
+    (suppressedV2 && suppressedV2.length > 0) ||
+    (suppressedV1 && suppressedV1.length > 0);
+
+  if (isSuppressed) {
     await supabaseAdmin
       .from("campaign_numbers_v2")
       .update({ outcome: "suppressed" })

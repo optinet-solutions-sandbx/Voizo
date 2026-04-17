@@ -16,6 +16,7 @@
 # next.js
 /.next/
 /out/
+caller-system-dashboard/.next/
 
 # production
 /build

@@ -1,0 +1,37 @@
+<!--
+  FreeSWITCH global variables — example template.
+
+  STATUS: Phase 0 template (2026-04-15).
+  Deploy: copy to /etc/freeswitch/vars.xml on the AWS instance and fill in real values.
+  Restart FS after editing (`systemctl restart freeswitch`).
+
+  Values referenced from sofia.conf.xml as $${var_name}.
+
+  Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §5
+-->
+<include>
+
+  <!-- ── SquareTalk SIP trunk credentials ──
+       Provided by SquareTalk; pending Maria via Chris (2026-04-15).
+       Trunk handoff config used Asterisk format; FS settings are equivalent. -->
+  <X-PRE-PROCESS cmd="set" data="squaretalk_host=lb-sbc.squaretalk.com"/>
+  <X-PRE-PROCESS cmd="set" data="squaretalk_port=5080"/>
+  <X-PRE-PROCESS cmd="set" data="squaretalk_username=REPLACE_ME"/>
+  <X-PRE-PROCESS cmd="set" data="squaretalk_password=REPLACE_ME"/>
+
+  <!-- ── AWS networking ──
+       external_ip = the EC2 instance's Elastic IP (NOT the private IP).
+       FS uses this for SIP/SDP advertisements so SquareTalk + Vapi route audio back here.
+       Get it from the AWS console after Phase 1 provisioning. -->
+  <X-PRE-PROCESS cmd="set" data="external_ip=REPLACE_WITH_ELASTIC_IP"/>
+
+  <!-- ── ESL (Event Socket Layer) ──
+       Used by src/lib/freeswitch/client.ts to issue originate commands. -->
+  <X-PRE-PROCESS cmd="set" data="esl_password=REPLACE_ME_STRONG_RANDOM"/>
+
+  <!-- ── RTP port range — must match the AWS security group ──
+       Default FS range; opens UDP 16384–32768 for audio. -->
+  <X-PRE-PROCESS cmd="set" data="rtp_start_port=16384"/>
+  <X-PRE-PROCESS cmd="set" data="rtp_end_port=32768"/>
+
+</include>
