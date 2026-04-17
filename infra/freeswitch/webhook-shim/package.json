@@ -1,0 +1,18 @@
+{
+  "name": "voizo-freeswitch-shim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Translates FreeSWITCH ESL events to Voizo dashboard HTTP webhooks with HMAC signing. Runs on the AWS EC2 box alongside FreeSWITCH.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "start:dry": "DRY_RUN=true node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "modesl": "^1.4.0"
+  },
+  "license": "UNLICENSED"
+}
