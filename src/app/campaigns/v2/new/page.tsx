@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Bot, CalendarDays, ListChecks, MessageSquareText, Phone, Save, Sparkles } from "lucide-react";
 import { createCampaignV2, formatDefaultCallWindowsJson, parsePhoneList } from "@/lib/campaignV2Data";
+import SegmentImporter from "@/components/SegmentImporter";
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">{children}</label>;
@@ -227,6 +228,19 @@ export default function NewCampaignV2Page() {
             <ListChecks size={16} className="text-blue-400" />
             <h2 className="text-base font-semibold text-[var(--text-1)]">Phone Numbers</h2>
           </div>
+
+          <SegmentImporter
+            onImport={(phones) => {
+              // Append imported phones to the textarea. Dedup happens at parse
+              // time (parsePhoneList uses Set), so duplicates from prior pastes
+              // or prior imports are silently removed on submit.
+              setNumbersText((prev) => {
+                const sep = prev.trim().length > 0 && !prev.endsWith("\n") ? "\n" : "";
+                return prev + sep + phones.join("\n");
+              });
+            }}
+          />
+
           <textarea
             value={numbersText}
             onChange={(e) => setNumbersText(e.target.value)}

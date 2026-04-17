@@ -144,16 +144,56 @@ export async function POST(request: NextRequest) {
           .limit(1);
 
         if (!existingSms || existingSms.length === 0) {
-          await supabaseAdmin.from("sms_messages_v2").insert({
-            campaign_id: callRow.campaign_id,
-            call_id: callRow.id,
-            campaign_number_id: callRow.campaign_number_id,
-            to_phone_e164: numRow.phone_e164,
-            body: campaign!.sms_template,
-            provider: "twilio",
-            status: "queued",
-          });
-          console.log(`SMS queued for ${numRow.phone_e164} (goal reached)`);
+          // Step 1: Write state BEFORE calling provider (manifesto §6)
+          const { data: smsRow } = await supabaseAdmin
+            .from("sms_messages_v2")
+            .insert({
+              campaign_id: callRow.campaign_id,
+              call_id: callRow.id,
+              campaign_number_id: callRow.campaign_number_id,
+              to_phone_e164: numRow.phone_e164,
+              body: campaign!.sms_template,
+              provider: "mobivate",
+              status: "queued",
+            })
+            .select("id")
+            .single();
+
+          // Step 2: Actually send the SMS via Mobivate
+          // If Mobivate isn't configured (no API key), this returns
+          // success=false gracefully — the row stays 'queued' for
+          // manual retry or later dispatch when config is available.
+          const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
+
+          if (!getMobivateConfigError()) {
+            const result = await sendSMS({
+              to: numRow.phone_e164,
+              body: campaign!.sms_template,
+              reference: smsRow?.id || undefined,
+            });
+
+            // Step 3: Update the row with the result
+            if (smsRow) {
+              await supabaseAdmin
+                .from("sms_messages_v2")
+                .update({
+                  status: result.success ? "sent" : "failed",
+                  provider_message_id: result.providerMessageId,
+                  error_message: result.error,
+                })
+                .eq("id", smsRow.id);
+            }
+
+            console.log(
+              `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164} ` +
+              `(goal reached, provider_id=${result.providerMessageId})`,
+            );
+          } else {
+            console.warn(
+              `SMS queued for ${numRow.phone_e164} (goal reached) but Mobivate not configured — ` +
+              `row stays 'queued' until API key is set.`,
+            );
+          }
         }
       }
     }

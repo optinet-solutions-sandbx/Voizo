@@ -1,3 +1,14 @@
+/**
+ * ⚠️ DEPRECATED 2026-04-15 — Twilio is OUT of scope per Chris.
+ *
+ * TwiML doesn't apply to the new FreeSWITCH stack. The bridge-to-Vapi behavior
+ * is now performed by FreeSWITCH dialplan: infra/freeswitch/dialplan/voizo.xml
+ * (the `voizo_bridge_to_vapi` extension).
+ *
+ * See: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md
+ * This route gets removed when the FreeSWITCH PoC is operational.
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 
 /**

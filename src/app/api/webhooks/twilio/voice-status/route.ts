@@ -1,3 +1,10 @@
+/**
+ * ⚠️ DEPRECATED 2026-04-15 — Twilio is OUT of scope per Chris.
+ * Replacement: src/app/api/webhooks/freeswitch/voice-status/route.ts
+ * See: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md
+ * This route stays alive only until the FreeSWITCH PoC is operational.
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateTwilioSignature } from "@/lib/twilioClient";
