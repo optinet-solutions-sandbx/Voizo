@@ -1,0 +1,44 @@
+# Voizo FreeSWITCH → Dashboard webhook shim — systemd unit.
+#
+# STATUS: Phase 0 (2026-04-15) — deploy to /etc/systemd/system/voizo-shim.service
+# on the AWS EC2 instance after copying the shim into /opt/voizo-shim.
+#
+# Deployment steps (run on the EC2 box after AWS provisioning):
+#   sudo mkdir -p /opt/voizo-shim
+#   sudo cp -r index.js package.json /opt/voizo-shim/
+#   cd /opt/voizo-shim && sudo npm install --production
+#   sudo cp voizo-shim.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/voizo-shim.service  # fill in env vars
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now voizo-shim
+#   sudo journalctl -u voizo-shim -f  # watch logs
+#
+# Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §10
+
+[Unit]
+Description=Voizo FreeSWITCH webhook shim — translates FS ESL events to Voizo dashboard webhooks
+After=network.target freeswitch.service
+Requires=freeswitch.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/voizo-shim
+ExecStart=/usr/bin/node /opt/voizo-shim/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Runs as non-root for defense-in-depth.
+User=ubuntu
+Group=ubuntu
+
+# Environment — fill these in with real values before enabling the service.
+Environment="ESL_HOST=127.0.0.1"
+Environment="ESL_PORT=8021"
+Environment="ESL_PASSWORD=REPLACE_ME_match_vars.xml"
+Environment="VOIZO_WEBHOOK_URL=https://<voizo-dashboard-url>/api/webhooks/freeswitch/voice-status"
+Environment="VOIZO_WEBHOOK_SECRET=REPLACE_ME_random_hex_match_Voizo_env"
+
+[Install]
+WantedBy=multi-user.target
