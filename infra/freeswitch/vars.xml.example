@@ -11,13 +11,11 @@
 -->
 <include>
 
-  <!-- ── SquareTalk SIP trunk credentials ──
-       Provided by SquareTalk; pending Maria via Chris (2026-04-15).
-       Trunk handoff config used Asterisk format; FS settings are equivalent. -->
+  <!-- ── SquareTalk SIP trunk ──
+       IP authorization (switched 2026-04-20). No username/password needed —
+       SquareTalk recognizes us by source IP (must be whitelisted on their side). -->
   <X-PRE-PROCESS cmd="set" data="squaretalk_host=lb-sbc.squaretalk.com"/>
-  <X-PRE-PROCESS cmd="set" data="squaretalk_port=5080"/>
-  <X-PRE-PROCESS cmd="set" data="squaretalk_username=REPLACE_ME"/>
-  <X-PRE-PROCESS cmd="set" data="squaretalk_password=REPLACE_ME"/>
+  <X-PRE-PROCESS cmd="set" data="squaretalk_port=5060"/>
 
   <!-- ── AWS networking ──
        external_ip = the EC2 instance's Elastic IP (NOT the private IP).
