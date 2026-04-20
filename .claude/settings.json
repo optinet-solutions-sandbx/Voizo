@@ -7,5 +7,6 @@
       "Bash(npx tsc:*)",
       "Bash(find c:UsersUserOneDriveDesktopcaller-system-dashboardcaller-system-dashboard -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\))"
     ]
-  }
+  },
+  "enabledMcpjsonServers": ["gitnexus"]
 }
