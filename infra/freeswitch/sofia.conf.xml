@@ -1,18 +1,14 @@
 <!--
   FreeSWITCH Sofia SIP profile — outbound to SquareTalk SBC.
 
-  STATUS: Phase 0 template (2026-04-15). Deploy to /etc/freeswitch/autoload_configs/sofia.conf.xml
-  on the AWS EC2 instance once Phase 1 (provisioning) is complete.
+  AUTH MODE: IP authorization (switched 2026-04-20 per SquareTalk).
+  SquareTalk whitelists our Elastic IP (54.251.96.24) on their side; we send INVITEs
+  to lb-sbc.squaretalk.com:5060 directly. No REGISTER, no username, no password.
 
-  Drop-in pattern: this file replaces the default sofia.conf.xml. The "external"
-  profile is the only profile we use for the PoC — we don't accept inbound calls
-  from SquareTalk in the PoC scope (only outbound).
-
+  Deploy to /etc/freeswitch/autoload_configs/sofia.conf.xml on the AWS EC2 instance.
   All ${vars} are read from vars.xml (deploy vars.xml.example as vars.xml and fill in).
 
-  Reference:
-    - SquareTalk handoff config (Asterisk format): docs/handoffs/2026-04-15_squaretalk_trunk_config
-    - Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §5
+  Reference: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §5
 -->
 <configuration name="sofia.conf" description="sofia Endpoint">
   <global_settings>
@@ -23,48 +19,31 @@
   </global_settings>
 
   <profiles>
-    <!-- The "external" profile is what we use to register out to SquareTalk. -->
     <profile name="external">
       <gateways>
         <!--
-          Gateway = the SquareTalk SBC. We REGISTER outbound on port 5080 with the
-          provided username/password. Once registered, we can place INVITEs through
-          this gateway (sofia/external/+E164@${squaretalk_host}:${squaretalk_port}).
-
-          The trunk config from SquareTalk requires:
-            - From + Contact = SquareTalk username
-            - Remote-Party-ID = our caller ID
-          FreeSWITCH handles From/Contact automatically when registered. The caller ID
-          (Remote-Party-ID) is set per-call via origination_caller_id_number channel var
-          in the originate command (see src/lib/freeswitch/originate.ts).
+          Gateway = SquareTalk SBC. IP-auth only: send INVITEs to
+          sofia/gateway/squaretalk/+E164. No REGISTER; SquareTalk recognizes us
+          by source IP (54.251.96.24). Caller ID is set per-call via
+          origination_caller_id_number channel var (see src/lib/freeswitch/originate.ts).
         -->
         <gateway name="squaretalk">
-          <param name="username" value="$${squaretalk_username}"/>
-          <param name="password" value="$${squaretalk_password}"/>
-          <param name="realm"    value="$${squaretalk_host}"/>
           <param name="proxy"    value="$${squaretalk_host}:$${squaretalk_port}"/>
-          <param name="register" value="true"/>
-          <param name="register-transport" value="udp"/>
-          <param name="expire-seconds" value="600"/>
-          <!-- Re-REGISTER before expiry; FS handles this automatically -->
-          <param name="ping" value="30"/>
-          <!-- DTMF mode matches SquareTalk's `dtmfmode=rfc2833` -->
+          <param name="register" value="false"/>
+          <param name="ping"     value="30"/>
           <param name="dtmf-type" value="rfc2833"/>
-          <!-- canreinvite=no on SquareTalk's side: we don't allow re-INVITEs to redirect media -->
           <param name="caller-id-in-from" value="false"/>
         </gateway>
       </gateways>
 
       <settings>
         <param name="user-agent-string" value="Voizo-FreeSWITCH-PoC"/>
-        <!-- Bind to the EC2 instance's private IP, NAT to Elastic IP for SIP -->
         <param name="sip-ip"             value="$${local_ip_v4}"/>
         <param name="rtp-ip"             value="$${local_ip_v4}"/>
-        <!-- ext-sip-ip / ext-rtp-ip = our Elastic IP (set in vars.xml) -->
         <param name="ext-sip-ip"         value="$${external_ip}"/>
         <param name="ext-rtp-ip"         value="$${external_ip}"/>
 
-        <param name="sip-port"           value="5080"/>
+        <param name="sip-port"           value="5060"/>
         <param name="dialplan"           value="XML"/>
         <param name="context"            value="default"/>
         <param name="rtp-timer-name"     value="soft"/>
@@ -72,10 +51,8 @@
         <param name="dtmf-duration"      value="2000"/>
         <param name="rtp-timeout-sec"    value="300"/>
         <param name="rtp-hold-timeout-sec" value="1800"/>
-        <!-- Disable inbound registration (PoC is outbound-only) -->
         <param name="accept-blind-reg"   value="false"/>
         <param name="accept-blind-auth"  value="false"/>
-        <!-- NAT handling: critical for AWS deployment -->
         <param name="apply-nat-acl"      value="nat.auto"/>
         <param name="aggressive-nat-detection" value="true"/>
         <param name="NDLB-force-rport"   value="true"/>
