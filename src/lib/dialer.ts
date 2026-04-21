@@ -1,5 +1,14 @@
 import { supabaseAdmin } from "./supabaseServer";
 import { twilioClient, twilioPhoneNumber } from "./twilioClient";
+import { originateCall } from "./freeswitch/originate";
+
+/**
+ * Dialer provider selection. `twilio` keeps the legacy path (still deployed in
+ * Vercel at time of writing). `freeswitch` routes outbound through the EC2
+ * FreeSWITCH + SquareTalk stack. Default is `twilio` so production stays on
+ * the known-working path until FS is verified end-to-end.
+ */
+const DIALER_PROVIDER = (process.env.DIALER_PROVIDER || "twilio").toLowerCase();
 
 /**
  * Check if the current time falls within the campaign's call windows.
@@ -114,8 +123,8 @@ export async function findNextNumber(campaignId: string) {
 }
 
 /**
- * Fire a Twilio call for the given campaign number.
- * Returns the created calls_v2 row.
+ * Fire an outbound call for the given campaign number. Dispatches to Twilio or
+ * FreeSWITCH based on DIALER_PROVIDER. Returns the created calls_v2 row.
  *
  * Manifesto §6: state written to DB before calling provider.
  */
@@ -125,19 +134,21 @@ export async function fireCall(
   vapiAssistantId: string,
   baseUrl: string,
 ) {
+  const provider = DIALER_PROVIDER === "freeswitch" ? "freeswitch" : "twilio";
+
   // Mark number as in_progress
   await supabaseAdmin
     .from("campaign_numbers_v2")
     .update({ outcome: "in_progress" })
     .eq("id", campaignNumber.id);
 
-  // Create calls_v2 row BEFORE calling Twilio (Manifesto: write state before provider call)
+  // Create calls_v2 row BEFORE contacting the provider (state-before-action)
   const { data: callRow, error: callErr } = await supabaseAdmin
     .from("calls_v2")
     .insert({
       campaign_id: campaignId,
       campaign_number_id: campaignNumber.id,
-      provider: "twilio",
+      provider,
       status: "initiated",
     })
     .select()
@@ -145,26 +156,46 @@ export async function fireCall(
 
   if (callErr || !callRow) throw new Error("Failed to create call record");
 
-  const twimlUrl = `${baseUrl}/api/twiml/vapi-bridge?assistantId=${encodeURIComponent(vapiAssistantId)}`;
-  const statusCallback = `${baseUrl}/api/webhooks/twilio/voice-status?callId=${callRow.id}&campaignId=${campaignId}&numberId=${campaignNumber.id}`;
-
   try {
-    const twilioCall = await twilioClient.calls.create({
-      to: campaignNumber.phone_e164,
-      from: twilioPhoneNumber,
-      url: twimlUrl,
-      statusCallback,
-      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      statusCallbackMethod: "POST",
-    });
+    let providerCallId: string;
 
-    // Store the Twilio Call SID
+    if (provider === "freeswitch") {
+      const callerId = process.env.FREESWITCH_CALLER_ID;
+      if (!callerId) {
+        throw new Error(
+          "FREESWITCH_CALLER_ID not set. Required when DIALER_PROVIDER=freeswitch.",
+        );
+      }
+      const result = await originateCall({
+        to: campaignNumber.phone_e164,
+        callerId,
+        callId: callRow.id,
+        vapiAssistantId,
+        campaignId,
+        numberId: campaignNumber.id,
+      });
+      providerCallId = result.providerCallId;
+    } else {
+      const twimlUrl = `${baseUrl}/api/twiml/vapi-bridge?assistantId=${encodeURIComponent(vapiAssistantId)}`;
+      const statusCallback = `${baseUrl}/api/webhooks/twilio/voice-status?callId=${callRow.id}&campaignId=${campaignId}&numberId=${campaignNumber.id}`;
+
+      const twilioCall = await twilioClient.calls.create({
+        to: campaignNumber.phone_e164,
+        from: twilioPhoneNumber,
+        url: twimlUrl,
+        statusCallback,
+        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+        statusCallbackMethod: "POST",
+      });
+      providerCallId = twilioCall.sid;
+    }
+
     await supabaseAdmin
       .from("calls_v2")
-      .update({ provider_call_id: twilioCall.sid })
+      .update({ provider_call_id: providerCallId })
       .eq("id", callRow.id);
   } catch (err) {
-    // Twilio call failed — mark the call as failed so we don't leave it dangling
+    // Provider failed — mark the call as failed so we don't leave it dangling
     await supabaseAdmin
       .from("calls_v2")
       .update({ status: "failed", ended_at: new Date().toISOString() })
