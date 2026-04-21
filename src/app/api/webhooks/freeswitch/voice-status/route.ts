@@ -1,100 +1,206 @@
 /**
  * POST /api/webhooks/freeswitch/voice-status
  *
- * Receives call-lifecycle events from the FreeSWITCH webhook shim running
- * alongside the FS instance on AWS. Mirrors the structure of the existing
- * Twilio voice-status handler so the migration is mechanical when FS goes live.
+ * Receives CHANNEL_HANGUP_COMPLETE events from the FreeSWITCH webhook-shim
+ * (infra/freeswitch/webhook-shim/) running on the EC2 box alongside FS.
  *
- * STATUS: Phase 0 (2026-04-15) — skeleton only.
- *   - Signature validation: WIRED (uses FREESWITCH_WEBHOOK_SECRET)
- *   - Payload parsing: TODO (depends on the shim's event format — defined in Phase 4)
- *   - Idempotency: TODO (mirror Twilio handler's terminal-status check)
- *   - Chain-next-call: TODO (reuse findNextNumber + originateCall once dialer.ts is migrated)
+ * The shim only emits terminal (hangup) events — unlike Twilio which sends
+ * initiated/ringing/answered/completed. So this handler treats every event
+ * as terminal: update calls_v2, update campaign_numbers_v2, chain next call.
  *
- * Manifesto §6 compliance plan:
- *   - HMAC validated on every request (no exceptions)
- *   - Idempotent on `voizo_call_id` + status (FS may emit duplicate events on reconnect)
- *   - Returns 200 fast; heavy work happens after
- *   - Suppression + call window checked before chaining next call (via existing dialer.ts helpers)
- *
- * Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §10 (Phase 0)
+ * Manifesto §6 compliance:
+ * - HMAC-SHA256 signature validated on every request
+ * - Idempotent: re-processing the same voizo_call_id is a no-op on terminal status
+ * - Call window checked before every chain-dial
+ * - Suppression checked before every dial (inside findNextNumber)
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
+import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
 
-interface FreeSwitchEvent {
-  /** Voizo calls_v2.id — set as voizo_call_id channel variable in originate */
-  voizo_call_id?: string;
-  /** Voizo campaigns_v2.id */
-  voizo_campaign_id?: string;
-  /** Voizo campaign_numbers_v2.id */
-  voizo_number_id?: string;
-  /** FreeSWITCH call UUID (matches calls_v2.provider_call_id) */
-  call_uuid?: string;
-  /** Event type from the shim — e.g. "CHANNEL_HANGUP_COMPLETE" */
-  event_name?: string;
-  /** Hangup cause — see https://freeswitch.org/confluence/display/FREESWITCH/Hangup+Cause+Code+Table */
-  hangup_cause?: string;
-  /** Call duration in seconds (string from FS, parse to int) */
-  duration?: string;
-  /** ISO timestamp from the FS event */
-  timestamp?: string;
+interface ShimPayload {
+  voizo_call_id: string | null;
+  voizo_campaign_id: string | null;
+  voizo_number_id: string | null;
+  call_uuid: string | null;
+  event_name: string | null;
+  hangup_cause: string | null;
+  duration: string | null;
+  timestamp: string | null;
+}
+
+/**
+ * Map FreeSWITCH hangup causes to our internal call status + terminal outcome.
+ * Reference: https://freeswitch.org/confluence/display/FREESWITCH/Hangup+Cause+Code+Table
+ *
+ * `duration` is used to disambiguate NORMAL_CLEARING after a real connect (completed)
+ * from NORMAL_CLEARING on an unanswered leg (spam-filtered 480s often surface this way).
+ */
+function mapHangup(
+  hangupCause: string | null,
+  duration: number,
+): { status: string; terminalOutcome: "completed" | "busy" | "no_answer" | "failed" | "canceled" } {
+  const cause = (hangupCause || "").toUpperCase();
+
+  if (cause === "NORMAL_CLEARING" && duration > 0) {
+    return { status: "completed", terminalOutcome: "completed" };
+  }
+  if (cause === "USER_BUSY") return { status: "busy", terminalOutcome: "busy" };
+  if (cause === "NO_ANSWER" || cause === "ALLOTTED_TIMEOUT") {
+    return { status: "no_answer", terminalOutcome: "no_answer" };
+  }
+  if (cause === "ORIGINATOR_CANCEL") return { status: "canceled", terminalOutcome: "canceled" };
+
+  // NORMAL_CLEARING with 0 duration = carrier dropped before real answer
+  if (cause === "NORMAL_CLEARING" && duration === 0) {
+    return { status: "no_answer", terminalOutcome: "no_answer" };
+  }
+
+  return { status: "failed", terminalOutcome: "failed" };
 }
 
 export async function POST(request: NextRequest) {
-  // ── 1. HMAC signature validation (Manifesto §6: no exceptions in prod) ──
   const rawBody = await request.text();
   const signature = request.headers.get("x-freeswitch-signature");
 
   if (!validateFreeSwitchSignature(rawBody, signature)) {
-    console.warn("FreeSWITCH webhook: invalid signature — rejecting");
+    console.warn("[freeswitch.voice-status] invalid signature — rejecting");
     return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
   }
 
-  // ── 2. Parse event payload ──
-  let event: FreeSwitchEvent;
+  let payload: ShimPayload;
   try {
-    event = JSON.parse(rawBody);
+    payload = JSON.parse(rawBody) as ShimPayload;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // ── 3. Required fields check ──
-  if (!event.voizo_call_id || !event.event_name) {
-    return NextResponse.json(
-      { error: "Missing required fields: voizo_call_id, event_name" },
-      { status: 400 },
-    );
+  const callId = payload.voizo_call_id;
+  const campaignId = payload.voizo_campaign_id;
+  const numberId = payload.voizo_number_id;
+
+  if (!callId || !campaignId || !numberId) {
+    // Shim already filters these out, but belt-and-braces
+    return NextResponse.json({ error: "Missing voizo_* identifiers" }, { status: 400 });
   }
 
-  // ── 4. TODO (Phase 4): map FS event to Voizo status model ──
-  // Skeleton only — actual mapping requires the shim's event format finalized.
-  // Plan:
-  //   - Look up calls_v2 by id = event.voizo_call_id
-  //   - Idempotency: if call.status is already terminal, return 200 immediately
-  //   - Map hangup_cause → Voizo outcome:
-  //       NORMAL_CLEARING        → completed
-  //       USER_BUSY              → busy
-  //       NO_ANSWER / NO_USER_RESPONSE → no_answer
-  //       CALL_REJECTED / NORMAL_TEMPORARY_FAILURE → failed
-  //       (others)               → failed
-  //   - Update calls_v2 (status, ended_at, duration_seconds, provider_call_id=call_uuid)
-  //   - Update campaign_numbers_v2 (attempt_count++, schedule retry or finalize outcome)
-  //   - If campaign still running AND within call window:
-  //       findNextNumber(campaignId) → originateCall(...) → record new calls_v2 row
-  //   - Else: pause/complete campaign
+  // Idempotency: if we've already marked this call terminal, skip the DB churn
+  const { data: existingCall } = await supabaseAdmin
+    .from("calls_v2")
+    .select("status")
+    .eq("id", callId)
+    .single();
 
-  console.log(
-    `[freeswitch.voice-status] STUB received event=${event.event_name} ` +
-    `for call=${event.voizo_call_id} (cause=${event.hangup_cause}). ` +
-    `Phase 0 — no DB writes yet. Mapping logic lands in Phase 4.`,
-  );
+  const terminalStatuses = ["completed", "busy", "no_answer", "failed", "canceled"];
+  if (existingCall && terminalStatuses.includes(existingCall.status)) {
+    return NextResponse.json({ received: true, idempotent: "already processed" });
+  }
 
-  // Return 200 fast (manifesto §6: don't block the shim)
-  return NextResponse.json({
-    received: true,
-    phase: "phase-0-stub",
-    event: event.event_name,
-  });
+  const duration = payload.duration ? parseInt(payload.duration, 10) || 0 : 0;
+  const { status, terminalOutcome } = mapHangup(payload.hangup_cause, duration);
+
+  // Update calls_v2
+  const updatePayload: Record<string, unknown> = {
+    status,
+    ended_at: new Date().toISOString(),
+    duration_seconds: duration,
+  };
+  if (payload.call_uuid) updatePayload.provider_call_id = payload.call_uuid;
+
+  await supabaseAdmin.from("calls_v2").update(updatePayload).eq("id", callId);
+
+  // Update campaign_numbers_v2 — mirrors the Twilio handler's outcome logic
+  const { data: numRow } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .select("attempt_count, outcome")
+    .eq("id", numberId)
+    .single();
+
+  const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
+
+  const { data: campaign } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("max_attempts, retry_interval_minutes, status, vapi_assistant_id, call_windows, timezone")
+    .eq("id", campaignId)
+    .single();
+
+  // Don't overwrite Vapi-set outcomes (sent_sms, not_interested, declined_offer)
+  const vapiSetOutcomes = ["sent_sms", "not_interested", "declined_offer"];
+  if (numRow && vapiSetOutcomes.includes(numRow.outcome)) {
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+      })
+      .eq("id", numberId);
+  } else if (terminalOutcome === "completed") {
+    // Vapi's end-of-call webhook will set the final outcome
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+      })
+      .eq("id", numberId);
+  } else if (newAttemptCount >= (campaign?.max_attempts ?? 3)) {
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+        outcome: "unreached",
+      })
+      .eq("id", numberId);
+  } else {
+    const retryMinutes = campaign?.retry_interval_minutes ?? 90;
+    const nextAttempt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+        next_attempt_at: nextAttempt,
+        outcome: "pending_retry",
+      })
+      .eq("id", numberId);
+  }
+
+  // Chain next call
+  if (!campaign || campaign.status !== "running") {
+    return NextResponse.json({ received: true, next: "campaign not running" });
+  }
+
+  const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
+  const timezone = campaign.timezone as string | null;
+  if (callWindows && timezone && !isWithinCallWindow(callWindows, timezone)) {
+    await supabaseAdmin
+      .from("campaigns_v2")
+      .update({ status: "paused" })
+      .eq("id", campaignId);
+    return NextResponse.json({ received: true, next: "outside call window — paused" });
+  }
+
+  const nextNumber = await findNextNumber(campaignId);
+  if (!nextNumber) {
+    await supabaseAdmin
+      .from("campaigns_v2")
+      .update({ status: "completed" })
+      .eq("id", campaignId);
+    return NextResponse.json({ received: true, next: "campaign completed" });
+  }
+
+  const host = request.headers.get("host") || "localhost:3001";
+  const proto = request.headers.get("x-forwarded-proto") || "http";
+  const baseUrl = `${proto}://${host}`;
+
+  try {
+    await fireCall(campaignId, nextNumber, campaign.vapi_assistant_id as string, baseUrl);
+    return NextResponse.json({ received: true, next: nextNumber.phone_e164 });
+  } catch (err) {
+    console.error("[freeswitch.voice-status] chain-next failed:", err);
+    return NextResponse.json({ received: true, next: "chain failed" });
+  }
 }
