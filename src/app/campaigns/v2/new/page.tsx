@@ -7,6 +7,13 @@ import { ArrowLeft, Bot, CalendarDays, ListChecks, Loader2, MessageSquareText, P
 import { createCampaignV2, defaultCallWindows, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
 
+// Default SMS template pre-filled on the Create Campaign form.
+// Current brand: Lucky7even Canada. Approved by Maria, provided by Ernie (2026-04-22).
+// TODO: make this per-brand configurable when multi-brand Campaign V2 lands
+// (see .agent/handoffs/2026-04-21_HANDOFF_Dialer_Phase_A_Landed.md §7 item #11).
+const DEFAULT_SMS_TEMPLATE =
+  "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight. https://playmojo.live/promotions?fast-deposit=modal&bonus=LUCKY STOP? Qwt5.me";
+
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">{children}</label>;
 }
@@ -50,7 +57,7 @@ export default function NewCampaignV2Page() {
   const [endAt, setEndAt] = useState("");
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>(initialScheduleRows);
   const [smsEnabled, setSmsEnabled] = useState(false);
-  const [smsTemplate, setSmsTemplate] = useState("");
+  const [smsTemplate, setSmsTemplate] = useState(DEFAULT_SMS_TEMPLATE);
   const [numbersText, setNumbersText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
