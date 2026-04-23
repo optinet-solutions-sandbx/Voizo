@@ -103,15 +103,21 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
 
     const data = await response.json();
 
-    if (response.ok && data.success) {
-      const providerMessageId = data.record?.id || null;
+    // Mobivate's /send/single success response echoes the request body and adds
+    // a top-level `id` field (e.g. "proxied_<ISO-timestamp>"). There is no
+    // `success` boolean and no `record` wrapper — verified live on 2026-04-23.
+    // Treat HTTP 2xx + non-empty string `id` as acceptance.
+    const providerMessageId =
+      typeof data.id === "string" && data.id.length > 0 ? data.id : null;
+
+    if (response.ok && providerMessageId) {
       console.log(
         `[mobivate.sendSMS] sent to ${recipient} — id=${providerMessageId}`,
       );
       return { success: true, providerMessageId, error: null };
     }
 
-    // Mobivate returned an error
+    // Mobivate returned an error or an unexpected response shape
     const errorMsg = data.message || data.error || `HTTP ${response.status}`;
     console.error(
       `[mobivate.sendSMS] failed for ${recipient} — ${errorMsg}`,
