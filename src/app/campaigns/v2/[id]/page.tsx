@@ -58,6 +58,7 @@ export default function CampaignV2DetailPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("numbers");
   const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -91,11 +92,22 @@ export default function CampaignV2DetailPage() {
   async function handleStart() {
     if (!id) return;
     setActing(true);
+    setActionError(null);
     try {
-      await fetch(`/api/campaigns-v2/${id}/start`, { method: "POST" });
+      const res = await fetch(`/api/campaigns-v2/${id}/start`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setActionError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to start campaign (${res.status}).`,
+        );
+        return;
+      }
       setCampaign((prev) => prev ? { ...prev, status: "running" } : prev);
     } catch (err) {
       console.error("Start failed:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to start campaign.");
     } finally {
       setActing(false);
     }
@@ -182,6 +194,12 @@ export default function CampaignV2DetailPage() {
           </div>
         </div>
       </div>
+
+      {actionError && (
+        <div className="mb-6 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+          {actionError}
+        </div>
+      )}
 
       {/* Info cards */}
       <div className="grid gap-4 sm:grid-cols-3 mb-6">

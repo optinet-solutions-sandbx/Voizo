@@ -12,7 +12,7 @@
  *
  * API docs: https://wiki.mobivatebulksms.com
  * Auth: Bearer token in Authorization header
- * Endpoint: POST https://<host>/send/single
+ * Endpoint: POST https://vortex.mobivatebulksms.com/send/single
  *
  * Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md (SMS dispatch section)
  */
@@ -80,12 +80,10 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
   const recipient = args.to.startsWith("+") ? args.to.slice(1) : args.to;
 
   const requestBody = {
-    text: args.body,
+    body: args.body,
     originator: MOBIVATE_SENDER_ID,
     recipient,
     reference: args.reference || undefined,
-    shortenUrls: true, // confirmed with Maria 2026-04-17 — always on
-    excludeOptouts: true, // safety net per manifesto §1 compliance
   };
 
   const url = `https://${MOBIVATE_API_HOST}/send/single`;
@@ -103,12 +101,12 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
 
     const data = await response.json();
 
-    // Mobivate's /send/single success response echoes the request body and adds
-    // a top-level `id` field (e.g. "proxied_<ISO-timestamp>"). There is no
-    // `success` boolean and no `record` wrapper — verified live on 2026-04-23.
-    // Treat HTTP 2xx + non-empty string `id` as acceptance.
+    // Working Mobivate API path for this account uses the vortex host and
+    // returns { success: true, record: { id, ... } } on acceptance.
     const providerMessageId =
-      typeof data.id === "string" && data.id.length > 0 ? data.id : null;
+      typeof data.record?.id === "string" && data.record.id.length > 0
+        ? data.record.id
+        : null;
 
     if (response.ok && providerMessageId) {
       console.log(
