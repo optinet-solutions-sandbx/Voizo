@@ -196,13 +196,14 @@ export async function fireCall(
       .eq("id", callRow.id);
   } catch (err) {
     // Provider failed — mark the call as failed so we don't leave it dangling
+    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     await supabaseAdmin
       .from("calls_v2")
       .update({ status: "failed", ended_at: new Date().toISOString() })
       .eq("id", callRow.id);
     await supabaseAdmin
       .from("campaign_numbers_v2")
-      .update({ outcome: "pending_retry" })
+      .update({ outcome: "pending_retry", next_attempt_at: retryAt })
       .eq("id", campaignNumber.id);
     throw err;
   }
