@@ -51,6 +51,21 @@ export async function POST(request: NextRequest) {
   const transcript = message.transcript as string | undefined;
   const analysis = message.analysis as Record<string, unknown> | undefined;
 
+  // Diagnostic: log the full call payload shape on every end-of-call so we
+  // can see exactly what Vapi sends. Helps when match fails — we need to know
+  // whether `customer.number`, `customer.phoneNumber`, or some other field
+  // carries the recipient's E.164. Remove or downgrade once stable.
+  console.log(
+    `[vapi end-of-call] payload shape: ` +
+    JSON.stringify({
+      vapiCallId,
+      callKeys: vapiCall ? Object.keys(vapiCall) : null,
+      customer: vapiCall?.customer || null,
+      phoneCallProviderId: vapiCall?.phoneCallProviderId || null,
+      successEvaluation: analysis?.successEvaluation,
+    }),
+  );
+
   // Determine goal_reached from Vapi's analysis
   const successEval = analysis?.successEvaluation as string | undefined;
   const goalReached = successEval === "true";
