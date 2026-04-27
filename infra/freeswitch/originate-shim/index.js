@@ -73,7 +73,7 @@ function bgapi(command) {
     setTimeout(() => {
       try { conn.disconnect(); } catch {}
       finish(new Error("ESL connection timeout"));
-    }, 10000);
+    }, 30000);
   });
 }
 
