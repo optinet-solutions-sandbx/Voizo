@@ -13,7 +13,7 @@
  * Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §10 (Phase 0 deliverables)
  */
 
-import { getESLConnection } from "./client";
+import crypto from "crypto";
 
 export interface OriginateArgs {
   /** Customer phone in E.164, e.g. "+61412345678" */
@@ -76,29 +76,46 @@ export async function originateCall(args: OriginateArgs): Promise<OriginateResul
     return { providerCallId: fakeUuid };
   }
 
-  // ── Live mode (Phase 4+) ──
-  // TODO: implement once the AWS box is reachable and modesl is installed.
-  // The shape below is the plan, not yet executable.
-  const conn = await getESLConnection();
-  try {
-    const sqHost = process.env.SQUARETALK_HOST!;
-    const sqPort = process.env.SQUARETALK_PORT || "5080";
-
-    const channelVars = [
-      `origination_caller_id_number=${callerId}`,
-      `voizo_call_id=${callId}`,
-      `voizo_vapi_assistant=${vapiAssistantId}`,
-      args.campaignId ? `voizo_campaign_id=${args.campaignId}` : null,
-      args.numberId ? `voizo_number_id=${args.numberId}` : null,
-    ]
-      .filter(Boolean)
-      .join(",");
-
-    const command = `originate {${channelVars}}sofia/external/+${to.slice(1)}@${sqHost}:${sqPort} &transfer(voizo_bridge_to_vapi XML default)`;
-
-    const jobUuid = await conn.bgapi(command);
-    return { providerCallId: jobUuid };
-  } finally {
-    await conn.disconnect();
+  // ── Live mode — POST to the originate-shim on EC2 ──
+  // The shim listens on HTTP (default port 7777), validates HMAC, and runs
+  // ESL bgapi locally on the box. Avoids exposing FS port 8021 to the internet.
+  // See infra/freeswitch/originate-shim/ for the receiver implementation.
+  const shimUrl = process.env.FREESWITCH_SHIM_URL;
+  const shimSecret = process.env.FREESWITCH_SHIM_SECRET;
+  if (!shimUrl || !shimSecret) {
+    throw new Error(
+      "FREESWITCH_SHIM_URL or FREESWITCH_SHIM_SECRET not set. " +
+      "Required when DIALER_PROVIDER=freeswitch and FREESWITCH_STUB is not 'true'.",
+    );
   }
+
+  const payload = JSON.stringify({
+    to,
+    callerId,
+    callId,
+    vapiAssistantId,
+    campaignId: args.campaignId,
+    numberId: args.numberId,
+  });
+  const signature = crypto.createHmac("sha256", shimSecret).update(payload).digest("hex");
+
+  const response = await fetch(shimUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-shim-signature": signature,
+    },
+    body: payload,
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => "");
+    throw new Error(`Originate shim returned ${response.status}: ${errBody.slice(0, 200)}`);
+  }
+
+  const result = (await response.json()) as { jobUuid: string | null; error?: string };
+  if (!result.jobUuid) {
+    throw new Error(`Originate shim returned no jobUuid: ${result.error || "unknown"}`);
+  }
+  return { providerCallId: result.jobUuid };
 }

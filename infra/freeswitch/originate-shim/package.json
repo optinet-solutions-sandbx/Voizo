@@ -1,0 +1,17 @@
+{
+  "name": "voizo-originate-shim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTTP receiver on EC2 that translates Voizo dashboard originate requests into FreeSWITCH ESL bgapi commands. Companion to webhook-shim (events direction).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "modesl": "^1.2.1"
+  },
+  "license": "UNLICENSED"
+}
