@@ -82,6 +82,55 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // 3. Fallback: match by customer phone + recent + no vapi_call_id yet.
+  //
+  // Why: when the call goes through FreeSWITCH (DIALER_PROVIDER=freeswitch),
+  // calls_v2.provider_call_id stores the FS Job UUID, which Vapi has no
+  // visibility into. Vapi's phoneCallProviderId is a SIP-side identifier in
+  // a different namespace, so strategy #2 never matches for FS calls.
+  // calls_v2.vapi_call_id is null at originate time (we only learn Vapi's
+  // call id from this very webhook), so #1 also misses on the first event.
+  //
+  // This fallback closes the gap: if Vapi's payload includes the customer
+  // phone number, we look up the most recent calls_v2 row for that phone
+  // that hasn't been linked to a Vapi call yet, scoped to a 15-minute window
+  // (well over the 3-minute call cap, well under any realistic ambiguity
+  // from a second concurrent call to the same number).
+  if (!callRow) {
+    const customer = vapiCall?.customer as Record<string, unknown> | undefined;
+    const customerNumber = typeof customer?.number === "string" ? customer.number : null;
+
+    if (customerNumber) {
+      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+      const { data: numberRows } = await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .select("id")
+        .eq("phone_e164", customerNumber);
+
+      if (numberRows && numberRows.length > 0) {
+        const numberIds = numberRows.map((r) => r.id as string);
+        const { data } = await supabaseAdmin
+          .from("calls_v2")
+          .select("*")
+          .in("campaign_number_id", numberIds)
+          .is("vapi_call_id", null)
+          .gte("created_at", fifteenMinutesAgo)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (data) {
+          callRow = data;
+          console.log(
+            `Vapi end-of-call: matched by customer-phone fallback ` +
+            `(phone=${customerNumber} callId=${data.id} vapiCallId=${vapiCallId})`,
+          );
+        }
+      }
+    }
+  }
+
   if (!callRow) {
     console.warn("Vapi end-of-call: no matching call record found", { vapiCallId });
     return NextResponse.json({ received: true, matched: false });
