@@ -1,0 +1,43 @@
+# Voizo originate-shim — systemd unit
+#
+# Listens on HTTP port 7777, validates HMAC-signed requests from Voizo
+# dashboard, runs FreeSWITCH ESL bgapi commands on 127.0.0.1.
+#
+# Deploy:
+#   sudo mkdir -p /opt/voizo-originate-shim
+#   sudo cp -r index.js package.json /opt/voizo-originate-shim/
+#   cd /opt/voizo-originate-shim && sudo npm install --production
+#   sudo cp voizo-originate-shim.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/voizo-originate-shim.service  # fill in env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now voizo-originate-shim
+#   sudo journalctl -u voizo-originate-shim -f
+
+[Unit]
+Description=Voizo originate-shim — HTTP receiver for Voizo dashboard originate requests
+After=network.target freeswitch.service
+Requires=freeswitch.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/voizo-originate-shim
+ExecStart=/usr/bin/node /opt/voizo-originate-shim/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Run as a dedicated low-privilege user (or 'admin' on this Debian box).
+# Does NOT need to be root — only needs network access + ESL password.
+User=admin
+Group=admin
+
+# Environment — fill in the REAL values before enabling.
+Environment="SHIM_PORT=7777"
+Environment="SHIM_SECRET=REPLACE_ME_match_Vercel_FREESWITCH_SHIM_SECRET"
+Environment="ESL_HOST=127.0.0.1"
+Environment="ESL_PORT=8021"
+Environment="ESL_PASSWORD=REPLACE_ME_match_event_socket.conf.xml"
+
+[Install]
+WantedBy=multi-user.target
