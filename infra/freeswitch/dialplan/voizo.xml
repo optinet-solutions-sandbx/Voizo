@@ -29,10 +29,11 @@
       <action application="set" data="hangup_after_bridge=true"/>
 
       <!-- Bridge to Vapi SIP endpoint.
-           Format: sofia/external/sip:<assistant>@sip.vapi.ai
-           Note: this leg goes out via the same "external" Sofia profile,
-           but targets sip.vapi.ai directly (NOT through SquareTalk). -->
-      <action application="bridge" data="sofia/external/sip:${voizo_vapi_assistant}@sip.vapi.ai"/>
+           Inline-auth form with hardcoded voizo-poc identity (matches what's deployed live on EC2).
+           This leg goes out via the same "external" Sofia profile,
+           but targets sip.vapi.ai directly (NOT through SquareTalk).
+           Multi-assistant routing is a Phase C decision (see 2026-04-23 handoff §5). -->
+      <action application="bridge" data="[sip_auth_username=voizo-poc,sip_auth_password=test123]sofia/external/sip:voizo-poc@sip.vapi.ai"/>
 
       <!-- After the bridge ends, the customer leg hangs up automatically.
            FS emits CHANNEL_HANGUP_COMPLETE → webhook shim → /api/webhooks/freeswitch/voice-status -->
