@@ -91,22 +91,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing voizo_* identifiers" }, { status: 400 });
   }
 
-  // Idempotency: if we've already marked this call terminal, skip the DB churn
-  const { data: existingCall } = await supabaseAdmin
-    .from("calls_v2")
-    .select("status")
-    .eq("id", callId)
-    .single();
-
-  const terminalStatuses = ["completed", "busy", "no_answer", "failed", "canceled"];
-  if (existingCall && terminalStatuses.includes(existingCall.status)) {
-    return NextResponse.json({ received: true, idempotent: "already processed" });
-  }
-
   const duration = payload.duration ? parseInt(payload.duration, 10) || 0 : 0;
   const { status, terminalOutcome } = mapHangup(payload.hangup_cause, duration);
 
-  // Update calls_v2
   const updatePayload: Record<string, unknown> = {
     status,
     ended_at: new Date().toISOString(),
@@ -114,7 +101,33 @@ export async function POST(request: NextRequest) {
   };
   if (payload.call_uuid) updatePayload.provider_call_id = payload.call_uuid;
 
-  await supabaseAdmin.from("calls_v2").update(updatePayload).eq("id", callId);
+  // Atomic idempotency claim. We try to flip calls_v2 from a non-terminal
+  // state to the new terminal state in a single UPDATE filtered by status.
+  // If another invocation got there first (or the row doesn't exist), the
+  // RETURNING set is empty and we skip the rest of the handler.
+  //
+  // This replaces a SELECT-then-UPDATE pattern that had a TOCTOU window:
+  // two near-simultaneous deliveries of the same hangup event could both
+  // pass the idempotency check before either UPDATE landed, then both fire
+  // chain-next — double-dialing the next number.
+  const TERMINAL_STATUSES = ["completed", "busy", "no_answer", "failed", "canceled"];
+  const { data: claimedRows, error: claimErr } = await supabaseAdmin
+    .from("calls_v2")
+    .update(updatePayload)
+    .eq("id", callId)
+    .not("status", "in", `(${TERMINAL_STATUSES.join(",")})`)
+    .select("id");
+
+  if (claimErr) {
+    console.error("[freeswitch.voice-status] claim error:", claimErr);
+    return NextResponse.json({ error: "DB error" }, { status: 500 });
+  }
+
+  if (!claimedRows || claimedRows.length === 0) {
+    // Row already terminal (idempotent retry) or unknown callId. Either way,
+    // a no-op for us. Returning 200 prevents shim retry storms.
+    return NextResponse.json({ received: true, idempotent: "already processed" });
+  }
 
   // Update campaign_numbers_v2 — mirrors the Twilio handler's outcome logic
   const { data: numRow } = await supabaseAdmin
