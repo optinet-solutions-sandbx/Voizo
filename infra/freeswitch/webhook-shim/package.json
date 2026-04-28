@@ -12,7 +12,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "modesl": "^1.4.0"
+    "modesl": "^1.2.1"
   },
   "license": "UNLICENSED"
 }

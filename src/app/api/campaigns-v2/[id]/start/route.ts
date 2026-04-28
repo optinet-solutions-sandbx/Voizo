@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
 
+// FreeSWITCH bgapi originate callback fires 8-22s after the command is sent on
+// this box (memory project_freeswitch_bgapi_slow). The originate-shim's own
+// timeout is 30s. Default Vercel function timeout (10s on Hobby/Free, 15s on
+// Pro) would 504 mid-bgapi. Bumping to 60s keeps both planes in sync.
+export const maxDuration = 60;
+
 /**
  * POST /api/campaigns-v2/[id]/start
  *

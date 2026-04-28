@@ -20,6 +20,11 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
 
+// Chain-next dial in this handler calls the originate-shim, which blocks 8-22s
+// on FS bgapi (memory project_freeswitch_bgapi_slow). Default Vercel timeout
+// would 504 before bgapi returns; bumping to 60s matches the shim's own ceiling.
+export const maxDuration = 60;
+
 interface ShimPayload {
   voizo_call_id: string | null;
   voizo_campaign_id: string | null;
