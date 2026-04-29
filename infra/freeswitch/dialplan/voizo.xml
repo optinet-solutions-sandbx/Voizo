@@ -1,42 +1,36 @@
 <!--
   Voizo dialplan — bridges answered customer leg to Vapi assistant.
 
-  STATUS: Phase 0 template (2026-04-15). Deploy to /etc/freeswitch/dialplan/default/voizo.xml
-  on the AWS EC2 instance.
+  Deploy to /etc/freeswitch/dialplan/default/voizo.xml on the AWS EC2 instance.
 
   How it's invoked: src/lib/freeswitch/originate.ts issues an `originate` ESL command
   ending with `&transfer(voizo_bridge_to_vapi XML default)`. After the customer
   answers, FS executes this extension on the answered leg.
 
-  Channel variables set by originate:
+  Channel variables set by originate-shim:
     voizo_call_id          — Voizo calls_v2.id (for webhook correlation)
-    voizo_vapi_assistant   — Vapi assistant ID (constructs sip:<id>@sip.vapi.ai)
+    voizo_vapi_assistant   — Vapi assistant ID (for logging)
+    voizo_vapi_sip_user    — SIP username for the campaign's Vapi phone number
+    voizo_vapi_sip_pass    — SIP digest auth password (shared, from VAPI_SIP_AUTH_PASSWORD env)
     voizo_campaign_id      — for logging
     voizo_number_id        — for logging
     origination_caller_id_number — Caller ID presented to customer
 
-  Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md §5
+  SIP routing: each campaign gets its own Vapi SIP phone number (Option B).
+  The originate-shim resolves the campaign's SIP URI into voizo_vapi_sip_user
+  and falls back to "voizo-poc" for campaigns created before multi-agent.
 -->
 <include>
   <extension name="voizo_bridge_to_vapi">
     <condition field="destination_number" expression="^voizo_bridge_to_vapi$">
 
-      <!-- Log incoming context for debugging -->
-      <action application="log" data="INFO Voizo bridge: call_id=${voizo_call_id} assistant=${voizo_vapi_assistant} campaign=${voizo_campaign_id}"/>
+      <action application="log" data="INFO Voizo bridge: call_id=${voizo_call_id} assistant=${voizo_vapi_assistant} sip_user=${voizo_vapi_sip_user} campaign=${voizo_campaign_id}"/>
 
-      <!-- Defensive: must have an assistant ID to bridge to -->
       <action application="set" data="continue_on_fail=true"/>
       <action application="set" data="hangup_after_bridge=true"/>
 
-      <!-- Bridge to Vapi SIP endpoint.
-           Inline-auth form with hardcoded voizo-poc identity (matches what's deployed live on EC2).
-           This leg goes out via the same "external" Sofia profile,
-           but targets sip.vapi.ai directly (NOT through SquareTalk).
-           Multi-assistant routing is a Phase C decision (see 2026-04-23 handoff §5). -->
-      <action application="bridge" data="[sip_auth_username=voizo-poc,sip_auth_password=test123]sofia/external/sip:voizo-poc@sip.vapi.ai"/>
+      <action application="bridge" data="[sip_auth_username=${voizo_vapi_sip_user},sip_auth_password=${voizo_vapi_sip_pass}]sofia/external/sip:${voizo_vapi_sip_user}@sip.vapi.ai"/>
 
-      <!-- After the bridge ends, the customer leg hangs up automatically.
-           FS emits CHANNEL_HANGUP_COMPLETE → webhook shim → /api/webhooks/freeswitch/voice-status -->
     </condition>
   </extension>
 </include>

@@ -26,18 +26,26 @@ export async function POST(request: NextRequest) {
   // ── Vapi signature validation (Manifesto §6) ──
   const vapiSecret = process.env.VAPI_PRIVATE_KEY;
   const vapiSignature = request.headers.get("x-vapi-signature");
-  if (vapiSecret && vapiSignature) {
+  if (!vapiSecret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("FATAL: VAPI_PRIVATE_KEY not set — rejecting webhook");
+      return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
+    }
+    console.warn("Vapi webhook: VAPI_PRIVATE_KEY not set (accepting in dev only)");
+  } else if (!vapiSignature) {
+    console.warn("Vapi webhook: missing x-vapi-signature header — rejecting");
+    return NextResponse.json({ error: "Missing signature" }, { status: 403 });
+  } else {
     const expectedSignature = crypto
       .createHmac("sha256", vapiSecret)
       .update(rawBody)
       .digest("hex");
-    if (vapiSignature !== expectedSignature) {
+    const sigBuffer = Buffer.from(vapiSignature, "hex");
+    const expectedBuffer = Buffer.from(expectedSignature, "hex");
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
       console.warn("Vapi webhook: invalid signature — rejecting");
       return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
     }
-  } else if (!vapiSignature) {
-    // Log but allow in dev — Vapi may not send signatures on all plans
-    console.warn("Vapi webhook: no x-vapi-signature header present (accepting in dev)");
   }
 
   // ── Parse Vapi payload ──
@@ -69,6 +77,13 @@ export async function POST(request: NextRequest) {
   // Determine goal_reached from Vapi's analysis
   const successEval = analysis?.successEvaluation as string | undefined;
   const goalReached = successEval === "true";
+
+  // Opt-out signal: Vapi assistant outputs structuredData.optOut when the
+  // contact explicitly asks not to be called again. This field won't exist
+  // until Ernie updates the Vapi prompt — until then this is a no-op.
+  const structuredData = analysis?.structuredData as Record<string, unknown> | undefined;
+  const optedOut =
+    structuredData?.optOut === true || structuredData?.optOut === "true";
 
   // ── Match to our calls_v2 record (H1 fix: reliable matching) ──
   // Strategy: match by vapi_call_id first, then by phoneCallProviderId (Twilio SID)
@@ -139,7 +154,7 @@ export async function POST(request: NextRequest) {
           callRow = data;
           console.log(
             `Vapi end-of-call: matched by customer-phone fallback ` +
-            `(phone=${customerNumber} callId=${data.id} vapiCallId=${vapiCallId})`,
+            `(phone=${customerNumber.slice(0, -4)}**** callId=${data.id} vapiCallId=${vapiCallId})`,
           );
         }
       }
@@ -167,16 +182,29 @@ export async function POST(request: NextRequest) {
     .eq("id", callRow.id);
 
   // ── Update campaign_numbers_v2 outcome ──
-  if (goalReached) {
-    await supabaseAdmin
+  const outcome = optedOut ? "declined_offer" : goalReached ? "sent_sms" : "not_interested";
+  await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .update({ outcome })
+    .eq("id", callRow.campaign_number_id);
+
+  // ── Auto-suppress on opt-out (Manifesto: suppression checked before every dial) ──
+  if (optedOut) {
+    const { data: numRow } = await supabaseAdmin
       .from("campaign_numbers_v2")
-      .update({ outcome: "sent_sms" })
-      .eq("id", callRow.campaign_number_id);
-  } else {
-    await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .update({ outcome: "not_interested" })
-      .eq("id", callRow.campaign_number_id);
+      .select("phone_e164")
+      .eq("id", callRow.campaign_number_id)
+      .single();
+
+    if (numRow?.phone_e164) {
+      await supabaseAdmin
+        .from("suppression_list")
+        .upsert(
+          { phone_e164: numRow.phone_e164, reason: "opted_out_on_call", added_by: "webhook" },
+          { onConflict: "phone_e164", ignoreDuplicates: true },
+        );
+      console.log(`Auto-suppressed ${numRow.phone_e164.slice(0, -4)}**** (opted out during call)`);
+    }
   }
 
   // ── SMS dispatch (Manifesto §6: three conditions must ALL hold) ──
@@ -200,73 +228,73 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (numRow) {
-        // Idempotency: check if SMS already exists for this call
-        const { data: existingSms } = await supabaseAdmin
-          .from("sms_messages_v2")
+        // Suppression gate: never SMS a number on the suppression list
+        const { data: suppressed } = await supabaseAdmin
+          .from("suppression_list")
           .select("id")
-          .eq("call_id", callRow.id)
+          .eq("phone_e164", numRow.phone_e164)
           .limit(1);
 
-        if (!existingSms || existingSms.length === 0) {
-          // Step 1: Write state BEFORE calling provider (manifesto §6)
-          const { data: smsRow } = await supabaseAdmin
+        if (suppressed && suppressed.length > 0) {
+          console.log(`SMS skipped for ${numRow.phone_e164.slice(0, -4)}**** (on suppression list)`);
+        } else {
+          // Idempotency: check if SMS already exists for this call
+          const { data: existingSms } = await supabaseAdmin
             .from("sms_messages_v2")
-            .insert({
-              campaign_id: callRow.campaign_id,
-              call_id: callRow.id,
-              campaign_number_id: callRow.campaign_number_id,
-              to_phone_e164: numRow.phone_e164,
-              body: campaign!.sms_template,
-              provider: "mobivate",
-              status: "queued",
-            })
             .select("id")
-            .single();
+            .eq("call_id", callRow.id)
+            .limit(1);
 
-          // Step 2: Actually send the SMS via Mobivate
-          // If Mobivate isn't configured (no API key), this returns
-          // success=false gracefully — the row stays 'queued' for
-          // manual retry or later dispatch when config is available.
-          const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
+          if (!existingSms || existingSms.length === 0) {
+            const { data: smsRow } = await supabaseAdmin
+              .from("sms_messages_v2")
+              .insert({
+                campaign_id: callRow.campaign_id,
+                call_id: callRow.id,
+                campaign_number_id: callRow.campaign_number_id,
+                to_phone_e164: numRow.phone_e164,
+                body: campaign!.sms_template,
+                provider: "mobivate",
+                status: "queued",
+              })
+              .select("id")
+              .single();
 
-          if (!getMobivateConfigError()) {
-            const result = await sendSMS({
-              to: numRow.phone_e164,
-              body: campaign!.sms_template,
-              reference: smsRow?.id || undefined,
-            });
+            const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
 
-            // Step 3: Update the row with the result
-            if (smsRow) {
-              await supabaseAdmin
-                .from("sms_messages_v2")
-                .update({
-                  status: result.success ? "sent" : "failed",
-                  provider_message_id: result.providerMessageId,
-                  error_message: result.error,
-                })
-                .eq("id", smsRow.id);
+            if (!getMobivateConfigError()) {
+              const result = await sendSMS({
+                to: numRow.phone_e164,
+                body: campaign!.sms_template,
+                reference: smsRow?.id || undefined,
+              });
+
+              if (smsRow) {
+                await supabaseAdmin
+                  .from("sms_messages_v2")
+                  .update({
+                    status: result.success ? "sent" : "failed",
+                    provider_message_id: result.providerMessageId,
+                    error_message: result.error,
+                  })
+                  .eq("id", smsRow.id);
+              }
+
+              console.log(
+                `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
+                `(goal reached, provider_id=${result.providerMessageId})`,
+              );
+            } else {
+              console.warn(
+                `SMS queued for ${numRow.phone_e164.slice(0, -4)}**** (goal reached) but Mobivate not configured — ` +
+                `row stays 'queued' until API key is set.`,
+              );
             }
-
-            console.log(
-              `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164} ` +
-              `(goal reached, provider_id=${result.providerMessageId})`,
-            );
-          } else {
-            console.warn(
-              `SMS queued for ${numRow.phone_e164} (goal reached) but Mobivate not configured — ` +
-              `row stays 'queued' until API key is set.`,
-            );
           }
         }
       }
     }
   }
 
-  return NextResponse.json({
-    received: true,
-    matched: true,
-    goalReached,
-    callId: callRow.id,
-  });
+  return NextResponse.json({ received: true, matched: true });
 }

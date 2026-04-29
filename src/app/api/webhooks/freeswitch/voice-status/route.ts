@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
 
   const { data: campaign } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("max_attempts, retry_interval_minutes, status, vapi_assistant_id, call_windows, timezone")
+    .select("max_attempts, retry_interval_minutes, status, vapi_assistant_id, vapi_sip_uri, call_windows, timezone")
     .eq("id", campaignId)
     .single();
 
@@ -215,7 +215,7 @@ export async function POST(request: NextRequest) {
   const baseUrl = `${proto}://${host}`;
 
   try {
-    await fireCall(campaignId, nextNumber, campaign.vapi_assistant_id as string, baseUrl);
+    await fireCall(campaignId, nextNumber, campaign.vapi_assistant_id as string, baseUrl, (campaign.vapi_sip_uri as string) ?? undefined);
     return NextResponse.json({ received: true, next: nextNumber.phone_e164 });
   } catch (err) {
     console.error("[freeswitch.voice-status] chain-next failed:", err);

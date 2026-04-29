@@ -82,7 +82,7 @@ export async function POST(
   const baseUrl = getBaseUrl(request);
 
   try {
-    const callRow = await fireCall(id, nextNumber, campaign.vapi_assistant_id, baseUrl);
+    const callRow = await fireCall(id, nextNumber, campaign.vapi_assistant_id, baseUrl, campaign.vapi_sip_uri ?? undefined);
     return NextResponse.json({
       message: "Campaign started. First call fired.",
       callId: callRow.id,

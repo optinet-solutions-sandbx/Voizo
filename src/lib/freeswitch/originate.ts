@@ -24,6 +24,8 @@ export interface OriginateArgs {
   callId: string;
   /** Vapi assistant ID — used to construct sip:<assistantId>@sip.vapi.ai for leg 2 */
   vapiAssistantId: string;
+  /** Vapi SIP URI for this campaign's clone (e.g. sip:voizo-abc12345@sip.vapi.ai) */
+  vapiSipUri?: string;
   /** Optional: campaign and number IDs for additional logging context */
   campaignId?: string;
   numberId?: string;
@@ -94,6 +96,7 @@ export async function originateCall(args: OriginateArgs): Promise<OriginateResul
     callerId,
     callId,
     vapiAssistantId,
+    vapiSipUri: args.vapiSipUri || undefined,
     campaignId: args.campaignId,
     numberId: args.numberId,
   });

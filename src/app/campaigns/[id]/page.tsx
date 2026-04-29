@@ -172,7 +172,7 @@ export default function CampaignDetailPage() {
     return (
       <div className="p-6 flex flex-col gap-4">
         <p className="text-[var(--text-2)] text-sm">Campaign not found.</p>
-        <Link href="/campaigns" className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors">
+        <Link href="/campaigns/v1" className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors">
           <ArrowLeft size={14} /> Back to Campaigns
         </Link>
       </div>
@@ -261,7 +261,7 @@ export default function CampaignDetailPage() {
   return (
     <div className="p-4 sm:p-6 w-full">
       {/* Back */}
-      <Link href="/campaigns"
+      <Link href="/campaigns/v1"
         className="inline-flex items-center gap-1.5 text-sm text-[var(--text-2)] hover:text-blue-400 transition-colors mb-5">
         <ArrowLeft size={14} /> Back to Campaigns
       </Link>

@@ -11,7 +11,7 @@ import {
 const CampaignIcon = Megaphone;
 import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
-import { fetchCampaigns } from "@/lib/campaignData";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 
 const navItems = [
   { label: "Campaigns",    href: "/campaigns",       icon: Megaphone, color: "text-blue-400",    bg: "bg-blue-500/10"    },
@@ -74,11 +74,11 @@ function GlobalSearch() {
 
     let campaignResults: SearchResult[] = [];
     try {
-      const campaigns = await fetchCampaigns();
+      const campaigns = await fetchCampaignsV2();
       campaignResults = campaigns
-        .filter((c) => c.name.toLowerCase().includes(trimmed))
+        .filter((c) => (c.name as string).toLowerCase().includes(trimmed))
         .slice(0, 5)
-        .map((c) => ({ id: `campaign-${c.id}`, label: c.name, description: `Status: ${c.status} · ${c.totalContacts} contacts`, href: `/campaigns/${c.id}`, category: "Campaign" as const, icon: Megaphone }));
+        .map((c) => ({ id: `campaign-${c.id}`, label: c.name as string, description: `Status: ${c.status as string}`, href: `/campaigns/v2/${c.id}`, category: "Campaign" as const, icon: Megaphone }));
     } catch { /* silent */ }
 
     setResults([...pageResults, ...kbResults, ...campaignResults]);
@@ -272,12 +272,12 @@ function SidebarContent() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center px-4 h-[57px] border-b border-[var(--border)]">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/20">
+        <Link href="/campaigns" className="flex items-center gap-2.5 group">
+          <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:bg-blue-500 group-hover:shadow-blue-500/30 transition-all">
             <span className="text-white text-xs font-bold">V</span>
           </div>
           <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
-        </div>
+        </Link>
       </div>
 
       <div className="px-3 py-3 border-b border-[var(--border)]">

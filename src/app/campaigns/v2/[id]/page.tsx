@@ -143,6 +143,10 @@ export default function CampaignV2DetailPage() {
   }
 
   const status = campaign.status as string;
+  const phoneByNumberId = new Map(
+    numbers.map((n) => [n.id as string, n.phone_e164 as string]),
+  );
+
   const tabClass = (t: Tab) =>
     `px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
       tab === t
@@ -154,8 +158,8 @@ export default function CampaignV2DetailPage() {
     <div className="p-4 sm:p-6 max-w-6xl mx-auto w-full">
       {/* Header */}
       <div className="mb-6">
-        <Link href="/campaigns/v2" className="inline-flex items-center gap-1.5 text-sm text-[var(--text-2)] hover:text-blue-400 transition-colors mb-3">
-          <ArrowLeft size={14} /> Back to Campaigns V2
+        <Link href="/campaigns" className="inline-flex items-center gap-1.5 text-sm text-[var(--text-2)] hover:text-blue-400 transition-colors mb-3">
+          <ArrowLeft size={14} /> Back to Campaigns
         </Link>
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
@@ -283,7 +287,7 @@ export default function CampaignV2DetailPage() {
               <tbody>
                 {calls.map((c) => (
                   <tr key={c.id as string} className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
-                    <td className="px-5 py-3 text-[var(--text-1)] font-mono">{c.phone_e164 as string}</td>
+                    <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phoneByNumberId.get(c.campaign_number_id as string) || "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{(c.status as string) || "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{c.duration_seconds != null ? `${c.duration_seconds}s` : "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{c.goal_reached === true ? "Yes" : c.goal_reached === false ? "No" : "—"}</td>
@@ -298,10 +302,9 @@ export default function CampaignV2DetailPage() {
         {tab === "settings" && (
           <div className="p-5 sm:p-6 grid gap-5">
             <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">System Prompt</h3>
-              <pre className="whitespace-pre-wrap text-sm text-[var(--text-2)] bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 max-h-64 overflow-y-auto">
-                {campaign.system_prompt as string}
-              </pre>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">Vapi Assistant</h3>
+              <p className="text-sm text-[var(--text-1)] font-medium">{(campaign.vapi_assistant_name as string) || "—"}</p>
+              <p className="text-xs text-[var(--text-3)] font-mono mt-1">{(campaign.vapi_assistant_id as string) || "—"}</p>
             </div>
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">Call Windows</h3>

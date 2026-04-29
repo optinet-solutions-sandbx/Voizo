@@ -2,10 +2,11 @@
  * GET /api/vapi/assistants
  *
  * Returns the list of Vapi assistants on the account so the Campaign V2 create
- * page can offer a dropdown instead of asking operators to paste a UUID.
+ * page can offer a dropdown. Now also returns each assistant's current voice
+ * and system prompt — the form pre-fills these when the operator selects a base
+ * agent, and they can override before saving (clone-per-campaign).
  *
- * Server-side only — the Vapi private key never leaves this handler. The
- * client receives only { id, name } pairs.
+ * Server-side only — the Vapi private key never leaves this handler.
  *
  * Vapi API: GET https://api.vapi.ai/assistant
  * Auth:     Bearer <VAPI_PRIVATE_KEY>
@@ -13,9 +14,20 @@
 
 import { NextResponse } from "next/server";
 
-interface VapiAssistant {
+interface VapiAssistantRaw {
   id: string;
   name?: string;
+  voice?: {
+    voiceId?: string;
+    provider?: string;
+    model?: string;
+    stability?: number;
+    similarityBoost?: number;
+  };
+  model?: {
+    messages?: { role: string; content: string }[];
+  };
+  firstMessage?: string;
 }
 
 export async function GET() {
@@ -44,9 +56,19 @@ export async function GET() {
       );
     }
 
-    const raw = (await response.json()) as VapiAssistant[];
+    const raw = (await response.json()) as VapiAssistantRaw[];
     const assistants = (raw ?? [])
-      .map((a) => ({ id: a.id, name: a.name ?? "(unnamed)" }))
+      .map((a) => {
+        const sysMsg = a.model?.messages?.find((m) => m.role === "system");
+        return {
+          id: a.id,
+          name: a.name ?? "(unnamed)",
+          voiceId: a.voice?.voiceId ?? null,
+          voiceProvider: a.voice?.provider ?? null,
+          systemPrompt: sysMsg?.content ?? null,
+          firstMessage: a.firstMessage ?? null,
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return NextResponse.json({ assistants });
