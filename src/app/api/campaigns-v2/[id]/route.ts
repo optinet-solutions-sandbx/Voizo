@@ -7,7 +7,8 @@ const DELETABLE_STATUSES = new Set(["draft", "paused", "completed", "archived"])
  * DELETE /api/campaigns-v2/[id]
  *
  * Deletes a Campaign V2 and all child rows (numbers, calls, SMS)
- * via Postgres ON DELETE CASCADE.
+ * via Postgres ON DELETE CASCADE. Also cleans up the cloned Vapi
+ * assistant and its SIP phone number so no orphans are left.
  *
  * Guards:
  * - Origin check: only same-origin requests accepted (blocks external tooling)
@@ -31,7 +32,7 @@ export async function DELETE(
 
   const { data: campaign, error } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, status")
+    .select("id, status, vapi_assistant_id")
     .eq("id", id)
     .single();
 
@@ -46,6 +47,48 @@ export async function DELETE(
     );
   }
 
+  // Clean up Vapi resources (assistant + its SIP phone number)
+  const vapiKey = process.env.VAPI_PRIVATE_KEY;
+  const vapiWarnings: string[] = [];
+  if (vapiKey && campaign.vapi_assistant_id) {
+    // Find and delete the SIP phone number bound to this assistant
+    try {
+      const phonesRes = await fetch("https://api.vapi.ai/phone-number", {
+        headers: { Authorization: `Bearer ${vapiKey}`, Accept: "application/json" },
+      });
+      if (phonesRes.ok) {
+        const phones = await phonesRes.json();
+        const match = phones.find(
+          (p: { assistantId?: string }) => p.assistantId === campaign.vapi_assistant_id,
+        );
+        if (match?.id) {
+          const delPhone = await fetch(`https://api.vapi.ai/phone-number/${match.id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${vapiKey}` },
+          });
+          if (!delPhone.ok) {
+            vapiWarnings.push(`phone cleanup failed (${delPhone.status})`);
+          }
+        }
+      }
+    } catch (err) {
+      vapiWarnings.push(`phone lookup failed: ${(err as Error).message}`);
+    }
+
+    // Delete the cloned assistant
+    try {
+      const delAssistant = await fetch(
+        `https://api.vapi.ai/assistant/${campaign.vapi_assistant_id}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${vapiKey}` } },
+      );
+      if (!delAssistant.ok && delAssistant.status !== 404) {
+        vapiWarnings.push(`assistant cleanup failed (${delAssistant.status})`);
+      }
+    } catch (err) {
+      vapiWarnings.push(`assistant delete failed: ${(err as Error).message}`);
+    }
+  }
+
   const { error: deleteErr } = await supabaseAdmin
     .from("campaigns_v2")
     .delete()
@@ -56,5 +99,9 @@ export async function DELETE(
     return NextResponse.json({ error: "Failed to delete campaign" }, { status: 500 });
   }
 
-  return NextResponse.json({ deleted: true });
+  if (vapiWarnings.length > 0) {
+    console.warn("[campaigns-v2] vapi cleanup warnings:", vapiWarnings);
+  }
+
+  return NextResponse.json({ deleted: true, vapiWarnings });
 }
