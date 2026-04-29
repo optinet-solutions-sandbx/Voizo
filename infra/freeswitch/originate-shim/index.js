@@ -102,7 +102,7 @@ async function handleOriginate(req, res, rawBody) {
     return res.end(JSON.stringify({ error: "invalid json" }));
   }
 
-  const { to, callerId, callId, vapiAssistantId, campaignId, numberId } = payload;
+  const { to, callerId, callId, vapiAssistantId, vapiSipUri, campaignId, numberId } = payload;
 
   if (!to || typeof to !== "string" || !to.startsWith("+")) {
     res.writeHead(400, { "content-type": "application/json" });
@@ -120,11 +120,23 @@ async function handleOriginate(req, res, rawBody) {
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: "invalid 'vapiAssistantId'" }));
   }
+  if (vapiSipUri && !/^sip:[a-zA-Z0-9_-]+@sip\.vapi\.ai$/.test(vapiSipUri)) {
+    res.writeHead(400, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: "invalid 'vapiSipUri' format" }));
+  }
+
+  // Extract SIP username from URI, or fall back to voizo-poc for old campaigns
+  const sipUser = vapiSipUri
+    ? vapiSipUri.replace(/^sip:/, "").replace(/@.*$/, "")
+    : "voizo-poc";
+  const sipPass = process.env.VAPI_SIP_AUTH_PASSWORD || "test123";
 
   const channelVars = [
     `origination_caller_id_number=${callerId}`,
     `voizo_call_id=${callId}`,
     `voizo_vapi_assistant=${vapiAssistantId}`,
+    `voizo_vapi_sip_user=${sipUser}`,
+    `voizo_vapi_sip_pass=${sipPass}`,
     "ignore_early_media=true",
     campaignId ? `voizo_campaign_id=${campaignId}` : null,
     numberId ? `voizo_number_id=${numberId}` : null,

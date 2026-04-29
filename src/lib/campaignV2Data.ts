@@ -11,6 +11,7 @@ export interface CampaignV2CreateInput {
   systemPrompt: string;
   vapiAssistantId: string;
   vapiAssistantName?: string;
+  vapiSipUri?: string;
   timezone: string;
   startAt?: string | null;
   endAt?: string | null;
@@ -59,6 +60,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       name: input.name,
       vapi_assistant_id: input.vapiAssistantId,
       vapi_assistant_name: input.vapiAssistantName || null,
+      vapi_sip_uri: input.vapiSipUri || null,
       system_prompt: input.systemPrompt,
       timezone: input.timezone,
       start_at: input.startAt || null,

@@ -1,13 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Trash2, RotateCcw, Search, X, Megaphone, BookOpen, PhoneOff } from "lucide-react";
+import { Trash2, RotateCcw, Search, X, Megaphone, BookOpen } from "lucide-react";
 import { useToast } from "@/lib/toastContext";
 import { fetchArchivedCampaigns, recoverCampaign, deleteCampaign } from "@/lib/campaignData";
 import { fetchArchivedKnowledgeBases, restoreKnowledgeBase, deleteKnowledgeBase } from "@/lib/knowledgeBaseData";
-import { fetchArchivedDncEntries, restoreDncEntry, deleteDncEntry } from "@/lib/dncData";
 
-type ItemType = "Campaign" | "Knowledge Base" | "DNC";
+type ItemType = "Campaign" | "Knowledge Base";
 type FilterType = "All" | ItemType;
 
 interface DeletedItem {
@@ -19,7 +18,6 @@ interface DeletedItem {
 const TYPE_META: Record<ItemType, { icon: React.ElementType; color: string; bg: string; border: string }> = {
   "Campaign":       { icon: Megaphone, color: "text-blue-400",   bg: "bg-blue-500/10",   border: "border-blue-500/20"   },
   "Knowledge Base": { icon: BookOpen,  color: "text-indigo-400", bg: "bg-indigo-500/10", border: "border-indigo-500/20" },
-  "DNC":            { icon: PhoneOff,  color: "text-red-400",    bg: "bg-red-500/10",    border: "border-red-500/20"    },
 };
 
 export default function DeletedHistoryPage() {
@@ -34,15 +32,13 @@ export default function DeletedHistoryPage() {
   async function loadAll() {
     setLoading(true);
     try {
-      const [campaigns, kbs, dncs] = await Promise.all([
+      const [campaigns, kbs] = await Promise.all([
         fetchArchivedCampaigns(),
         fetchArchivedKnowledgeBases(),
-        fetchArchivedDncEntries(),
       ]);
       const merged: DeletedItem[] = [
-        ...campaigns.map((c) => ({ id: c.id, name: c.name, type: "Campaign" as ItemType })),
-        ...kbs.map((k) => ({ id: k.id, name: k.name, type: "Knowledge Base" as ItemType })),
-        ...dncs.map((d) => ({ id: d.id, name: d.phoneNumber, type: "DNC" as ItemType })),
+        ...campaigns.map((c: { id: number; name: string }) => ({ id: c.id, name: c.name, type: "Campaign" as ItemType })),
+        ...kbs.map((k: { id: number; name: string }) => ({ id: k.id, name: k.name, type: "Knowledge Base" as ItemType })),
       ];
       setItems(merged);
     } catch {
@@ -59,7 +55,6 @@ export default function DeletedHistoryPage() {
     try {
       if (item.type === "Campaign")       await recoverCampaign(item.id);
       if (item.type === "Knowledge Base") await restoreKnowledgeBase(item.id);
-      if (item.type === "DNC")            await restoreDncEntry(item.id);
       setItems((prev) => prev.filter((i) => !(i.id === item.id && i.type === item.type)));
       showToast(`"${item.name}" recovered successfully.`);
     } catch {
@@ -74,7 +69,6 @@ export default function DeletedHistoryPage() {
     try {
       if (item.type === "Campaign")       await deleteCampaign(item.id);
       if (item.type === "Knowledge Base") await deleteKnowledgeBase(item.id);
-      if (item.type === "DNC")            await deleteDncEntry(item.id);
       setItems((prev) => prev.filter((i) => !(i.id === item.id && i.type === item.type)));
       setConfirmDelete(null);
       showToast(`"${item.name}" permanently deleted.`, "error");
@@ -98,10 +92,9 @@ export default function DeletedHistoryPage() {
     All: items.length,
     Campaign: items.filter((i) => i.type === "Campaign").length,
     "Knowledge Base": items.filter((i) => i.type === "Knowledge Base").length,
-    DNC: items.filter((i) => i.type === "DNC").length,
   };
 
-  const filters: FilterType[] = ["All", "Campaign", "Knowledge Base", "DNC"];
+  const filters: FilterType[] = ["All", "Campaign", "Knowledge Base"];
 
   return (
     <div className="p-4 sm:p-6 w-full">

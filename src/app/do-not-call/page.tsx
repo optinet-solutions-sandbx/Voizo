@@ -1,10 +1,22 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { PhoneOff, Plus, X, Upload, Phone, Search, Loader2, AlertCircle, Archive, RotateCcw, Trash2 } from "lucide-react";
-import { fetchDncEntries, insertDncEntries, archiveDncEntry, restoreDncEntry, deleteDncEntry, DncEntry } from "@/lib/dncData";
+import { PhoneOff, Plus, X, Upload, Phone, Search, Loader2, AlertCircle, Trash2 } from "lucide-react";
+import { fetchDncEntries, insertDncEntries, deleteDncEntry, DncEntry } from "@/lib/dncData";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
+
+function ReasonBadge({ reason }: { reason: string }) {
+  const map: Record<string, string> = {
+    manual: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+    "opted out during call": "bg-red-500/15 text-red-400 border-red-500/25",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${map[reason] ?? map.manual}`}>
+      {reason}
+    </span>
+  );
+}
 
 export default function DoNotCallPage() {
   const { showToast } = useToast();
@@ -14,8 +26,8 @@ export default function DoNotCallPage() {
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [tab, setTab] = useState<"active" | "archived">("active");
-  const [processingId, setProcessingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => { load(); }, []);
 
@@ -40,7 +52,7 @@ export default function DoNotCallPage() {
         return [...fresh, ...prev];
       });
       const count = added.length;
-      const msg = count === 1 ? `1 phone number added to DNC list.` : `${count} phone numbers added to DNC list.`;
+      const msg = count === 1 ? `1 phone number added to suppression list.` : `${count} phone numbers added to suppression list.`;
       showToast(msg);
       addNotification(msg);
     } catch {
@@ -49,44 +61,28 @@ export default function DoNotCallPage() {
     }
   }
 
-  async function handleArchive(id: number) {
-    setProcessingId(id);
-    try {
-      await archiveDncEntry(id);
-      setEntries((prev) => prev.map((e) => e.id === id ? { ...e, archived: true } : e));
-      showToast("Number moved to archive.");
-    } catch { setError("Failed to archive number."); }
-    finally { setProcessingId(null); }
-  }
-
-  async function handleRestore(id: number) {
-    setProcessingId(id);
-    try {
-      await restoreDncEntry(id);
-      setEntries((prev) => prev.map((e) => e.id === id ? { ...e, archived: false } : e));
-      showToast("Number restored to active list.");
-    } catch { setError("Failed to restore number."); }
-    finally { setProcessingId(null); }
-  }
-
-  async function handleDelete(id: number) {
-    setProcessingId(id);
+  async function handleDelete(id: string) {
+    setDeleting(true);
     try {
       await deleteDncEntry(id);
       setEntries((prev) => prev.filter((e) => e.id !== id));
-      showToast("Number permanently deleted.", "error");
-    } catch { setError("Failed to delete number."); }
-    finally { setProcessingId(null); }
+      showToast("Number removed from suppression list.");
+    } catch {
+      setError("Failed to delete number.");
+    } finally {
+      setDeleting(false);
+      setConfirmDeleteId(null);
+    }
   }
 
-  const activeEntries = useMemo(() => entries.filter((e) => !e.archived), [entries]);
-  const archivedEntries = useMemo(() => entries.filter((e) => e.archived), [entries]);
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const list = tab === "active" ? activeEntries : archivedEntries;
-    if (!q) return list;
-    return list.filter((e) => e.phoneNumber.toLowerCase().includes(q));
-  }, [tab, activeEntries, archivedEntries, searchQuery]);
+    if (!q) return entries;
+    return entries.filter((e) =>
+      e.phoneNumber.toLowerCase().includes(q) ||
+      e.reason.toLowerCase().includes(q),
+    );
+  }, [entries, searchQuery]);
 
   return (
     <div className="p-4 sm:p-6 w-full">
@@ -98,7 +94,9 @@ export default function DoNotCallPage() {
           </div>
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-bold text-[var(--text-1)] truncate">Do Not Call List</h1>
-            <p className="text-xs text-[var(--text-3)] mt-0.5">{activeEntries.length} active · {archivedEntries.length} archived</p>
+            <p className="text-xs text-[var(--text-3)] mt-0.5">
+              {entries.length} suppressed number{entries.length !== 1 ? "s" : ""}
+            </p>
           </div>
         </div>
         <button onClick={() => setShowModal(true)}
@@ -107,27 +105,6 @@ export default function DoNotCallPage() {
           <span className="hidden sm:inline">Add Phone Numbers</span>
           <span className="sm:hidden">Add</span>
         </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 border-b border-[var(--border)] mb-5">
-        {(["active", "archived"] as const).map((t) => {
-          const count = t === "active" ? activeEntries.length : archivedEntries.length;
-          return (
-            <button key={t} onClick={() => { setTab(t); setSearchQuery(""); }}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors capitalize ${
-                tab === t ? "border-blue-500 text-blue-400" : "border-transparent text-[var(--text-3)] hover:text-[var(--text-2)]"
-              }`}>
-              {t === "archived" && <Archive size={13} />}
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-              {count > 0 && (
-                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                  tab === t ? "bg-blue-500/20 text-blue-400" : "bg-[var(--bg-elevated)] text-[var(--text-2)]"
-                }`}>{count}</span>
-              )}
-            </button>
-          );
-        })}
       </div>
 
       {/* Error */}
@@ -142,12 +119,12 @@ export default function DoNotCallPage() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3">
           <Loader2 size={24} className="text-blue-500 animate-spin" />
-          <p className="text-sm text-[var(--text-3)]">Loading DNC list…</p>
+          <p className="text-sm text-[var(--text-3)]">Loading suppression list…</p>
         </div>
       ) : (
         <>
           {/* Search */}
-          {(tab === "active" ? activeEntries : archivedEntries).length > 0 && (
+          {entries.length > 0 && (
             <div className="mb-4 relative max-w-xs">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
               <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
@@ -160,33 +137,29 @@ export default function DoNotCallPage() {
             </div>
           )}
 
-          {/* Empty states */}
+          {/* Empty state */}
           {filtered.length === 0 && searchQuery ? (
             <div className="flex flex-col items-center justify-center py-16 gap-2">
               <p className="text-sm text-[var(--text-3)]">No results for &ldquo;{searchQuery}&rdquo;</p>
             </div>
-          ) : filtered.length === 0 && tab === "active" ? (
+          ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 gap-2">
               <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
                 <PhoneOff size={20} className="text-[var(--text-3)]" />
               </div>
-              <p className="text-sm text-[var(--text-3)]">No active phone numbers</p>
-              <p className="text-xs text-[var(--text-3)] text-center px-4">Add numbers using the &quot;Add&quot; button above</p>
-            </div>
-          ) : filtered.length === 0 && tab === "archived" ? (
-            <div className="flex flex-col items-center justify-center py-24 gap-2">
-              <div className="w-12 h-12 rounded-full bg-[var(--bg-card)] flex items-center justify-center mb-1">
-                <Archive size={20} className="text-[var(--text-3)]" />
-              </div>
-              <p className="text-sm text-[var(--text-3)]">No archived numbers</p>
+              <p className="text-sm text-[var(--text-3)]">No suppressed numbers</p>
+              <p className="text-xs text-[var(--text-3)] text-center px-4">
+                Add numbers manually or they&apos;ll appear here automatically when someone opts out during a call.
+              </p>
             </div>
           ) : (
             <div className="rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--bg-app)]">
               <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[300px]">
+                <table className="w-full text-sm min-w-[400px]">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                       <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Phone Number</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide hidden sm:table-cell">Reason</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide hidden sm:table-cell">Added</th>
                       <th className="w-20 text-right px-3 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Actions</th>
                     </tr>
@@ -196,27 +169,33 @@ export default function DoNotCallPage() {
                       <tr key={entry.id}
                         className={`border-b border-[var(--border)] hover:bg-[var(--bg-hover)] transition-colors ${i === filtered.length - 1 ? "border-b-0" : ""}`}>
                         <td className="px-4 py-3.5">
-                          <p className={`font-medium ${tab === "archived" ? "text-[var(--text-3)] line-through" : "text-[var(--text-1)]"}`}>{entry.phoneNumber}</p>
-                          <p className="text-[var(--text-3)] text-xs mt-0.5 sm:hidden">{entry.addedAt}</p>
+                          <p className="font-medium text-[var(--text-1)]">{entry.phoneNumber}</p>
+                          <p className="text-[var(--text-3)] text-xs mt-0.5 sm:hidden">{entry.reason} · {entry.addedAt}</p>
+                        </td>
+                        <td className="px-4 py-3.5 hidden sm:table-cell">
+                          <ReasonBadge reason={entry.reason} />
                         </td>
                         <td className="px-4 py-3.5 text-[var(--text-3)] text-xs hidden sm:table-cell">{entry.addedAt}</td>
                         <td className="px-3 py-3.5">
-                          {processingId === entry.id ? (
-                            <div className="flex justify-end"><Loader2 size={13} className="text-[var(--text-3)] animate-spin" /></div>
-                          ) : tab === "active" ? (
-                            <div className="flex justify-end">
-                              <button onClick={() => handleArchive(entry.id)} title="Archive"
-                                className="p-1.5 text-[var(--text-3)] hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-colors">
-                                <Archive size={13} />
+                          {confirmDeleteId === entry.id ? (
+                            <div className="flex justify-end items-center gap-2">
+                              <button
+                                onClick={() => handleDelete(entry.id)}
+                                disabled={deleting}
+                                className="text-xs text-red-400 hover:text-red-300 font-medium disabled:opacity-50"
+                              >
+                                {deleting ? "..." : "Yes"}
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="text-xs text-[var(--text-3)] hover:text-[var(--text-2)]"
+                              >
+                                No
                               </button>
                             </div>
                           ) : (
-                            <div className="flex justify-end gap-1">
-                              <button onClick={() => handleRestore(entry.id)} title="Restore"
-                                className="p-1.5 text-[var(--text-3)] hover:text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors">
-                                <RotateCcw size={13} />
-                              </button>
-                              <button onClick={() => handleDelete(entry.id)} title="Delete permanently"
+                            <div className="flex justify-end">
+                              <button onClick={() => setConfirmDeleteId(entry.id)} title="Remove from list"
                                 className="p-1.5 text-[var(--text-3)] hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors">
                                 <Trash2 size={13} />
                               </button>
@@ -230,9 +209,9 @@ export default function DoNotCallPage() {
               </div>
               <div className="px-4 py-2.5 border-t border-[var(--border)] bg-[var(--bg-card)]">
                 <p className="text-xs text-[var(--text-3)]">
-                  {filtered.length === (tab === "active" ? activeEntries : archivedEntries).length
+                  {filtered.length === entries.length
                     ? `${filtered.length} number${filtered.length !== 1 ? "s" : ""}`
-                    : `${filtered.length} of ${(tab === "active" ? activeEntries : archivedEntries).length} numbers`}
+                    : `${filtered.length} of ${entries.length} numbers`}
                 </p>
               </div>
             </div>
@@ -253,7 +232,10 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
   const fileRef = useRef<HTMLInputElement>(null);
 
   function parseCSV(text: string): string[] {
-    return text.split(/[\n,]/).map((s) => s.replace(/[^0-9+\-\s()]/g, "").trim()).filter((s) => s.replace(/\D/g, "").length >= 3);
+    return text
+      .split(/[\n,]/)
+      .map((s) => s.replace(/[^0-9+]/g, "").trim())
+      .filter((s) => /^\+\d{8,15}$/.test(s));
   }
 
   async function handleFile(file: File) {
@@ -272,7 +254,7 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
   }
 
   async function handleManualAdd() {
-    const numbers = manualText.split(/[\n,;]/).map((s) => s.trim()).filter((s) => s.replace(/\D/g, "").length >= 3);
+    const numbers = manualText.split(/[\n,;]/).map((s) => s.replace(/[^0-9+]/g, "").trim()).filter((s) => /^\+\d{8,15}$/.test(s));
     if (numbers.length > 0) { setSaving(true); await onAdd(numbers); setSaving(false); }
   }
 
@@ -291,8 +273,8 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
             <div className="w-12 h-12 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
               <Phone size={22} className="text-blue-400" />
             </div>
-            <p className="text-sm font-semibold text-[var(--text-1)] text-center">Phone Numbers Imports</p>
-            <p className="text-xs text-[var(--text-3)] text-center">Manage imports and add new.</p>
+            <p className="text-sm font-semibold text-[var(--text-1)] text-center">Suppression List</p>
+            <p className="text-xs text-[var(--text-3)] text-center">Numbers blocked from all campaigns.</p>
           </div>
         </div>
         <div className="flex-1 flex flex-col min-h-0">
@@ -300,7 +282,7 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
             <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center">
               <Phone size={16} className="text-blue-400" />
             </div>
-            <p className="flex-1 text-sm font-semibold text-[var(--text-1)]">Phone Numbers Imports</p>
+            <p className="flex-1 text-sm font-semibold text-[var(--text-1)]">Suppression List</p>
             <button onClick={onClose} className="p-1.5 text-[var(--text-2)] hover:text-[var(--text-1)] rounded-lg hover:bg-[var(--bg-elevated)] transition-colors"><X size={18} /></button>
           </div>
           <div className="flex border-b border-[var(--border)] px-4 sm:px-6 pt-3 sm:pt-4 gap-4 sm:gap-6">
@@ -323,7 +305,7 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
                       <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-blue-500/10 flex items-center justify-center">
                         <Phone size={20} className="text-blue-400" />
                       </div>
-                      <p className="text-xs sm:text-sm font-semibold text-[var(--text-2)] text-center px-4">Import DNC numbers from a file</p>
+                      <p className="text-xs sm:text-sm font-semibold text-[var(--text-2)] text-center px-4">Import suppressed numbers from a file</p>
                       <p className="text-xs text-[var(--text-3)]">Drop CSV file here or</p>
                       <button className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 border border-[var(--border)] rounded-full text-xs text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors"
                         onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>

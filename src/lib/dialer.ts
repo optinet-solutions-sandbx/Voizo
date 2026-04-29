@@ -133,6 +133,7 @@ export async function fireCall(
   campaignNumber: { id: string; phone_e164: string },
   vapiAssistantId: string,
   baseUrl: string,
+  vapiSipUri?: string,
 ) {
   const provider = DIALER_PROVIDER === "freeswitch" ? "freeswitch" : "twilio";
 
@@ -171,6 +172,7 @@ export async function fireCall(
         callerId,
         callId: callRow.id,
         vapiAssistantId,
+        vapiSipUri,
         campaignId,
         numberId: campaignNumber.id,
       });

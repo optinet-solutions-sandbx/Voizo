@@ -2,13 +2,27 @@
 
 import React, { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
-import { useNotifications } from "@/lib/notificationsContext";
-import { Search, Plus, X, Megaphone as MegaphoneIcon, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
-  AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis
+  Search, Plus, Loader2, Trash2, Archive, Phone, ArrowUpRight, X,
+  Users, PhoneCall, Zap, Target,
+} from "lucide-react";
+import {
+  AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis,
 } from "recharts";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
+import { supabase } from "@/lib/supabase";
+import Pagination from "@/components/Pagination";
 
-// Generate last N day labels e.g. "Mar 5"
+type CampaignRow = Record<string, unknown>;
+
+interface CampaignStats {
+  totalContacts: number;
+  totalCalls: number;
+  connectCount: number;
+  successCount: number;
+}
+
 function lastNDays(n: number): string[] {
   const days: string[] = [];
   const now = new Date();
@@ -33,368 +47,482 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] text-xs rounded-lg px-2.5 py-1.5 shadow-xl pointer-events-none">
       <p className="font-semibold text-[var(--text-1)]">{date}</p>
-      <p className="text-[var(--text-2)]">{pct}% of month</p>
+      <p className="text-[var(--text-2)]">{pct !== undefined ? `${pct}%` : payload[0].value}</p>
     </div>
   );
 }
-import CampaignsTable from "@/components/CampaignsTable";
-import CampaignEditor from "@/components/CampaignEditor";
-import AddGroupModal from "@/components/AddGroupModal";
-import Pagination from "@/components/Pagination";
-import { fetchCampaigns, insertCampaign, deleteCampaign, archiveCampaign, recoverCampaign, Campaign, Group } from "@/lib/campaignData";
-import { useToast } from "@/lib/toastContext";
 
-const BUILTIN_GROUPS: Group[] = ["Canada", "RND", "Reactivation", "Archived"];
-const PAGE_SIZE = 5;
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { cls: string; dot?: boolean }> = {
+    draft:     { cls: "bg-gray-500/10 text-gray-400 border-gray-500/20" },
+    running:   { cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", dot: true },
+    paused:    { cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+    completed: { cls: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
+    archived:  { cls: "bg-gray-500/10 text-gray-400 border-gray-500/20" },
+  };
+  const { cls, dot } = map[status] ?? map.draft;
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${cls}`}>
+      {dot && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+      {status}
+    </span>
+  );
+}
+
+interface StatCardProps {
+  title: string;
+  value: string;
+  subtitle: string;
+  chart: React.ReactNode;
+  accent: string;
+  gradientFrom: string;
+  gradientTo: string;
+  icon: React.ElementType;
+  iconColor: string;
+}
+
+function StatCard({ title, value, subtitle, chart, accent, gradientFrom, gradientTo, icon: Icon, iconColor }: StatCardProps) {
+  return (
+    <div className={`relative rounded-2xl border border-[var(--border)] p-4 sm:p-5 flex flex-col gap-2 overflow-hidden bg-gradient-to-br ${gradientFrom} ${gradientTo}`}>
+      <div className="flex items-center gap-2">
+        <Icon size={14} className={iconColor} />
+        <p className="text-xs font-medium text-[var(--text-3)] uppercase tracking-wide">{title}</p>
+      </div>
+      <div className="h-12 sm:h-14 w-full opacity-80">
+        <ResponsiveContainer width="100%" height="100%">
+          {chart as React.ReactElement}
+        </ResponsiveContainer>
+      </div>
+      <div className="flex items-end justify-between gap-2 mt-auto">
+        <p className={`text-2xl sm:text-3xl font-bold tracking-tight leading-none ${accent}`}>{value}</p>
+        <span className="text-[10px] text-[var(--text-3)] font-medium">{subtitle}</span>
+      </div>
+    </div>
+  );
+}
+
+const PAGE_SIZE = 10;
 
 export default function CampaignsPage() {
-  const { addNotification } = useNotifications();
-  const { showToast } = useToast();
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const router = useRouter();
+  const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
+  const [campaignStats, setCampaignStats] = useState<Record<string, CampaignStats>>({});
+  const [dailyCalls, setDailyCalls] = useState<{ date: string; calls: number; connects: number; successes: number }[]>([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchCampaigns()
-      .then((camps) => {
-        setCampaigns(camps);
-      })
-      .finally(() => setLoading(false));
-  }, []);
-  const [customGroups, setCustomGroups] = useState<Group[]>([]);
-  const [activeTab, setActiveTab] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [showNewModal, setShowNewModal] = useState(false);
-  const [showAddGroupModal, setShowAddGroupModal] = useState(false);
-  const [deleteGroupConfirm, setDeleteGroupConfirm] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  const allGroups = useMemo(() => [...BUILTIN_GROUPS, ...customGroups], [customGroups]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await fetchCampaignsV2();
+        setCampaigns(rows);
+
+        const ids = rows.map((r: CampaignRow) => r.id as string);
+        if (ids.length === 0) { setLoading(false); return; }
+
+        const [{ data: numbers }, { data: calls }] = await Promise.all([
+          supabase
+            .from("campaign_numbers_v2")
+            .select("campaign_id, outcome")
+            .in("campaign_id", ids),
+          supabase
+            .from("calls_v2")
+            .select("campaign_id, status, goal_reached, created_at")
+            .in("campaign_id", ids),
+        ]);
+
+        const s: Record<string, CampaignStats> = {};
+        for (const id of ids) s[id] = { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
+        for (const n of numbers ?? []) {
+          const cid = n.campaign_id as string;
+          if (s[cid]) s[cid].totalContacts++;
+        }
+        for (const c of calls ?? []) {
+          const cid = c.campaign_id as string;
+          if (!s[cid]) continue;
+          s[cid].totalCalls++;
+          if (c.status === "completed" || c.status === "answered") s[cid].connectCount++;
+          if (c.goal_reached === true) s[cid].successCount++;
+        }
+        setCampaignStats(s);
+
+        const now = new Date();
+        const sevenDaysAgo = new Date(now);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+
+        const daily: Record<string, { calls: number; connects: number; successes: number }> = {};
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(sevenDaysAgo);
+          d.setDate(d.getDate() + i);
+          daily[d.toISOString().slice(0, 10)] = { calls: 0, connects: 0, successes: 0 };
+        }
+        for (const c of calls ?? []) {
+          const day = (c.created_at as string)?.slice(0, 10);
+          if (day && daily[day]) {
+            daily[day].calls++;
+            if (c.status === "completed" || c.status === "answered") daily[day].connects++;
+            if (c.goal_reached === true) daily[day].successes++;
+          }
+        }
+        setDailyCalls(
+          Object.entries(daily)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, v]) => ({ date, ...v })),
+        );
+      } catch (err) {
+        console.error("Failed to fetch campaigns:", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const totals = useMemo(() => {
+    const vals = Object.values(campaignStats);
+    const totalContacts = vals.reduce((s, v) => s + v.totalContacts, 0);
+    const totalCalls = vals.reduce((s, v) => s + v.totalCalls, 0);
+    const connectCount = vals.reduce((s, v) => s + v.connectCount, 0);
+    const successCount = vals.reduce((s, v) => s + v.successCount, 0);
+    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0";
+    const successRate = connectCount > 0 ? ((successCount / connectCount) * 100).toFixed(1) : "0";
+    return { totalContacts, totalCalls, connectCount, successCount, connectRate, successRate };
+  }, [campaignStats]);
+
+  const sparkContacts = useMemo(() => {
+    const vals = Object.values(campaignStats).map((v) => v.totalContacts);
+    const total = vals.reduce((s, v) => s + v, 0) || 1;
+    return vals.slice(-7).map((v, i) => ({ i, v, date: DAY_LABELS[i] ?? "", pct: Math.round((v / total) * 100) }));
+  }, [campaignStats]);
+
+  const sparkCalls = useMemo(() => {
+    const total = dailyCalls.reduce((s, d) => s + d.calls, 0) || 1;
+    return dailyCalls.map((d, i) => ({ i, v: d.calls, date: DAY_LABELS[i] ?? "", pct: Math.round((d.calls / total) * 100) }));
+  }, [dailyCalls]);
+
+  const sparkConnect = useMemo(() => {
+    return dailyCalls.map((d, i) => {
+      const rate = d.calls > 0 ? Math.round((d.connects / d.calls) * 100) : 0;
+      return { i, v: rate, date: DAY_LABELS[i] ?? "", pct: rate };
+    });
+  }, [dailyCalls]);
+
+  const sparkSuccess = useMemo(() => {
+    return dailyCalls.map((d, i) => {
+      const rate = d.connects > 0 ? Math.round((d.successes / d.connects) * 100) : 0;
+      return { i, v: rate, date: DAY_LABELS[i] ?? "", pct: rate };
+    });
+  }, [dailyCalls]);
 
   const filtered = useMemo(() => {
-    let list = campaigns;
-    if (activeTab === "All") list = list.filter((c) => c.group !== "Archived");
-    else list = list.filter((c) => c.group === activeTab);
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter((c) => c.name.toLowerCase().includes(q));
-    }
-    return list;
-  }, [campaigns, activeTab, searchQuery]);
+    if (!searchQuery.trim()) return campaigns;
+    const q = searchQuery.toLowerCase();
+    return campaigns.filter((c) => (c.name as string).toLowerCase().includes(q));
+  }, [campaigns, searchQuery]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const tabCounts = useMemo(() => {
-    const counts: Record<string, number> = { All: campaigns.filter((c) => c.group !== "Archived").length };
-    for (const g of allGroups) {
-      counts[g] = campaigns.filter((c) => c.group === g).length;
-    }
-    return counts;
-  }, [campaigns, allGroups]);
-
-  const stats = useMemo(() => {
-    const totalContacts = filtered.reduce((s, c) => s + c.totalContacts, 0);
-    const totalCalls = filtered.reduce((s, c) => s + c.totalCalls, 0);
-    const totalConnect = filtered.reduce((s, c) => s + c.connectCount, 0);
-    const totalSuccess = filtered.reduce((s, c) => s + c.successCount, 0);
-    const connectRate = totalCalls > 0 ? ((totalConnect / totalCalls) * 100).toFixed(1) : "0";
-    const successRate = totalConnect > 0 ? ((totalSuccess / totalConnect) * 100).toFixed(1) : "0";
-    return { totalContacts, totalCalls, connectRate, successRate };
-  }, [filtered]);
-
-  // Sparkline data derived from campaigns (last 7 data points)
-  const sparkContacts = useMemo(() => {
-    const pts = filtered.slice(-7).map((c) => c.totalContacts);
-    const total = pts.reduce((s, v) => s + v, 0) || 1;
-    return pts.map((v, i) => ({ i, v, date: DAY_LABELS[i], pct: Math.round((v / total) * 100) }));
-  }, [filtered]);
-  const sparkCalls = useMemo(() => {
-    const pts = filtered.slice(-7).map((c) => c.totalCalls);
-    const total = pts.reduce((s, v) => s + v, 0) || 1;
-    return pts.map((v, i) => ({ i, v, date: DAY_LABELS[i], pct: Math.round((v / total) * 100) }));
-  }, [filtered]);
-  const sparkConnect = useMemo(() => {
-    const pts = filtered.slice(-7).map((c) => c.totalCalls > 0 ? Math.round((c.connectCount / c.totalCalls) * 100) : 0);
-    const total = pts.reduce((s, v) => s + v, 0) || 1;
-    return pts.map((v, i) => ({ i, v, date: DAY_LABELS[i], pct: Math.round((v / total) * 100) }));
-  }, [filtered]);
-  const sparkSuccess = useMemo(() => {
-    const pts = filtered.slice(-7).map((c) => c.connectCount > 0 ? Math.round((c.successCount / c.connectCount) * 100) : 0);
-    const total = pts.reduce((s, v) => s + v, 0) || 1;
-    return pts.map((v, i) => ({ i, v, date: DAY_LABELS[i], pct: Math.round((v / total) * 100) }));
-  }, [filtered]);
-
-  function handleTabChange(tab: string) { setActiveTab(tab); setCurrentPage(1); }
   function handleSearch(q: string) { setSearchQuery(q); setCurrentPage(1); }
 
-  async function handleAddCampaign(campaign: Campaign) {
+  async function handleDelete(id: string) {
+    setDeleting(true);
     try {
-      const saved = await insertCampaign(campaign);
-      setCampaigns((prev) => [saved, ...prev]);
-      addNotification(`New campaign added: "${saved.name}"`);
-      showToast(`Campaign "${saved.name}" added successfully!`);
-      setShowNewModal(false);
-      setActiveTab(campaign.group);
-      setSearchQuery("");
-      setCurrentPage(1);
+      const res = await fetch(`/api/campaigns-v2/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setCampaigns((prev) => prev.filter((c) => (c.id as string) !== id));
+      }
     } catch (err) {
-      console.error("Failed to save campaign:", err);
-      showToast("Failed to save campaign. Please try again.");
+      console.error("Delete failed:", err);
+    } finally {
+      setDeleting(false);
+      setConfirmDeleteId(null);
     }
   }
-
-  function handleAddGroup(name: string) {
-    if (!allGroups.includes(name)) setCustomGroups((prev) => [...prev, name]);
-    setActiveTab(name);
-    setCurrentPage(1);
-    setShowAddGroupModal(false);
-  }
-
-  function handleDeleteGroup(name: string) {
-    setCustomGroups((prev) => prev.filter((g) => g !== name));
-    if (activeTab === name) setActiveTab("All");
-    setCurrentPage(1);
-    setDeleteGroupConfirm(null);
-  }
-
-  function handleDuplicateCampaign(id: number) {
-    const src = campaigns.find((c) => c.id === id);
-    if (!src) return;
-    const newId = Math.max(...campaigns.map((c) => c.id)) + 1;
-    setCampaigns((prev) => [
-      { ...src, id: newId, name: src.name + " (Copy)", isDuplicate: true },
-      ...prev,
-    ]);
-  }
-
-  async function handleDeleteCampaign(id: number) {
-    setCampaigns((prev) => prev.filter((c) => c.id !== id));
-    try { await deleteCampaign(id); } catch { /* already removed from UI */ }
-  }
-
-  async function handleArchiveCampaign(id: number) {
-    setCampaigns((prev) => prev.map((c) => c.id === id ? { ...c, group: "Archived" } : c));
-    try { await archiveCampaign(id); } catch { /* already updated in UI */ }
-  }
-
-  async function handleRecoverCampaign(id: number) {
-    setCampaigns((prev) => prev.map((c) => c.id === id ? { ...c, group: "RND" } : c));
-    try { await recoverCampaign(id); } catch { /* already updated in UI */ }
-  }
-
-  const tabs = [{ label: "All", group: "All" }, ...allGroups.map((g) => ({ label: g, group: g }))];
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-64 gap-2">
+        <Loader2 size={20} className="animate-spin text-blue-500" />
+        <span className="text-sm text-[var(--text-3)]">Loading campaigns...</span>
       </div>
     );
   }
 
+  const activeCount = campaigns.filter((c) => (c.status as string) !== "archived").length;
+  const runningCount = campaigns.filter((c) => (c.status as string) === "running").length;
+
   return (
     <div className="p-4 sm:p-6 w-full">
-
-      {/* ── Page header ── */}
-      <div className="flex items-start sm:items-center justify-between mb-5 gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
-            <MegaphoneIcon size={17} className="text-blue-400" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold text-[var(--text-1)]">Campaigns</h1>
-            <p className="text-xs text-[var(--text-3)] mt-0.5">{campaigns.filter((c) => c.group !== "Archived").length} active campaigns</p>
-          </div>
+      {/* Header */}
+      <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-1)] tracking-tight">Campaigns</h1>
+          <p className="text-xs text-[var(--text-3)] mt-1">
+            {activeCount} campaign{activeCount !== 1 ? "s" : ""}
+            {runningCount > 0 && (
+              <span className="text-emerald-400 ml-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1 align-middle" />
+                {runningCount} running
+              </span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <Link
-            href="/campaigns/v2/new"
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 border border-[var(--border)] bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-2)] text-sm font-medium rounded-full transition-colors"
+            href="/campaigns/v1"
+            className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-3)] hover:text-[var(--text-2)] text-xs font-medium rounded-lg transition-colors"
           >
-            <Sparkles size={15} />
-            <span className="hidden sm:inline">New Campaign V2</span>
-            <span className="sm:hidden">V2</span>
+            <Archive size={13} />
+            <span className="hidden sm:inline">Legacy V1</span>
           </Link>
-          <button
-            onClick={() => { setShowNewModal(true); }}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0"
+          <Link
+            href="/campaigns/v2/new"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-blue-600/25 flex-shrink-0"
           >
             <Plus size={15} />
-            <span className="hidden sm:inline">New Campaign</span>
-            <span className="sm:hidden">New</span>
-          </button>
+            New Campaign
+          </Link>
         </div>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="mb-5 border-b border-[var(--border)] overflow-x-auto hide-scrollbar">
-        <div className="flex items-center min-w-max">
-          {tabs.map((tab) => {
-            const isDeletable = tab.group !== "All";
-            const isActive = activeTab === tab.group;
-            return (
-              <div key={tab.group} className="group relative flex items-center">
-                <button
-                  onClick={() => handleTabChange(tab.group)}
-                  className={`flex items-center gap-1.5 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
-                    isDeletable ? "pl-3 sm:pl-4 pr-1" : "px-3 sm:px-4"
-                  } ${
-                    isActive
-                      ? "border-blue-500 text-blue-400"
-                      : "border-transparent text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-[var(--border-2)]"
-                  }`}
-                >
-                  {tab.label}
-                  <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium ${
-                    isActive ? "bg-blue-500/20 text-blue-400" : "bg-[var(--bg-elevated)] text-[var(--text-2)]"
-                  }`}>
-                    {tabCounts[tab.group] ?? 0}
-                  </span>
-                </button>
-                {isDeletable && (
-                  <button onClick={() => setDeleteGroupConfirm(tab.group)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 mr-2 p-0.5 rounded-full hover:bg-[var(--bg-elevated)] text-[var(--text-3)] hover:text-[var(--text-2)] -mb-px"
-                    title={`Remove ${tab.label}`}>
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          <button onClick={() => setShowAddGroupModal(true)}
-            className="flex items-center gap-1 px-3 sm:px-4 py-2.5 text-sm font-medium text-[var(--text-3)] hover:text-[var(--text-2)] transition-colors border-b-2 border-transparent -mb-px whitespace-nowrap">
-            <Plus size={13} />
-            Add Group
-          </button>
-        </div>
-      </div>
-
-      {/* ── Stats ── 2 cols mobile / 4 cols desktop (hidden on Archived tab) */}
-      <div className={`grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5 ${activeTab === "Archived" ? "hidden" : ""}`}>
-        {/* Total Contacts */}
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <StatCard
-          title="Total Contacts"
-          value={stats.totalContacts.toLocaleString()}
-          change={+13}
-          label="this month"
-          chart={<BarChart data={sparkContacts}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(99,102,241,0.08)" }} /><Bar dataKey="v" fill="#6366f1" radius={[3,3,0,0]} /></BarChart>}
+          title="Contacts"
+          value={totals.totalContacts.toLocaleString()}
+          subtitle="all time"
+          accent="text-indigo-400"
+          icon={Users}
+          iconColor="text-indigo-400"
+          gradientFrom="from-indigo-500/[0.07]"
+          gradientTo="to-transparent"
+          chart={<BarChart data={sparkContacts}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(99,102,241,0.08)" }} /><Bar dataKey="v" fill="#818cf8" radius={[4,4,0,0]} /></BarChart>}
         />
-        {/* Total Calls */}
         <StatCard
-          title="Total Calls"
-          value={stats.totalCalls.toLocaleString()}
-          change={+8}
-          label="this month"
-          chart={<BarChart data={sparkCalls}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(139,92,246,0.08)" }} /><Bar dataKey="v" fill="#8b5cf6" radius={[3,3,0,0]} /></BarChart>}
+          title="Calls"
+          value={totals.totalCalls.toLocaleString()}
+          subtitle="last 7 days"
+          accent="text-violet-400"
+          icon={PhoneCall}
+          iconColor="text-violet-400"
+          gradientFrom="from-violet-500/[0.07]"
+          gradientTo="to-transparent"
+          chart={<BarChart data={sparkCalls}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(139,92,246,0.08)" }} /><Bar dataKey="v" fill="#a78bfa" radius={[4,4,0,0]} /></BarChart>}
         />
-        {/* Connect Rate */}
         <StatCard
           title="Connect Rate"
-          value={stats.connectRate + "%"}
-          change={+5}
-          label="this month"
-          chart={<AreaChart data={sparkConnect}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="cgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.25}/><stop offset="95%" stopColor="#22c55e" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#22c55e" strokeWidth={2} fill="url(#cgGrad)" dot={false} /></AreaChart>}
+          value={totals.connectRate + "%"}
+          subtitle="last 7 days"
+          accent="text-emerald-400"
+          icon={Zap}
+          iconColor="text-emerald-400"
+          gradientFrom="from-emerald-500/[0.07]"
+          gradientTo="to-transparent"
+          chart={<AreaChart data={sparkConnect}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="cgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#34d399" stopOpacity={0.3}/><stop offset="95%" stopColor="#34d399" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#34d399" strokeWidth={2} fill="url(#cgGrad)" dot={false} /></AreaChart>}
         />
-        {/* Success Rate */}
         <StatCard
           title="Success Rate"
-          value={stats.successRate + "%"}
-          change={-2}
-          label="this month"
-          chart={<AreaChart data={sparkSuccess}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="srGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.25}/><stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#f59e0b" strokeWidth={2} fill="url(#srGrad)" dot={false} /></AreaChart>}
+          value={totals.successRate + "%"}
+          subtitle="last 7 days"
+          accent="text-amber-400"
+          icon={Target}
+          iconColor="text-amber-400"
+          gradientFrom="from-amber-500/[0.07]"
+          gradientTo="to-transparent"
+          chart={<AreaChart data={sparkSuccess}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="srGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#fbbf24" stopOpacity={0.3}/><stop offset="95%" stopColor="#fbbf24" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={2} fill="url(#srGrad)" dot={false} /></AreaChart>}
         />
       </div>
 
-      {/* ── Search ── */}
+      {/* Search */}
       <div className="mb-4">
-        <div className="relative w-full max-w-md">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
-          <input type="text" placeholder="Search Campaigns" value={searchQuery}
+        <div className="relative w-full max-w-sm">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search campaigns..."
+            value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            className="w-full pl-9 pr-8 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
           />
+          {searchQuery && (
+            <button onClick={() => handleSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-2)]">
+              <X size={13} />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ── Table + Pagination ── */}
+      {/* Table */}
       <div className="rounded-xl border border-[var(--border)] overflow-hidden">
-        <CampaignsTable campaigns={paginated} onDuplicate={handleDuplicateCampaign} onDelete={handleDeleteCampaign} onArchive={handleArchiveCampaign} onRecover={handleRecoverCampaign} />
-        <div className="border-t border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
-          <Pagination currentPage={safePage} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setCurrentPage} />
-        </div>
-      </div>
-
-      {/* Full campaign editor */}
-      {showNewModal && (
-        <CampaignEditor
-          onClose={() => setShowNewModal(false)}
-          onSave={handleAddCampaign}
-          nextId={campaigns.length + 1}
-          availableGroups={allGroups}
-        />
-      )}
-      {showAddGroupModal && (
-        <AddGroupModal
-          onClose={() => setShowAddGroupModal(false)}
-          onAdd={handleAddGroup}
-        />
-      )}
-
-      {/* ── Delete group confirmation modal ── */}
-      {deleteGroupConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-          <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-2xl w-full max-w-sm p-6">
-            <h2 className="text-base font-semibold text-[var(--text-1)] mb-1">Delete Group</h2>
-            <p className="text-sm text-[var(--text-2)] mb-6">
-              Are you sure you want to delete the <span className="font-medium text-[var(--text-1)]">{deleteGroupConfirm}</span> group?
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setDeleteGroupConfirm(null)}
-                className="px-4 py-2 text-sm font-medium text-[var(--text-2)] bg-[var(--bg-elevated)] hover:bg-[var(--border-2)] rounded-lg transition-colors">
-                No
-              </button>
-              <button onClick={() => handleDeleteGroup(deleteGroupConfirm)}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-500/90 hover:bg-red-500 rounded-lg transition-colors">
-                Yes, Delete
-              </button>
+        {campaigns.length === 0 ? (
+          <div className="bg-[var(--bg-card)] px-6 py-20 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-4">
+              <Plus size={22} className="text-blue-400" />
             </div>
+            <p className="text-sm font-medium text-[var(--text-1)] mb-1">No campaigns yet</p>
+            <p className="text-xs text-[var(--text-3)] mb-4">Create your first AI-powered outbound campaign</p>
+            <Link href="/campaigns/v2/new" className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors">
+              <Plus size={14} /> New Campaign
+            </Link>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        ) : (
+          <>
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-[var(--border)] bg-[var(--bg-app)]">
+              {paginated.map((c) => {
+                const s = campaignStats[c.id as string] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
+                const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) + "%" : "0%";
+                const hasActivity = s.totalCalls > 0;
+                return (
+                  <div
+                    key={c.id as string}
+                    onClick={() => router.push(`/campaigns/v2/${c.id}`)}
+                    className={`px-4 py-3.5 cursor-pointer transition-colors hover:bg-[var(--bg-hover)] ${!hasActivity ? "opacity-60" : ""}`}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2.5">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <span className="w-5 h-5 rounded-md bg-blue-500/10 flex items-center justify-center">
+                            <ArrowUpRight size={10} className="text-blue-400" />
+                          </span>
+                          <span className="w-5 h-5 rounded-md bg-[var(--bg-elevated)] flex items-center justify-center">
+                            <Phone size={10} className="text-[var(--text-2)]" />
+                          </span>
+                        </div>
+                        <span className="font-semibold text-[var(--text-1)] text-sm truncate">{c.name as string}</span>
+                      </div>
+                      <StatusBadge status={c.status as string} />
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Contacts</p>
+                        <p className="text-xs font-semibold text-[var(--text-2)]">{s.totalContacts.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Calls</p>
+                        <p className="text-xs font-semibold text-[var(--text-2)]">{s.totalCalls.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Connect</p>
+                        <p className="text-xs font-semibold text-[var(--text-2)]">{connectRate}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
-// ── StatCard component ──────────────────────────────────────────────────────
-
-interface StatCardProps {
-  title: string;
-  value: string;
-  change: number;
-  label: string;
-  chart: React.ReactNode;
-}
-
-function StatCard({ title, value, change, label, chart }: StatCardProps) {
-  const isPositive = change >= 0;
-  return (
-    <div className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4 flex flex-col gap-3 overflow-hidden">
-      <p className="text-xs font-semibold text-[var(--text-2)] truncate">{title}</p>
-      <div className="h-14 sm:h-16 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          {chart as React.ReactElement}
-        </ResponsiveContainer>
-      </div>
-      <div className="flex items-end justify-between gap-2">
-        <p className="text-xl sm:text-2xl font-bold text-[var(--text-1)] leading-tight tracking-tight">{value}</p>
-        <div className="flex flex-col items-end shrink-0">
-          <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${
-            isPositive ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
-          }`}>
-            {isPositive ? "↑" : "↓"}{Math.abs(change)}%
-          </span>
-          <span className="text-[10px] text-[var(--text-3)] mt-0.5 text-right">{label}</span>
+            {/* Desktop table */}
+            <div className="hidden md:block bg-[var(--bg-app)] w-full overflow-x-auto">
+              <table className="w-full min-w-[740px] text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
+                    <th className="text-left px-5 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Campaign</th>
+                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Contacts</th>
+                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Calls</th>
+                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Connect</th>
+                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Success</th>
+                    <th className="text-center px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Status</th>
+                    <th className="w-10" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginated.map((c, index) => {
+                    const s = campaignStats[c.id as string] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
+                    const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) : "0";
+                    const successRate = s.connectCount > 0 ? ((s.successCount / s.connectCount) * 100).toFixed(1) : "0";
+                    const hasActivity = s.totalCalls > 0;
+                    return (
+                      <tr
+                        key={c.id as string}
+                        onClick={() => router.push(`/campaigns/v2/${c.id}`)}
+                        className={`group border-b border-[var(--border)] last:border-b-0 hover:bg-blue-500/[0.04] transition-colors cursor-pointer ${!hasActivity ? "opacity-50 hover:opacity-80" : ""}`}
+                      >
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <span className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                <ArrowUpRight size={13} className="text-blue-400" />
+                              </span>
+                              <span className="w-7 h-7 rounded-lg bg-[var(--bg-elevated)] flex items-center justify-center">
+                                <Phone size={13} className="text-[var(--text-3)]" />
+                              </span>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-[var(--text-1)] group-hover:text-blue-400 transition-colors truncate">{c.name as string}</p>
+                              {(c.vapi_assistant_name as string) && (
+                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">{c.vapi_assistant_name as string}</p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-right text-[var(--text-2)] tabular-nums">{s.totalContacts.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-right tabular-nums">
+                          <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{s.totalCalls.toLocaleString()}</span>
+                        </td>
+                        <td className="px-4 py-4 text-right tabular-nums">
+                          <span className={`${Number(connectRate) > 0 ? "text-emerald-400" : "text-[var(--text-3)]"}`}>
+                            {connectRate}%
+                          </span>
+                          <span className="text-[var(--text-3)] text-[11px] ml-1">({s.connectCount})</span>
+                        </td>
+                        <td className="px-4 py-4 text-right tabular-nums">
+                          <span className={`${Number(successRate) > 0 ? "text-amber-400" : "text-[var(--text-3)]"}`}>
+                            {successRate}%
+                          </span>
+                          <span className="text-[var(--text-3)] text-[11px] ml-1">({s.successCount})</span>
+                        </td>
+                        <td className="px-4 py-4 text-center"><StatusBadge status={c.status as string} /></td>
+                        <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
+                          {(c.status as string) !== "running" && (
+                            confirmDeleteId === (c.id as string) ? (
+                              <span className="inline-flex items-center gap-2">
+                                <button
+                                  onClick={() => handleDelete(c.id as string)}
+                                  disabled={deleting}
+                                  className="text-[11px] text-red-400 hover:text-red-300 font-semibold disabled:opacity-50"
+                                >
+                                  {deleting ? "..." : "Yes"}
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="text-[11px] text-[var(--text-3)] hover:text-[var(--text-2)]"
+                                >
+                                  No
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmDeleteId(c.id as string)}
+                                className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-3)] hover:text-red-400 rounded-md hover:bg-red-500/10 transition-all"
+                                title="Delete campaign"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+        <div className="border-t border-[var(--border)] bg-[var(--bg-card)] px-5 py-3">
+          <Pagination
+            currentPage={safePage}
+            totalPages={totalPages}
+            totalItems={filtered.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setCurrentPage}
+          />
         </div>
       </div>
     </div>
