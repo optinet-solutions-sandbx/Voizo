@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
     maxDurationSeconds: base.maxDurationSeconds ?? 202,
     firstMessageMode: base.firstMessageMode ?? "assistant-speaks-first-with-model-generated-message",
     analysisPlan: base.analysisPlan ?? {},
+    structuredDataPlan: base.structuredDataPlan ?? undefined,
     voicemailDetection: base.voicemailDetection ?? null,
     server: base.server ?? null,
   };
