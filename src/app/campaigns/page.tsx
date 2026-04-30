@@ -4,7 +4,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Search, Plus, Loader2, Trash2, Archive, Phone, ArrowUpRight, X,
+  Search, Plus, Loader2, Trash2, Phone, ArrowUpRight, X,
   Users, PhoneCall, Zap, Target,
 } from "lucide-react";
 import {
@@ -273,13 +273,7 @@ export default function CampaignsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <Link
-            href="/campaigns/v1"
-            className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-3)] hover:text-[var(--text-2)] text-xs font-medium rounded-lg transition-colors"
-          >
-            <Archive size={13} />
-            <span className="hidden sm:inline">Legacy V1</span>
-          </Link>
+          {/* Legacy V1 button hidden per Chris — V1 was placeholder only */}
           <Link
             href="/campaigns/v2/new"
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-blue-600/25 flex-shrink-0"
