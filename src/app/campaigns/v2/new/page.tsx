@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Bot, CalendarDays, Clock, ListChecks, Loader2, MessageSquareText, Phone, Play, Save, Sparkles, Timer } from "lucide-react";
+import { ArrowLeft, CalendarDays, Clock, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
 import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
 
@@ -230,17 +230,13 @@ export default function NewCampaignV2Page() {
           </Link>
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0">
-              <Sparkles size={18} className="text-blue-400" />
+              <Megaphone size={18} className="text-blue-400" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-2xl font-bold text-[var(--text-1)]">New Campaign V2</h1>
+              <h1 className="text-2xl font-bold text-[var(--text-1)]">New Campaign</h1>
               <p className="text-sm text-[var(--text-3)] mt-1">Create an AI-powered outbound campaign. Pick an assistant, add numbers, and set a schedule.</p>
             </div>
           </div>
-        </div>
-        <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-xs text-[var(--text-2)]">
-          <Bot size={14} className="text-blue-400" />
-          AI-only Week 1
         </div>
       </div>
 
