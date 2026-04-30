@@ -8,7 +8,7 @@ import crypto from "crypto";
  * Vapi posts this when a call ends.
  *
  * Manifesto compliance:
- * - Vapi signature validated via HMAC-SHA256 (§6)
+ * - Vapi webhook authenticated via x-vapi-secret token (§6 — per Vapi's documented method)
  * - Idempotent: checks if goal_reached already set on this call (§6)
  * - SMS fires only when goal_reached=true AND sms_enabled=true AND sms_on_goal_reached_only=true (§6: 3 conditions)
  * - Call matching uses Vapi's phoneCallProviderId (Twilio SID) — no fragile fallback
@@ -23,27 +23,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // ── Vapi signature validation (Manifesto §6) ──
-  const vapiSecret = process.env.VAPI_PRIVATE_KEY;
-  const vapiSignature = request.headers.get("x-vapi-signature");
-  if (!vapiSecret) {
+  // ── Vapi webhook authentication (Manifesto §6) ──
+  // Vapi's server.secret sends the raw token as the x-vapi-secret header.
+  // We validate with constant-time comparison. VAPI_WEBHOOK_SECRET is the
+  // dedicated secret (preferred); falls back to VAPI_PRIVATE_KEY for compat.
+  const webhookSecret = process.env.VAPI_WEBHOOK_SECRET || process.env.VAPI_PRIVATE_KEY;
+  const vapiSecretHeader = request.headers.get("x-vapi-secret");
+  if (!webhookSecret) {
     if (process.env.NODE_ENV === "production") {
-      console.error("FATAL: VAPI_PRIVATE_KEY not set — rejecting webhook");
+      console.error("FATAL: VAPI_WEBHOOK_SECRET not set — rejecting webhook");
       return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
     }
-    console.warn("Vapi webhook: VAPI_PRIVATE_KEY not set (accepting in dev only)");
-  } else if (!vapiSignature) {
-    console.warn("Vapi webhook: missing x-vapi-signature header — rejecting");
+    console.warn("Vapi webhook: no webhook secret configured (accepting in dev only)");
+  } else if (!vapiSecretHeader) {
+    console.warn("Vapi webhook: missing x-vapi-secret header — rejecting");
     return NextResponse.json({ error: "Missing signature" }, { status: 403 });
   } else {
-    const expectedSignature = crypto
-      .createHmac("sha256", vapiSecret)
-      .update(rawBody)
-      .digest("hex");
-    const sigBuffer = Buffer.from(vapiSignature, "hex");
-    const expectedBuffer = Buffer.from(expectedSignature, "hex");
-    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-      console.warn("Vapi webhook: invalid signature — rejecting");
+    // Constant-time comparison to prevent timing attacks
+    const received = Buffer.from(vapiSecretHeader, "utf-8");
+    const expected = Buffer.from(webhookSecret, "utf-8");
+    if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
+      console.warn("Vapi webhook: invalid x-vapi-secret — rejecting");
       return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
     }
   }
@@ -59,24 +59,26 @@ export async function POST(request: NextRequest) {
   const transcript = message.transcript as string | undefined;
   const analysis = message.analysis as Record<string, unknown> | undefined;
 
-  // Diagnostic: log the full call payload shape on every end-of-call so we
-  // can see exactly what Vapi sends. Helps when match fails — we need to know
-  // whether `customer.number`, `customer.phoneNumber`, or some other field
-  // carries the recipient's E.164. Remove or downgrade once stable.
+  // Diagnostic: log the full analysis payload on every end-of-call.
+  // Critical for debugging the "analysis never runs" issue (all 45 calls
+  // returned analysis:{} as of 2026-04-30). Remove once analysis is stable.
   console.log(
-    `[vapi end-of-call] payload shape: ` +
+    `[vapi end-of-call] payload: ` +
     JSON.stringify({
       vapiCallId,
-      callKeys: vapiCall ? Object.keys(vapiCall) : null,
       customer: vapiCall?.customer || null,
       phoneCallProviderId: vapiCall?.phoneCallProviderId || null,
-      successEvaluation: analysis?.successEvaluation,
+      analysis: analysis || null,
+      analysisKeys: analysis ? Object.keys(analysis) : [],
+      hasTranscript: Boolean(transcript),
     }),
   );
 
-  // Determine goal_reached from Vapi's analysis
-  const successEval = analysis?.successEvaluation as string | undefined;
-  const goalReached = successEval === "true";
+  // Determine goal_reached from Vapi's analysis.
+  // Vapi's successEvaluation can be string | boolean | number | null depending
+  // on API version (June 2025 breaking change). Handle all variants defensively.
+  const successEval = analysis?.successEvaluation;
+  const goalReached = successEval === true || successEval === "true";
 
   // Opt-out signal: Vapi assistant outputs structuredData.optOut when the
   // contact explicitly asks not to be called again. This field won't exist

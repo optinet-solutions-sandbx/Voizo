@@ -125,7 +125,19 @@ export async function POST(request: NextRequest) {
     analysisPlan: base.analysisPlan ?? {},
     structuredDataPlan: base.structuredDataPlan ?? undefined,
     voicemailDetection: base.voicemailDetection ?? null,
-    server: base.server ?? null,
+    // Explicitly inject server.secret on every clone. Vapi redacts the secret
+    // field in GET responses (encrypted at rest), so base.server will NOT
+    // contain the secret even if the base assistant has one configured.
+    // Without this, clones silently lose webhook authentication.
+    server: (() => {
+      const baseServer = base.server ?? {};
+      const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
+      return {
+        url: baseServer.url ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call",
+        timeoutSeconds: baseServer.timeoutSeconds ?? 20,
+        ...(webhookSecret ? { secret: webhookSecret } : {}),
+      };
+    })(),
   };
 
   // ── 3. Create clone on Vapi ──
