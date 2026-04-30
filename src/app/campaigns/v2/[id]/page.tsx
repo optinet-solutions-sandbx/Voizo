@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bot, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
@@ -60,34 +60,46 @@ export default function CampaignV2DetailPage() {
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Fetch all campaign data — used on mount and by polling.
+  // Wrapped in useCallback so the interval always calls the latest version
+  // and ESLint exhaustive-deps stays clean.
+  const refreshData = useCallback(async () => {
     if (!id) return;
-    (async () => {
-      try {
-        const [c, n, cl, sms] = await Promise.all([
-          fetchCampaignV2(id),
-          fetchCampaignNumbersV2(id),
-          fetchCallsV2(id).catch(() => []),
-          fetchSmsMessagesV2(id).catch(() => []),
-        ]);
-        setCampaign(c);
-        setNumbers(n);
-        setCalls(cl);
-        // Build phone -> most-recent SMS map. Rows arrive ordered newest-first,
-        // so the first one we see per phone is the latest.
-        const map = new Map<string, Row>();
-        for (const row of sms) {
-          const phone = row.to_phone_e164 as string | undefined;
-          if (phone && !map.has(phone)) map.set(phone, row);
-        }
-        setSmsByPhone(map);
-      } catch (err) {
-        console.error("Failed to load campaign:", err);
-      } finally {
-        setLoading(false);
+    try {
+      const [c, n, cl, sms] = await Promise.all([
+        fetchCampaignV2(id),
+        fetchCampaignNumbersV2(id),
+        fetchCallsV2(id).catch(() => []),
+        fetchSmsMessagesV2(id).catch(() => []),
+      ]);
+      setCampaign(c);
+      setNumbers(n);
+      setCalls(cl);
+      const map = new Map<string, Row>();
+      for (const row of sms) {
+        const phone = row.to_phone_e164 as string | undefined;
+        if (phone && !map.has(phone)) map.set(phone, row);
       }
-    })();
+      setSmsByPhone(map);
+    } catch (err) {
+      console.error("Failed to load campaign:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
+
+  // Initial fetch
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
+
+  // Auto-refresh every 5s while campaign is running
+  useEffect(() => {
+    const status = campaign?.status as string | undefined;
+    if (status !== "running") return;
+    const interval = setInterval(refreshData, 5000);
+    return () => clearInterval(interval);
+  }, [campaign?.status, refreshData]);
 
   async function handleStart() {
     if (!id) return;

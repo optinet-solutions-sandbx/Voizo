@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Clock, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
 import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
+import DateTimePicker from "@/components/DateTimePicker";
 
 // Default SMS template pre-filled on the Create Campaign form.
 // Current brand: Lucky7even Canada. Approved by Maria, provided by Ernie (2026-04-22).
@@ -95,8 +96,9 @@ export default function NewCampaignV2Page() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [baseVoiceId, setBaseVoiceId] = useState<string | null>(null);
   const [timezone, setTimezone] = useState("America/Toronto");
-  const [startMode, setStartMode] = useState<"now" | "delay">("now");
+  const [startMode, setStartMode] = useState<"now" | "delay" | "scheduled">("now");
   const [delayMinutes, setDelayMinutes] = useState(60);
+  const [scheduledDate, setScheduledDate] = useState("");
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>(initialScheduleRows);
   const [smsEnabled, setSmsEnabled] = useState(true);
   const [smsTemplate, setSmsTemplate] = useState(DEFAULT_SMS_TEMPLATE);
@@ -203,7 +205,11 @@ export default function NewCampaignV2Page() {
         vapiAssistantName: cloneData.assistantName,
         vapiSipUri: cloneData.sipUri,
         timezone: timezone.trim(),
-        startAt: startMode === "delay" ? new Date(Date.now() + delayMinutes * 60_000).toISOString() : null,
+        startAt: startMode === "delay"
+          ? new Date(Date.now() + delayMinutes * 60_000).toISOString()
+          : startMode === "scheduled" && scheduledDate
+            ? new Date(scheduledDate).toISOString()
+            : null,
         endAt: null,
         callWindows,
         smsEnabled,
@@ -387,6 +393,18 @@ export default function NewCampaignV2Page() {
               <Timer size={14} />
               Delay Start
             </button>
+            <button
+              type="button"
+              onClick={() => setStartMode("scheduled")}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                startMode === "scheduled"
+                  ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+                  : "bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/40"
+              }`}
+            >
+              <CalendarDays size={14} />
+              Schedule Date
+            </button>
           </div>
 
           {startMode === "delay" && (
@@ -440,6 +458,45 @@ export default function NewCampaignV2Page() {
                   )}
                 </span>
               </div>
+            </div>
+          )}
+
+          {startMode === "scheduled" && (
+            <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 mb-1">
+              <p className="text-xs text-[var(--text-3)] mb-3">Pick a date and time to start dialling:</p>
+              <p className="text-[10px] text-amber-400/80 mb-2">
+                Times are in your browser&apos;s local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
+                Calls still only dial within the schedule&apos;s active hours.
+              </p>
+              <DateTimePicker
+                value={scheduledDate}
+                onChange={(v) => setScheduledDate(v)}
+                min={new Date().toISOString().slice(0, 16)}
+              />
+              {scheduledDate && (
+                <div className="flex items-center gap-2 mt-3">
+                  <CalendarDays size={13} className="text-[var(--text-3)]" />
+                  <span className="text-xs text-[var(--text-2)]">
+                    Campaign will start on{" "}
+                    <span className="font-semibold text-[var(--text-1)]">
+                      {new Date(scheduledDate).toLocaleDateString("en-US", {
+                        weekday: "long",
+                        month: "long",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </span>
+                    {" "}at{" "}
+                    <span className="font-semibold text-[var(--text-1)]">
+                      {new Date(scheduledDate).toLocaleTimeString("en-US", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                        hour12: true,
+                      })}
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
