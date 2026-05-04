@@ -78,7 +78,38 @@ export async function POST(request: NextRequest) {
   // Vapi's successEvaluation can be string | boolean | number | null depending
   // on API version (June 2025 breaking change). Handle all variants defensively.
   const successEval = analysis?.successEvaluation;
-  const goalReached = successEval === true || successEval === "true";
+  let goalReached = successEval === true || successEval === "true";
+  let goalSource: "vapi" | "fallback" = "vapi";
+
+  // ── Fallback: transcript-based success evaluation ──
+  // As of 2026-05-04, Vapi's post-call analysis never runs on our SIP inbound
+  // calls (51/51 returned analysis:{}). Until Vapi resolves this, we evaluate
+  // the transcript ourselves when their analysis is missing.
+  //
+  // Strategy: Tom's prompt only confirms SMS dispatch ("I'll send you an SMS")
+  // AFTER the customer agrees. That AI confirmation line is a reliable downstream
+  // signal of customer consent. We scan AI lines for it.
+  //
+  // Vapi's analysis takes priority when present — this fallback is a safety net.
+  if (successEval == null && transcript && !goalReached) {
+    // Match AI confirmation of SMS/text dispatch.
+    // Patterns observed across 6+ real calls:
+    //   "I'll send you an SMS"
+    //   "I'll send the SMS right now"
+    //   "I'll send the SMS now"
+    //   "I'll send you a text"
+    const aiConfirmedSms =
+      /i(?:'ll| will) send (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
+
+    if (aiConfirmedSms) {
+      goalReached = true;
+      goalSource = "fallback";
+      console.log(
+        `[fallback-eval] goal_reached=true via transcript pattern ` +
+        `(Vapi analysis missing, AI confirmed SMS dispatch). vapiCallId=${vapiCallId}`,
+      );
+    }
+  }
 
   // Opt-out signal: Vapi assistant outputs structuredData.optOut when the
   // contact explicitly asks not to be called again. This field won't exist
