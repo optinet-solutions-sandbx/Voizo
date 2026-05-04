@@ -95,14 +95,46 @@ export async function POST(request: NextRequest) {
     ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.5, similarityBoost: 0.75 }
     : base.voice;
 
+  // ── Voizo system prefix (Chris's architecture: system prompt + agent prompt = 1 prompt) ──
+  // Dev-controlled instructions that every cloned assistant receives, prepended
+  // to whatever agent prompt Ernie/Maria configure. Ensures predictable AI
+  // behavior for post-call evaluation (SMS confirmation phrasing, call ending).
+  // Vapi only allows one system message, so we concatenate.
+  const VOIZO_SYSTEM_PREFIX = [
+    `[System Instructions — Voizo Platform]`,
+    `Important call behavior rules that apply to every call:`,
+    ``,
+    `1. SMS CONFIRMATION: When the customer agrees to receive SMS or text details,`,
+    `   you MUST verbally confirm by saying something like "I'll send you an SMS now"`,
+    `   before moving on. Do not skip this step — it is required for SMS delivery to work.`,
+    ``,
+    `2. CALL ENDING: Never end the call immediately after the customer agrees to receive`,
+    `   SMS. Confirm the SMS dispatch first, then wrap up the call politely.`,
+    ``,
+    `3. OPT-OUT: If the customer explicitly asks not to be called again, acknowledge`,
+    `   their request respectfully before ending the call.`,
+    ``,
+    `[End System Instructions]`,
+    ``,
+    ``,
+  ].join("\n");
+
   const cloneMessages = base.model?.messages ? [...base.model.messages] : [];
-  if (systemPrompt) {
-    const sysIdx = cloneMessages.findIndex((m: { role: string }) => m.role === "system");
-    if (sysIdx >= 0) {
-      cloneMessages[sysIdx] = { role: "system", content: systemPrompt };
-    } else {
-      cloneMessages.unshift({ role: "system", content: systemPrompt });
-    }
+
+  // Determine agent prompt: custom override from request, or base assistant's existing prompt
+  const sysIdx = cloneMessages.findIndex((m: { role: string }) => m.role === "system");
+  const baseSystemContent = sysIdx >= 0
+    ? (cloneMessages[sysIdx] as { role: string; content: string }).content
+    : "";
+  const agentPrompt = systemPrompt || baseSystemContent;
+
+  // Combine: Voizo system prefix + agent prompt
+  const finalSystemContent = VOIZO_SYSTEM_PREFIX + agentPrompt;
+
+  if (sysIdx >= 0) {
+    cloneMessages[sysIdx] = { role: "system", content: finalSystemContent };
+  } else {
+    cloneMessages.unshift({ role: "system", content: finalSystemContent });
   }
 
   const clonePayload = {
