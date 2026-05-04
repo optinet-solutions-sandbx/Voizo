@@ -48,12 +48,27 @@ function normalizeStatus(raw: unknown): SmsStatus {
 }
 
 export async function POST(request: NextRequest) {
+  // Mobivate delivery receipts may arrive as JSON or form-encoded.
+  // Try JSON first, then form-encoded, then log raw body for debugging.
   let payload: Record<string, unknown>;
+  const rawBody = await request.text();
+
   try {
-    payload = await request.json();
+    payload = JSON.parse(rawBody);
   } catch {
-    console.warn("[mobivate/delivery-status] non-JSON body — ignoring");
-    return NextResponse.json({ received: false, error: "invalid json" }, { status: 200 });
+    // Try URL-encoded form data (common for SMS delivery receipts)
+    try {
+      const params = new URLSearchParams(rawBody);
+      if (params.has("id") || params.has("reference") || params.has("status")) {
+        payload = Object.fromEntries(params.entries());
+      } else {
+        console.warn("[mobivate/delivery-status] unrecognized body format:", rawBody.slice(0, 500));
+        return NextResponse.json({ received: true, parsed: false }, { status: 200 });
+      }
+    } catch {
+      console.warn("[mobivate/delivery-status] unparseable body:", rawBody.slice(0, 500));
+      return NextResponse.json({ received: true, parsed: false }, { status: 200 });
+    }
   }
 
   console.log("[mobivate/delivery-status] payload:", JSON.stringify(payload));
