@@ -93,13 +93,21 @@ export async function POST(request: NextRequest) {
   // Vapi's analysis takes priority when present — this fallback is a safety net.
   if (successEval == null && transcript && !goalReached) {
     // Match AI confirmation of SMS/text dispatch.
-    // Patterns observed across 6+ real calls:
-    //   "I'll send you an SMS"
-    //   "I'll send the SMS right now"
-    //   "I'll send the SMS now"
-    //   "I'll send you a text"
-    const aiConfirmedSms =
+    //
+    // Pattern 1 (explicit): AI names the channel directly.
+    //   "I'll send you an SMS"  /  "I'll send the SMS now"  /  "I'll send you a text"
+    //
+    // Pattern 2 (contextual): AI uses generic send phrasing ("I'll send that over")
+    //   but SMS/text was discussed earlier in the conversation. Both parts must hold
+    //   to avoid false positives.
+    //   Real example (Maria 2026-05-04):
+    //     AI: "Can I send you the details via SMS?"  →  Customer: "Go ahead."
+    //     AI: "I'll send that over now."
+    const aiExplicit =
       /i(?:'ll| will) send (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
+    const smsDiscussed = /\bsms\b|text message/i.test(transcript);
+    const aiConfirmedSend = /i(?:'ll| will) send (?:that|it)\b/i.test(transcript);
+    const aiConfirmedSms = aiExplicit || (smsDiscussed && aiConfirmedSend);
 
     if (aiConfirmedSms) {
       goalReached = true;
