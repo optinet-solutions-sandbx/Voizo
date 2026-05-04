@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import crypto from "crypto";
 
+// SMS dispatch + multiple Supabase queries run inline before returning 200.
+// Default Vercel timeout is too tight if Mobivate API is slow.
+export const maxDuration = 30;
+
 /**
  * POST /api/webhooks/vapi/end-of-call
  *
@@ -103,7 +107,6 @@ export async function POST(request: NextRequest) {
   // on API version (June 2025 breaking change). Handle all variants defensively.
   const successEval = analysis?.successEvaluation;
   let goalReached = successEval === true || successEval === "true";
-  let goalSource: "vapi" | "fallback" = "vapi";
 
   // ── Fallback: transcript-based success evaluation ──
   // As of 2026-05-04, Vapi's post-call analysis never runs on our SIP inbound
@@ -135,7 +138,6 @@ export async function POST(request: NextRequest) {
 
     if (aiConfirmedSms) {
       goalReached = true;
-      goalSource = "fallback";
       console.log(
         `[fallback-eval] goal_reached=true via transcript pattern ` +
         `(Vapi analysis missing, AI confirmed SMS dispatch). vapiCallId=${vapiCallId}`,
@@ -307,7 +309,7 @@ export async function POST(request: NextRequest) {
       campaign?.sms_on_goal_reached_only === true &&
       Boolean(campaign?.sms_template);
 
-    if (shouldSendSms) {
+    if (shouldSendSms && campaign) {
       const { data: numRow } = await supabaseAdmin
         .from("campaign_numbers_v2")
         .select("phone_e164")
@@ -340,7 +342,7 @@ export async function POST(request: NextRequest) {
                 call_id: callRow.id,
                 campaign_number_id: callRow.campaign_number_id,
                 to_phone_e164: numRow.phone_e164,
-                body: campaign!.sms_template,
+                body: campaign.sms_template,
                 provider: "mobivate",
                 status: "queued",
               })
@@ -352,7 +354,7 @@ export async function POST(request: NextRequest) {
             if (!getMobivateConfigError()) {
               const result = await sendSMS({
                 to: numRow.phone_e164,
-                body: campaign!.sms_template,
+                body: campaign.sms_template,
                 reference: smsRow?.id || undefined,
               });
 
