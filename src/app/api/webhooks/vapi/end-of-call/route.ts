@@ -74,6 +74,30 @@ export async function POST(request: NextRequest) {
     }),
   );
 
+  // Temporary diagnostic for Vapi support ticket — full call object inspection.
+  // Requested by Vapi Composer to determine if analysisPlan is present on the
+  // call object in the webhook payload. Remove once Vapi resolves the issue.
+  const artifact = vapiCall?.artifact as Record<string, unknown> | undefined;
+  console.log(
+    `[vapi-diag] call-object: ` +
+    JSON.stringify({
+      callKeys: vapiCall ? Object.keys(vapiCall) : [],
+      artifactKeys: artifact ? Object.keys(artifact) : [],
+      meta: {
+        id: vapiCallId,
+        type: vapiCall?.type,
+        endedReason: vapiCall?.endedReason,
+        assistantId: vapiCall?.assistantId,
+        phoneNumberId: vapiCall?.phoneNumberId,
+        messagesLen: Array.isArray(vapiCall?.messages) ? (vapiCall.messages as unknown[]).length : undefined,
+        artifactMessagesLen: Array.isArray(artifact?.messages) ? (artifact.messages as unknown[]).length : undefined,
+        hasTranscript: Boolean(artifact?.transcript || transcript),
+        analysisKeys: analysis ? Object.keys(analysis) : [],
+        hasAnalysisPlan: vapiCall?.analysisPlan ? true : false,
+      },
+    }),
+  );
+
   // Determine goal_reached from Vapi's analysis.
   // Vapi's successEvaluation can be string | boolean | number | null depending
   // on API version (June 2025 breaking change). Handle all variants defensively.
