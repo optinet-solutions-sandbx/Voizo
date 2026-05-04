@@ -83,6 +83,8 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
     body: args.body,
     originator: MOBIVATE_SENDER_ID,
     recipient,
+    shortenUrls: true,
+    excludeOptouts: true,
     reference: args.reference || undefined,
   };
 
