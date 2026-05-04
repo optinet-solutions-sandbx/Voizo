@@ -144,11 +144,33 @@ export async function POST(request: NextRequest) {
   }
 
   // Opt-out signal: Vapi assistant outputs structuredData.optOut when the
-  // contact explicitly asks not to be called again. This field won't exist
-  // until Ernie updates the Vapi prompt — until then this is a no-op.
+  // contact explicitly asks not to be called again.
   const structuredData = analysis?.structuredData as Record<string, unknown> | undefined;
-  const optedOut =
+  let optedOut =
     structuredData?.optOut === true || structuredData?.optOut === "true";
+
+  // ── Fallback: transcript-based opt-out detection ──
+  // Same Vapi analysis bug means structuredData is always undefined.
+  // Scan transcript for explicit customer opt-out requests.
+  //
+  // Compliance note: missing an opt-out is worse than a false positive.
+  // A false positive just suppresses a number (safe). A false negative
+  // means we keep calling someone who asked to stop (compliance risk).
+  // So we detect on customer signals alone — no AI confirmation required.
+  //
+  // Vapi's structuredData takes priority when present.
+  if (successEval == null && transcript && !optedOut) {
+    const stopCalls = /(?:don'?t|do not|stop|never) (?:call|contact|phone)/i.test(transcript);
+    const removeMe = /(?:remove|take) (?:me|my (?:number|phone)) (?:off|from|out)/i.test(transcript);
+
+    if (stopCalls || removeMe) {
+      optedOut = true;
+      console.log(
+        `[fallback-eval] opted_out=true via transcript pattern ` +
+        `(Vapi analysis missing, customer requested no more calls). vapiCallId=${vapiCallId}`,
+      );
+    }
+  }
 
   // ── Match to our calls_v2 record (H1 fix: reliable matching) ──
   // Strategy: match by vapi_call_id first, then by phoneCallProviderId (Twilio SID)
