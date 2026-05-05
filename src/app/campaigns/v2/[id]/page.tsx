@@ -1,9 +1,10 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -23,27 +24,60 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function SmsStatusCell({ sms }: { sms: Row | undefined }) {
+const SMS_STATUS_LABEL: Record<string, string> = {
+  queued: "Queued",
+  sent: "Sent",
+  delivered: "Delivered",
+  failed: "Failed",
+  undelivered: "Undelivered",
+};
+const SMS_STATUS_CLS: Record<string, string> = {
+  queued: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+  sent: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+  delivered: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+  failed: "bg-red-500/15 text-red-400 border-red-500/25",
+  undelivered: "bg-amber-500/15 text-amber-400 border-amber-500/25",
+};
+
+function SmsStatusCell({ sms, expanded, onToggle }: { sms: Row | undefined; expanded: boolean; onToggle: () => void }) {
   if (!sms) return <span className="text-[var(--text-3)]">—</span>;
   const status = (sms.status as string) || "queued";
-  const label: Record<string, string> = {
-    queued: "Queued",
-    sent: "Sent",
-    delivered: "Delivered",
-    failed: "Failed",
-    undelivered: "Undelivered",
-  };
-  const cls: Record<string, string> = {
-    queued: "bg-gray-500/15 text-gray-400 border-gray-500/25",
-    sent: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-    delivered: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
-    failed: "bg-red-500/15 text-red-400 border-red-500/25",
-    undelivered: "bg-amber-500/15 text-amber-400 border-amber-500/25",
-  };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls[status] ?? cls.queued}`}>
-      {label[status] ?? status}
-    </span>
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-pointer hover:opacity-80 transition-opacity ${SMS_STATUS_CLS[status] ?? SMS_STATUS_CLS.queued}`}
+    >
+      {SMS_STATUS_LABEL[status] ?? status}
+      <ChevronDown size={10} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+    </button>
+  );
+}
+
+/** Inline detail row shown when an SMS badge is clicked. */
+function SmsDetailRow({ sms }: { sms: Row }) {
+  const status = (sms.status as string) || "queued";
+  const body = (sms.body as string) || "—";
+  const sentAt = sms.sent_at ? new Date(sms.sent_at as string).toLocaleString() : null;
+  const createdAt = sms.created_at ? new Date(sms.created_at as string).toLocaleString() : null;
+  return (
+    <tr className="bg-[var(--bg-app)]">
+      <td colSpan={5} className="px-5 py-3">
+        <div className="flex flex-col gap-2 max-w-2xl">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--text-3)] font-semibold">
+            <MessageSquareText size={10} /> SMS Details
+          </div>
+          <p className="text-sm text-[var(--text-2)] leading-relaxed whitespace-pre-wrap bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2">
+            {body}
+          </p>
+          <div className="flex gap-4 text-[10px] text-[var(--text-3)]">
+            <span>Status: <span className={`font-medium ${SMS_STATUS_CLS[status]?.includes("emerald") ? "text-emerald-400" : SMS_STATUS_CLS[status]?.includes("red") ? "text-red-400" : "text-blue-400"}`}>{SMS_STATUS_LABEL[status] ?? status}</span></span>
+            {sentAt && <span>Sent: {sentAt}</span>}
+            {!sentAt && createdAt && <span>Queued: {createdAt}</span>}
+          </div>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -59,6 +93,7 @@ export default function CampaignV2DetailPage() {
   const [tab, setTab] = useState<Tab>("numbers");
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [expandedSms, setExpandedSms] = useState<string | null>(null);
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -268,15 +303,29 @@ export default function CampaignV2DetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {numbers.map((n) => (
-                  <tr key={n.id as string} className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
-                    <td className="px-5 py-3 text-[var(--text-1)] font-mono">{n.phone_e164 as string}</td>
-                    <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
-                    <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
-                    <td className="px-5 py-3"><SmsStatusCell sms={smsByPhone.get(n.phone_e164 as string)} /></td>
-                    <td className="px-5 py-3 text-[var(--text-3)]">{n.last_attempted_at ? new Date(n.last_attempted_at as string).toLocaleString() : "—"}</td>
-                  </tr>
-                ))}
+                {numbers.map((n) => {
+                  const phone = n.phone_e164 as string;
+                  const sms = smsByPhone.get(phone);
+                  const isExpanded = expandedSms === phone;
+                  return (
+                    <React.Fragment key={n.id as string}>
+                      <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
+                        <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phone}</td>
+                        <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
+                        <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
+                        <td className="px-5 py-3">
+                          <SmsStatusCell
+                            sms={sms}
+                            expanded={isExpanded}
+                            onToggle={() => setExpandedSms(isExpanded ? null : phone)}
+                          />
+                        </td>
+                        <td className="px-5 py-3 text-[var(--text-3)]">{n.last_attempted_at ? new Date(n.last_attempted_at as string).toLocaleString() : "—"}</td>
+                      </tr>
+                      {isExpanded && sms && <SmsDetailRow sms={sms} />}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           )
