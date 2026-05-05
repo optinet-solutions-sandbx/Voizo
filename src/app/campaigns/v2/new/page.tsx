@@ -8,12 +8,25 @@ import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaig
 import SegmentImporter from "@/components/SegmentImporter";
 import DateTimePicker from "@/components/DateTimePicker";
 
-// Default SMS template pre-filled on the Create Campaign form.
+// Default SMS content pre-filled on the Create Campaign form.
+// Split into message + link + opt-out so operators can edit each section.
+// Link and opt-out require an Edit toggle with confirmation (Manifesto §8: Compliance first).
+//
 // Current brand: Lucky7even Canada. Approved by Maria, provided by Ernie (2026-04-22).
-// TODO: make this per-brand configurable when multi-brand Campaign V2 lands
+// TODO: make defaults per-brand when multi-brand Campaign V2 lands
 // (see .agent/handoffs/2026-04-21_HANDOFF_Dialer_Phase_A_Landed.md §7 item #11).
-const DEFAULT_SMS_TEMPLATE =
-  "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight. https://playmojo.live/promotions?fast-deposit=modal&bonus=LUCKY STOP? Qwt5.me";
+const DEFAULT_SMS_MESSAGE =
+  "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight.";
+const DEFAULT_SMS_LINK = "https://playmojo.live/promotions?fast-deposit=modal&bonus=LUCKY";
+const SMS_OPTOUT_FOOTER = "STOP? Qwt5.me";
+const SHORTENED_URL_LENGTH = 22; // Mobivate shortens to cllk.me/xxxxxx
+
+/** Estimate SMS segment count from character length (GSM-7 encoding). */
+function smsSegmentCount(len: number): number {
+  if (len === 0) return 0;
+  if (len <= 160) return 1;
+  return Math.ceil(len / 153); // multi-part SMS uses 153 chars per segment
+}
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">{children}</label>;
@@ -101,12 +114,35 @@ export default function NewCampaignV2Page() {
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>(initialScheduleRows);
   const [smsEnabled, setSmsEnabled] = useState(true);
-  const [smsTemplate, setSmsTemplate] = useState(DEFAULT_SMS_TEMPLATE);
+  const [smsMessage, setSmsMessage] = useState(DEFAULT_SMS_MESSAGE);
+  const [smsLink, setSmsLink] = useState(DEFAULT_SMS_LINK);
+  const [smsLinkEditing, setSmsLinkEditing] = useState(false);
+  const [smsOptout, setSmsOptout] = useState(SMS_OPTOUT_FOOTER);
+  const [smsOptoutEditing, setSmsOptoutEditing] = useState(false);
   const [numbersText, setNumbersText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const parsedNumbers = useMemo(() => parsePhoneList(numbersText), [numbersText]);
+
+  // ── SMS composition + validation ──
+  const composedSmsTemplate = useMemo(() => {
+    const parts = [smsMessage.trim(), smsLink.trim(), smsOptout.trim()].filter(Boolean);
+    return parts.join(" ");
+  }, [smsMessage, smsLink, smsOptout]);
+
+  const estimatedDeliveredLength = useMemo(() => {
+    const msgLen = smsMessage.trim().length;
+    const urlLen = smsLink.trim() ? SHORTENED_URL_LENGTH : 0;
+    const optLen = smsOptout.trim().length;
+    const spaces = (msgLen > 0 ? 1 : 0) + (urlLen > 0 ? 1 : 0);
+    return msgLen + urlLen + optLen + spaces;
+  }, [smsMessage, smsLink, smsOptout]);
+
+  const smsSegments = smsSegmentCount(estimatedDeliveredLength);
+  const hasUrlInMessage = /https?:\/\//i.test(smsMessage);
+  const isValidSmsLink = smsLink.trim() === "" || smsLink.trim().startsWith("https://");
+  const isSmsBodyEmpty = smsEnabled && smsMessage.trim().length === 0;
 
   useEffect(() => {
     (async () => {
@@ -213,7 +249,7 @@ export default function NewCampaignV2Page() {
         endAt: null,
         callWindows,
         smsEnabled,
-        smsTemplate: smsTemplate.trim() || null,
+        smsTemplate: composedSmsTemplate || null,
         smsOnGoalReachedOnly: true,
         numbers: parsedNumbers,
       });
@@ -584,10 +620,120 @@ export default function NewCampaignV2Page() {
           </p>
 
           {smsEnabled && (
-            <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">Message Preview</p>
-              <p className="text-sm text-[var(--text-2)] leading-relaxed whitespace-pre-wrap">{smsTemplate}</p>
-              <p className="text-[10px] text-[var(--text-3)] mt-3">Template is managed externally. Contact your admin to update.</p>
+            <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              {/* ── Message ── */}
+              <div>
+                <FieldLabel>Message</FieldLabel>
+                <textarea
+                  value={smsMessage}
+                  onChange={(e) => setSmsMessage(e.target.value)}
+                  rows={2}
+                  placeholder="Enter your promotional message..."
+                  className="w-full bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none transition-all"
+                />
+                {hasUrlInMessage && (
+                  <p className="text-[10px] text-amber-400 mt-1">Tip: Use the Link field below for URLs — they&apos;ll be auto-shortened.</p>
+                )}
+                {isSmsBodyEmpty && (
+                  <p className="text-[10px] text-red-400 mt-1">Message cannot be empty when SMS is enabled.</p>
+                )}
+              </div>
+
+              {/* ── Link ── */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <FieldLabel>Link</FieldLabel>
+                  {!smsLinkEditing ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm("Changing the link affects where customers land. Continue?")) {
+                          setSmsLinkEditing(true);
+                        }
+                      }}
+                      className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+                    >
+                      Edit
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-amber-400">Editing</span>
+                  )}
+                </div>
+                <input
+                  type="url"
+                  value={smsLink}
+                  onChange={(e) => setSmsLink(e.target.value)}
+                  disabled={!smsLinkEditing}
+                  placeholder="https://..."
+                  className={`w-full bg-[var(--bg-card)] border rounded-lg px-3 py-2 text-sm transition-all ${
+                    !isValidSmsLink
+                      ? "border-red-500/50 focus:ring-red-500"
+                      : "border-[var(--border)] focus:ring-blue-500"
+                  } ${
+                    smsLinkEditing
+                      ? "text-[var(--text-1)] focus:outline-none focus:ring-1 focus:border-blue-500"
+                      : "text-[var(--text-3)] opacity-75 cursor-not-allowed"
+                  }`}
+                />
+                {!isValidSmsLink && (
+                  <p className="text-[10px] text-red-400 mt-1">Link must start with https://</p>
+                )}
+              </div>
+
+              {/* ── Opt-out ── */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)]">Opt-out</span>
+                  {!smsOptoutEditing ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm("Changing the opt-out text affects compliance. Continue?")) {
+                          setSmsOptoutEditing(true);
+                        }
+                      }}
+                      className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+                    >
+                      Edit
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-amber-400">Editing</span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={smsOptout}
+                  onChange={(e) => setSmsOptout(e.target.value)}
+                  disabled={!smsOptoutEditing}
+                  placeholder="e.g. STOP? Qwt5.me"
+                  className={`w-full bg-[var(--bg-card)] border rounded-lg px-3 py-2 text-sm transition-all ${
+                    "border-[var(--border)] focus:ring-blue-500"
+                  } ${
+                    smsOptoutEditing
+                      ? "text-[var(--text-1)] focus:outline-none focus:ring-1 focus:border-blue-500"
+                      : "text-[var(--text-3)] opacity-75 cursor-not-allowed"
+                  }`}
+                />
+              </div>
+
+              {/* ── Divider ── */}
+              <div className="border-t border-[var(--border)]" />
+
+              {/* ── Preview ── */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)]">Preview</span>
+                  <span className={`text-[10px] font-medium ${
+                    smsSegments > 2 ? "text-red-400" : smsSegments > 1 ? "text-amber-400" : "text-emerald-400"
+                  }`}>
+                    ~{estimatedDeliveredLength} chars ({smsSegments} SMS{smsSegments !== 1 ? "s" : ""})
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--text-2)] leading-relaxed whitespace-pre-wrap bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2">
+                  {smsMessage.trim()}{smsLink.trim() ? ` ${smsLink.trim()}` : ""}{smsOptout.trim() ? ` ${smsOptout.trim()}` : ""}
+                </p>
+                <p className="text-[10px] text-[var(--text-3)] mt-1">Link appears shortened (cllk.me) on delivery.</p>
+              </div>
             </div>
           )}
         </section>
@@ -642,7 +788,7 @@ export default function NewCampaignV2Page() {
           </Link>
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || isSmsBodyEmpty || !isValidSmsLink}
             className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-70 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors shadow-md shadow-blue-600/20"
           >
             <Save size={15} />
