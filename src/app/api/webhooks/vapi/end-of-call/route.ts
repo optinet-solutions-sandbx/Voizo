@@ -2,13 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import crypto from "crypto";
 
+// SMS dispatch + multiple Supabase queries run inline before returning 200.
+// Default Vercel timeout is too tight if Mobivate API is slow.
+export const maxDuration = 30;
+
 /**
  * POST /api/webhooks/vapi/end-of-call
  *
  * Vapi posts this when a call ends.
  *
  * Manifesto compliance:
- * - Vapi signature validated via HMAC-SHA256 (§6)
+ * - Vapi webhook authenticated via x-vapi-secret token (§6 — per Vapi's documented method)
  * - Idempotent: checks if goal_reached already set on this call (§6)
  * - SMS fires only when goal_reached=true AND sms_enabled=true AND sms_on_goal_reached_only=true (§6: 3 conditions)
  * - Call matching uses Vapi's phoneCallProviderId (Twilio SID) — no fragile fallback
@@ -23,27 +27,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // ── Vapi signature validation (Manifesto §6) ──
-  const vapiSecret = process.env.VAPI_PRIVATE_KEY;
-  const vapiSignature = request.headers.get("x-vapi-signature");
-  if (!vapiSecret) {
+  // ── Vapi webhook authentication (Manifesto §6) ──
+  // Vapi's server.secret sends the raw token as the x-vapi-secret header.
+  // We validate with constant-time comparison. VAPI_WEBHOOK_SECRET is the
+  // dedicated secret (preferred); falls back to VAPI_PRIVATE_KEY for compat.
+  const webhookSecret = process.env.VAPI_WEBHOOK_SECRET || process.env.VAPI_PRIVATE_KEY;
+  const vapiSecretHeader = request.headers.get("x-vapi-secret");
+  if (!webhookSecret) {
     if (process.env.NODE_ENV === "production") {
-      console.error("FATAL: VAPI_PRIVATE_KEY not set — rejecting webhook");
+      console.error("FATAL: VAPI_WEBHOOK_SECRET not set — rejecting webhook");
       return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
     }
-    console.warn("Vapi webhook: VAPI_PRIVATE_KEY not set (accepting in dev only)");
-  } else if (!vapiSignature) {
-    console.warn("Vapi webhook: missing x-vapi-signature header — rejecting");
+    console.warn("Vapi webhook: no webhook secret configured (accepting in dev only)");
+  } else if (!vapiSecretHeader) {
+    console.warn("Vapi webhook: missing x-vapi-secret header — rejecting");
     return NextResponse.json({ error: "Missing signature" }, { status: 403 });
   } else {
-    const expectedSignature = crypto
-      .createHmac("sha256", vapiSecret)
-      .update(rawBody)
-      .digest("hex");
-    const sigBuffer = Buffer.from(vapiSignature, "hex");
-    const expectedBuffer = Buffer.from(expectedSignature, "hex");
-    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-      console.warn("Vapi webhook: invalid signature — rejecting");
+    // Constant-time comparison to prevent timing attacks
+    const received = Buffer.from(vapiSecretHeader, "utf-8");
+    const expected = Buffer.from(webhookSecret, "utf-8");
+    if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
+      console.warn("Vapi webhook: invalid x-vapi-secret — rejecting");
       return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
     }
   }
@@ -59,31 +63,116 @@ export async function POST(request: NextRequest) {
   const transcript = message.transcript as string | undefined;
   const analysis = message.analysis as Record<string, unknown> | undefined;
 
-  // Diagnostic: log the full call payload shape on every end-of-call so we
-  // can see exactly what Vapi sends. Helps when match fails — we need to know
-  // whether `customer.number`, `customer.phoneNumber`, or some other field
-  // carries the recipient's E.164. Remove or downgrade once stable.
+  // Diagnostic: log the full analysis payload on every end-of-call.
+  // Critical for debugging the "analysis never runs" issue (all 45 calls
+  // returned analysis:{} as of 2026-04-30). Remove once analysis is stable.
   console.log(
-    `[vapi end-of-call] payload shape: ` +
+    `[vapi end-of-call] payload: ` +
     JSON.stringify({
       vapiCallId,
-      callKeys: vapiCall ? Object.keys(vapiCall) : null,
       customer: vapiCall?.customer || null,
       phoneCallProviderId: vapiCall?.phoneCallProviderId || null,
-      successEvaluation: analysis?.successEvaluation,
+      analysis: analysis || null,
+      analysisKeys: analysis ? Object.keys(analysis) : [],
+      hasTranscript: Boolean(transcript),
     }),
   );
 
-  // Determine goal_reached from Vapi's analysis
-  const successEval = analysis?.successEvaluation as string | undefined;
-  const goalReached = successEval === "true";
+  // Temporary diagnostic for Vapi support ticket — full call object inspection.
+  // Requested by Vapi Composer to determine if analysisPlan is present on the
+  // call object in the webhook payload. Remove once Vapi resolves the issue.
+  const artifact = vapiCall?.artifact as Record<string, unknown> | undefined;
+  console.log(
+    `[vapi-diag] call-object: ` +
+    JSON.stringify({
+      callKeys: vapiCall ? Object.keys(vapiCall) : [],
+      artifactKeys: artifact ? Object.keys(artifact) : [],
+      meta: {
+        id: vapiCallId,
+        type: vapiCall?.type,
+        endedReason: vapiCall?.endedReason,
+        assistantId: vapiCall?.assistantId,
+        phoneNumberId: vapiCall?.phoneNumberId,
+        messagesLen: Array.isArray(vapiCall?.messages) ? (vapiCall.messages as unknown[]).length : undefined,
+        artifactMessagesLen: Array.isArray(artifact?.messages) ? (artifact.messages as unknown[]).length : undefined,
+        hasTranscript: Boolean(artifact?.transcript || transcript),
+        analysisKeys: analysis ? Object.keys(analysis) : [],
+        hasAnalysisPlan: vapiCall?.analysisPlan ? true : false,
+      },
+    }),
+  );
+
+  // Determine goal_reached from Vapi's analysis.
+  // Vapi's successEvaluation can be string | boolean | number | null depending
+  // on API version (June 2025 breaking change). Handle all variants defensively.
+  const successEval = analysis?.successEvaluation;
+  let goalReached = successEval === true || successEval === "true";
+
+  // ── Fallback: transcript-based success evaluation ──
+  // As of 2026-05-04, Vapi's post-call analysis never runs on our SIP inbound
+  // calls (51/51 returned analysis:{}). Until Vapi resolves this, we evaluate
+  // the transcript ourselves when their analysis is missing.
+  //
+  // Strategy: Tom's prompt only confirms SMS dispatch ("I'll send you an SMS")
+  // AFTER the customer agrees. That AI confirmation line is a reliable downstream
+  // signal of customer consent. We scan AI lines for it.
+  //
+  // Vapi's analysis takes priority when present — this fallback is a safety net.
+  if (successEval == null && transcript && !goalReached) {
+    // Match AI confirmation of SMS/text dispatch.
+    //
+    // Pattern 1 (explicit): AI names the channel directly.
+    //   "I'll send you an SMS"  /  "I'll send the SMS now"  /  "I'll send you a text"
+    //
+    // Pattern 2 (contextual): AI uses generic send phrasing ("I'll send that over")
+    //   but SMS/text was discussed earlier in the conversation. Both parts must hold
+    //   to avoid false positives.
+    //   Real example (Maria 2026-05-04):
+    //     AI: "Can I send you the details via SMS?"  →  Customer: "Go ahead."
+    //     AI: "I'll send that over now."
+    const aiExplicit =
+      /i(?:'ll| will) send (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
+    const smsDiscussed = /\bsms\b|text message/i.test(transcript);
+    const aiConfirmedSend = /i(?:'ll| will) send (?:that|it)\b/i.test(transcript);
+    const aiConfirmedSms = aiExplicit || (smsDiscussed && aiConfirmedSend);
+
+    if (aiConfirmedSms) {
+      goalReached = true;
+      console.log(
+        `[fallback-eval] goal_reached=true via transcript pattern ` +
+        `(Vapi analysis missing, AI confirmed SMS dispatch). vapiCallId=${vapiCallId}`,
+      );
+    }
+  }
 
   // Opt-out signal: Vapi assistant outputs structuredData.optOut when the
-  // contact explicitly asks not to be called again. This field won't exist
-  // until Ernie updates the Vapi prompt — until then this is a no-op.
+  // contact explicitly asks not to be called again.
   const structuredData = analysis?.structuredData as Record<string, unknown> | undefined;
-  const optedOut =
+  let optedOut =
     structuredData?.optOut === true || structuredData?.optOut === "true";
+
+  // ── Fallback: transcript-based opt-out detection ──
+  // Same Vapi analysis bug means structuredData is always undefined.
+  // Scan transcript for explicit customer opt-out requests.
+  //
+  // Compliance note: missing an opt-out is worse than a false positive.
+  // A false positive just suppresses a number (safe). A false negative
+  // means we keep calling someone who asked to stop (compliance risk).
+  // So we detect on customer signals alone — no AI confirmation required.
+  //
+  // Vapi's structuredData takes priority when present.
+  if (successEval == null && transcript && !optedOut) {
+    const stopCalls = /(?:don'?t|do not|stop|never) (?:call|contact|phone)/i.test(transcript);
+    const removeMe = /(?:remove|take) (?:me|my (?:number|phone)) (?:off|from|out)/i.test(transcript);
+
+    if (stopCalls || removeMe) {
+      optedOut = true;
+      console.log(
+        `[fallback-eval] opted_out=true via transcript pattern ` +
+        `(Vapi analysis missing, customer requested no more calls). vapiCallId=${vapiCallId}`,
+      );
+    }
+  }
 
   // ── Match to our calls_v2 record (H1 fix: reliable matching) ──
   // Strategy: match by vapi_call_id first, then by phoneCallProviderId (Twilio SID)
@@ -126,6 +215,12 @@ export async function POST(request: NextRequest) {
   // that hasn't been linked to a Vapi call yet, scoped to a 15-minute window
   // (well over the 3-minute call cap, well under any realistic ambiguity
   // from a second concurrent call to the same number).
+  //
+  // 3b. SIP URI suffix matching — when customer.number is missing, some
+  // carriers (e.g. SquareTalk GI routes) prepend routing prefixes to the
+  // SIP URI user part (e.g. "sip:99900134637534739@..." for +34637534739).
+  // We extract the digits from the SIP URI and suffix-match against campaign
+  // numbers to handle arbitrary carrier prefixes.
   if (!callRow) {
     const customer = vapiCall?.customer as Record<string, unknown> | undefined;
     const customerNumber = typeof customer?.number === "string" ? customer.number : null;
@@ -156,6 +251,58 @@ export async function POST(request: NextRequest) {
             `Vapi end-of-call: matched by customer-phone fallback ` +
             `(phone=${customerNumber.slice(0, -4)}**** callId=${data.id} vapiCallId=${vapiCallId})`,
           );
+        }
+      }
+    }
+
+    // 3b: SIP URI suffix matching — carrier prefixes make exact match fail.
+    // Extract digits from the SIP user part and find a campaign number whose
+    // E.164 digits are a suffix of the SIP digits.
+    // Example: SIP "99900134637534739" ends with "34637534739" → matches "+34637534739"
+    if (!callRow && typeof customer?.sipUri === "string") {
+      const sipMatch = customer.sipUri.match(/^sip:([^@]+)@/);
+      if (sipMatch) {
+        const sipDigits = sipMatch[1].replace(/[^0-9]/g, "");
+
+        if (sipDigits.length >= 8) {
+          const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+          // Get recent unlinked calls within the time window
+          const { data: recentCalls } = await supabaseAdmin
+            .from("calls_v2")
+            .select("*, campaign_number_id")
+            .is("vapi_call_id", null)
+            .gte("created_at", fifteenMinutesAgo)
+            .order("created_at", { ascending: false })
+            .limit(20);
+
+          if (recentCalls && recentCalls.length > 0) {
+            const numberIds = [...new Set(recentCalls.map((c) => c.campaign_number_id as string))];
+            const { data: numberRows } = await supabaseAdmin
+              .from("campaign_numbers_v2")
+              .select("id, phone_e164")
+              .in("id", numberIds);
+
+            if (numberRows) {
+              // Suffix match: does the SIP digits string end with the E.164 digits?
+              const matched = numberRows.find((n) => {
+                const e164Digits = (n.phone_e164 as string).replace(/[^0-9]/g, "");
+                return sipDigits.endsWith(e164Digits);
+              });
+
+              if (matched) {
+                const matchedCall = recentCalls.find((c) => c.campaign_number_id === matched.id);
+                if (matchedCall) {
+                  callRow = matchedCall;
+                  console.log(
+                    `Vapi end-of-call: matched by SIP URI suffix fallback ` +
+                    `(sipDigits=${sipDigits} phone=${(matched.phone_e164 as string).slice(0, -4)}**** ` +
+                    `callId=${matchedCall.id} vapiCallId=${vapiCallId})`,
+                  );
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -220,7 +367,7 @@ export async function POST(request: NextRequest) {
       campaign?.sms_on_goal_reached_only === true &&
       Boolean(campaign?.sms_template);
 
-    if (shouldSendSms) {
+    if (shouldSendSms && campaign) {
       const { data: numRow } = await supabaseAdmin
         .from("campaign_numbers_v2")
         .select("phone_e164")
@@ -253,7 +400,7 @@ export async function POST(request: NextRequest) {
                 call_id: callRow.id,
                 campaign_number_id: callRow.campaign_number_id,
                 to_phone_e164: numRow.phone_e164,
-                body: campaign!.sms_template,
+                body: campaign.sms_template,
                 provider: "mobivate",
                 status: "queued",
               })
@@ -265,7 +412,7 @@ export async function POST(request: NextRequest) {
             if (!getMobivateConfigError()) {
               const result = await sendSMS({
                 to: numRow.phone_e164,
-                body: campaign!.sms_template,
+                body: campaign.sms_template,
                 reference: smsRow?.id || undefined,
               });
 
