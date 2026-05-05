@@ -43,6 +43,22 @@ export async function POST(
     );
   }
 
+  // ── Schedule guard: respect start_at if set ──
+  // If the operator scheduled this campaign for a future time, don't let a
+  // manual Start override that. The auto-scheduler (cron) will fire it on time.
+  const startAt = campaign.start_at ? new Date(campaign.start_at) : null;
+  if (startAt && startAt.getTime() > Date.now()) {
+    const formatted = startAt.toLocaleString("en-US", {
+      timeZone: campaign.timezone || "UTC",
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    return NextResponse.json(
+      { error: `Campaign is scheduled for ${formatted}. It will start automatically at that time.` },
+      { status: 400 },
+    );
+  }
+
   // ── Call window check (Manifesto §6: check before every dial) ──
   const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
   if (callWindows && callWindows.length > 0 && !isWithinCallWindow(callWindows, campaign.timezone)) {

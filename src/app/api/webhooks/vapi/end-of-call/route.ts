@@ -215,6 +215,12 @@ export async function POST(request: NextRequest) {
   // that hasn't been linked to a Vapi call yet, scoped to a 15-minute window
   // (well over the 3-minute call cap, well under any realistic ambiguity
   // from a second concurrent call to the same number).
+  //
+  // 3b. SIP URI suffix matching — when customer.number is missing, some
+  // carriers (e.g. SquareTalk GI routes) prepend routing prefixes to the
+  // SIP URI user part (e.g. "sip:99900134637534739@..." for +34637534739).
+  // We extract the digits from the SIP URI and suffix-match against campaign
+  // numbers to handle arbitrary carrier prefixes.
   if (!callRow) {
     const customer = vapiCall?.customer as Record<string, unknown> | undefined;
     const customerNumber = typeof customer?.number === "string" ? customer.number : null;
@@ -245,6 +251,58 @@ export async function POST(request: NextRequest) {
             `Vapi end-of-call: matched by customer-phone fallback ` +
             `(phone=${customerNumber.slice(0, -4)}**** callId=${data.id} vapiCallId=${vapiCallId})`,
           );
+        }
+      }
+    }
+
+    // 3b: SIP URI suffix matching — carrier prefixes make exact match fail.
+    // Extract digits from the SIP user part and find a campaign number whose
+    // E.164 digits are a suffix of the SIP digits.
+    // Example: SIP "99900134637534739" ends with "34637534739" → matches "+34637534739"
+    if (!callRow && typeof customer?.sipUri === "string") {
+      const sipMatch = customer.sipUri.match(/^sip:([^@]+)@/);
+      if (sipMatch) {
+        const sipDigits = sipMatch[1].replace(/[^0-9]/g, "");
+
+        if (sipDigits.length >= 8) {
+          const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+          // Get recent unlinked calls within the time window
+          const { data: recentCalls } = await supabaseAdmin
+            .from("calls_v2")
+            .select("*, campaign_number_id")
+            .is("vapi_call_id", null)
+            .gte("created_at", fifteenMinutesAgo)
+            .order("created_at", { ascending: false })
+            .limit(20);
+
+          if (recentCalls && recentCalls.length > 0) {
+            const numberIds = [...new Set(recentCalls.map((c) => c.campaign_number_id as string))];
+            const { data: numberRows } = await supabaseAdmin
+              .from("campaign_numbers_v2")
+              .select("id, phone_e164")
+              .in("id", numberIds);
+
+            if (numberRows) {
+              // Suffix match: does the SIP digits string end with the E.164 digits?
+              const matched = numberRows.find((n) => {
+                const e164Digits = (n.phone_e164 as string).replace(/[^0-9]/g, "");
+                return sipDigits.endsWith(e164Digits);
+              });
+
+              if (matched) {
+                const matchedCall = recentCalls.find((c) => c.campaign_number_id === matched.id);
+                if (matchedCall) {
+                  callRow = matchedCall;
+                  console.log(
+                    `Vapi end-of-call: matched by SIP URI suffix fallback ` +
+                    `(sipDigits=${sipDigits} phone=${(matched.phone_e164 as string).slice(0, -4)}**** ` +
+                    `callId=${matchedCall.id} vapiCallId=${vapiCallId})`,
+                  );
+                }
+              }
+            }
+          }
         }
       }
     }
