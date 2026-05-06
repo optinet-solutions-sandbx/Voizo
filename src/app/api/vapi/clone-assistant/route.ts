@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     ? campaignName
     : `Clone – ${(base.name ?? "Unnamed").slice(0, 20)}`;
   const withVoice = baseName + voiceSuffix;
-  const cloneName = withVoice.length <= 60 ? withVoice : baseName.slice(0, 60);
+  const cloneName = withVoice.length <= 40 ? withVoice : baseName.slice(0, 40);
 
   const cloneVoice = voiceId
     ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.85, similarityBoost: 0.75, optimizeStreamingLatency: 3, enableSsmlParsing: false }
