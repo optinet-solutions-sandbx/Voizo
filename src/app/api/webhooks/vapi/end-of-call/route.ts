@@ -121,20 +121,29 @@ export async function POST(request: NextRequest) {
   if (successEval == null && transcript && !goalReached) {
     // Match AI confirmation of SMS/text dispatch.
     //
-    // Pattern 1 (explicit): AI names the channel directly.
-    //   "I'll send you an SMS"  /  "I'll send the SMS now"  /  "I'll send you a text"
+    // Every missed detection = lost conversion. Cast a wide net on AI confirmation
+    // phrases while keeping false-positive risk low (we only match AI-side lines,
+    // and the AI only confirms after customer agrees).
+    //
+    // Pattern 1 (explicit): AI names the channel — covers future, present, past
+    //   tense and "let me" / "going to" phrasing.
     //
     // Pattern 2 (contextual): AI uses generic send phrasing ("I'll send that over")
-    //   but SMS/text was discussed earlier in the conversation. Both parts must hold
-    //   to avoid false positives.
-    //   Real example (Maria 2026-05-04):
-    //     AI: "Can I send you the details via SMS?"  →  Customer: "Go ahead."
-    //     AI: "I'll send that over now."
+    //   but SMS/text was discussed earlier in the conversation. Both parts must hold.
+    //
+    // Pattern 3 (short form): AI says "I'll text you" without using "send".
+    //
+    // TC-039: Vapi STT splits "SMS" into "s. MS" / "S. M. S." — smsDiscussed
+    // accounts for these artifacts.
     const aiExplicit =
-      /i(?:'ll| will) send (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
-    const smsDiscussed = /\bsms\b|text message/i.test(transcript);
-    const aiConfirmedSend = /i(?:'ll| will) send (?:that|it)\b/i.test(transcript);
-    const aiConfirmedSms = aiExplicit || (smsDiscussed && aiConfirmedSend);
+      /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent|text)(?:ing|ed)? (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
+    const aiShortForm =
+      /i(?:'ll| will|'m| am) text(?:ing)? you/i.test(transcript);
+    const aiPassive =
+      /you(?:'ll| will) (?:receive|get) (?:an? )?(?:sms|text)/i.test(transcript);
+    const smsDiscussed = /\bsms\b|s\.\s?ms\b|s\.\s?m\.\s?s\.?|text message/i.test(transcript);
+    const aiConfirmedSend = /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent)(?:ing)? (?:that|it)\b/i.test(transcript);
+    const aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend);
 
     if (aiConfirmedSms) {
       goalReached = true;
