@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Clock, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
 import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
@@ -30,6 +30,80 @@ function smsSegmentCount(len: number): number {
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">{children}</label>;
+}
+
+type DropdownOption = { value: string; label: string; group?: string };
+
+function StyledSelect({ icon, options, value, onChange, placeholder }: {
+  icon?: React.ReactNode;
+  options: DropdownOption[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const selected = options.find((o) => o.value === value);
+
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const groups = options.reduce<Record<string, DropdownOption[]>>((acc, o) => {
+    const g = o.group || "";
+    (acc[g] ??= []).push(o);
+    return acc;
+  }, {});
+  const groupKeys = Object.keys(groups);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full flex items-center gap-2.5 ${icon ? "pl-3.5" : "pl-4"} pr-10 py-3 rounded-xl bg-[var(--bg-app)] border text-sm text-left cursor-pointer transition-all ${
+          open
+            ? "border-blue-500 ring-1 ring-blue-500"
+            : "border-[var(--border)] hover:border-blue-500/40"
+        }`}
+      >
+        {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}
+        <span className={selected ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}>
+          {selected?.label || placeholder || "Select…"}
+        </span>
+      </button>
+      <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1.5 w-full max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
+          {groupKeys.map((g) => (
+            <div key={g}>
+              {g && <div className="px-3.5 pt-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{g}</div>}
+              {groups[g].map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => { onChange(o.value); setOpen(false); }}
+                  className={`w-full text-left px-3.5 py-2.5 text-sm transition-colors ${
+                    o.value === value
+                      ? "bg-blue-600/20 text-blue-400"
+                      : "text-[var(--text-1)] hover:bg-[var(--bg-hover)]"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 type Assistant = {
@@ -309,36 +383,29 @@ export default function NewCampaignV2Page() {
                   {assistantsError}
                 </div>
               ) : (
-                <select
+                <StyledSelect
                   value={vapiAssistantId}
-                  onChange={(e) => handleAssistantChange(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="">— Select an assistant —</option>
-                  {assistants!.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={handleAssistantChange}
+                  icon={<Phone size={14} />}
+                  placeholder="— Select an assistant —"
+                  options={assistants!.map((a) => ({ value: a.id, label: a.name }))}
+                />
               )}
             </div>
             {vapiAssistantId && (
               <>
                 <div>
                   <FieldLabel>Voice</FieldLabel>
-                  <select
+                  <StyledSelect
                     value={voiceId}
-                    onChange={(e) => setVoiceId(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    <option value="">— Use assistant default —</option>
-                    {VOICE_OPTIONS.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}{v.id === baseVoiceId ? " (current)" : ""}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setVoiceId}
+                    icon={<Megaphone size={14} />}
+                    placeholder="— Use assistant default —"
+                    options={VOICE_OPTIONS.map((v) => ({
+                      value: v.id,
+                      label: `${v.name}${v.id === baseVoiceId ? " (current)" : ""}`,
+                    }))}
+                  />
                 </div>
                 <div className="sm:col-span-2">
                   <FieldLabel>System Prompt</FieldLabel>
@@ -366,36 +433,32 @@ export default function NewCampaignV2Page() {
           <div className="grid gap-4 sm:grid-cols-2 mb-5">
             <div>
               <FieldLabel>Timezone</FieldLabel>
-              <select
+              <StyledSelect
                 value={timezone}
-                onChange={(e) => handleTimezoneChange(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <optgroup label="Americas">
-                  <option value="America/Toronto">America/Toronto</option>
-                  <option value="America/New_York">America/New_York</option>
-                  <option value="America/Chicago">America/Chicago</option>
-                  <option value="America/Denver">America/Denver</option>
-                  <option value="America/Los_Angeles">America/Los_Angeles</option>
-                  <option value="America/Vancouver">America/Vancouver</option>
-                  <option value="America/Mexico_City">America/Mexico_City</option>
-                </optgroup>
-                <optgroup label="Europe">
-                  <option value="Europe/London">Europe/London</option>
-                  <option value="Europe/Athens">Europe/Athens</option>
-                  <option value="Europe/Paris">Europe/Paris</option>
-                  <option value="Europe/Berlin">Europe/Berlin</option>
-                  <option value="Europe/Madrid">Europe/Madrid</option>
-                </optgroup>
-                <optgroup label="Asia / Pacific">
-                  <option value="Asia/Manila">Asia/Manila</option>
-                  <option value="Asia/Singapore">Asia/Singapore</option>
-                  <option value="Asia/Tokyo">Asia/Tokyo</option>
-                  <option value="Asia/Dubai">Asia/Dubai</option>
-                  <option value="Australia/Sydney">Australia/Sydney</option>
-                </optgroup>
-                <option value="UTC">UTC</option>
-              </select>
+                onChange={handleTimezoneChange}
+                icon={<Clock size={14} />}
+                placeholder="Select timezone"
+                options={[
+                  { value: "America/Toronto", label: "America/Toronto", group: "Americas" },
+                  { value: "America/New_York", label: "America/New_York", group: "Americas" },
+                  { value: "America/Chicago", label: "America/Chicago", group: "Americas" },
+                  { value: "America/Denver", label: "America/Denver", group: "Americas" },
+                  { value: "America/Los_Angeles", label: "America/Los_Angeles", group: "Americas" },
+                  { value: "America/Vancouver", label: "America/Vancouver", group: "Americas" },
+                  { value: "America/Mexico_City", label: "America/Mexico_City", group: "Americas" },
+                  { value: "Europe/London", label: "Europe/London", group: "Europe" },
+                  { value: "Europe/Athens", label: "Europe/Athens", group: "Europe" },
+                  { value: "Europe/Paris", label: "Europe/Paris", group: "Europe" },
+                  { value: "Europe/Berlin", label: "Europe/Berlin", group: "Europe" },
+                  { value: "Europe/Madrid", label: "Europe/Madrid", group: "Europe" },
+                  { value: "Asia/Manila", label: "Asia/Manila", group: "Asia / Pacific" },
+                  { value: "Asia/Singapore", label: "Asia/Singapore", group: "Asia / Pacific" },
+                  { value: "Asia/Tokyo", label: "Asia/Tokyo", group: "Asia / Pacific" },
+                  { value: "Asia/Dubai", label: "Asia/Dubai", group: "Asia / Pacific" },
+                  { value: "Australia/Sydney", label: "Australia/Sydney", group: "Asia / Pacific" },
+                  { value: "UTC", label: "UTC" },
+                ]}
+              />
               <p className="text-xs text-[var(--text-3)] mt-2">
                 Recommended hours: <span className="text-[var(--text-2)] font-medium">{getCallingHours(timezone).start}–{getCallingHours(timezone).end}</span>
                 <span className="text-[var(--text-3)] ml-1">({getCallingHours(timezone).note})</span>
