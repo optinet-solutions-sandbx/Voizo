@@ -126,26 +126,30 @@ export default function CampaignsPage() {
         const [{ data: numbers }, { data: calls }] = await Promise.all([
           supabase
             .from("campaign_numbers_v2")
-            .select("campaign_id, outcome")
+            .select("id, campaign_id, outcome")
             .in("campaign_id", ids),
           supabase
             .from("calls_v2")
-            .select("campaign_id, status, goal_reached, created_at")
+            .select("campaign_id, campaign_number_id, status, created_at")
             .in("campaign_id", ids),
         ]);
 
+        const outcomeByNumberId: Record<string, string> = {};
         const s: Record<string, CampaignStats> = {};
         for (const id of ids) s[id] = { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
         for (const n of numbers ?? []) {
           const cid = n.campaign_id as string;
-          if (s[cid]) s[cid].totalContacts++;
+          if (s[cid]) {
+            s[cid].totalContacts++;
+            if (n.outcome === "sent_sms") s[cid].successCount++;
+          }
+          outcomeByNumberId[n.id as string] = (n.outcome as string) ?? "";
         }
         for (const c of calls ?? []) {
           const cid = c.campaign_id as string;
           if (!s[cid]) continue;
           s[cid].totalCalls++;
           if (c.status === "completed" || c.status === "answered") s[cid].connectCount++;
-          if (c.goal_reached === true) s[cid].successCount++;
         }
         setCampaignStats(s);
 
@@ -165,7 +169,8 @@ export default function CampaignsPage() {
           if (day && daily[day]) {
             daily[day].calls++;
             if (c.status === "completed" || c.status === "answered") daily[day].connects++;
-            if (c.goal_reached === true) daily[day].successes++;
+            const numOutcome = outcomeByNumberId[c.campaign_number_id as string];
+            if (numOutcome === "sent_sms") daily[day].successes++;
           }
         }
         setDailyCalls(
