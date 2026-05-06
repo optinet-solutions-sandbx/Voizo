@@ -12,6 +12,7 @@ type Row = Record<string, unknown>;
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     draft: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+    scheduled: "bg-cyan-500/15 text-cyan-400 border-cyan-500/25",
     running: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
     paused: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
     completed: "bg-blue-500/15 text-blue-400 border-blue-500/25",
@@ -190,6 +191,7 @@ export default function CampaignV2DetailPage() {
   }
 
   const status = campaign.status as string;
+  const isScheduled = status === "draft" && campaign.start_at && new Date(campaign.start_at as string).getTime() > Date.now();
   const phoneByNumberId = new Map(
     numbers.map((n) => [n.id as string, n.phone_e164 as string]),
   );
@@ -216,15 +218,15 @@ export default function CampaignV2DetailPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl font-bold text-[var(--text-1)] truncate">{campaign.name as string}</h1>
-                <StatusBadge status={status} />
+                <StatusBadge status={isScheduled ? "scheduled" : status} />
               </div>
               <p className="text-sm text-[var(--text-3)] mt-1">
-                {(campaign.vapi_assistant_name as string) || "No agent name"} &middot; {campaign.timezone as string}
+                {(campaign.vapi_assistant_name as string) ? `${campaign.vapi_assistant_name} · ${campaign.timezone}` : (campaign.timezone as string)}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {(status === "draft" || status === "paused") && (
+            {(status === "draft" || status === "paused") && !isScheduled && (
               <button
                 onClick={handleStart}
                 disabled={acting}
@@ -246,13 +248,18 @@ export default function CampaignV2DetailPage() {
         </div>
       </div>
 
+      {isScheduled && (
+        <p className="mb-4 text-sm text-emerald-400">
+          Starts {new Date(campaign.start_at as string).toLocaleString()}
+        </p>
+      )}
+
       {actionError && (
-        <div className="mb-6 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+        <div className="mb-4 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
           {actionError}
         </div>
       )}
 
-      {/* Info cards */}
       <div className="grid gap-4 sm:grid-cols-3 mb-6">
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
