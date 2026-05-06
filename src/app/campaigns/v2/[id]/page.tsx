@@ -221,7 +221,11 @@ export default function CampaignV2DetailPage() {
                 <StatusBadge status={isScheduled ? "scheduled" : status} />
               </div>
               <p className="text-sm text-[var(--text-3)] mt-1">
-                {(campaign.vapi_assistant_name as string) ? `${campaign.vapi_assistant_name} · ${campaign.timezone}` : (campaign.timezone as string)}
+                {(() => {
+                  const raw = (campaign.vapi_assistant_name as string) || "";
+                  const display = raw.replace(/\s*\([^)]*\)?\s*$/, "").trim();
+                  return display ? `${display} · ${campaign.timezone}` : (campaign.timezone as string);
+                })()}
               </p>
             </div>
           </div>
