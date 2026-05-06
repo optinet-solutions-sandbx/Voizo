@@ -6,6 +6,9 @@
  * and system prompt — the form pre-fills these when the operator selects a base
  * agent, and they can override before saving (clone-per-campaign).
  *
+ * Filters out campaign clones (metadata.voizoClone) so only base agents appear.
+ * Older clones without metadata are excluded by name pattern fallback.
+ *
  * Server-side only — the Vapi private key never leaves this handler.
  *
  * Vapi API: GET https://api.vapi.ai/assistant
@@ -28,6 +31,17 @@ interface VapiAssistantRaw {
     messages?: { role: string; content: string }[];
   };
   firstMessage?: string;
+  metadata?: Record<string, unknown>;
+}
+
+const CLONE_NAME_PATTERNS = [
+  /^(QA test|LIVE TEST|SCHEDULE|ERNIE .* LIVE|Clone –)/i,
+];
+
+function isClone(a: VapiAssistantRaw): boolean {
+  if (a.metadata?.voizoClone) return true;
+  const name = a.name ?? "";
+  return CLONE_NAME_PATTERNS.some((p) => p.test(name));
 }
 
 export async function GET() {
@@ -58,6 +72,7 @@ export async function GET() {
 
     const raw = (await response.json()) as VapiAssistantRaw[];
     const assistants = (raw ?? [])
+      .filter((a) => !isClone(a))
       .map((a) => {
         const sysMsg = a.model?.messages?.find((m) => m.role === "system");
         return {

@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
   const cloneName = rawName.slice(0, 40);
 
   const cloneVoice = voiceId
-    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.5, similarityBoost: 0.75 }
+    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.85, similarityBoost: 0.75, optimizeStreamingLatency: 3, enableSsmlParsing: false }
     : base.voice;
 
   const cloneMessages = base.model?.messages ? [...base.model.messages] : [];
@@ -126,6 +126,7 @@ export async function POST(request: NextRequest) {
     structuredDataPlan: base.structuredDataPlan ?? undefined,
     voicemailDetection: base.voicemailDetection ?? null,
     server: base.server ?? null,
+    metadata: { voizoClone: true },
   };
 
   // ── 3. Create clone on Vapi ──
