@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
   const cloneName = rawName.slice(0, 40);
 
   const cloneVoice = voiceId
-    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.5, similarityBoost: 0.75 }
+    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.85, similarityBoost: 0.75, optimizeStreamingLatency: 3, enableSsmlParsing: false }
     : base.voice;
 
   // ── Voizo system prefix (Chris's architecture: system prompt + agent prompt = 1 prompt) ──
@@ -157,10 +157,6 @@ export async function POST(request: NextRequest) {
     analysisPlan: base.analysisPlan ?? {},
     structuredDataPlan: base.structuredDataPlan ?? undefined,
     voicemailDetection: base.voicemailDetection ?? null,
-    // Explicitly inject server.secret on every clone. Vapi redacts the secret
-    // field in GET responses (encrypted at rest), so base.server will NOT
-    // contain the secret even if the base assistant has one configured.
-    // Without this, clones silently lose webhook authentication.
     server: (() => {
       const baseServer = base.server ?? {};
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
@@ -170,6 +166,7 @@ export async function POST(request: NextRequest) {
         ...(webhookSecret ? { secret: webhookSecret } : {}),
       };
     })(),
+    metadata: { voizoClone: true },
   };
 
   // ── 3. Create clone on Vapi ──
