@@ -193,7 +193,7 @@ export async function POST(request: NextRequest) {
       .from("calls_v2")
       .select("*")
       .eq("vapi_call_id", vapiCallId)
-      .single();
+      .maybeSingle();
     callRow = data;
   }
 
@@ -205,7 +205,7 @@ export async function POST(request: NextRequest) {
         .from("calls_v2")
         .select("*")
         .eq("provider_call_id", providerCallId)
-        .single();
+        .maybeSingle();
       callRow = data;
     }
   }
