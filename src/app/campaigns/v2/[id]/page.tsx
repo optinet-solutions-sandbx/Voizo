@@ -191,7 +191,7 @@ export default function CampaignV2DetailPage() {
   }
 
   const status = campaign.status as string;
-  const isScheduled = status === "draft" && campaign.start_at && new Date(campaign.start_at as string).getTime() > Date.now();
+  const isScheduled = status === "draft" && !!campaign.start_at && new Date(campaign.start_at as string).getTime() > Date.now();
   const phoneByNumberId = new Map(
     numbers.map((n) => [n.id as string, n.phone_e164 as string]),
   );
