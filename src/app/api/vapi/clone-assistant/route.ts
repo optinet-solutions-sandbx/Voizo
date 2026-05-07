@@ -93,8 +93,16 @@ export async function POST(request: NextRequest) {
   const withVoice = baseName + voiceSuffix;
   const cloneName = withVoice.length <= 40 ? withVoice : baseName.slice(0, 40);
 
+  // Voice merge: when operator picks a voice, swap only the voiceId; inherit
+  // every other voice knob (provider, model, stability, similarityBoost,
+  // optimizeStreamingLatency, enableSsmlParsing, future Vapi voice fields)
+  // from the base assistant. Replacing the whole object wholesale was the
+  // root cause of mispronunciation (SSML disabled), wrong cadence (turbo
+  // model + stability 0.85 forced over base tuning), and "two voices in a
+  // call" symptoms — base startSpeakingPlan still spread, but voice timing
+  // was no longer aligned. See .agent/handoffs/2026-05-07_HANDOFF_Clone_Drift_Investigation.md §5.1
   const cloneVoice = voiceId
-    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.85, similarityBoost: 0.75, optimizeStreamingLatency: 3, enableSsmlParsing: false }
+    ? { ...base.voice, voiceId }
     : base.voice;
 
   // ── Voizo system prefix (Chris's architecture: system prompt + agent prompt = 1 prompt) ──
