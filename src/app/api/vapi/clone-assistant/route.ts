@@ -139,26 +139,34 @@ export async function POST(request: NextRequest) {
     cloneMessages.unshift({ role: "system", content: finalSystemContent });
   }
 
+  // ── Clone payload: spread-base, override surgically ──
+  // Previously this was a field-by-field whitelist that silently dropped any
+  // base assistant fields not explicitly listed (backgroundDenoisingEnabled,
+  // model.temperature, startSpeakingPlan, voice sub-settings, transcriber.keyterm,
+  // etc.). Result: clones drifted from base behavior in invisible ways.
+  //
+  // New approach: spread `base` entirely so every field Chris configures on the
+  // base assistant (Keyterms, Denoising, Smart Endpointing, model temperature,
+  // tools, future Vapi additions) inherits automatically. Override only what
+  // MUST be different per campaign (name, operator-chosen voice, system prompt,
+  // Voizo's runtime knobs, our webhook server). Strip Vapi-server-set fields
+  // that POST /assistant rejects (id, orgId, createdAt, updatedAt).
   const clonePayload = {
+    ...base,
+    // ── Per-campaign overrides ──
     name: cloneName,
+    voice: cloneVoice,
     model: {
+      ...base.model,
+      messages: cloneMessages,
+      // Defaults if base.model is undefined entirely (defensive)
       provider: base.model?.provider ?? "openai",
       model: base.model?.model ?? "gpt-4o",
       maxTokens: base.model?.maxTokens ?? 150,
-      messages: cloneMessages,
     },
-    voice: cloneVoice,
-    transcriber: base.transcriber ?? { provider: "deepgram", model: "flux-general-en", language: "en" },
-    firstMessage: base.firstMessage ?? null,
-    endCallMessage: base.endCallMessage ?? "Goodbye.",
-    endCallFunctionEnabled: base.endCallFunctionEnabled ?? true,
-    voicemailMessage: base.voicemailMessage ?? null,
+    // ── Voizo-mandated runtime knobs ──
     silenceTimeoutSeconds: 60,
-    maxDurationSeconds: base.maxDurationSeconds ?? 202,
-    firstMessageMode: base.firstMessageMode ?? "assistant-speaks-first-with-model-generated-message",
-    analysisPlan: base.analysisPlan ?? {},
-    structuredDataPlan: base.structuredDataPlan ?? undefined,
-    voicemailDetection: base.voicemailDetection ?? null,
+    // ── Webhook server config (must point at our endpoint with our secret) ──
     server: (() => {
       const baseServer = base.server ?? {};
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
@@ -168,7 +176,16 @@ export async function POST(request: NextRequest) {
         ...(webhookSecret ? { secret: webhookSecret } : {}),
       };
     })(),
+    // ── Voizo identifier (for assistant-picker filter on campaign creation) ──
     metadata: { voizoClone: true },
+    // ── Strip Vapi-server-set fields (POST /assistant rejects these) ──
+    id: undefined,
+    orgId: undefined,
+    createdAt: undefined,
+    updatedAt: undefined,
+    // Defensive: associations don't transfer; each clone gets its own SIP phone
+    phoneNumberIds: undefined,
+    isServerUrlSecretSet: undefined,
   };
 
   // ── 3. Create clone on Vapi ──
