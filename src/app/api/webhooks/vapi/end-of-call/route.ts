@@ -6,6 +6,132 @@ import crypto from "crypto";
 // Default Vercel timeout is too tight if Mobivate API is slow.
 export const maxDuration = 30;
 
+// Defensive cap on transcript length before regex evaluation. V8's regex
+// engine doesn't catastrophically backtrack on the patterns below (all
+// quantifiers bounded), but a >50KB transcript with many '?' chars still
+// pays measurable CPU on the SMS-dispatch path. 32k is generous for a
+// 3-minute call (Vapi's documented call cap is 5 min, ~7-10KB transcript).
+const TRANSCRIPT_CAP = 32_000;
+
+// ── Speaker-aware transcript parsing ───────────────────────────────────────
+// Vapi's transcript field is a flat multi-line string with speaker labels.
+// Two formats observed in the wild:
+//   1. "User\n[content]\nAssistant\n[content]"  (Vapi UI export-style — labels on own lines)
+//   2. "User: [content]\nAI: [content]"          (inline-prefix style)
+// The parser below handles both, plus stray timestamp lines like
+// "4:48:40 PM(+00:00.61)" which Vapi sometimes interleaves.
+
+type TranscriptSpeaker = "ai" | "user" | "unknown";
+type TranscriptTurn = { speaker: TranscriptSpeaker; text: string };
+
+function parseTranscriptTurns(transcript: string): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = [];
+  const lines = transcript.split(/\r?\n/);
+  let currentSpeaker: TranscriptSpeaker = "unknown";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const text = buffer.join(" ").trim();
+    if (text) turns.push({ speaker: currentSpeaker, text });
+    buffer = [];
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // Skip pure timestamp lines (e.g. "4:48:40 PM(+00:00.61)")
+    if (/^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?(\s*\(\+?[\d:.]+\))?$/i.test(line)) continue;
+
+    // Speaker on own line (Vapi UI format)
+    if (/^(?:AI|Assistant|Bot)$/i.test(line)) {
+      flush();
+      currentSpeaker = "ai";
+      continue;
+    }
+    if (/^(?:User|Customer|Caller|Human)$/i.test(line)) {
+      flush();
+      currentSpeaker = "user";
+      continue;
+    }
+
+    // Inline prefix (alternate format)
+    const aiInline = line.match(/^(?:AI|Assistant|Bot):\s*(.*)$/i);
+    if (aiInline) {
+      flush();
+      currentSpeaker = "ai";
+      if (aiInline[1]) buffer.push(aiInline[1]);
+      continue;
+    }
+    const userInline = line.match(/^(?:User|Customer|Caller|Human):\s*(.*)$/i);
+    if (userInline) {
+      flush();
+      currentSpeaker = "user";
+      if (userInline[1]) buffer.push(userInline[1]);
+      continue;
+    }
+
+    // Content line, attribute to current speaker
+    buffer.push(line);
+  }
+
+  flush();
+  return turns;
+}
+
+// ── Pattern 4 detector: AI offered SMS/text, user agreed shortly after ─────
+// Speaker-aware to prevent false positives that pure regex on the flat
+// transcript can't avoid:
+//   - "Don't send me an SMS, OK?"        → negation around agreement word
+//   - "Definitely not, sorry"            → agreement word with negation suffix
+//   - AI's own affirmation post-question → agreement word from wrong speaker
+// Returns true only if:
+//   1. An AI-attributed turn contains an SMS-related question
+//   2. A user-attributed turn within 3 turns contains an agreement word
+//   3. No negation word within ±30 chars of that agreement
+//
+// If parser detects no AI-attributed turns at all (transcript without
+// speaker labels), returns false — fail-safe: prefer false-negative
+// over false-positive on compliance-sensitive SMS dispatch.
+const AI_OFFER_A = /\bsend\b[^?]{0,80}\b(?:sms|text)\b[^?]{0,30}\?/i;
+const AI_OFFER_B = /\btext(?:ing)?\s+you\b[^?]{0,80}\?/i;
+const AGREEMENT_WORD = /\b(?:y(?:eah|es|up|ep)|sure|of course|ok(?:ay)?|please|definitely|absolutely)\b/i;
+const NEGATION_NEAR = /\b(?:not|no|nope|never|don'?t|dont)\b/i;
+
+function detectOfferThenAgree(transcript: string): boolean {
+  const turns = parseTranscriptTurns(transcript);
+  if (!turns.some((t) => t.speaker === "ai")) return false;
+
+  let lastAiOfferIdx = -1;
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+
+    if (t.speaker === "ai" && (AI_OFFER_A.test(t.text) || AI_OFFER_B.test(t.text))) {
+      lastAiOfferIdx = i;
+      continue;
+    }
+
+    if (lastAiOfferIdx < 0) continue;
+    if (i - lastAiOfferIdx > 3) {
+      lastAiOfferIdx = -1; // out of window — discard offer reference
+      continue;
+    }
+    if (t.speaker !== "user") continue;
+
+    const m = AGREEMENT_WORD.exec(t.text);
+    if (!m) continue;
+
+    // Negation guard — within ±30 chars of the agreement word
+    const start = Math.max(0, m.index - 30);
+    const end = m.index + m[0].length + 30;
+    const window = t.text.slice(start, end);
+    if (NEGATION_NEAR.test(window)) continue;
+
+    return true;
+  }
+  return false;
+}
+
 /**
  * POST /api/webhooks/vapi/end-of-call
  *
@@ -133,17 +259,57 @@ export async function POST(request: NextRequest) {
     //
     // Pattern 3 (short form): AI says "I'll text you" without using "send".
     //
+    // Pattern 4 (offer-then-agree): AI asks an SMS-related question, customer
+    //   agrees in next turn. Speaker-aware (see detectOfferThenAgree above).
+    //   Backstop for STT mangling of the AI's confirmation line (e.g. "an SMS"
+    //   → "a EVs" observed on call 019e019f-f296-7001-9a2f-573fe787d335).
+    //
     // TC-039: Vapi STT splits "SMS" into "s. MS" / "S. M. S." — smsDiscussed
     // accounts for these artifacts.
+    //
+    // Length cap: all patterns run against `safeTranscript` (≤32k chars) for
+    // CPU safety on pathologically long transcripts.
+    const safeTranscript = transcript.slice(0, TRANSCRIPT_CAP);
+
     const aiExplicit =
-      /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent|text)(?:ing|ed)? (?:you |the )?(?:an? )?(?:sms|text)/i.test(transcript);
+      /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent|text)(?:ing|ed)? (?:you |the )?(?:an? )?(?:sms|text)/i.test(safeTranscript);
     const aiShortForm =
-      /i(?:'ll| will|'m| am) text(?:ing)? you/i.test(transcript);
+      /i(?:'ll| will|'m| am) text(?:ing)? you/i.test(safeTranscript);
     const aiPassive =
-      /you(?:'ll| will) (?:receive|get) (?:an? )?(?:sms|text)/i.test(transcript);
-    const smsDiscussed = /\bsms\b|s\.\s?ms\b|s\.\s?m\.\s?s\.?|text message/i.test(transcript);
-    const aiConfirmedSend = /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent)(?:ing)? (?:that|it)\b/i.test(transcript);
-    const aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend);
+      /you(?:'ll| will) (?:receive|get) (?:an? )?(?:sms|text)/i.test(safeTranscript);
+    const smsDiscussed = /\bsms\b|s\.\s?ms\b|s\.\s?m\.\s?s\.?|text message/i.test(safeTranscript);
+    const aiConfirmedSend = /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent)(?:ing)? (?:that|it)\b/i.test(safeTranscript);
+    const offerThenAgree = detectOfferThenAgree(safeTranscript);
+
+    let aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend) || offerThenAgree;
+
+    // Final user-rejection override (compliance safety net):
+    // Patterns 1-3 fire whenever the AI utters a confirmation phrase, with no
+    // awareness of whether the customer subsequently rejected. Real failure mode:
+    //   AI: "I'll send you an SMS, OK?"  → matches Pattern 1
+    //   User: "No."                        → currently ignored
+    // → SMS dispatched against customer's explicit no = compliance violation.
+    //
+    // Override: if any pattern fired AND the customer's LAST turn contains an
+    // explicit rejection without an offsetting agreement word, drop goalReached.
+    // Pattern 4 already has its own speaker-aware negation guard; this override
+    // is the safety net for Patterns 1-3.
+    if (aiConfirmedSms) {
+      const turns = parseTranscriptTurns(safeTranscript);
+      const lastUserTurn = [...turns].reverse().find((t) => t.speaker === "user");
+      if (lastUserTurn) {
+        const lastTurnRejects = /\b(?:no|nope|don'?t|dont|not\s+interested)\b/i.test(lastUserTurn.text);
+        const lastTurnAgrees = AGREEMENT_WORD.test(lastUserTurn.text);
+        if (lastTurnRejects && !lastTurnAgrees) {
+          aiConfirmedSms = false;
+          console.log(
+            `[fallback-eval] aiConfirmedSms overridden to false — ` +
+            `AI signaled dispatch but customer's last turn is unambiguous rejection. ` +
+            `vapiCallId=${vapiCallId}`,
+          );
+        }
+      }
+    }
 
     if (aiConfirmedSms) {
       goalReached = true;
