@@ -68,6 +68,29 @@ export async function POST(
     );
   }
 
+  // ── Queue gate: only one campaign runs at a time (MVP constraint) ──
+  // Chris's directive 2026-05-07. Pairs with the same check in
+  // /api/cron/campaign-scheduler — both gates prevent more than one
+  // campaign reaching status='running' under normal operation.
+  // Trade-off: count-then-update is not perfectly atomic; a sub-millisecond
+  // race could let two campaigns through. The stuck-campaign heartbeat
+  // (Phase 1) surfaces anomalies as a backstop.
+  const { count: runningCount } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "running")
+    .neq("id", id); // defensive: exclude self in any race scenario
+
+  if (runningCount && runningCount > 0) {
+    return NextResponse.json(
+      {
+        error: "Another campaign is currently running. Wait for it to complete, or pause it first.",
+        queueLimit: 1,
+      },
+      { status: 409 },
+    );
+  }
+
   // ── Concurrency guard (H2): atomic status transition ──
   // Only update if status is still draft/paused (prevents double-click race)
   const { data: updated, error: updateErr } = await supabaseAdmin
