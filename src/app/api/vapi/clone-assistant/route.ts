@@ -173,7 +173,11 @@ export async function POST(request: NextRequest) {
       maxTokens: base.model?.maxTokens ?? 150,
     },
     // ── Voizo-mandated runtime knobs ──
-    silenceTimeoutSeconds: 60,
+    // (silenceTimeoutSeconds intentionally NOT overridden — inherits from base
+    //  via the spread above. Chris must set base.silenceTimeoutSeconds = 60 in
+    //  the Vapi UI to preserve Ernie's required value. If base is left at the
+    //  default ~26s, customer pauses mid-pitch will drop the call. Tracked as
+    //  a launch-blocking dependency in 2026-05-07_HANDOFF_Clone_Drift_Investigation.md §5.2)
     // ── Webhook server config (must point at our endpoint with our secret) ──
     server: (() => {
       const baseServer = base.server ?? {};
