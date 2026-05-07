@@ -93,8 +93,34 @@ export async function POST(request: NextRequest) {
   const withVoice = baseName + voiceSuffix;
   const cloneName = withVoice.length <= 40 ? withVoice : baseName.slice(0, 40);
 
+  // Voice merge: when operator picks a voice, swap only the voiceId; inherit
+  // every other voice knob (provider, model, stability, similarityBoost,
+  // optimizeStreamingLatency, enableSsmlParsing, future Vapi voice fields)
+  // from the base assistant. Replacing the whole object wholesale was the
+  // root cause of mispronunciation (SSML disabled), wrong cadence (turbo
+  // model + stability 0.85 forced over base tuning), and "two voices in a
+  // call" symptoms — base startSpeakingPlan still spread, but voice timing
+  // was no longer aligned. See .agent/handoffs/2026-05-07_HANDOFF_Clone_Drift_Investigation.md §5.1
+  //
+  // Provider guard: KNOWN_VOICES is 11labs-only today. If the base assistant
+  // ever uses a non-11labs provider (azure/playht/cartesia/rime), spreading
+  // base.voice and overlaying an 11labs voiceId produces a hybrid that Vapi
+  // rejects (or worse, silently breaks audio). Refuse early with a clear
+  // operator-facing error.
+  const baseProvider = base.voice?.provider as string | undefined;
+  if (voiceId && baseProvider && baseProvider !== "11labs") {
+    return NextResponse.json(
+      {
+        error:
+          `Base assistant uses voice provider "${baseProvider}" but the operator-selectable ` +
+          `voice list is ElevenLabs-only. Either pick a base assistant with provider="11labs" ` +
+          `or use the base's own voice (don't pick one in the form).`,
+      },
+      { status: 400 },
+    );
+  }
   const cloneVoice = voiceId
-    ? { provider: "11labs", voiceId, model: "eleven_turbo_v2_5", stability: 0.85, similarityBoost: 0.75, optimizeStreamingLatency: 3, enableSsmlParsing: false }
+    ? { ...base.voice, voiceId }
     : base.voice;
 
   // ── Voizo system prefix (Chris's architecture: system prompt + agent prompt = 1 prompt) ──
@@ -139,26 +165,42 @@ export async function POST(request: NextRequest) {
     cloneMessages.unshift({ role: "system", content: finalSystemContent });
   }
 
+  // ── Clone payload: spread-base, override surgically ──
+  // Previously this was a field-by-field whitelist that silently dropped any
+  // base assistant fields not explicitly listed (backgroundDenoisingEnabled,
+  // model.temperature, startSpeakingPlan, voice sub-settings, transcriber.keyterm,
+  // etc.). Result: clones drifted from base behavior in invisible ways.
+  //
+  // New approach: spread `base` entirely so every field Chris configures on the
+  // base assistant (Keyterms, Denoising, Smart Endpointing, model temperature,
+  // tools, future Vapi additions) inherits automatically. Override only what
+  // MUST be different per campaign (name, operator-chosen voice, system prompt,
+  // Voizo's runtime knobs, our webhook server). Strip Vapi-server-set fields
+  // that POST /assistant rejects (id, orgId, createdAt, updatedAt).
   const clonePayload = {
+    ...base,
+    // ── Per-campaign overrides ──
     name: cloneName,
+    voice: cloneVoice,
     model: {
+      ...base.model,
+      messages: cloneMessages,
+      // Defaults if base.model is undefined entirely (defensive)
       provider: base.model?.provider ?? "openai",
       model: base.model?.model ?? "gpt-4o",
       maxTokens: base.model?.maxTokens ?? 150,
-      messages: cloneMessages,
     },
-    voice: cloneVoice,
-    transcriber: base.transcriber ?? { provider: "deepgram", model: "flux-general-en", language: "en" },
-    firstMessage: base.firstMessage ?? null,
-    endCallMessage: base.endCallMessage ?? "Goodbye.",
-    endCallFunctionEnabled: base.endCallFunctionEnabled ?? true,
-    voicemailMessage: base.voicemailMessage ?? null,
+    // ── Voizo-mandated runtime knobs ──
+    // silenceTimeoutSeconds=60 is RESTORED as an explicit override after the
+    // post-launch audit (2026-05-07): the previous "delegate to base" approach
+    // (commit 25af55f) had no enforcement, so a forgotten Vapi UI step would
+    // silently regress to Vapi's ~26s default and re-introduce Ernie's
+    // "call cut short mid-pitch" bug. Hardcoding here is a Voizo-platform
+    // guarantee, not an opinion that should be tunable per base assistant.
+    // If a future use case needs a different value, expose it as a campaign
+    // setting in the form rather than removing the override.
     silenceTimeoutSeconds: 60,
-    maxDurationSeconds: base.maxDurationSeconds ?? 202,
-    firstMessageMode: base.firstMessageMode ?? "assistant-speaks-first-with-model-generated-message",
-    analysisPlan: base.analysisPlan ?? {},
-    structuredDataPlan: base.structuredDataPlan ?? undefined,
-    voicemailDetection: base.voicemailDetection ?? null,
+    // ── Webhook server config (must point at our endpoint with our secret) ──
     server: (() => {
       const baseServer = base.server ?? {};
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
@@ -168,7 +210,16 @@ export async function POST(request: NextRequest) {
         ...(webhookSecret ? { secret: webhookSecret } : {}),
       };
     })(),
+    // ── Voizo identifier (for assistant-picker filter on campaign creation) ──
     metadata: { voizoClone: true },
+    // ── Strip Vapi-server-set fields (POST /assistant rejects these) ──
+    id: undefined,
+    orgId: undefined,
+    createdAt: undefined,
+    updatedAt: undefined,
+    // Defensive: associations don't transfer; each clone gets its own SIP phone
+    phoneNumberIds: undefined,
+    isServerUrlSecretSet: undefined,
   };
 
   // ── 3. Create clone on Vapi ──

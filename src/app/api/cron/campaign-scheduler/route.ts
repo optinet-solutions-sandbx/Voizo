@@ -43,6 +43,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // ── Queue gate: only one campaign runs at a time (MVP constraint) ──
+  // Chris's directive 2026-05-07: avoid Vapi/SquareTalk/Mobivate concurrent-load
+  // surprises by enforcing serial campaign execution. If another campaign is
+  // currently running, defer this tick — the cron fires every minute and the
+  // candidate campaign will be picked up once the running one completes.
+  // True scaling = additional Vapi accounts or higher subscription tier (Phase 3).
+  const { count: runningCount } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "running");
+
+  if (runningCount && runningCount > 0) {
+    return NextResponse.json({
+      started: 0,
+      queued: true,
+      reason: "another campaign currently running — deferring to next tick",
+    });
+  }
+
   // ── Find campaigns ready to auto-start ──
   const now = new Date().toISOString();
 
@@ -52,7 +71,8 @@ export async function GET(request: NextRequest) {
     .eq("status", "draft")
     .not("start_at", "is", null)
     .lte("start_at", now)
-    .limit(2); // cap per tick — fireCall takes 8-22s, maxDuration is 60s
+    .order("start_at", { ascending: true }) // FIFO when multiple are ready
+    .limit(1); // queue gate enforces 1-at-a-time; no point picking 2
 
   if (error) {
     console.error("[campaign-scheduler] query error:", error);
