@@ -101,6 +101,24 @@ export async function POST(request: NextRequest) {
   // model + stability 0.85 forced over base tuning), and "two voices in a
   // call" symptoms — base startSpeakingPlan still spread, but voice timing
   // was no longer aligned. See .agent/handoffs/2026-05-07_HANDOFF_Clone_Drift_Investigation.md §5.1
+  //
+  // Provider guard: KNOWN_VOICES is 11labs-only today. If the base assistant
+  // ever uses a non-11labs provider (azure/playht/cartesia/rime), spreading
+  // base.voice and overlaying an 11labs voiceId produces a hybrid that Vapi
+  // rejects (or worse, silently breaks audio). Refuse early with a clear
+  // operator-facing error.
+  const baseProvider = base.voice?.provider as string | undefined;
+  if (voiceId && baseProvider && baseProvider !== "11labs") {
+    return NextResponse.json(
+      {
+        error:
+          `Base assistant uses voice provider "${baseProvider}" but the operator-selectable ` +
+          `voice list is ElevenLabs-only. Either pick a base assistant with provider="11labs" ` +
+          `or use the base's own voice (don't pick one in the form).`,
+      },
+      { status: 400 },
+    );
+  }
   const cloneVoice = voiceId
     ? { ...base.voice, voiceId }
     : base.voice;
@@ -173,11 +191,15 @@ export async function POST(request: NextRequest) {
       maxTokens: base.model?.maxTokens ?? 150,
     },
     // ── Voizo-mandated runtime knobs ──
-    // (silenceTimeoutSeconds intentionally NOT overridden — inherits from base
-    //  via the spread above. Chris must set base.silenceTimeoutSeconds = 60 in
-    //  the Vapi UI to preserve Ernie's required value. If base is left at the
-    //  default ~26s, customer pauses mid-pitch will drop the call. Tracked as
-    //  a launch-blocking dependency in 2026-05-07_HANDOFF_Clone_Drift_Investigation.md §5.2)
+    // silenceTimeoutSeconds=60 is RESTORED as an explicit override after the
+    // post-launch audit (2026-05-07): the previous "delegate to base" approach
+    // (commit 25af55f) had no enforcement, so a forgotten Vapi UI step would
+    // silently regress to Vapi's ~26s default and re-introduce Ernie's
+    // "call cut short mid-pitch" bug. Hardcoding here is a Voizo-platform
+    // guarantee, not an opinion that should be tunable per base assistant.
+    // If a future use case needs a different value, expose it as a campaign
+    // setting in the form rather than removing the override.
+    silenceTimeoutSeconds: 60,
     // ── Webhook server config (must point at our endpoint with our secret) ──
     server: (() => {
       const baseServer = base.server ?? {};
