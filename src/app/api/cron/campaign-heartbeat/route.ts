@@ -111,7 +111,32 @@ export async function GET(request: NextRequest) {
 
     if (!pendingCount || pendingCount === 0) continue; // no work left — just hasn't auto-completed
 
-    // Stuck: running, has work, no recent activity
+    // Pending-retry awareness (compliance / noise-reduction):
+    // Per project_clone_voice_settings.md, retry_interval_minutes default is
+    // 90. A campaign whose remaining work is all pending_retry awaiting their
+    // next attempt would be flagged "stuck" by the previous heuristic — but
+    // it's actually HEALTHY (just waiting). Check if any pending_retry rows
+    // are scheduled within the next hour. If yes, this campaign is healthy.
+    const oneHourFromNow = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const { count: imminentRetryCount, error: retryErr } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .eq("outcome", "pending_retry")
+      .lte("next_attempt_at", oneHourFromNow);
+
+    if (retryErr) {
+      console.error(`[campaign-heartbeat] retry-count error for ${campaignId}:`, retryErr);
+      // Fail-open: if we can't tell, assume healthy (better than false alarm)
+      continue;
+    }
+
+    if (imminentRetryCount && imminentRetryCount > 0) {
+      // Healthy: a retry will fire within the hour; not stuck
+      continue;
+    }
+
+    // Stuck: running, has pending work, no recent activity, no imminent retries
     stuck.push({
       id: campaignId,
       name: campaignName,
@@ -121,8 +146,8 @@ export async function GET(request: NextRequest) {
 
     console.warn(
       `[campaign-heartbeat] STUCK: ${campaignName} (${campaignId}) — ` +
-      `running with ${pendingCount} pending numbers, no calls in last ${STALE_WINDOW_MIN}m. ` +
-      `Operator action needed (pause + investigate, or resume manually).`,
+      `running with ${pendingCount} pending numbers, no calls in last ${STALE_WINDOW_MIN}m, ` +
+      `no imminent retries. Operator action needed (pause + investigate, or resume manually).`,
     );
   }
 
