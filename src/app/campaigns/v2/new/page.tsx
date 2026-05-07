@@ -3,7 +3,7 @@
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarDays, Clock, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
+import { ArrowLeft, CalendarDays, Clock, Info, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
 import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
 import DateTimePicker from "@/components/DateTimePicker";
@@ -162,6 +162,18 @@ const CALLING_HOURS: Record<string, { start: string; end: string; note: string }
 
 function getCallingHours(tz: string) {
   return CALLING_HOURS[tz] ?? { start: "09:00", end: "20:00", note: "Safe default" };
+}
+
+function formatLocalTime(date: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit", hour12: true,
+      timeZone,
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 function initialScheduleRows(): ScheduleRow[] {
@@ -506,10 +518,45 @@ export default function NewCampaignV2Page() {
             </button>
           </div>
 
+          {/* Mode preview — compact, updates live as operator picks a mode */}
+          {(() => {
+            const isWarn = startMode === "scheduled" && !scheduledDate;
+            const tzShort = timezone.split("/").pop()?.replace(/_/g, " ") ?? timezone;
+            return (
+              <div className={`px-3 py-2 rounded-lg flex items-center gap-2 text-xs mb-3 ${
+                isWarn
+                  ? "bg-amber-500/[0.08] text-amber-200"
+                  : "bg-blue-500/[0.06] text-[var(--text-2)]"
+              }`}>
+                <Info size={12} className={`shrink-0 ${isWarn ? "text-amber-400" : "text-blue-400"}`} />
+                {startMode === "now" && (
+                  <p className="leading-snug">Saves as <span className="text-[var(--text-1)] font-medium">draft</span> — click <span className="text-emerald-400 font-medium">Start</span> on the campaign page to begin.</p>
+                )}
+                {startMode === "delay" && (
+                  <p className="leading-snug">
+                    Auto-starts in <span className="text-[var(--text-1)] font-medium">{delayMinutes} min</span>
+                    {" — "}
+                    <span className="text-[var(--text-1)] font-medium">{formatLocalTime(new Date(Date.now() + delayMinutes * 60_000), timezone)}</span>
+                    <span className="text-[var(--text-3)]"> · {tzShort}</span>
+                  </p>
+                )}
+                {startMode === "scheduled" && scheduledDate && (
+                  <p className="leading-snug">
+                    Auto-starts <span className="text-[var(--text-1)] font-medium">{formatLocalTime(new Date(scheduledDate), timezone)}</span>
+                    <span className="text-[var(--text-3)]"> · {tzShort}</span>
+                  </p>
+                )}
+                {isWarn && (
+                  <p className="leading-snug">Pick a date below — or switch to <span className="font-medium">Start Immediately</span>.</p>
+                )}
+              </div>
+            );
+          })()}
+
           {startMode === "delay" && (
             <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 mb-1">
               <p className="text-xs text-[var(--text-3)] mb-3">Start dialling after:</p>
-              <div className="flex flex-wrap gap-2 mb-3">
+              <div className="flex flex-wrap gap-2">
                 {[
                   { label: "30 min", value: 30 },
                   { label: "1 hour", value: 60 },
@@ -532,70 +579,19 @@ export default function NewCampaignV2Page() {
                   </button>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
-                <Clock size={13} className="text-[var(--text-3)]" />
-                <span className="text-xs text-[var(--text-2)]">
-                  Campaign will start at approximately{" "}
-                  <span className="font-semibold text-[var(--text-1)]">
-                    {new Date(Date.now() + delayMinutes * 60_000).toLocaleTimeString("en-US", {
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    })}
-                  </span>
-                  {delayMinutes >= 1440 && (
-                    <span>
-                      {" "}on{" "}
-                      <span className="font-semibold text-[var(--text-1)]">
-                        {new Date(Date.now() + delayMinutes * 60_000).toLocaleDateString("en-US", {
-                          weekday: "short",
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                    </span>
-                  )}
-                </span>
-              </div>
             </div>
           )}
 
           {startMode === "scheduled" && (
             <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 mb-1">
-              <p className="text-xs text-[var(--text-3)] mb-3">Pick a date and time to start dialling:</p>
-              <p className="text-[10px] text-amber-400/80 mb-2">
-                Times are in your browser&apos;s local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
-                Calls still only dial within the schedule&apos;s active hours.
+              <p className="text-xs text-[var(--text-3)] mb-2">
+                Pick a date and time. Times are in your browser&apos;s timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
               </p>
               <DateTimePicker
                 value={scheduledDate}
                 onChange={(v) => setScheduledDate(v)}
                 min={new Date().toISOString().slice(0, 16)}
               />
-              {scheduledDate && (
-                <div className="flex items-center gap-2 mt-3">
-                  <CalendarDays size={13} className="text-[var(--text-3)]" />
-                  <span className="text-xs text-[var(--text-2)]">
-                    Campaign will start on{" "}
-                    <span className="font-semibold text-[var(--text-1)]">
-                      {new Date(scheduledDate).toLocaleDateString("en-US", {
-                        weekday: "long",
-                        month: "long",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </span>
-                    {" "}at{" "}
-                    <span className="font-semibold text-[var(--text-1)]">
-                      {new Date(scheduledDate).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                        hour12: true,
-                      })}
-                    </span>
-                  </span>
-                </div>
-              )}
             </div>
           )}
 

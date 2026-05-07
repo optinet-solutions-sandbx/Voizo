@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, Phone, ArrowUpRight, X,
-  Users, PhoneCall, Zap, Target,
+  Users, PhoneCall, Zap, Target, Clock,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis,
@@ -55,6 +55,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { cls: string; dot?: boolean }> = {
     draft:     { cls: "bg-gray-500/10 text-gray-400 border-gray-500/20" },
+    scheduled: { cls: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
     running:   { cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", dot: true },
     paused:    { cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
     completed: { cls: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
@@ -67,6 +68,46 @@ function StatusBadge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+type WhenInfo = { label: string; sub?: string; muted?: boolean };
+
+function formatWhen(c: CampaignRow): WhenInfo {
+  const status = (c.status as string) || "draft";
+  const startAt = c.start_at as string | null | undefined;
+  const tz = c.timezone as string | undefined;
+  const tzShort = tz ? tz.split("/").pop()?.replace(/_/g, " ") : undefined;
+
+  if (status === "running") return { label: "Live now" };
+  if (status === "scheduled" && startAt) return { label: relativeStart(startAt), sub: tzShort };
+  if (status === "draft" && startAt) return { label: relativeStart(startAt), sub: tzShort ? `${tzShort} · draft` : "draft" };
+  if (status === "draft") return { label: "Manual start", muted: true };
+  if (status === "paused") return { label: "Paused", muted: true };
+  return { label: "—", muted: true };
+}
+
+function relativeStart(iso: string): string {
+  const ts = new Date(iso).getTime();
+  const now = Date.now();
+  const diff = ts - now;
+  if (diff <= 0) return "Due now";
+
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "Starting now";
+  if (minutes < 60) return `Starts in ${minutes}m`;
+  if (hours < 24) return `Starts in ${hours}h`;
+
+  const date = new Date(iso);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  if (days === 1) return `Tomorrow ${time}`;
+  if (days < 7) {
+    const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
+    return `${dayName} ${time}`;
+  }
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 interface StatCardProps {
@@ -377,13 +418,14 @@ export default function CampaignsPage() {
                 const s = campaignStats[c.id as string] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
                 const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) + "%" : "0%";
                 const hasActivity = s.totalCalls > 0;
+                const when = formatWhen(c);
                 return (
                   <div
                     key={c.id as string}
                     onClick={() => router.push(`/campaigns/v2/${c.id}`)}
                     className={`px-4 py-3.5 cursor-pointer transition-colors hover:bg-[var(--bg-hover)] ${!hasActivity ? "opacity-60" : ""}`}
                   >
-                    <div className="flex items-start justify-between gap-2 mb-2.5">
+                    <div className="flex items-start justify-between gap-2 mb-1.5">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         <div className="flex items-center gap-0.5 shrink-0">
                           <span className="w-5 h-5 rounded-md bg-blue-500/10 flex items-center justify-center">
@@ -396,6 +438,13 @@ export default function CampaignsPage() {
                         <span className="font-semibold text-[var(--text-1)] text-sm truncate">{c.name as string}</span>
                       </div>
                       <StatusBadge status={c.status as string} />
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-2.5 ml-7">
+                      <Clock size={10} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
+                      <p className={`text-[11px] truncate ${when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}`}>
+                        {when.label}
+                        {when.sub && <span className="text-[var(--text-3)] ml-1">· {when.sub}</span>}
+                      </p>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div>
@@ -418,10 +467,11 @@ export default function CampaignsPage() {
 
             {/* Desktop table */}
             <div className="hidden md:block bg-[var(--bg-app)] w-full overflow-x-auto">
-              <table className="w-full min-w-[740px] text-sm">
+              <table className="w-full min-w-[860px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                     <th className="text-left px-5 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Campaign</th>
+                    <th className="text-left px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">When</th>
                     <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Contacts</th>
                     <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Calls</th>
                     <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Connect</th>
@@ -436,6 +486,7 @@ export default function CampaignsPage() {
                     const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) : "0";
                     const successRate = s.connectCount > 0 ? ((s.successCount / s.connectCount) * 100).toFixed(1) : "0";
                     const hasActivity = s.totalCalls > 0;
+                    const when = formatWhen(c);
                     return (
                       <tr
                         key={c.id as string}
@@ -457,6 +508,15 @@ export default function CampaignsPage() {
                               {(c.vapi_assistant_name as string) && (
                                 <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">{c.vapi_assistant_name as string}</p>
                               )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-1.5">
+                            <Clock size={11} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
+                            <div className="min-w-0">
+                              <p className={`text-[12px] truncate ${when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}`}>{when.label}</p>
+                              {when.sub && <p className="text-[10px] text-[var(--text-3)] truncate">{when.sub}</p>}
                             </div>
                           </div>
                         </td>
