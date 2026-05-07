@@ -72,9 +72,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   } else {
+    // Fail-closed in production: previous behavior left the endpoint OPEN
+    // when the env var was missing. That converted a misconfigured deploy
+    // into a publicly-callable originate trigger. Refuse to serve in prod.
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[freeswitch.originate trigger] FREESWITCH_WEBHOOK_SECRET not set in production — REFUSING to serve",
+      );
+      return NextResponse.json({ error: "Endpoint not configured" }, { status: 503 });
+    }
     console.warn(
-      "[freeswitch.originate trigger] FREESWITCH_WEBHOOK_SECRET not set — endpoint is OPEN. " +
-      "Acceptable in dev; MUST be set before the dashboard is publicly reachable.",
+      "[freeswitch.originate trigger] FREESWITCH_WEBHOOK_SECRET not set — endpoint is OPEN in dev only. " +
+      "MUST be set before the dashboard is publicly reachable.",
     );
   }
 

@@ -33,9 +33,19 @@ export function validateFreeSwitchSignature(
   signature: string | null,
 ): boolean {
   if (!WEBHOOK_SECRET) {
+    // Fail-closed in production: refuse to validate unsigned webhooks. Previous
+    // behavior returned `true` unconditionally, which made a missing env var
+    // silently turn the webhook endpoint into an open relay. Manifesto §6:
+    // "Throw loud if a required var is missing."
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[freeswitch.validateWebhook] FREESWITCH_WEBHOOK_SECRET not set in production — REJECTING request",
+      );
+      return false;
+    }
     console.warn(
-      "[freeswitch.validateWebhook] FREESWITCH_WEBHOOK_SECRET not set — accepting request without validation. " +
-      "This is acceptable in dev but MUST be set before production. See manifesto §6.",
+      "[freeswitch.validateWebhook] FREESWITCH_WEBHOOK_SECRET not set — accepting in dev only. " +
+      "MUST be set before production. See manifesto §6.",
     );
     return true;
   }
