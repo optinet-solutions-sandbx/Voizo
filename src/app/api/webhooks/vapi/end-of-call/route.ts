@@ -143,7 +143,20 @@ export async function POST(request: NextRequest) {
       /you(?:'ll| will) (?:receive|get) (?:an? )?(?:sms|text)/i.test(transcript);
     const smsDiscussed = /\bsms\b|s\.\s?ms\b|s\.\s?m\.\s?s\.?|text message/i.test(transcript);
     const aiConfirmedSend = /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent)(?:ing)? (?:that|it)\b/i.test(transcript);
-    const aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend);
+
+    // Pattern 4: AI offered SMS/text in a question, customer agreed within ~120 chars.
+    // Backstop for STT mangling of the AI's confirmation line (e.g. "an SMS" → "a EVs"
+    // observed on call 019e019f-f296-7001-9a2f-573fe787d335). Anchors on the AI's offer
+    // + customer's agreement instead of the AI's (potentially mistranscribed) confirmation.
+    //
+    // Two flavors:
+    //   4a. "send … sms/text … ?" — verb "send" with explicit SMS/text noun
+    //   4b. "text you … ?"        — verb "text" alone (text-as-verb already implies SMS)
+    const offerThenAgree =
+      /\bsend\b[^?]{0,80}\b(?:sms|text)\b[^?]{0,30}\?[\s\S]{0,120}\b(?:y(?:eah|es|up|ep)|sure|of course|ok(?:ay)?|please|definitely|absolutely)\b/i.test(transcript)
+      || /\btext(?:ing)?\s+you\b[^?]{0,80}\?[\s\S]{0,120}\b(?:y(?:eah|es|up|ep)|sure|of course|ok(?:ay)?|please|definitely|absolutely)\b/i.test(transcript);
+
+    const aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend) || offerThenAgree;
 
     if (aiConfirmedSms) {
       goalReached = true;
