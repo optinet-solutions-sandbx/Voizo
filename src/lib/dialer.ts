@@ -43,6 +43,42 @@ export function isWithinCallWindow(
 }
 
 /**
+ * Returns true when the campaign has work that's not yet terminal:
+ *   - pending_retry numbers waiting for their retry window (next_attempt_at > now), OR
+ *   - in_progress numbers (call fired but no terminal hangup webhook yet — usually
+ *     transient, but if the webhook is lost we should NOT auto-complete; the
+ *     campaign-heartbeat cron will surface a stuck call for operator action).
+ *
+ * Pairs with findNextNumber (which only returns numbers eligible RIGHT NOW).
+ * Used by start route, freeswitch chain-next, and scheduler cron to avoid
+ * prematurely completing a campaign whose only remaining work is queued retries
+ * or an in-flight call.
+ *
+ * Name kept (rather than renamed to e.g. hasOpenWork) for diff-history clarity;
+ * the in_progress branch is a defensive expansion documented inline.
+ */
+export async function hasPendingRetry(campaignId: string): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+
+  // (a) pending_retry numbers waiting for their retry window
+  const { count: retryCount } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("outcome", "pending_retry")
+    .gt("next_attempt_at", nowIso);
+  if ((retryCount ?? 0) > 0) return true;
+
+  // (b) in_progress numbers (defensive against lost terminal webhook)
+  const { count: inProgressCount } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("outcome", "in_progress");
+  return (inProgressCount ?? 0) > 0;
+}
+
+/**
  * Find the next eligible number in a campaign:
  * - outcome = 'pending' or 'pending_retry'
  * - not suppressed
@@ -197,16 +233,59 @@ export async function fireCall(
       .update({ provider_call_id: providerCallId })
       .eq("id", callRow.id);
   } catch (err) {
-    // Provider failed — mark the call as failed so we don't leave it dangling
-    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    // Provider failed — handle it the same way voice-status would have, since
+    // we never reach voice-status when the provider call itself errors:
+    //   - Mark calls_v2 row 'failed' so it stops counting as in-flight.
+    //   - Increment attempt_count and apply max_attempts logic. Without this,
+    //     a sustained provider outage + the cron resume sweep would loop on
+    //     the same number forever (attempt_count never hits max → never goes
+    //     terminal → cron keeps re-firing every retry_interval_minutes).
+    //   - Use campaign.retry_interval_minutes (default 90) for the cooldown
+    //     instead of a hardcoded 5-min value that would burn cycles fast.
+    const { data: numRow } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("attempt_count")
+      .eq("id", campaignNumber.id)
+      .single();
+    const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
+
+    const { data: cfg } = await supabaseAdmin
+      .from("campaigns_v2")
+      .select("retry_interval_minutes, max_attempts")
+      .eq("id", campaignId)
+      .single();
+    const retryMinutes = cfg?.retry_interval_minutes ?? 90;
+    const maxAttempts = cfg?.max_attempts ?? 3;
+
     await supabaseAdmin
       .from("calls_v2")
       .update({ status: "failed", ended_at: new Date().toISOString() })
       .eq("id", callRow.id);
-    await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .update({ outcome: "pending_retry", next_attempt_at: retryAt })
-      .eq("id", campaignNumber.id);
+
+    if (newAttemptCount >= maxAttempts) {
+      // Exhausted via provider failures → terminal `unreached`. Mirrors the
+      // voice-status webhook's terminal-outcome logic so retry-loop behavior
+      // is identical regardless of whether voice-status fires or not.
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({
+          attempt_count: newAttemptCount,
+          last_attempted_at: new Date().toISOString(),
+          outcome: "unreached",
+        })
+        .eq("id", campaignNumber.id);
+    } else {
+      const retryAt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({
+          attempt_count: newAttemptCount,
+          last_attempted_at: new Date().toISOString(),
+          next_attempt_at: retryAt,
+          outcome: "pending_retry",
+        })
+        .eq("id", campaignNumber.id);
+    }
     throw err;
   }
 

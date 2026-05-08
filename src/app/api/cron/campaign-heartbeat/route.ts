@@ -54,9 +54,12 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Find all running campaigns ──
+  // Pull retry_interval_minutes too — used to size the imminent-retry window
+  // per campaign so heartbeat doesn't false-flag during the early portion of
+  // a 90-min wait (or longer if operator configured a different interval).
   const { data: running, error: runningErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, updated_at")
+    .select("id, name, updated_at, retry_interval_minutes")
     .eq("status", "running");
 
   if (runningErr) {
@@ -112,18 +115,31 @@ export async function GET(request: NextRequest) {
     if (!pendingCount || pendingCount === 0) continue; // no work left — just hasn't auto-completed
 
     // Pending-retry awareness (compliance / noise-reduction):
-    // Per project_clone_voice_settings.md, retry_interval_minutes default is
-    // 90. A campaign whose remaining work is all pending_retry awaiting their
-    // next attempt would be flagged "stuck" by the previous heuristic — but
-    // it's actually HEALTHY (just waiting). Check if any pending_retry rows
-    // are scheduled within the next hour. If yes, this campaign is healthy.
-    const oneHourFromNow = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    // A campaign whose remaining work is all pending_retry awaiting their next
+    // attempt would be flagged "stuck" by the previous heuristic — but it's
+    // actually HEALTHY (just waiting). Lookahead window MUST be at least the
+    // campaign's retry_interval_minutes; otherwise we false-flag the early
+    // portion of a 90-min wait (heartbeat fires every 30min, retry interval
+    // is 90min — without sizing the lookahead by retry_interval, the first
+    // 60min of every wait would alarm).
+    // Type-guard against schema corruption: the column is INT NOT NULL DEFAULT 90,
+    // but defensive programming for null / NaN / string-typed values means we
+    // guarantee a numeric value before Math.max. Otherwise `Math.max(NaN, 60)`
+    // returns NaN → `new Date(NaN)` → `.toISOString()` throws → entire
+    // heartbeat tick crashes for ALL campaigns.
+    const retryRaw = c.retry_interval_minutes;
+    const retryInterval =
+      typeof retryRaw === "number" && Number.isFinite(retryRaw) && retryRaw > 0
+        ? retryRaw
+        : 90;
+    const lookaheadMin = Math.max(retryInterval, 60);
+    const lookaheadAt = new Date(Date.now() + lookaheadMin * 60 * 1000).toISOString();
     const { count: imminentRetryCount, error: retryErr } = await supabaseAdmin
       .from("campaign_numbers_v2")
       .select("id", { count: "exact", head: true })
       .eq("campaign_id", campaignId)
       .eq("outcome", "pending_retry")
-      .lte("next_attempt_at", oneHourFromNow);
+      .lte("next_attempt_at", lookaheadAt);
 
     if (retryErr) {
       console.error(`[campaign-heartbeat] retry-count error for ${campaignId}:`, retryErr);
@@ -132,7 +148,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (imminentRetryCount && imminentRetryCount > 0) {
-      // Healthy: a retry will fire within the hour; not stuck
+      // Healthy: a retry will fire within the lookahead window; not stuck
       continue;
     }
 

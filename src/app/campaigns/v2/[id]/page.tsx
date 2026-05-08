@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
@@ -82,6 +82,58 @@ function SmsDetailRow({ sms }: { sms: Row }) {
   );
 }
 
+// Outcome ordering, labels, and badge classes for the per-campaign breakdown row.
+// Order = the natural lifecycle progression: not yet → in flight → terminal states.
+const OUTCOME_DISPLAY_ORDER = [
+  "pending", "in_progress", "pending_retry",
+  "sent_sms", "not_interested", "declined_offer", "wrong_number",
+  "unreached", "suppressed",
+] as const;
+
+const OUTCOME_LABEL: Record<string, string> = {
+  pending: "Pending",
+  in_progress: "Dialing",
+  pending_retry: "Awaiting retry",
+  sent_sms: "SMS sent",
+  not_interested: "Not interested",
+  declined_offer: "Declined",
+  wrong_number: "Wrong number",
+  unreached: "Unreached",
+  suppressed: "Suppressed",
+};
+
+const OUTCOME_BADGE_CLASS: Record<string, string> = {
+  pending: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
+  in_progress: "bg-blue-500/15 text-blue-400 border border-blue-500/25",
+  pending_retry: "bg-amber-500/15 text-amber-400 border border-amber-500/25",
+  sent_sms: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25",
+  not_interested: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
+  declined_offer: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
+  wrong_number: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
+  unreached: "bg-red-500/15 text-red-400 border border-red-500/25",
+  suppressed: "bg-purple-500/15 text-purple-400 border border-purple-500/25",
+};
+
+/**
+ * Format a timestamp relative to now. Past by default; pass `future: true`
+ * for "in 1h 18m" style output. Returns "—" for null, "just now"/"due now"
+ * for negative diffs.
+ */
+function formatRelative(ts: number | null, opts?: { future?: boolean }): string {
+  if (!ts) return "—";
+  const diff = opts?.future ? ts - Date.now() : Date.now() - ts;
+  if (diff < 0) return opts?.future ? "due now" : "just now";
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s${opts?.future ? "" : " ago"}`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m${opts?.future ? "" : " ago"}`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  if (hr < 24) return `${hr}h ${remMin}m${opts?.future ? "" : " ago"}`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ${hr % 24}h${opts?.future ? "" : " ago"}`;
+}
+
 type Tab = "numbers" | "calls" | "settings";
 
 export default function CampaignV2DetailPage() {
@@ -155,6 +207,49 @@ export default function CampaignV2DetailPage() {
     const interval = setInterval(tick, intervalMs);
     return () => clearInterval(interval);
   }, [campaign?.status, campaign?.start_at, refreshData]);
+
+  // Derived live stats for the header line: when did we start, how long
+  // since last call, when's the next retry due, total calls fired, calls
+  // currently in flight. Recomputes when calls/numbers state updates
+  // (i.e., on every successful poll).
+  const liveStats = useMemo(() => {
+    const inFlightStatuses = new Set(["initiated", "ringing", "in_progress", "answered"]);
+    let firstCallAt: number | null = null;
+    let lastCallEndedAt: number | null = null;
+    let inFlightCount = 0;
+
+    for (const c of calls) {
+      const created = c.created_at ? new Date(c.created_at as string).getTime() : 0;
+      if (created > 0 && (firstCallAt === null || created < firstCallAt)) firstCallAt = created;
+
+      if (inFlightStatuses.has(c.status as string)) {
+        inFlightCount++;
+      } else if (c.ended_at) {
+        const ended = new Date(c.ended_at as string).getTime();
+        if (lastCallEndedAt === null || ended > lastCallEndedAt) lastCallEndedAt = ended;
+      }
+    }
+
+    let nextRetryAt: number | null = null;
+    for (const n of numbers) {
+      if (n.outcome === "pending_retry" && n.next_attempt_at) {
+        const t = new Date(n.next_attempt_at as string).getTime();
+        if (t > Date.now() && (nextRetryAt === null || t < nextRetryAt)) nextRetryAt = t;
+      }
+    }
+
+    return { firstCallAt, lastCallEndedAt, inFlightCount, nextRetryAt, callsFired: calls.length };
+  }, [calls, numbers]);
+
+  // Per-outcome counts for the breakdown badge row above the numbers table.
+  const outcomeBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const n of numbers) {
+      const o = (n.outcome as string) || "pending";
+      counts[o] = (counts[o] ?? 0) + 1;
+    }
+    return counts;
+  }, [numbers]);
 
   async function handleStart() {
     if (!id) return;
@@ -246,6 +341,29 @@ export default function CampaignV2DetailPage() {
                   return display ? `${display} · ${campaign.timezone}` : (campaign.timezone as string);
                 })()}
               </p>
+              {(liveStats.firstCallAt || liveStats.callsFired > 0 || liveStats.nextRetryAt) && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-3)] mt-1.5">
+                  {liveStats.firstCallAt && (
+                    <span>Started {formatRelative(liveStats.firstCallAt)}</span>
+                  )}
+                  {liveStats.inFlightCount > 0 ? (
+                    <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Live call
+                    </span>
+                  ) : liveStats.lastCallEndedAt ? (
+                    <span>Idle {formatRelative(liveStats.lastCallEndedAt)}</span>
+                  ) : null}
+                  {liveStats.nextRetryAt && (
+                    <span>Next retry in {formatRelative(liveStats.nextRetryAt, { future: true })}</span>
+                  )}
+                  {liveStats.callsFired > 0 && (
+                    <span>
+                      {liveStats.callsFired} call{liveStats.callsFired !== 1 ? "s" : ""} fired
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -322,42 +440,56 @@ export default function CampaignV2DetailPage() {
           numbers.length === 0 ? (
             <div className="text-center py-12 text-sm text-[var(--text-3)]">No numbers in this campaign.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
-                  <th className="text-left px-5 py-3 font-semibold">Phone</th>
-                  <th className="text-left px-5 py-3 font-semibold">Outcome</th>
-                  <th className="text-left px-5 py-3 font-semibold">Attempts</th>
-                  <th className="text-left px-5 py-3 font-semibold">SMS</th>
-                  <th className="text-left px-5 py-3 font-semibold">Last Attempted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {numbers.map((n) => {
-                  const phone = n.phone_e164 as string;
-                  const sms = smsByPhone.get(phone);
-                  const isExpanded = expandedSms === phone;
-                  return (
-                    <React.Fragment key={n.id as string}>
-                      <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
-                        <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phone}</td>
-                        <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
-                        <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
-                        <td className="px-5 py-3">
-                          <SmsStatusCell
-                            sms={sms}
-                            expanded={isExpanded}
-                            onToggle={() => setExpandedSms(isExpanded ? null : phone)}
-                          />
-                        </td>
-                        <td className="px-5 py-3 text-[var(--text-3)]">{n.last_attempted_at ? new Date(n.last_attempted_at as string).toLocaleString() : "—"}</td>
-                      </tr>
-                      {isExpanded && sms && <SmsDetailRow sms={sms} />}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+            <>
+              <div className="px-5 py-3 border-b border-[var(--border)] flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-[var(--text-3)] uppercase tracking-wide font-semibold mr-1">Breakdown</span>
+                {OUTCOME_DISPLAY_ORDER.filter((o) => (outcomeBreakdown[o] ?? 0) > 0).map((o) => (
+                  <span
+                    key={o}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${OUTCOME_BADGE_CLASS[o] ?? "bg-gray-500/15 text-gray-400 border border-gray-500/25"}`}
+                  >
+                    <span className="font-semibold">{outcomeBreakdown[o]}</span>
+                    <span>{OUTCOME_LABEL[o] ?? o}</span>
+                  </span>
+                ))}
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
+                    <th className="text-left px-5 py-3 font-semibold">Phone</th>
+                    <th className="text-left px-5 py-3 font-semibold">Outcome</th>
+                    <th className="text-left px-5 py-3 font-semibold">Attempts</th>
+                    <th className="text-left px-5 py-3 font-semibold">SMS</th>
+                    <th className="text-left px-5 py-3 font-semibold">Last Attempted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {numbers.map((n) => {
+                    const phone = n.phone_e164 as string;
+                    const sms = smsByPhone.get(phone);
+                    const isExpanded = expandedSms === phone;
+                    return (
+                      <React.Fragment key={n.id as string}>
+                        <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
+                          <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phone}</td>
+                          <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
+                          <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
+                          <td className="px-5 py-3">
+                            <SmsStatusCell
+                              sms={sms}
+                              expanded={isExpanded}
+                              onToggle={() => setExpandedSms(isExpanded ? null : phone)}
+                            />
+                          </td>
+                          <td className="px-5 py-3 text-[var(--text-3)]">{n.last_attempted_at ? new Date(n.last_attempted_at as string).toLocaleString() : "—"}</td>
+                        </tr>
+                        {isExpanded && sms && <SmsDetailRow sms={sms} />}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
           )
         )}
 
