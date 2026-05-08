@@ -504,11 +504,19 @@ export async function POST(request: NextRequest) {
     .eq("id", callRow.id);
 
   // ── Update campaign_numbers_v2 outcome ──
+  // Adversarial review C2 (2026-05-08): guard against late Vapi end-of-call
+  // stomping a sweeper-resolved state or a fresh retry's in_progress. Only
+  // update outcome if the number is still in_progress (the state set by the
+  // most recent fireCall and not yet resolved by sweeper / chain-next).
+  // Worst case: a late Vapi outcome >5min after call end is silently dropped,
+  // which is acceptable — at that latency Vapi is effectively broken anyway,
+  // and the sweeper has already given the customer a benefit-of-doubt retry.
   const outcome = optedOut ? "declined_offer" : goalReached ? "sent_sms" : "not_interested";
   await supabaseAdmin
     .from("campaign_numbers_v2")
     .update({ outcome })
-    .eq("id", callRow.campaign_number_id);
+    .eq("id", callRow.campaign_number_id)
+    .eq("outcome", "in_progress");
 
   // ── Auto-suppress on opt-out (Manifesto: suppression checked before every dial) ──
   if (optedOut) {
