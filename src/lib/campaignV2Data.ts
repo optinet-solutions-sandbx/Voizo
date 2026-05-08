@@ -12,6 +12,7 @@ export interface CampaignV2CreateInput {
   vapiAssistantId: string;
   vapiAssistantName?: string;
   vapiSipUri?: string;
+  vapiPoolSlotId?: string; // SIP pool slot id when USE_SIP_POOL=true; null/undefined for legacy per-campaign flow
   timezone: string;
   startAt?: string | null;
   endAt?: string | null;
@@ -61,6 +62,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       vapi_assistant_id: input.vapiAssistantId,
       vapi_assistant_name: input.vapiAssistantName || null,
       vapi_sip_uri: input.vapiSipUri || null,
+      vapi_pool_slot_id: input.vapiPoolSlotId || null,
       system_prompt: input.systemPrompt,
       timezone: input.timezone,
       start_at: input.startAt || null,
@@ -76,6 +78,27 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
     .single();
 
   if (campaignError) throw campaignError;
+
+  // ── Back-link the leased pool slot to this campaign ──
+  // The slot was already leased (assistant_id set) by clone-assistant before
+  // this function ran. Now that the campaign row exists, set current_campaign_id
+  // for operator observability and to satisfy the partial unique index.
+  if (input.vapiPoolSlotId) {
+    const { linkSlot } = await import("./vapi/sipPool");
+    const linked = await linkSlot(supabase, {
+      slotId: input.vapiPoolSlotId,
+      campaignId: campaign.id,
+      expectedAssistantId: input.vapiAssistantId,
+    });
+    if (!linked) {
+      // Defensive: if the RPC refused (slot not leased to this assistant),
+      // log and continue. Heartbeat reconciliation will surface the orphan.
+      console.warn(
+        `[createCampaignV2] linkSlot returned false for slot ${input.vapiPoolSlotId} ` +
+        `(campaign ${campaign.id}, assistant ${input.vapiAssistantId})`,
+      );
+    }
+  }
 
   const campaignRows = input.numbers.map((phone) => ({
     campaign_id: campaign.id,
