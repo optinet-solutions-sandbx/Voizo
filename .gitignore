@@ -44,6 +44,9 @@ next-env.d.ts
 .vercel
 .gitnexus
 
+# sandbox / phase-0 verification artifacts (raw Vapi API response captures)
+.sandbox-tmp/
+
 # internal project docs (not for repo)
 .agent/
 docs/
