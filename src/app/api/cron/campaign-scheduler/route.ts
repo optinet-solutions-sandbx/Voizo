@@ -246,11 +246,11 @@ export async function GET(request: NextRequest) {
       results.push({ id: campaignId, name: campaignName, result: "started" });
     } catch (err) {
       console.error(`[campaign-scheduler] ${campaignName}: fireCall failed:`, err);
-      // Don't leave campaign running with no active call
-      await supabaseAdmin
-        .from("campaigns_v2")
-        .update({ status: "paused" })
-        .eq("id", campaignId);
+      // Match start route + chain-next pattern: don't pause on transient failure.
+      // fireCall's catch already flipped the failed number to pending_retry (or
+      // unreached at max). The next cron tick (60s) will pick up the next
+      // eligible number via the resume sweep. Pause-on-failure was redundant
+      // once B2 landed and inconsistent with manual-Start behavior.
       results.push({ id: campaignId, name: campaignName, result: "fire_failed" });
     }
   }
