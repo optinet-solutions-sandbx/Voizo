@@ -140,12 +140,23 @@ export async function POST(
     });
   } catch (err) {
     console.error("Failed to fire call:", err);
-    // Don't leave campaign in "running" with no active call
-    await supabaseAdmin
-      .from("campaigns_v2")
-      .update({ status: "paused" })
-      .eq("id", id);
-    return NextResponse.json({ error: "Failed to start dialing. Campaign paused." }, { status: 500 });
+    // Match the chain-next webhook pattern: log + return without pausing.
+    // With B2 (cron resume sweep) in place, pause-on-failure is redundant —
+    // the cron picks up the next eligible number on its next tick (~60s).
+    // fireCall's catch path already flipped the failed number to pending_retry
+    // (or unreached at max_attempts). Pausing here would force unnecessary
+    // operator intervention on every transient originate-shim hiccup.
+    //
+    // Safety stack remains: max_attempts cap, suppression list checked per
+    // dial, scheduler resume sweep self-heals to `completed` when truly done.
+    // Operator can manually Pause if they spot runaway in the dashboard.
+    return NextResponse.json(
+      {
+        error: "Initial dial failed; cron will resume on the next tick.",
+        waiting: true,
+      },
+      { status: 500 },
+    );
   }
 }
 
