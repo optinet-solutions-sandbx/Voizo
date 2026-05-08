@@ -43,6 +43,138 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // ── Stale in_progress sweeper ──
+  // Numbers stuck at outcome='in_progress' fall into 2 categories:
+  //   (a) Latest calls_v2 row is terminal AND ended >5 min ago — Vapi end-of-call
+  //       was lost or never fired. Resolve to pending_retry (or unreached at max).
+  //   (b) NO calls_v2 row at all — fireCall failed AT the INSERT step before any
+  //       provider call was made. No actual dial happened, so revert to pending
+  //       WITHOUT bumping attempt_count, letting the next cron pick it up cleanly.
+  //
+  // Per Voizo policy (confirmed with Maria, 2026-05-08): treat ambiguous short
+  // calls as "missed" and retry up to max_attempts. Maximizes success rate.
+  //
+  // Closes adversarial review items C3 (no-calls_v2 stuck), C4/S2 (lost Vapi
+  // webhook), and the queue-gate-blocking effect of long-stuck campaigns.
+  //
+  // Bounded:
+  //   - Only running campaigns (per-iter status check)
+  //   - .limit(50) on the candidate query
+  //   - .eq("outcome", "in_progress") guard on every UPDATE prevents stomping
+  //     late-arriving Vapi outcomes (sent_sms / not_interested / declined_offer)
+  //   - MIN_GRACE_SEC floor on next_attempt_at prevents tight-loop thrash
+  //     when retry_interval_minutes is set to a small value for testing
+  const STALE_GRACE_MS = 5 * 60 * 1000;
+  const MIN_GRACE_SEC = 60; // floor on next_attempt_at offset (defense vs retry_interval=0 testing)
+  const TERMINAL_CALL_STATUSES = ["completed", "no_answer", "busy", "failed", "canceled"];
+  const sweepCutoff = new Date(Date.now() - STALE_GRACE_MS).toISOString();
+
+  const { data: stuckCandidates, error: stuckErr } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .select("id, campaign_id, attempt_count")
+    .eq("outcome", "in_progress")
+    .limit(50);
+
+  if (stuckErr) {
+    console.error("[scheduler.sweep] stuckCandidates query failed:", stuckErr);
+    // Don't fail the whole tick — resume sweep + draft pickup still useful.
+  }
+
+  // Per-tick campaign cache: at PoC scale (queue gate=1) all stuck candidates
+  // typically share the same campaign_id, so memoizing avoids N+1 round-trips.
+  const campaignCache = new Map<string, { status: string; retry_interval_minutes: number; max_attempts: number; name: string } | null>();
+  async function getCampaign(campaignId: string) {
+    if (campaignCache.has(campaignId)) return campaignCache.get(campaignId)!;
+    const { data, error } = await supabaseAdmin
+      .from("campaigns_v2")
+      .select("status, retry_interval_minutes, max_attempts, name")
+      .eq("id", campaignId)
+      .single();
+    if (error) {
+      console.error(`[scheduler.sweep] campaign lookup failed for ${campaignId}:`, error);
+      campaignCache.set(campaignId, null);
+      return null;
+    }
+    const row = {
+      status: (data?.status as string) ?? "",
+      retry_interval_minutes: (data?.retry_interval_minutes as number) ?? 90,
+      max_attempts: (data?.max_attempts as number) ?? 3,
+      name: (data?.name as string) ?? campaignId,
+    };
+    campaignCache.set(campaignId, row);
+    return row;
+  }
+
+  const sweeperResults: Array<{ id: string; result: string }> = [];
+
+  for (const n of stuckCandidates ?? []) {
+    const numberId = n.id as string;
+    const campaignId = n.campaign_id as string;
+
+    const campaign = await getCampaign(campaignId);
+    if (!campaign || campaign.status !== "running") continue;
+
+    // Latest call lookup
+    const { data: latestCall, error: callErr } = await supabaseAdmin
+      .from("calls_v2")
+      .select("status, ended_at")
+      .eq("campaign_number_id", numberId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (callErr) {
+      console.error(`[scheduler.sweep] latestCall lookup failed for ${numberId}:`, callErr);
+      continue;
+    }
+
+    // Branch (b): no calls_v2 row at all. fireCall failed at INSERT step before
+    // any provider call. No actual dial happened — revert to pending so it can
+    // be cleanly re-attempted by the next cron tick or chain-next.
+    if (!latestCall) {
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({ outcome: "pending", next_attempt_at: null })
+        .eq("id", numberId)
+        .eq("outcome", "in_progress");
+      console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → pending (no calls_v2 row — fireCall failed pre-INSERT)`);
+      sweeperResults.push({ id: numberId, result: "reverted_to_pending" });
+      continue;
+    }
+
+    // Branch (a): latest call is still in flight → chain-next will handle.
+    if (!TERMINAL_CALL_STATUSES.includes(latestCall.status as string)) continue;
+    // Branch (a): latest call ended within grace window → wait for Vapi end-of-call.
+    if (!latestCall.ended_at || (latestCall.ended_at as string) > sweepCutoff) continue;
+
+    // Branch (a) resolution: at max attempts → unreached; else → pending_retry.
+    const attempts = (n.attempt_count as number) ?? 0;
+    const maxAttempts = campaign.max_attempts;
+    const retryMin = campaign.retry_interval_minutes;
+
+    if (attempts >= maxAttempts) {
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({ outcome: "unreached" })
+        .eq("id", numberId)
+        .eq("outcome", "in_progress");
+      console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → unreached (max attempts)`);
+      sweeperResults.push({ id: numberId, result: "unreached_exhausted" });
+    } else {
+      // Floor next_attempt_at at now + MIN_GRACE_SEC so a same-tick resume sweep
+      // can't fire a fresh retry that races a still-in-flight late Vapi webhook.
+      const retryMs = Math.max(retryMin * 60 * 1000, MIN_GRACE_SEC * 1000);
+      const retryAt = new Date(Date.now() + retryMs).toISOString();
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({ outcome: "pending_retry", next_attempt_at: retryAt })
+        .eq("id", numberId)
+        .eq("outcome", "in_progress");
+      console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → pending_retry @ ${retryAt}`);
+      sweeperResults.push({ id: numberId, result: "pending_retry" });
+    }
+  }
+
   // ── Resume idle running campaigns where retries are due (B2) ──
   // A campaign whose only remaining work is pending_retry sits idle in
   // `running` state. The chain-next webhook can't wake it (no call to chain
@@ -154,6 +286,8 @@ export async function GET(request: NextRequest) {
       reason: "another campaign currently running — deferring to next tick",
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
+      sweepResolved: sweeperResults.length,
+      sweeperResults,
     });
   }
 
@@ -179,6 +313,8 @@ export async function GET(request: NextRequest) {
       started: 0,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
+      sweepResolved: sweeperResults.length,
+      sweeperResults,
     });
   }
 
@@ -260,5 +396,7 @@ export async function GET(request: NextRequest) {
     results,
     resumed: resumeResults.filter((r) => r.result === "resumed").length,
     resumeResults,
+    sweepResolved: sweeperResults.length,
+    sweeperResults,
   });
 }
