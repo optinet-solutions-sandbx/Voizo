@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -226,6 +226,54 @@ export default function CampaignsPage() {
       }
     })();
   }, []);
+
+  // Status-only poll — light (single select on campaigns_v2 only).
+  // Runs at 30s when ≥1 campaign is in a non-terminal state. Updates only the
+  // status + start_at fields and drops campaigns deleted server-side. Heavy
+  // aggregates (numbers/calls/charts) stay mount-only by design — operators
+  // glance at badges here, then click into the detail page (which polls
+  // numbers/calls live every 5s) for real-time stats. New campaigns created
+  // from another tab won't appear until reload — same as before this change.
+  // Polls only when the tab is visible and skips overlapping requests.
+  const hasActiveCampaign = useMemo(
+    () => campaigns.some((c) => {
+      const s = c.status as string;
+      const startAt = c.start_at as string | null | undefined;
+      if (s === "running" || s === "paused" || s === "scheduled") return true;
+      if (s === "draft" && startAt) return true;
+      return false;
+    }),
+    [campaigns],
+  );
+
+  const listPollInFlightRef = useRef(false);
+  useEffect(() => {
+    if (!hasActiveCampaign) return;
+    const tick = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (listPollInFlightRef.current) return;
+      listPollInFlightRef.current = true;
+      try {
+        const { data } = await supabase
+          .from("campaigns_v2")
+          .select("id, status, start_at")
+          .order("created_at", { ascending: false });
+        if (!data) return;
+        const freshIds = new Set(data.map((d) => d.id));
+        setCampaigns((prev) => {
+          const surviving = prev.filter((c) => freshIds.has(c.id as string));
+          return surviving.map((c) => {
+            const fresh = data.find((d) => d.id === (c.id as string));
+            return fresh ? { ...c, status: fresh.status, start_at: fresh.start_at } : c;
+          });
+        });
+      } finally {
+        listPollInFlightRef.current = false;
+      }
+    };
+    const interval = setInterval(tick, 30000);
+    return () => clearInterval(interval);
+  }, [hasActiveCampaign]);
 
   const totals = useMemo(() => {
     const vals = Object.values(campaignStats);

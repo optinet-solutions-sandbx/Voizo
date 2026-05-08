@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
@@ -129,13 +129,32 @@ export default function CampaignV2DetailPage() {
     refreshData();
   }, [refreshData]);
 
-  // Auto-refresh every 5s while campaign is running
+  // Auto-refresh while campaign is in any non-terminal state so transitions
+  // (running → paused, draft → running, etc.) are visible without a manual
+  // refresh. 5s when actively dialling, 15s while waiting/recovering.
+  // Stops on completed/archived. Drafts with no start_at don't transition
+  // autonomously, so they're skipped too. Polls only when the tab is visible
+  // and skips overlapping requests during latency spikes.
+  const pollInFlightRef = useRef(false);
   useEffect(() => {
     const status = campaign?.status as string | undefined;
-    if (status !== "running") return;
-    const interval = setInterval(refreshData, 5000);
+    const startAt = campaign?.start_at as string | null | undefined;
+    if (!status || status === "completed" || status === "archived") return;
+    if (status === "draft" && !startAt) return;
+    const intervalMs = status === "running" ? 5000 : 15000;
+    const tick = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      try {
+        await refreshData();
+      } finally {
+        pollInFlightRef.current = false;
+      }
+    };
+    const interval = setInterval(tick, intervalMs);
     return () => clearInterval(interval);
-  }, [campaign?.status, refreshData]);
+  }, [campaign?.status, campaign?.start_at, refreshData]);
 
   async function handleStart() {
     if (!id) return;
