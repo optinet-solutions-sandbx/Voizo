@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
+import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import crypto from "crypto";
 
 // FS bgapi originate takes 8-22s per call. With 60s budget and limit(2),
@@ -43,12 +43,105 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // ── Resume idle running campaigns where retries are due (B2) ──
+  // A campaign whose only remaining work is pending_retry sits idle in
+  // `running` state. The chain-next webhook can't wake it (no call to chain
+  // from), so this sweep handles it: when a retry comes due, fire the next
+  // call. Self-heals truly-done campaigns to `completed`.
+  //
+  // Bounded by:
+  //   - max_attempts (default 3) — each number caps at 3 dial attempts
+  //   - 1 fire per cron tick per campaign = 60/hr ceiling
+  //   - in-flight check — never overlaps an active call
+  //   - .limit(1) — defense-in-depth: if the queue gate is ever bypassed
+  //     (manual DB edit, race), the resume sweep still won't burn the 60s
+  //     function budget on multiple fireCall blocks of 8-22s each.
+  const { data: idleRunning, error: idleRunningErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("*")
+    .eq("status", "running")
+    .order("updated_at", { ascending: true }) // oldest first → no starvation
+    .limit(1);
+
+  if (idleRunningErr) {
+    console.error("[scheduler.resume] idleRunning query failed:", idleRunningErr);
+    // Don't fail the whole tick — let draft-pickup still run. Resumes catch up next tick.
+  }
+
+  const resumeResults: Array<{ id: string; name: string; result: string }> = [];
+
+  for (const campaign of idleRunning ?? []) {
+    const campaignId = campaign.id as string;
+    const campaignName = campaign.name as string;
+
+    // Skip if a call is in flight — chain-next will handle when it ends
+    const { count: inFlight } = await supabaseAdmin
+      .from("calls_v2")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .in("status", ["initiated", "ringing", "in_progress", "answered"]);
+
+    if (inFlight && inFlight > 0) continue;
+
+    // Call window check (Manifesto §6: every dial). Outside-window → flip to
+    // `paused` for parity with the chain-next webhook (voice-status/route.ts).
+    // Without this, the campaign would silently sit in `running` for hours
+    // until the window opens — confusing operators and blocking the queue gate.
+    const cw = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
+    const tz = campaign.timezone as string;
+    if (cw && cw.length > 0 && !isWithinCallWindow(cw, tz)) {
+      await supabaseAdmin
+        .from("campaigns_v2")
+        .update({ status: "paused" })
+        .eq("id", campaignId)
+        .eq("status", "running");
+      resumeResults.push({ id: campaignId, name: campaignName, result: "paused_outside_window" });
+      continue;
+    }
+
+    const next = await findNextNumber(campaignId);
+    if (!next) {
+      // Nothing due AND nothing waiting → genuinely complete (self-heal).
+      // Conditional WHERE status='running' prevents stomping a concurrent
+      // operator Pause action.
+      if (!(await hasPendingRetry(campaignId))) {
+        await supabaseAdmin
+          .from("campaigns_v2")
+          .update({ status: "completed" })
+          .eq("id", campaignId)
+          .eq("status", "running");
+        resumeResults.push({ id: campaignId, name: campaignName, result: "auto_completed" });
+      }
+      continue;
+    }
+
+    try {
+      const host = request.headers.get("host") || "voizo-eight.vercel.app";
+      const proto = request.headers.get("x-forwarded-proto") || "https";
+      const baseUrl = `${proto}://${host}`;
+      await fireCall(
+        campaignId,
+        next,
+        campaign.vapi_assistant_id as string,
+        baseUrl,
+        (campaign.vapi_sip_uri as string) ?? undefined,
+      );
+      console.log(`[scheduler.resume] ${campaignName}: fired retry → ${next.phone_e164.slice(0, -4)}****`);
+      resumeResults.push({ id: campaignId, name: campaignName, result: "resumed" });
+    } catch (err) {
+      console.error(`[scheduler.resume] ${campaignName}: fire failed:`, err);
+      resumeResults.push({ id: campaignId, name: campaignName, result: "fire_failed" });
+    }
+  }
+
   // ── Queue gate: only one campaign runs at a time (MVP constraint) ──
   // Chris's directive 2026-05-07: avoid Vapi/SquareTalk/Mobivate concurrent-load
   // surprises by enforcing serial campaign execution. If another campaign is
   // currently running, defer this tick — the cron fires every minute and the
   // candidate campaign will be picked up once the running one completes.
   // True scaling = additional Vapi accounts or higher subscription tier (Phase 3).
+  // Note: this gate fires AFTER the resume sweep above so already-running
+  // campaigns can still advance their retries on this tick.
   const { count: runningCount } = await supabaseAdmin
     .from("campaigns_v2")
     .select("id", { count: "exact", head: true })
@@ -59,6 +152,8 @@ export async function GET(request: NextRequest) {
       started: 0,
       queued: true,
       reason: "another campaign currently running — deferring to next tick",
+      resumed: resumeResults.filter((r) => r.result === "resumed").length,
+      resumeResults,
     });
   }
 
@@ -80,7 +175,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (!campaigns || campaigns.length === 0) {
-    return NextResponse.json({ started: 0 });
+    return NextResponse.json({
+      started: 0,
+      resumed: resumeResults.filter((r) => r.result === "resumed").length,
+      resumeResults,
+    });
   }
 
   const results: Array<{ id: string; name: string; result: string }> = [];
@@ -115,10 +214,17 @@ export async function GET(request: NextRequest) {
     // ── Find next number and fire first call ──
     const nextNumber = await findNextNumber(campaignId);
     if (!nextNumber) {
+      // No number eligible right now. If pending_retry numbers exist for the
+      // future, keep `running` so the resume sweep can fire them when due.
+      if (await hasPendingRetry(campaignId)) {
+        results.push({ id: campaignId, name: campaignName, result: "idle_waiting_retry" });
+        continue;
+      }
       await supabaseAdmin
         .from("campaigns_v2")
         .update({ status: "completed" })
-        .eq("id", campaignId);
+        .eq("id", campaignId)
+        .eq("status", "running");
       results.push({ id: campaignId, name: campaignName, result: "no_eligible_numbers" });
       continue;
     }
@@ -149,5 +255,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ started: results.filter((r) => r.result === "started").length, results });
+  return NextResponse.json({
+    started: results.filter((r) => r.result === "started").length,
+    results,
+    resumed: resumeResults.filter((r) => r.result === "resumed").length,
+    resumeResults,
+  });
 }

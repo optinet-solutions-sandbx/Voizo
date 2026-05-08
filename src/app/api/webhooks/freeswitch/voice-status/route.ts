@@ -18,7 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
-import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
+import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 
 // Chain-next dial in this handler calls the originate-shim, which blocks 8-22s
 // on FS bgapi (memory project_freeswitch_bgapi_slow). Default Vercel timeout
@@ -203,10 +203,17 @@ export async function POST(request: NextRequest) {
 
   const nextNumber = await findNextNumber(campaignId);
   if (!nextNumber) {
+    // No number eligible right now. If retries are queued for the future,
+    // stay `running` — the scheduler cron's resume sweep will fire them when
+    // their windows arrive. Only mark `completed` when truly nothing remains.
+    if (await hasPendingRetry(campaignId)) {
+      return NextResponse.json({ received: true, next: "idle — waiting for retry window" });
+    }
     await supabaseAdmin
       .from("campaigns_v2")
       .update({ status: "completed" })
-      .eq("id", campaignId);
+      .eq("id", campaignId)
+      .eq("status", "running");
     return NextResponse.json({ received: true, next: "campaign completed" });
   }
 
