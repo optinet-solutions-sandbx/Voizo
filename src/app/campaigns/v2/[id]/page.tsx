@@ -341,20 +341,25 @@ export default function CampaignV2DetailPage() {
                   return display ? `${display} · ${campaign.timezone}` : (campaign.timezone as string);
                 })()}
               </p>
-              {(liveStats.firstCallAt || liveStats.callsFired > 0 || liveStats.nextRetryAt) && (
+              {(liveStats.firstCallAt || liveStats.callsFired > 0) && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-3)] mt-1.5">
                   {liveStats.firstCallAt && (
                     <span>Started {formatRelative(liveStats.firstCallAt)}</span>
                   )}
-                  {liveStats.inFlightCount > 0 ? (
+                  {/* Live operational indicators (Live call / Idle / Next retry) only
+                      apply while the campaign is `running` — for completed/paused/
+                      archived they're misleading. The status badge above already
+                      conveys the non-running state; pure historical facts (Started,
+                      N calls fired) stay visible always. */}
+                  {status === "running" && liveStats.inFlightCount > 0 ? (
                     <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       Live call
                     </span>
-                  ) : liveStats.lastCallEndedAt ? (
+                  ) : status === "running" && liveStats.lastCallEndedAt ? (
                     <span>Idle {formatRelative(liveStats.lastCallEndedAt)}</span>
                   ) : null}
-                  {liveStats.nextRetryAt && (
+                  {status === "running" && liveStats.nextRetryAt && (
                     <span>Next retry in {formatRelative(liveStats.nextRetryAt, { future: true })}</span>
                   )}
                   {liveStats.callsFired > 0 && (
