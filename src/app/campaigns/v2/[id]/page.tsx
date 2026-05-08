@@ -255,9 +255,24 @@ export default function CampaignV2DetailPage() {
     if (!id) return;
     setActing(true);
     setActionError(null);
+
+    // Optimistic update: flip the badge to `running` immediately so the UI
+    // reflects the intent while the server-side fireCall blocks on the
+    // FreeSWITCH bgapi (8-22s per memory project_freeswitch_bgapi_slow).
+    // Without this, the dashboard appears frozen for the full bgapi window
+    // even though the customer's phone is already ringing. We snapshot the
+    // previous status so we can revert cleanly if the server rejects.
+    const prevStatus = campaign?.status as string | undefined;
+    setCampaign((prev) => (prev ? { ...prev, status: "running" } : prev));
+
     try {
       const res = await fetch(`/api/campaigns-v2/${id}/start`, { method: "POST" });
       if (!res.ok) {
+        // Revert optimistic update so the badge reflects reality (queue gate
+        // hit, schedule guard, outside call window, etc.).
+        setCampaign((prev) =>
+          prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+        );
         const body = await res.json().catch(() => ({}));
         setActionError(
           typeof body.error === "string"
@@ -266,8 +281,15 @@ export default function CampaignV2DetailPage() {
         );
         return;
       }
-      setCampaign((prev) => prev ? { ...prev, status: "running" } : prev);
+      // Server accepted. Pull the fresh campaign + calls + numbers state so
+      // the live status line ("Started just now · Live call") populates
+      // immediately without waiting for the next 5s polling tick.
+      await refreshData();
     } catch (err) {
+      // Network error → revert optimistic update too
+      setCampaign((prev) =>
+        prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+      );
       console.error("Start failed:", err);
       setActionError(err instanceof Error ? err.message : "Failed to start campaign.");
     } finally {
