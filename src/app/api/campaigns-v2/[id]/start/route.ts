@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { findNextNumber, fireCall, isWithinCallWindow } from "@/lib/dialer";
+import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 
 // FreeSWITCH bgapi originate callback fires 8-22s after the command is sent on
 // this box (memory project_freeswitch_bgapi_slow). The originate-shim's own
@@ -111,10 +111,21 @@ export async function POST(
   // Find next eligible number
   const nextNumber = await findNextNumber(id);
   if (!nextNumber) {
+    // No number eligible RIGHT NOW. If pending_retry numbers exist with future
+    // next_attempt_at, the campaign is idle-waiting for the retry window —
+    // keep it `running` so the scheduler cron can advance it when a retry
+    // comes due. Only mark `completed` when there's truly nothing left.
+    if (await hasPendingRetry(id)) {
+      return NextResponse.json({
+        message: "Campaign resumed. Idle-waiting for next retry window.",
+        waiting: true,
+      });
+    }
     await supabaseAdmin
       .from("campaigns_v2")
       .update({ status: "completed" })
-      .eq("id", id);
+      .eq("id", id)
+      .eq("status", "running");
     return NextResponse.json({ message: "No eligible numbers to dial. Campaign completed." });
   }
 
