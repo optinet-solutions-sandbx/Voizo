@@ -69,10 +69,6 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       sms_enabled: input.smsEnabled,
       sms_template: input.smsTemplate || null,
       sms_on_goal_reached_only: input.smsOnGoalReachedOnly ?? true,
-      // TEMP 2026-05-08: Eva is testing the redial mechanism today. 90-min
-      // default cycle is too long to observe within a shift. REVERT this line
-      // (delete it) at end of Jas's shift to restore the schema default of 90.
-      retry_interval_minutes: 10,
       status: "draft",
       created_by: input.createdBy || null,
     })
