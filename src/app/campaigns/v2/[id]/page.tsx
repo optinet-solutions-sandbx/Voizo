@@ -4,7 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2 } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2, StopCircle, AlertTriangle } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -147,6 +147,22 @@ export default function CampaignV2DetailPage() {
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [expandedSms, setExpandedSms] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [stopResult, setStopResult] = useState<string | null>(null);
+  const cancelStopBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
+  // auto-focus the safer Cancel button (so an accidental Enter doesn't
+  // confirm the destructive action) and let Escape dismiss it.
+  useEffect(() => {
+    if (!confirmStop) return;
+    cancelStopBtnRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !acting) setConfirmStop(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmStop, acting]);
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -310,6 +326,59 @@ export default function CampaignV2DetailPage() {
     }
   }
 
+  // Emergency Stop ("kill switch"): differs from Pause in that it ALSO
+  // attempts to terminate any in-flight Vapi call immediately (not just
+  // stop new dials). Pending_retry rows on other numbers stay queued for
+  // resume. Backend at /api/campaigns-v2/[id]/stop handles the atomic flip
+  // + best-effort Vapi DELETE. UI follows handleStart's optimistic pattern.
+  async function handleStop() {
+    if (!id) return;
+    setConfirmStop(false);
+    setActing(true);
+    setActionError(null);
+    setStopResult(null);
+
+    const prevStatus = campaign?.status as string | undefined;
+    // Optimistic: flip badge to paused immediately so UI feels responsive
+    setCampaign((prev) => (prev ? { ...prev, status: "paused" } : prev));
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/stop`, { method: "POST" });
+      if (!res.ok) {
+        // Revert optimistic update if backend rejected
+        setCampaign((prev) =>
+          prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+        );
+        const body = await res.json().catch(() => ({}));
+        setActionError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to stop campaign (${res.status}).`,
+        );
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      const inFlight = body?.inFlightCount ?? 0;
+      // Honest copy: we stopped the queue, but in-flight calls end naturally.
+      // Don't promise "terminated" when the live audio session is still
+      // unwinding for ~60s. (Phase 1 follow-up will wire actual termination.)
+      setStopResult(
+        inFlight > 0
+          ? `Stopped queueing new calls. ${inFlight} call${inFlight !== 1 ? "s" : ""} currently in progress will end naturally within ~60 seconds.`
+          : "Stopped queueing new calls. No calls were in flight.",
+      );
+      await refreshData();
+    } catch (err) {
+      setCampaign((prev) =>
+        prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+      );
+      console.error("Stop failed:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to stop campaign.");
+    } finally {
+      setActing(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-4 sm:p-6 max-w-6xl mx-auto flex items-center justify-center py-24 text-[var(--text-3)]">
@@ -404,13 +473,27 @@ export default function CampaignV2DetailPage() {
               </button>
             )}
             {status === "running" && (
-              <button
-                onClick={handlePause}
-                disabled={acting}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-yellow-600 hover:bg-yellow-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
-              >
-                <Pause size={15} /> Pause
-              </button>
+              <>
+                <button
+                  onClick={handlePause}
+                  disabled={acting}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-yellow-600 hover:bg-yellow-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                >
+                  <Pause size={15} /> Pause
+                </button>
+                {/* Thin divider — visually separates the soft action (Pause)
+                    from the destructive emergency action (Stop). Helps prevent
+                    misclicks in a panic moment. */}
+                <span aria-hidden className="w-px h-6 bg-[var(--border)]" />
+                <button
+                  onClick={() => setConfirmStop(true)}
+                  disabled={acting}
+                  title="Emergency stop — stops queueing new calls; any in-flight call ends naturally within ~60s"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                >
+                  <StopCircle size={15} /> Stop
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -425,6 +508,71 @@ export default function CampaignV2DetailPage() {
       {actionError && (
         <div className="mb-4 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
           {actionError}
+        </div>
+      )}
+
+      {stopResult && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-sm text-emerald-300 flex items-center justify-between gap-3">
+          <span>{stopResult}</span>
+          <button
+            onClick={() => setStopResult(null)}
+            className="text-emerald-300/70 hover:text-emerald-200 text-xs"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Emergency Stop confirmation modal */}
+      {confirmStop && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-stop-title"
+          onClick={() => !acting && setConfirmStop(false)}
+        >
+          <div
+            className="bg-[var(--bg-card)] border border-red-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0">
+                <AlertTriangle size={18} className="text-red-400" />
+              </div>
+              <h3 id="confirm-stop-title" className="text-base font-semibold text-[var(--text-1)]">
+                Emergency Stop?
+              </h3>
+            </div>
+            <p className="text-sm text-[var(--text-2)] mb-2 leading-relaxed">
+              This will <span className="font-semibold text-red-400">stop queueing new calls</span> and
+              pause the campaign immediately. Any call <em>currently in progress</em> will end
+              naturally within ~60 seconds (queue gate caps in-flight calls at one).
+            </p>
+            <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
+              Numbers scheduled for retry stay queued — resume later with Start, or delete the
+              campaign after pausing to discard everything.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                ref={cancelStopBtnRef}
+                onClick={() => setConfirmStop(false)}
+                disabled={acting}
+                className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStop}
+                disabled={acting}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-red-400"
+              >
+                <StopCircle size={14} />
+                {acting ? "Stopping..." : "Stop Campaign"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
