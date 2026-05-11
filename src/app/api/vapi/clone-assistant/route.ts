@@ -212,9 +212,12 @@ export async function POST(request: NextRequest) {
     //   - startAtSeconds: 3 (was 5) — start sooner without going below the
     //     documented safe minimum. Gibraltar/UK voicemail greetings start
     //     speaking within the first 1-2 seconds.
-    //   - frequencySeconds: 2 (was 2.5) — check more often during the window.
-    //   - maxRetries: 6 (was 4) — detection window now 3-15s, covers the
-    //     specific 15s greeting that defeated the old config.
+    //   - frequencySeconds: 2.5 (unchanged from base) — Vapi enforces a hard
+    //     minimum of 2.5 on this field (verified by 400 response 2026-05-09
+    //     "frequencySeconds must not be less than 2.5"). We can't go lower
+    //     even if we wanted to without Vapi rejecting the entire clone POST.
+    //   - maxRetries: 6 (was 4) — detection window now 3-15.5s, covers the
+    //     15s greeting that defeated the old config.
     //
     // Deliberately NOT touching voicemailMessage. The base value ("Please call
     // back when you're available.") is inherited via ...base, and overriding
@@ -233,7 +236,7 @@ export async function POST(request: NextRequest) {
       backoffPlan: {
         ...((base.voicemailDetection ?? {}).backoffPlan ?? {}),
         startAtSeconds: 3,
-        frequencySeconds: 2,
+        frequencySeconds: 2.5,
         maxRetries: 6,
       },
     },
