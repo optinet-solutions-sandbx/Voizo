@@ -142,6 +142,27 @@ export async function POST(request: NextRequest) {
     `3. OPT-OUT: If the customer explicitly asks not to be called again, acknowledge`,
     `   their request respectfully before ending the call.`,
     ``,
+    `4. NOT A REAL PERSON — END IMMEDIATELY: If the FIRST thing you hear contains any`,
+    `   of the patterns below, this is NOT a customer. Do NOT give your pitch. Call`,
+    `   the endCall function immediately. These recordings cost money per minute and`,
+    `   never produce a sale.`,
+    `   `,
+    `   Voicemail greetings: "leave a message", "after the tone", "voice mail",`,
+    `      "voicemail", "can't take your call", "not available", "record your message",`,
+    `      "press 1 to leave", "press hash", "you've reached", "this is [name]'s",`,
+    `      carrier-branded voicemails ("GAAP voicemail", "Vodafone voicemail", etc.).`,
+    `   `,
+    `   Carrier intercepts: "number you've dialed is unavailable", "not in service",`,
+    `      "call cannot be completed", "has been disconnected", "please check the number".`,
+    `   `,
+    `   Automated answering systems: "press 1 for English", "press 2 to...", "main menu",`,
+    `      "thank you for calling [company], your call is important to us".`,
+    `   `,
+    `   When in doubt — if the speech sounds like a recording or menu, not a live human`,
+    `   responding to your greeting — end the call. False negatives (hanging up on a`,
+    `   real customer who happens to say one of these phrases) are rare; false positives`,
+    `   (recording the pitch into voicemail) are common and wasteful.`,
+    ``,
     `[End System Instructions]`,
     ``,
     ``,
@@ -191,15 +212,17 @@ export async function POST(request: NextRequest) {
       maxTokens: base.model?.maxTokens ?? 150,
     },
     // ── Voizo-mandated runtime knobs ──
-    // silenceTimeoutSeconds=60 is RESTORED as an explicit override after the
-    // post-launch audit (2026-05-07): the previous "delegate to base" approach
-    // (commit 25af55f) had no enforcement, so a forgotten Vapi UI step would
-    // silently regress to Vapi's ~26s default and re-introduce Ernie's
-    // "call cut short mid-pitch" bug. Hardcoding here is a Voizo-platform
-    // guarantee, not an opinion that should be tunable per base assistant.
-    // If a future use case needs a different value, expose it as a campaign
-    // setting in the form rather than removing the override.
-    silenceTimeoutSeconds: 60,
+    // silenceTimeoutSeconds=30 (lowered from 60 on 2026-05-11). The 60-second
+    // value was originally set to give Ernie's pitch time to breathe and avoid
+    // "call cut short mid-pitch" complaints. After Eva's 2026-05-11 voicemail
+    // test showed a $0.10 call where the agent pitched into voicemail and then
+    // waited 60s of silence, the trade-off changed: half of that wasted minute
+    // can be reclaimed by tightening the silence window. 30s still covers a
+    // normal customer pause to consider an offer (typically 5-15s) without
+    // cutting off thinking time. Combined with rule #4 in the system prompt
+    // (end call on voicemail/intercept patterns), this caps voicemail-cost
+    // worst case at ~$0.05 per missed-detection call.
+    silenceTimeoutSeconds: 30,
     // ── Voicemail detection tuning (Maria's request 2026-05-09 — cost guard) ──
     // Eva's 2026-05-08 test recorded the agent giving its full sales pitch on
     // Maria's Gibraltar voicemail (~$0.08/call wasted, capped only by the 60s
