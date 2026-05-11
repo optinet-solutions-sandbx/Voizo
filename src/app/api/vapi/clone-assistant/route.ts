@@ -200,6 +200,43 @@ export async function POST(request: NextRequest) {
     // If a future use case needs a different value, expose it as a campaign
     // setting in the form rather than removing the override.
     silenceTimeoutSeconds: 60,
+    // ── Voicemail detection tuning (Maria's request 2026-05-09 — cost guard) ──
+    // Eva's 2026-05-08 test recorded the agent giving its full sales pitch on
+    // Maria's Gibraltar voicemail (~$0.08/call wasted, capped only by the 60s
+    // silenceTimeoutSeconds above). Vapi voicemail detection IS enabled on base
+    // assistants (provider="vapi") with a brief voicemailMessage already set,
+    // but the default backoff plan (startAtSeconds=5, frequencySeconds=2.5,
+    // maxRetries=4) missed Eva's 15s Gibraltar greeting.
+    //
+    // Conservative tightening — only the backoff plan changes:
+    //   - startAtSeconds: 3 (was 5) — start sooner without going below the
+    //     documented safe minimum. Gibraltar/UK voicemail greetings start
+    //     speaking within the first 1-2 seconds.
+    //   - frequencySeconds: 2 (was 2.5) — check more often during the window.
+    //   - maxRetries: 6 (was 4) — detection window now 3-15s, covers the
+    //     specific 15s greeting that defeated the old config.
+    //
+    // Deliberately NOT touching voicemailMessage. The base value ("Please call
+    // back when you're available.") is inherited via ...base, and overriding
+    // it to null/empty risks Vapi's class-validator rejecting the entire
+    // clone POST — which would break all new campaign creation.
+    //
+    // Cost projection:
+    //   - Detection catches (target case): ~$0.01 per voicemail (brief message)
+    //   - Detection misses: ~$0.08 (today's baseline, unchanged)
+    //   - At 20 players × 30% voicemail rate, ~$0.06 worst case. Bounded.
+    //
+    // Existing clones keep base config until deleted/recreated. This override
+    // only applies to NEW campaigns created after deploy.
+    voicemailDetection: {
+      ...(base.voicemailDetection ?? {}),
+      backoffPlan: {
+        ...((base.voicemailDetection ?? {}).backoffPlan ?? {}),
+        startAtSeconds: 3,
+        frequencySeconds: 2,
+        maxRetries: 6,
+      },
+    },
     // ── Webhook server config (must point at our endpoint with our secret) ──
     server: (() => {
       const baseServer = base.server ?? {};
