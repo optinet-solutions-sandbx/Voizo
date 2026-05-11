@@ -132,6 +132,40 @@ function detectOfferThenAgree(transcript: string): boolean {
   return false;
 }
 
+// ── Voicemail greeting detector ───────────────────────────────────────────
+// Recognizes voicemail/answering-machine recordings in the call transcript.
+// Used by the outcome routing logic below: when the call hit voicemail and
+// no positive/negative customer signal fired, we skip the outcome update so
+// the scheduler cron's stale-in_progress sweeper resolves the number to
+// pending_retry — keeping the customer in the retry cycle instead of
+// terminating them as 'not_interested'.
+//
+// High-confidence threshold (2+ distinct patterns must match) keeps false
+// positives low. A real customer rarely emits two of these phrases in the
+// same call; a voicemail greeting typically emits 3-5 of them.
+//
+// If a false positive does fire, the cost is bounded: the number stays
+// in_progress → sweeper retries it once more → if it's still a real customer
+// they'll either engage or opt out, and we route correctly the second time.
+const VOICEMAIL_GREETING_PATTERNS = [
+  /\bvoice\s*mail\b/i,
+  /\bvoicemail\b/i,
+  /can'?t take your call/i,
+  /\bleave (?:a |your )?message\b/i,
+  /after the (?:tone|beep)/i,
+  /\bpress (?:1|hash|pound|star)/i,
+  /\byou'?ve reached\b/i,
+  /at the sound of the (?:tone|beep)/i,
+  /please record (?:your )?message/i,
+  /\bnot available\b/i,
+];
+
+function detectVoicemailInTranscript(transcript: string): boolean {
+  const safe = transcript.slice(0, TRANSCRIPT_CAP);
+  const hits = VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length;
+  return hits >= 2;
+}
+
 /**
  * POST /api/webhooks/vapi/end-of-call
  *
@@ -228,6 +262,23 @@ export async function POST(request: NextRequest) {
     }),
   );
 
+  // ── Detect voicemail in transcript (used by both goalReached fallback + outcome routing) ──
+  // Computed once here so it's available to:
+  //   1. The transcript-fallback goalReached block below — suppresses false
+  //      positives when the agent's own pitch phrases ("you'll receive an SMS")
+  //      are recorded into voicemail. Without this guard, the existing
+  //      Patterns 1-3 fire on the agent's transcript regardless of whether a
+  //      real customer agreed, causing SMS dispatch to non-consented voicemail
+  //      numbers (compliance + cost issue at scale).
+  //   2. The outcome routing block much further below — when voicemail and no
+  //      positive/negative signal, skip the outcome update so the scheduler
+  //      cron's stale-in_progress sweeper resolves to pending_retry.
+  // NOTE: opt-out fallback (lines below) deliberately runs WITHOUT this guard.
+  // Per the existing comment "missing an opt-out is worse than a false
+  // positive" — a voicemail greeting containing "don't call" still routes to
+  // declined_offer + DNC suppression (Maria-approved compliance policy).
+  const isVoicemail = transcript ? detectVoicemailInTranscript(transcript) : false;
+
   // Determine goal_reached from Vapi's analysis.
   // Vapi's successEvaluation can be string | boolean | number | null depending
   // on API version (June 2025 breaking change). Handle all variants defensively.
@@ -309,6 +360,24 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+    }
+
+    // Voicemail override (compliance safety net, 2026-05-11):
+    // Patterns 1-3 fire on the agent's transcript phrases regardless of who's
+    // on the other end. When the call hit a voicemail and the agent gave its
+    // pitch (because the agent prompt rule #4 missed the greeting), the agent's
+    // own "you'll receive an SMS" phrasing would trigger aiPassive → goalReached
+    // → SMS dispatch to a number we never got real consent from. Catch this
+    // explicitly by dropping the transcript-derived goalReached when voicemail
+    // patterns are present. Vapi's authoritative successEvaluation (when set)
+    // still wins — it's set ABOVE this block and is not touched here.
+    if (aiConfirmedSms && isVoicemail) {
+      aiConfirmedSms = false;
+      console.log(
+        `[fallback-eval] aiConfirmedSms overridden to false — ` +
+        `voicemail patterns present in transcript; transcript-fallback ` +
+        `goalReached is unreliable. vapiCallId=${vapiCallId}`,
+      );
     }
 
     if (aiConfirmedSms) {
@@ -511,12 +580,39 @@ export async function POST(request: NextRequest) {
   // Worst case: a late Vapi outcome >5min after call end is silently dropped,
   // which is acceptable — at that latency Vapi is effectively broken anyway,
   // and the sweeper has already given the customer a benefit-of-doubt retry.
-  const outcome = optedOut ? "declined_offer" : goalReached ? "sent_sms" : "not_interested";
-  await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .update({ outcome })
-    .eq("id", callRow.campaign_number_id)
-    .eq("outcome", "in_progress");
+  //
+  // Voicemail-aware outcome routing (2026-05-11): if the transcript showed a
+  // voicemail greeting AND no positive/negative customer signal fired, skip
+  // the outcome update entirely. Number stays at outcome='in_progress' and
+  // the scheduler cron's stale-in_progress sweeper (shipped as 46ba040)
+  // resolves it to pending_retry within ~5min — routing voicemail-hit
+  // numbers through the normal retry cycle instead of terminating them as
+  // 'not_interested'. Maria's policy: 3 attempts × 90min retry interval.
+  //
+  // goal/opt-out signals ALWAYS win over voicemail detection. A customer
+  // who said "yes send SMS" while their voicemail prompt was still playing
+  // (extreme edge case, plus the transcript-fallback override above already
+  // suppresses fake goalReached from voicemail-contaminated transcripts)
+  // still gets sent_sms and an SMS dispatched.
+  //
+  // `isVoicemail` was computed earlier in this function (before transcript
+  // fallback) so it's already available here. Re-using rather than recomputing.
+  const skipOutcomeForVoicemail = isVoicemail && !goalReached && !optedOut;
+
+  if (skipOutcomeForVoicemail) {
+    console.log(
+      `[vapi end-of-call] voicemail detected — skipping outcome update so the ` +
+      `scheduler stale-in_progress sweeper resolves to pending_retry. ` +
+      `vapiCallId=${vapiCallId}`,
+    );
+  } else {
+    const outcome = optedOut ? "declined_offer" : goalReached ? "sent_sms" : "not_interested";
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({ outcome })
+      .eq("id", callRow.campaign_number_id)
+      .eq("outcome", "in_progress");
+  }
 
   // ── Auto-suppress on opt-out (Manifesto: suppression checked before every dial) ──
   if (optedOut) {
