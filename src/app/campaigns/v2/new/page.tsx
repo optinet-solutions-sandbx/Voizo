@@ -257,11 +257,17 @@ export default function NewCampaignV2Page() {
     setVapiAssistantId(id);
     const a = assistants?.find((x) => x.id === id);
     if (a) {
-      setVoiceId(a.voiceId ?? "");
+      // Voice is LOCKED to the assistant's default — we don't propagate
+      // a.voiceId into local voiceId state. The clone-assistant route
+      // inherits base.voice (whole config) when our request body voiceId
+      // is undefined, which avoids both (a) operators degrading agent
+      // performance by mismatching voice to prompt, and (b) the
+      // KNOWN_VOICES whitelist failing when a base assistant uses a
+      // voice outside our operator-selectable list. baseVoiceId is kept
+      // for the read-only display next to the prompt name.
       setBaseVoiceId(a.voiceId);
       setSystemPrompt(a.systemPrompt ?? "");
     } else {
-      setVoiceId("");
       setBaseVoiceId(null);
       setSystemPrompt("");
     }
@@ -410,18 +416,29 @@ export default function NewCampaignV2Page() {
             </div>
             {vapiAssistantId && (
               <>
-                <div>
-                  <FieldLabel>Voice</FieldLabel>
-                  <StyledSelect
-                    value={voiceId}
-                    onChange={setVoiceId}
-                    icon={<Megaphone size={14} />}
-                    placeholder="— Use assistant default —"
-                    options={VOICE_OPTIONS.map((v) => ({
-                      value: v.id,
-                      label: `${v.name}${v.id === baseVoiceId ? " (current)" : ""}`,
-                    }))}
-                  />
+                <div className="sm:col-span-2">
+                  <div className="px-4 py-3 rounded-xl bg-blue-500/5 border border-blue-500/15">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Phone size={12} className="text-blue-400" />
+                        <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-3)]">Prompt</span>
+                        <span className="text-[var(--text-1)] font-semibold">
+                          {assistants?.find((a) => a.id === vapiAssistantId)?.name ?? vapiAssistantId}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Megaphone size={12} className="text-[var(--text-3)]" />
+                        <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-3)]">Voice</span>
+                        <span className="text-[var(--text-1)] font-semibold">
+                          {(baseVoiceId && VOICE_OPTIONS.find((v) => v.id === baseVoiceId)?.name) || "Assistant default"}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wide text-[var(--text-3)] bg-[var(--bg-app)] px-1.5 py-0.5 rounded font-medium">Locked</span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-[var(--text-3)] mt-2">
+                      Voice is locked to the assistant&apos;s default to prevent performance drift. To change the voice, update the base assistant in Vapi.
+                    </p>
+                  </div>
                 </div>
                 <div className="sm:col-span-2">
                   <FieldLabel>System Prompt</FieldLabel>
