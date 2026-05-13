@@ -631,6 +631,7 @@ export default function CampaignV2DetailPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
+                    <th className="text-left px-5 py-3 font-semibold w-12">#</th>
                     <th className="text-left px-5 py-3 font-semibold">Phone</th>
                     <th className="text-left px-5 py-3 font-semibold">Outcome</th>
                     <th className="text-left px-5 py-3 font-semibold">Attempts</th>
@@ -639,13 +640,14 @@ export default function CampaignV2DetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {numbers.map((n) => {
+                  {numbers.map((n, idx) => {
                     const phone = n.phone_e164 as string;
                     const sms = smsByPhone.get(phone);
                     const isExpanded = expandedSms === phone;
                     return (
                       <React.Fragment key={n.id as string}>
                         <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
+                          <td className="px-5 py-3 text-[var(--text-3)] font-mono">{idx + 1}</td>
                           <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phone}</td>
                           <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
                           <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
@@ -675,6 +677,7 @@ export default function CampaignV2DetailPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
+                  <th className="text-left px-5 py-3 font-semibold w-12">#</th>
                   <th className="text-left px-5 py-3 font-semibold">Phone</th>
                   <th className="text-left px-5 py-3 font-semibold">Status</th>
                   <th className="text-left px-5 py-3 font-semibold">Duration</th>
@@ -683,8 +686,9 @@ export default function CampaignV2DetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {calls.map((c) => (
+                {calls.map((c, idx) => (
                   <tr key={c.id as string} className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
+                    <td className="px-5 py-3 text-[var(--text-3)] font-mono">{idx + 1}</td>
                     <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phoneByNumberId.get(c.campaign_number_id as string) || "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{(c.status as string) || "—"}</td>
                     <td className="px-5 py-3 text-[var(--text-2)]">{c.duration_seconds != null ? `${c.duration_seconds}s` : "—"}</td>
