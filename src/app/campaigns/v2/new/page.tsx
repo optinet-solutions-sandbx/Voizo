@@ -206,6 +206,10 @@ export default function NewCampaignV2Page() {
   const [smsOptout, setSmsOptout] = useState(SMS_OPTOUT_FOOTER);
   const [smsOptoutEditing, setSmsOptoutEditing] = useState(false);
   const [numbersText, setNumbersText] = useState("");
+  // Edit/view toggle for the phone numbers panel. Default true (textarea shown)
+  // so a fresh form is immediately typeable. CIO import flips to false to show
+  // the numbered preview. User can toggle with the Edit/Done buttons.
+  const [phoneEditing, setPhoneEditing] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -815,18 +819,55 @@ export default function NewCampaignV2Page() {
             <SegmentImporter
               onImport={(phones) => {
                 setNumbersText(phones.join("\n"));
+                // Switch to view mode so operator immediately sees the
+                // numbered preview of what was captured.
+                setPhoneEditing(false);
               }}
             />
 
-            <div className="relative">
-              <textarea
-                value={numbersText}
-                onChange={(e) => setNumbersText(e.target.value)}
-                rows={5}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y font-mono text-sm transition-colors"
-                placeholder={"Paste or type numbers here, one per line\ne.g. +14035550100"}
-              />
-            </div>
+            {(parsedNumbers.length === 0 || phoneEditing) ? (
+              <div className="relative">
+                <textarea
+                  value={numbersText}
+                  onChange={(e) => setNumbersText(e.target.value)}
+                  rows={5}
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y font-mono text-sm transition-colors"
+                  placeholder={"Paste or type numbers here, one per line\ne.g. +14035550100"}
+                />
+                {parsedNumbers.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPhoneEditing(false)}
+                    className="absolute top-2 right-2 px-2.5 py-1 rounded-md text-xs font-medium text-blue-400 hover:text-blue-300 hover:bg-[var(--bg-hover)] transition-colors"
+                  >
+                    Done · view {parsedNumbers.length}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-xl bg-[var(--bg-app)] border border-[var(--border)] max-h-56 overflow-y-auto">
+                <div className="sticky top-0 z-10 bg-[var(--bg-app)] px-4 py-2 border-b border-[var(--border)] flex items-center justify-between">
+                  <p className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-3)]">
+                    {parsedNumbers.length} number{parsedNumbers.length !== 1 ? "s" : ""}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setPhoneEditing(true)}
+                    className="text-xs font-medium text-blue-400 hover:text-blue-300"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <div className="p-3 font-mono text-xs grid gap-1">
+                  {parsedNumbers.map((num, idx) => (
+                    <div key={`${idx}-${num}`} className="flex items-baseline gap-3">
+                      <span className="text-[var(--text-3)] w-8 text-right shrink-0">{idx + 1}.</span>
+                      <span className="text-[var(--text-1)]">{num}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {numbersText.trim() && parsedNumbers.length === 0 && (
               <p className="text-xs text-red-400">No valid E.164 numbers found. Numbers must start with + followed by 8–15 digits.</p>
             )}

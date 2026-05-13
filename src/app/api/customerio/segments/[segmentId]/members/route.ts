@@ -27,13 +27,87 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSegmentMembers, getCustomerAttributes } from "@/lib/customerio";
+import {
+  getSegmentMembers,
+  getCustomerAttributes,
+  type CustomerIOSegmentMember,
+  type CustomerIOCustomer,
+  type CustomerIOResult,
+} from "@/lib/customerio";
 
 interface Member {
   id: string;
   name: string | null;
   phone: string | null;
   email: string | null;
+}
+
+/**
+ * Execute async work in chunks to respect Customer.io's 10 req/sec rate limit.
+ * Default: 8 calls per chunk, 150ms pause between chunks. Keeps worst-case
+ * burst safely under 10/sec while still completing a 100-member segment in
+ * ~10-15 seconds. Without throttling, Promise.all over 200 members fires
+ * 200 simultaneous calls and trips CIO's per-second cap (429 cascade).
+ */
+async function chunkedPromiseAll<T, R>(
+  items: T[],
+  chunkSize: number,
+  fn: (item: T) => Promise<R>,
+  delayMs = 150,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+    if (i + chunkSize < items.length && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+/**
+ * Look up a customer's profile via Customer.io App API with identifier
+ * fallback. Customer.io segment membership and customer profiles can be
+ * inconsistent: a member's workspace `id` exists in the segment but not in
+ * the customers table (e.g., after re-identification, or for customers
+ * imported by email only). Try id → cio_<cio_id> → email in order; only
+ * return failure when ALL identifiers fail.
+ *
+ * Closes the 2026-05-13 "Glenda" silent-drop bug where Voizo dropped
+ * customers whose primary identifier failed a profile lookup, even when
+ * a fallback identifier would have succeeded. At Lucky7even scale this
+ * was costing ~30-40% of every segment import.
+ *
+ * Each failed attempt logs a warning so we can diagnose patterns in
+ * Vercel logs (e.g., "most failures are on `id`, all fall through to
+ * `email`" suggests a CIO data inconsistency we should report to them).
+ */
+async function lookupMemberProfileWithFallback(
+  member: CustomerIOSegmentMember,
+): Promise<CustomerIOResult<CustomerIOCustomer>> {
+  const identifiers = [
+    member.id,
+    member.cio_id ? `cio_${member.cio_id}` : null,
+    member.email,
+  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+
+  if (identifiers.length === 0) {
+    return { success: false, data: null, error: "No identifiers available on segment member" };
+  }
+
+  let lastError = "All identifiers exhausted";
+  for (const id of identifiers) {
+    const result = await getCustomerAttributes(id);
+    if (result.success) return result;
+    lastError = result.error;
+    console.warn(
+      `[customerio-importer] lookup failed for "${id.slice(0, 60)}" ` +
+      `(cio_id=${member.cio_id ?? "?"}): ${result.error.slice(0, 100)}`,
+    );
+  }
+  return { success: false, data: null, error: lastError };
 }
 
 /**
@@ -90,18 +164,25 @@ export async function GET(
     return NextResponse.json({ error: membersResult.error }, { status });
   }
 
-  // Step 2: Fetch each member's attributes in parallel.
-  // Identifier precedence (depends on workspace's identity mode):
-  //   1. Workspace-scoped `id` (e.g. "lucky7even:158491") — ID-based workspaces
-  //   2. `cio_<cio_id>` — cio_id-based workspaces
-  //   3. email — fallback for anonymous users
-  // Lucky7even is ID-based, so `id` takes precedence.
-  // Parallel is safe because Customer.io's rate limit is per-second, not per-request.
-  const profilePromises = membersResult.data.identifiers.map((member) => {
-    const identifier = member.id || `cio_${member.cio_id}` || member.email || "";
-    return getCustomerAttributes(identifier);
-  });
-  const profiles = await Promise.all(profilePromises);
+  // Step 2: Fetch each member's attributes with throttled fan-out + identifier
+  // fallback. Both characteristics matter:
+  //
+  // Throttling (chunkedPromiseAll, 8 per chunk + 150ms): Customer.io's App API
+  // enforces a per-second rate limit (~10 req/sec/workspace). Pre-2026-05-13
+  // this code used unthrottled Promise.all, which the pre-PoC volumes (segments
+  // <50) hadn't tripped — but a 200-member segment fires 200 parallel calls
+  // and produces 429 cascades. Throttling keeps the burst safely under cap.
+  //
+  // Identifier fallback (lookupMemberProfileWithFallback): try `member.id`
+  // first (Lucky7even is ID-based), then `cio_<cio_id>`, then `email`. CIO's
+  // segment membership and customer profile tables can be inconsistent — a
+  // member's `id` is in the segment but missing from /customers. Falling back
+  // captures customers we previously silently dropped (the "Glenda" bug).
+  const profiles = await chunkedPromiseAll(
+    membersResult.data.identifiers,
+    8,
+    lookupMemberProfileWithFallback,
+  );
 
   // Debug mode: return raw profile data to inspect attribute names.
   // Use ?debug=true with small limit. Server-side only — never expose to clients.
