@@ -365,14 +365,16 @@ export default function SegmentImporter({ onImport }: Props) {
                         <table className="w-full text-xs">
                           <thead className="sticky top-0 bg-[var(--bg-card)] border-b border-[var(--border)]">
                             <tr>
+                              <th className="text-left px-3 py-2 font-semibold text-[var(--text-3)] uppercase tracking-wide w-10">#</th>
                               <th className="text-left px-3 py-2 font-semibold text-[var(--text-3)] uppercase tracking-wide">Name</th>
                               <th className="text-left px-3 py-2 font-semibold text-[var(--text-3)] uppercase tracking-wide">Phone</th>
                               <th className="text-left px-3 py-2 font-semibold text-[var(--text-3)] uppercase tracking-wide">Email</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {displayMembers.map((m) => (
+                            {displayMembers.map((m, idx) => (
                               <tr key={m.id} className="border-t border-[var(--border)]">
+                                <td className="px-3 py-1.5 text-[var(--text-3)] font-mono">{idx + 1}</td>
                                 <td className="px-3 py-1.5 text-[var(--text-2)]">{m.name ?? "—"}</td>
                                 <td className={`px-3 py-1.5 font-mono ${m.phone ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}`}>
                                   {m.phone ?? "—"}
