@@ -73,7 +73,7 @@ export default function SegmentImporter({ onImport }: Props) {
 
     setLoadingIds((prev) => new Set(prev).add(segmentId));
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=50`);
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Failed (${res.status})`);
@@ -131,7 +131,7 @@ export default function SegmentImporter({ onImport }: Props) {
     setSingleMembers(null);
     setSingleLoading(true);
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=50`);
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setMembersError(body.error || `Failed to load members (${res.status})`);
