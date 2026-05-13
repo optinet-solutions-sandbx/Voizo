@@ -27,6 +27,42 @@ const KNOWN_VOICES: Record<string, string> = {
   "pNInz6obpgDQGcFmaJgB": "Adam",
 };
 
+/**
+ * Voizo runtime safety policy — fields the clone MUST have regardless of base.
+ *
+ * Rationale: clones outlive base edits. Once cloned, a campaign uses its frozen
+ * snapshot for the entire run; if Maria/Eva tune the base later, NEW clones get
+ * the changes but EXISTING clones don't. Therefore Voizo must own runtime safety
+ * (turn-taking determinism, interruption sensitivity, denoising, webhook routing)
+ * at clone-creation time. Persona (voice, sales pitch, model choice) stays
+ * inherited so Maria/Eva can iterate without code deploys.
+ *
+ * Values rationale:
+ *   - firstMessageMode "assistant-speaks-first": static greeting, no LLM
+ *     regeneration on interrupts. Closes Eva's 2026-05-13 loop bug where every
+ *     interruption during the opener caused the agent to restart its greeting.
+ *   - stopSpeakingPlan numWords=2: customer must say ≥2 words to barge in.
+ *     Prevents "Hello?" alone from triggering interrupt + re-prompt loop.
+ *   - stopSpeakingPlan voiceSeconds=0.3: needs 0.3s of voice to register as
+ *     speech. Buffers against cough/breath/background noise.
+ *   - stopSpeakingPlan backoffSeconds=1: agent waits 1s after interruption
+ *     before resuming. Sane default pinned for consistency.
+ *   - backgroundDenoisingEnabled=true: outbound calls hit noisy backgrounds
+ *     (TV, restaurant, car). Denoising lives at assistant ROOT level in Vapi's
+ *     API schema (Vapi UI groups it under "Transcriber" but the API field is
+ *     at the root). Adversarial review 2026-05-13 flagged a transcriber-nested
+ *     placement as CRITICAL risk — kept at root here.
+ */
+const VOIZO_RUNTIME_POLICY = {
+  firstMessageMode: "assistant-speaks-first" as const,
+  backgroundDenoisingEnabled: true,
+  stopSpeakingPlan: {
+    numWords: 2,
+    voiceSeconds: 0.3,
+    backoffSeconds: 1,
+  },
+} as const;
+
 export async function POST(request: NextRequest) {
   const key = process.env.VAPI_PRIVATE_KEY;
   if (!key) {
@@ -200,6 +236,12 @@ export async function POST(request: NextRequest) {
   // that POST /assistant rejects (id, orgId, createdAt, updatedAt).
   const clonePayload = {
     ...base,
+    // ── Voizo runtime safety floor (non-negotiable, base can't override) ──
+    // See VOIZO_RUNTIME_POLICY definition above for per-field rationale.
+    // This spread MUST come before the per-campaign overrides so that name/
+    // voice/model overrides still win for their own fields, but the safety
+    // floor wins over base for firstMessageMode and stopSpeakingPlan.
+    ...VOIZO_RUNTIME_POLICY,
     // ── Per-campaign overrides ──
     name: cloneName,
     voice: cloneVoice,
@@ -263,18 +305,29 @@ export async function POST(request: NextRequest) {
         maxRetries: 6,
       },
     },
-    // ── Webhook server config (must point at our endpoint with our secret) ──
+    // ── Webhook server config: HARD PIN Voizo's URL (no fallback to base) ──
+    // Previously fell back to base.server.url if set, allowing Maria's test
+    // webhook URLs to silently capture clone end-of-call events. Voizo must
+    // own webhook routing — base authority over this field was a footgun.
+    // Without the end-of-call reaching Voizo, goal_reached never sets, SMS
+    // never dispatches, and the call shows "completed" forever with no
+    // outcome on the dashboard.
+    //
+    // If we ever need a different webhook URL per environment, pull from
+    // process.env (e.g., NEXT_PUBLIC_APP_URL) — never from base.
     server: (() => {
-      const baseServer = base.server ?? {};
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
       return {
-        url: baseServer.url ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call",
-        timeoutSeconds: baseServer.timeoutSeconds ?? 20,
+        url: "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call",
+        timeoutSeconds: 20,
         ...(webhookSecret ? { secret: webhookSecret } : {}),
       };
     })(),
-    // ── Voizo identifier (for assistant-picker filter on campaign creation) ──
-    metadata: { voizoClone: true },
+    // ── Voizo identifier (preserve base metadata, add our marker) ──
+    // Previously wholesale-replaced base.metadata, dropping any team/lifecycle
+    // tags Maria set on the base. Merge preserves base.metadata while ensuring
+    // our voizoClone marker is always present for the assistant-picker filter.
+    metadata: { ...(base.metadata ?? {}), voizoClone: true },
     // ── Strip Vapi-server-set fields (POST /assistant rejects these) ──
     id: undefined,
     orgId: undefined,
