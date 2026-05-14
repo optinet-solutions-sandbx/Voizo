@@ -7,6 +7,7 @@ import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
 
 const navItems = [
+  { label: "Workers",       href: "/workers",         title: "Workers"       },
   { label: "Campaigns",     href: "/campaigns",       title: "Campaigns"      },
   { label: "Do Not Call",   href: "/do-not-call",     title: "Do Not Call"    },
   { label: "Knowledge",     href: "/knowledge-bases", title: "Knowledge Bases"},

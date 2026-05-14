@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Bell, Search, Megaphone, PhoneOff, BookOpen, Phone, X,
-  LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2,
+  LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2, Globe2,
 } from "lucide-react";
 
 const CampaignIcon = Megaphone;
@@ -14,12 +14,14 @@ import { useTheme } from "@/lib/themeContext";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 
 const navItems = [
+  { label: "Workers",      href: "/workers",         icon: Globe2,   color: "text-emerald-400", bg: "bg-emerald-500/10" },
   { label: "Campaigns",    href: "/campaigns",       icon: Megaphone, color: "text-blue-400",    bg: "bg-blue-500/10"    },
   { label: "Do Not Call",  href: "/do-not-call",     icon: PhoneOff,  color: "text-red-400",     bg: "bg-red-500/10"     },
   { label: "Knowledge",    href: "/knowledge-bases", icon: BookOpen,  color: "text-indigo-400",  bg: "bg-indigo-500/10"  },
 ];
 
 const allPages = [
+  { label: "Workers",        href: "/workers",         icon: Globe2,         description: "Worker fleet and world-time view" },
   { label: "Campaigns",      href: "/campaigns",       icon: Megaphone,      description: "Manage your calling campaigns" },
   { label: "Do Not Call",    href: "/do-not-call",     icon: PhoneOff,       description: "DNC list management" },
   { label: "Knowledge Bases",href: "/knowledge-bases", icon: BookOpen,       description: "Knowledge base documents" },
@@ -271,7 +273,7 @@ function SidebarContent() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center px-4 h-[57px] border-b border-[var(--border)]">
-        <Link href="/campaigns" className="flex items-center gap-2.5 group">
+        <Link href="/workers" className="flex items-center gap-2.5 group">
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:bg-blue-500 group-hover:shadow-blue-500/30 transition-all">
             <span className="text-white text-xs font-bold">V</span>
           </div>
