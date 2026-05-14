@@ -298,8 +298,26 @@ export async function POST(request: NextRequest) {
     //
     // Existing clones keep base config until deleted/recreated. This override
     // only applies to NEW campaigns created after deploy.
+    //
+    // Provider default (added 2026-05-14 hotfix): the comment above says "Vapi
+    // voicemail detection IS enabled on base assistants" — that's true for
+    // ~12 of 17 production base agents but NOT all. Verified 2026-05-14:
+    // Gisela, Janice, Nikhilesh, Alex, Meny have no voicemailDetection field
+    // at all. For those bases, the spread `...(base.voicemailDetection ?? {})`
+    // yields an empty object, and our backoffPlan override produces a
+    // {backoffPlan:{...}} payload missing the required `provider` field. Vapi
+    // rejects with 400: "voicemailDetection.an unknown value was passed to
+    // the validate function". The explicit `provider` default below ensures
+    // every clone's voicemailDetection is a valid Vapi payload regardless of
+    // whether the base has voicemailDetection configured. Bases that already
+    // have provider="vapi" inherit it via the ?? chain (no behavior change);
+    // bases without voicemailDetection now get provider="vapi" added (clone
+    // gains voicemail detection where the base lacked it — aligned with the
+    // original commit's intent of "tighter voicemail detection on cloned
+    // assistants" applying platform-wide).
     voicemailDetection: {
       ...(base.voicemailDetection ?? {}),
+      provider: base.voicemailDetection?.provider ?? "vapi",
       backoffPlan: {
         ...((base.voicemailDetection ?? {}).backoffPlan ?? {}),
         startAtSeconds: 3,
