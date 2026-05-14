@@ -123,16 +123,54 @@ export async function DELETE(
 
     // ── Common: delete the cloned assistant ──
     // Both pool and legacy paths still delete the per-campaign clone.
+    //
+    // SAFETY GUARD (added 2026-05-15 after incident): verify the assistant
+    // is actually a voizoClone before deleting. Old campaigns (pre-clone-per-
+    // campaign architecture, before metadata.voizoClone existed) sometimes
+    // reference base agents directly in their vapi_assistant_id field. Without
+    // this guard, deleting an old campaign deletes the BASE agent — which
+    // breaks future campaign creation for everyone using that base. Verified
+    // real: 2026-05-15 incident lost "Ernie - Voice Agent" (production base)
+    // when an old "ERNIE FIRST LIVE TEST" paused campaign was deleted via
+    // the dashboard. ~8 other campaigns currently carry the same risk shape.
+    //
+    // Approach: GET the assistant first, inspect metadata.voizoClone, only
+    // DELETE if true. If false/missing, log loudly and skip — preserves the
+    // base agent at the cost of an orphan clone left on Vapi (small standing
+    // cost, manually cleanable, far cheaper than losing a base).
     try {
-      const delAssistant = await fetch(
+      const inspectRes = await fetch(
         `https://api.vapi.ai/assistant/${campaign.vapi_assistant_id}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${vapiKey}` } },
+        { headers: { Authorization: `Bearer ${vapiKey}` } },
       );
-      if (!delAssistant.ok && delAssistant.status !== 404) {
-        vapiWarnings.push(`assistant cleanup failed (${delAssistant.status})`);
+      if (inspectRes.status === 404) {
+        // Already gone (e.g. earlier hand-cleanup or 404 race) — nothing to do
+      } else if (!inspectRes.ok) {
+        vapiWarnings.push(`assistant inspect failed (${inspectRes.status}); skipped delete for safety`);
+      } else {
+        const assistant = await inspectRes.json();
+        if (assistant.metadata?.voizoClone === true) {
+          // Safe to delete — this is a Voizo-managed clone
+          const delAssistant = await fetch(
+            `https://api.vapi.ai/assistant/${campaign.vapi_assistant_id}`,
+            { method: "DELETE", headers: { Authorization: `Bearer ${vapiKey}` } },
+          );
+          if (!delAssistant.ok && delAssistant.status !== 404) {
+            vapiWarnings.push(`assistant cleanup failed (${delAssistant.status})`);
+          }
+        } else {
+          // NOT a Voizo clone — refuse to delete. This is the safety net for
+          // base agents and pre-metadata-stamp legacy clones.
+          console.warn(
+            `[campaigns-v2] REFUSED to delete assistant ${campaign.vapi_assistant_id} ` +
+            `(name: "${assistant.name ?? 'unknown'}") — metadata.voizoClone is not true. ` +
+            `Possible base agent or pre-metadata clone. Manual Vapi cleanup needed if intentional.`,
+          );
+          vapiWarnings.push(`assistant not a voizoClone — skipped delete for safety`);
+        }
       }
     } catch (err) {
-      vapiWarnings.push(`assistant delete failed: ${(err as Error).message}`);
+      vapiWarnings.push(`assistant inspect/delete failed: ${(err as Error).message}`);
     }
   }
 
