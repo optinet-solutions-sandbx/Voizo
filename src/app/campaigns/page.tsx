@@ -120,14 +120,15 @@ interface StatCardProps {
   gradientTo: string;
   icon: React.ElementType;
   iconColor: string;
+  tooltip?: string;
 }
 
-function StatCard({ title, value, subtitle, chart, accent, gradientFrom, gradientTo, icon: Icon, iconColor }: StatCardProps) {
+function StatCard({ title, value, subtitle, chart, accent, gradientFrom, gradientTo, icon: Icon, iconColor, tooltip }: StatCardProps) {
   return (
     <div className={`relative rounded-2xl border border-[var(--border)] p-4 sm:p-5 flex flex-col gap-2 overflow-hidden bg-gradient-to-br ${gradientFrom} ${gradientTo}`}>
       <div className="flex items-center gap-2">
         <Icon size={14} className={iconColor} />
-        <p className="text-xs font-medium text-[var(--text-3)] uppercase tracking-wide">{title}</p>
+        <p className="text-xs font-medium text-[var(--text-3)] uppercase tracking-wide" title={tooltip}>{title}</p>
       </div>
       <div className="h-12 sm:h-14 w-full opacity-80">
         <ResponsiveContainer width="100%" height="100%">
@@ -404,6 +405,7 @@ export default function CampaignsPage() {
         />
         <StatCard
           title="Connect Rate"
+          tooltip="Connected calls ÷ Total calls placed × 100"
           value={totals.connectRate + "%"}
           subtitle="last 7 days"
           accent="text-emerald-400"
@@ -415,6 +417,7 @@ export default function CampaignsPage() {
         />
         <StatCard
           title="Success Rate"
+          tooltip="Goal-reached calls ÷ Connected calls × 100"
           value={totals.successRate + "%"}
           subtitle="last 7 days"
           accent="text-amber-400"

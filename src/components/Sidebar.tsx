@@ -17,7 +17,6 @@ const navItems = [
   { label: "Campaigns",    href: "/campaigns",       icon: Megaphone, color: "text-blue-400",    bg: "bg-blue-500/10"    },
   { label: "Do Not Call",  href: "/do-not-call",     icon: PhoneOff,  color: "text-red-400",     bg: "bg-red-500/10"     },
   { label: "Knowledge",    href: "/knowledge-bases", icon: BookOpen,  color: "text-indigo-400",  bg: "bg-indigo-500/10"  },
-  { label: "Phone Number", href: "/phone-numbers",   icon: Phone,     color: "text-emerald-400", bg: "bg-emerald-500/10" },
 ];
 
 const allPages = [

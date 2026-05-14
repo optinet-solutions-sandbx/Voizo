@@ -36,10 +36,10 @@ export default function AppCenterPage() {
       <div className="px-4 sm:px-6 pt-5 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">App Center</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-1)]">App Center</h1>
             <a
               href="#"
-              className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 border border-gray-300 rounded-full text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 border border-[var(--border)] rounded-full text-xs sm:text-sm font-medium text-[var(--text-2)] hover:bg-[var(--bg-hover)] transition-colors"
             >
               Read Help Doc
               <ExternalLink size={12} />
@@ -47,19 +47,19 @@ export default function AppCenterPage() {
           </div>
         </div>
       </div>
-      <div className="border-b border-gray-200 mx-4 sm:mx-6 flex-shrink-0" />
+      <div className="border-b border-[var(--border)] mx-4 sm:mx-6 flex-shrink-0" />
 
       {/* ── Mobile: horizontal category pills ── */}
       <div className="md:hidden flex-shrink-0">
         <div className="px-4 pt-3 pb-1">
           <div className="relative mb-3">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
             <input
               type="text"
               placeholder="Search Integrations"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full pl-8 pr-3 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
         </div>
@@ -73,13 +73,13 @@ export default function AppCenterPage() {
                   onClick={() => setActiveCategory(cat.label)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
                     isActive
-                      ? "bg-gray-900 text-white"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      ? "bg-blue-600 text-white"
+                      : "bg-[var(--bg-elevated)] text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
                   }`}
                 >
                   {cat.label}
                   {cat.count !== undefined && (
-                    <span className={`text-xs ${isActive ? "text-gray-300" : "text-gray-400"}`}>
+                    <span className={`text-xs ${isActive ? "text-blue-200" : "text-[var(--text-3)]"}`}>
                       {cat.count}
                     </span>
                   )}
@@ -88,7 +88,7 @@ export default function AppCenterPage() {
             })}
           </div>
         </div>
-        <div className="border-b border-gray-100" />
+        <div className="border-b border-[var(--border)]" />
         {/* Mobile content */}
         <div className="p-4">
           {activeCategory === "Connected" ? <ConnectedView /> : <EmptyCategoryView category={activeCategory} />}
@@ -98,16 +98,16 @@ export default function AppCenterPage() {
       {/* ── Desktop: sidebar + content ── */}
       <div className="hidden md:flex flex-1 min-h-0 overflow-hidden">
         {/* Left sidebar */}
-        <div className="w-64 min-w-[220px] border-r border-gray-100 flex flex-col py-4 overflow-y-auto flex-shrink-0">
+        <div className="w-64 min-w-[220px] border-r border-[var(--border)] flex flex-col py-4 overflow-y-auto flex-shrink-0">
           <div className="px-3 mb-3">
             <div className="relative">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
               <input
                 type="text"
                 placeholder="Search Integrations"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-sm bg-white border border-gray-200 rounded-md text-gray-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full pl-8 pr-3 py-1.5 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-md text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
           </div>
@@ -120,13 +120,13 @@ export default function AppCenterPage() {
                     onClick={() => setActiveCategory(cat.label)}
                     className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${
                       isActive
-                        ? "bg-gray-100 font-semibold text-gray-900"
-                        : "text-gray-500 hover:text-gray-800 hover:bg-gray-50"
+                        ? "bg-[var(--bg-elevated)] font-semibold text-[var(--text-1)]"
+                        : "text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)]"
                     }`}
                   >
                     <span>{cat.label}</span>
                     {cat.count !== undefined && (
-                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${isActive ? "bg-gray-200 text-gray-700" : "bg-gray-100 text-gray-500"}`}>
+                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${isActive ? "bg-[var(--border)] text-[var(--text-1)]" : "bg-[var(--bg-elevated)] text-[var(--text-2)]"}`}>
                         {cat.count}
                       </span>
                     )}
@@ -148,28 +148,28 @@ export default function AppCenterPage() {
 function ConnectedView() {
   return (
     <div>
-      <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Connected</p>
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden max-w-2xl">
-        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-gray-100">
+      <p className="text-xs font-semibold text-[var(--text-3)] uppercase tracking-widest mb-3">Connected</p>
+      <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl overflow-hidden max-w-2xl">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-[var(--border)]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-green-50 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Phone size={16} className="text-green-600" />
+            <div className="w-9 h-9 bg-emerald-500/15 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Phone size={16} className="text-emerald-400" />
             </div>
-            <span className="text-sm font-semibold text-gray-900">SIP Integration</span>
+            <span className="text-sm font-semibold text-[var(--text-1)]">SIP Integration</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-green-50 border border-green-200 rounded-full text-xs font-medium text-green-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            <span className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-emerald-500/15 border border-emerald-500/25 rounded-full text-xs font-medium text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               Connected
             </span>
-            <button className="w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-50 transition-colors">
+            <button className="w-7 h-7 rounded-full border border-[var(--border)] flex items-center justify-center text-[var(--text-2)] hover:bg-[var(--bg-hover)] transition-colors">
               <Plus size={14} />
             </button>
           </div>
         </div>
         <div className="flex items-center justify-between px-4 sm:px-5 py-3.5">
-          <span className="text-sm text-gray-700">N1 Greece Limited (RoosterPartners)</span>
-          <button className="text-gray-400 hover:text-gray-600 transition-colors p-1">
+          <span className="text-sm text-[var(--text-2)]">N1 Greece Limited (RoosterPartners)</span>
+          <button className="text-[var(--text-3)] hover:text-[var(--text-2)] transition-colors p-1">
             <MoreHorizontal size={16} />
           </button>
         </div>
@@ -181,11 +181,11 @@ function ConnectedView() {
 function EmptyCategoryView({ category }: { category: string }) {
   return (
     <div className="flex flex-col items-center justify-center h-48 sm:h-64 text-center">
-      <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mb-3">
-        <span className="text-gray-400 text-lg font-bold">{category[0]}</span>
+      <div className="w-12 h-12 bg-[var(--bg-elevated)] rounded-xl flex items-center justify-center mb-3">
+        <span className="text-[var(--text-3)] text-lg font-bold">{category[0]}</span>
       </div>
-      <p className="text-sm font-medium text-gray-700">{category}</p>
-      <p className="text-xs text-gray-400 mt-1">No integrations connected yet.</p>
+      <p className="text-sm font-medium text-[var(--text-2)]">{category}</p>
+      <p className="text-xs text-[var(--text-3)] mt-1">No integrations connected yet.</p>
     </div>
   );
 }

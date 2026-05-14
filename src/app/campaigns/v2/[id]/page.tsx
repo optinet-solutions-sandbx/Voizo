@@ -102,6 +102,13 @@ const OUTCOME_LABEL: Record<string, string> = {
   suppressed: "Suppressed",
 };
 
+const DAY_LABEL: Record<string, string> = {
+  mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday",
+  fri: "Friday", sat: "Saturday", sun: "Sunday",
+  monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday",
+  thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
+};
+
 const OUTCOME_BADGE_CLASS: Record<string, string> = {
   pending: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
   in_progress: "bg-blue-500/15 text-blue-400 border border-blue-500/25",
@@ -649,7 +656,13 @@ export default function CampaignV2DetailPage() {
                         <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors">
                           <td className="px-5 py-3 text-[var(--text-3)] font-mono">{idx + 1}</td>
                           <td className="px-5 py-3 text-[var(--text-1)] font-mono">{phone}</td>
-                          <td className="px-5 py-3 text-[var(--text-2)]">{(n.outcome as string) || "—"}</td>
+                          <td className="px-5 py-3">
+                            {n.outcome ? (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${OUTCOME_BADGE_CLASS[n.outcome as string] ?? "bg-gray-500/15 text-gray-400 border border-gray-500/25"}`}>
+                                {OUTCOME_LABEL[n.outcome as string] ?? (n.outcome as string)}
+                              </span>
+                            ) : <span className="text-[var(--text-3)]">—</span>}
+                          </td>
                           <td className="px-5 py-3 text-[var(--text-2)]">{(n.attempt_count as number) ?? 0}</td>
                           <td className="px-5 py-3">
                             <SmsStatusCell
@@ -710,9 +723,22 @@ export default function CampaignV2DetailPage() {
             </div>
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">Call Windows</h3>
-              <pre className="whitespace-pre-wrap text-sm text-[var(--text-2)] bg-[var(--bg-app)] border border-[var(--border)] rounded-xl p-4 font-mono text-xs max-h-48 overflow-y-auto">
-                {JSON.stringify(campaign.call_windows, null, 2)}
-              </pre>
+              {(() => {
+                const cw = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
+                if (!cw || cw.length === 0) {
+                  return <p className="text-sm text-[var(--text-3)]">Not configured</p>;
+                }
+                return (
+                  <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden divide-y divide-[var(--border)]">
+                    {cw.map((w, i) => (
+                      <div key={i} className="flex items-center justify-between px-4 py-2 text-sm">
+                        <span className="text-[var(--text-1)] font-medium">{DAY_LABEL[w.day?.toLowerCase()] ?? w.day}</span>
+                        <span className="text-[var(--text-2)] font-mono text-xs">{w.start} – {w.end}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
