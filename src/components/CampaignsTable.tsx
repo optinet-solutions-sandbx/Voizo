@@ -110,8 +110,8 @@ export default function CampaignsTable({ campaigns, onDuplicate, onArchive, onRe
               <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Campaign Name</th>
               <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap">Total Contacts</th>
               <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap">Total Calls</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap">Connect Rate</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap">Success Rate</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap" title="Connected calls ÷ Total calls placed × 100">Connect Rate</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide whitespace-nowrap" title="Goal-reached calls ÷ Connected calls × 100">Success Rate</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-[var(--text-2)] uppercase tracking-wide">Status</th>
               <th className="w-20" />
             </tr>
