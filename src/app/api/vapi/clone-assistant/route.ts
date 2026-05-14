@@ -15,6 +15,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabaseServer";
+import { leaseSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
 
 const KNOWN_VOICES: Record<string, string> = {
   "3jR9BuQAOPMWUjWpi0ll": "Stephen",
@@ -360,7 +362,70 @@ export async function POST(request: NextRequest) {
 
   const clone = await createRes.json();
 
-  // ── 4. Create a Vapi SIP phone number pointing to the clone ──
+  // ── 4. Bind clone to a SIP route ──
+  // Two paths gated by USE_SIP_POOL env flag:
+  //   - true:  lease a pool slot, PATCH its assistantId
+  //   - false: legacy per-campaign POST /phone-number
+  // Path-by-flag at create time only. DELETE handler routes by data
+  // (vapi_pool_slot_id presence on the campaign row) so flag flips
+  // are safe under in-flight campaigns.
+  const usePool = process.env.USE_SIP_POOL === "true";
+
+  if (usePool) {
+    // ── Pool path ──
+    const slot = await leaseSlot(supabaseAdmin, clone.id);
+
+    if (!slot) {
+      // Pool exhausted. Roll back the clone (per legacy flow) and 503.
+      console.warn("[clone-assistant] SIP pool exhausted; rolling back clone");
+      await fetch(`https://api.vapi.ai/assistant/${clone.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${key}` },
+      }).catch(() => {});
+      return NextResponse.json(
+        {
+          error:
+            "All SIP pool slots are in use. Wait for a running campaign to finish, " +
+            "or contact admin to expand the pool.",
+        },
+        { status: 503 },
+      );
+    }
+
+    // Slot leased. Now PATCH the Vapi phone to point at our clone.
+    const patchRes = await patchPhoneAssistant(key, slot.vapi_phone_number_id, clone.id);
+
+    if (!patchRes.ok) {
+      // PATCH failed: release the slot (DB) and roll back the clone (Vapi).
+      console.error("[clone-assistant] Vapi PATCH failed:", patchRes.body.slice(0, 500));
+      await releaseSlot(supabaseAdmin, slot.id).catch(() => {});
+      await fetch(`https://api.vapi.ai/assistant/${clone.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${key}` },
+      }).catch(() => {});
+      return NextResponse.json(
+        { error: `Failed to bind SIP slot: ${patchRes.body.slice(0, 200)}` },
+        { status: 502 },
+      );
+    }
+
+    // Diagnostic log: pool utilization at lease time.
+    console.log(
+      `[clone-assistant] leased slot ${String(slot.slot_index).padStart(2, "0")} ` +
+      `(${slot.sip_uri}) → assistant ${clone.id}`,
+    );
+
+    return NextResponse.json({
+      assistantId: clone.id,
+      assistantName: clone.name,
+      sipUri: slot.sip_uri,
+      poolSlotId: slot.id,
+    });
+  }
+
+  // ── Legacy path (per-campaign SIP creation) ──
+  // Preserved bit-exact from the pre-pool code. Used when USE_SIP_POOL is
+  // unset/false and during the dual-mode rollout window.
   // Option B (manifesto §8 Reliability): deterministic SIP routing, no webhook
   // in the call path. Each clone gets its own SIP endpoint on sip.vapi.ai.
   const sipUser = `voizo-campaign-${clone.id.slice(0, 8)}`;
