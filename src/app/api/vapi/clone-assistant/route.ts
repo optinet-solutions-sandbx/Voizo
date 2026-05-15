@@ -267,6 +267,26 @@ export async function POST(request: NextRequest) {
     // (end call on voicemail/intercept patterns), this caps voicemail-cost
     // worst case at ~$0.05 per missed-detection call.
     silenceTimeoutSeconds: 30,
+    // ── Hard cap call duration (cost guardrail, 2026-05-15) ──
+    // Stakeholder-mandated 3-minute ceiling on any single call. Base agents
+    // inherited 202s (most) or 338s (Ernie) from Vapi-side configuration,
+    // which silently exceeded the policy ceiling. Override here so every
+    // new clone enforces 180s regardless of what's on the base. Pairs with
+    // silenceTimeoutSeconds and endCallPhrases as the third leg of the
+    // wrong-number-loop cost guardrail (per project_cost_runaway_wrongnumbers
+    // memory: unconfigured caps let wrong numbers cost $0.15/call for 3-min
+    // carrier loops).
+    maxDurationSeconds: 180,
+    // ── Silent hangup on voicemail (compliance + cost, 2026-05-15) ──
+    // When Vapi's voicemail detection fires, it speaks `voicemailMessage` at
+    // the beep before ending. The inherited base value ("Please call back
+    // when you're available.") risks (1) leaving a pre-recorded sales-adjacent
+    // message which crosses into TCPA/CRTC pre-recorded-message consent
+    // territory, and (2) burns ~2-3s of billable Vapi time per voicemail-hit
+    // call. Empty string = Vapi detects voicemail, ends silently. Customer
+    // still sees the missed call and can call back via the carrier-side
+    // caller ID. Verified accepted by Vapi via 2026-05-15 throwaway clone test.
+    voicemailMessage: "",
     // ── Voicemail detection tuning (Maria's request 2026-05-09 — cost guard) ──
     // Eva's 2026-05-08 test recorded the agent giving its full sales pitch on
     // Maria's Gibraltar voicemail (~$0.08/call wasted, capped only by the 60s
@@ -285,11 +305,6 @@ export async function POST(request: NextRequest) {
     //     even if we wanted to without Vapi rejecting the entire clone POST.
     //   - maxRetries: 6 (was 4) — detection window now 3-15.5s, covers the
     //     15s greeting that defeated the old config.
-    //
-    // Deliberately NOT touching voicemailMessage. The base value ("Please call
-    // back when you're available.") is inherited via ...base, and overriding
-    // it to null/empty risks Vapi's class-validator rejecting the entire
-    // clone POST — which would break all new campaign creation.
     //
     // Cost projection:
     //   - Detection catches (target case): ~$0.01 per voicemail (brief message)
@@ -315,9 +330,24 @@ export async function POST(request: NextRequest) {
     // gains voicemail detection where the base lacked it — aligned with the
     // original commit's intent of "tighter voicemail detection on cloned
     // assistants" applying platform-wide).
+    //
+    // beepMaxAwaitSeconds override (2026-05-15): production diagnostic across
+    // 173 calls in 14 days showed ZERO calls with endedReason=voicemail despite
+    // the backoffPlan tightening shipped 2026-05-11. Root cause: base agents
+    // have beepMaxAwaitSeconds=0, which disables Vapi's wait-for-beep step.
+    // Without that wait, the detection chain never completes — AMD fires but
+    // Vapi never plays voicemailMessage, never sets endedReason=voicemail, and
+    // the call continues until the LLM agent itself detects voicemail content
+    // via prompt rule #4 and calls endCall. That LLM-detection path works but
+    // burns ~8-15s of agent talk into voicemail before realizing. Setting
+    // beepMaxAwaitSeconds=30 (Vapi's documented default) lets the detection
+    // complete properly so Vapi can intercept on detection rather than relying
+    // on the LLM fallback. Verified accepted by Vapi via 2026-05-15 throwaway
+    // clone test.
     voicemailDetection: {
       ...(base.voicemailDetection ?? {}),
       provider: base.voicemailDetection?.provider ?? "vapi",
+      beepMaxAwaitSeconds: 30,
       backoffPlan: {
         ...((base.voicemailDetection ?? {}).backoffPlan ?? {}),
         startAtSeconds: 3,
