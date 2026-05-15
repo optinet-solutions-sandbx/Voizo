@@ -92,7 +92,7 @@ const OUTCOME_DISPLAY_ORDER = [
 
 const OUTCOME_LABEL: Record<string, string> = {
   pending: "Pending",
-  in_progress: "Dialing",
+  in_progress: "In progress",
   pending_retry: "Awaiting retry",
   sent_sms: "SMS sent",
   not_interested: "Not interested",
