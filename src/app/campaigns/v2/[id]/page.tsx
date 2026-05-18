@@ -4,7 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2, StopCircle, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Plug, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -15,6 +15,10 @@ function StatusBadge({ status }: { status: string }) {
     scheduled: "bg-cyan-500/15 text-cyan-400 border-cyan-500/25",
     running: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
     paused: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+    // Step 1 (dashboard rebuild) added `inactive`: ejected, slot released,
+    // history preserved. Distinct from `paused` (slot held); slate/neutral
+    // reflects the "resting, no slot" state.
+    inactive: "bg-slate-500/15 text-slate-300 border-slate-500/25",
     completed: "bg-blue-500/15 text-blue-400 border-blue-500/25",
     archived: "bg-gray-500/15 text-gray-400 border-gray-500/25",
   };
@@ -157,6 +161,14 @@ export default function CampaignV2DetailPage() {
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopResult, setStopResult] = useState<string | null>(null);
   const cancelStopBtnRef = useRef<HTMLButtonElement>(null);
+  // Step 12a (dashboard rebuild): Eject + Resume confirmation modals + results.
+  // Match the Stop modal pattern for consistency — same shape, same a11y polish.
+  const [confirmEject, setConfirmEject] = useState(false);
+  const [confirmRebind, setConfirmRebind] = useState(false);
+  const [ejectResult, setEjectResult] = useState<string | null>(null);
+  const [rebindResult, setRebindResult] = useState<string | null>(null);
+  const cancelEjectBtnRef = useRef<HTMLButtonElement>(null);
+  const cancelRebindBtnRef = useRef<HTMLButtonElement>(null);
 
   // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
   // auto-focus the safer Cancel button (so an accidental Enter doesn't
@@ -170,6 +182,27 @@ export default function CampaignV2DetailPage() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [confirmStop, acting]);
+
+  // Same a11y treatment for Eject + Rebind modals.
+  useEffect(() => {
+    if (!confirmEject) return;
+    cancelEjectBtnRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !acting) setConfirmEject(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmEject, acting]);
+
+  useEffect(() => {
+    if (!confirmRebind) return;
+    cancelRebindBtnRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !acting) setConfirmRebind(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmRebind, acting]);
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -386,6 +419,105 @@ export default function CampaignV2DetailPage() {
     }
   }
 
+  // ── Step 12a: Eject + Resume (Rebind) handlers ──
+  // Both follow the handleStop optimistic-update pattern: flip the status
+  // optimistically, POST to the endpoint, revert on error, refresh on success.
+  // Wired to Step 3 (eject) + Step 4b (rebind) endpoints.
+  async function handleEject() {
+    if (!id) return;
+    setConfirmEject(false);
+    setActing(true);
+    setActionError(null);
+    setEjectResult(null);
+    setRebindResult(null);
+
+    const prevStatus = campaign?.status as string | undefined;
+    // Optimistic: flip to inactive (slot released, history preserved)
+    setCampaign((prev) => (prev ? { ...prev, status: "inactive" } : prev));
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/eject`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCampaign((prev) =>
+          prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+        );
+        setActionError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to eject worker (${res.status}).`,
+        );
+        return;
+      }
+      const slotLabel = typeof body.slotReleased === "string" ? body.slotReleased : null;
+      const warnings = Array.isArray(body.vapiWarnings) ? body.vapiWarnings : [];
+      setEjectResult(
+        slotLabel
+          ? `Ejected. ${slotLabel} released, clone deleted. Campaign history preserved.${
+              warnings.length ? ` (${warnings.length} Vapi warning${warnings.length !== 1 ? "s" : ""})` : ""
+            }`
+          : "Ejected. Campaign history preserved.",
+      );
+      await refreshData();
+    } catch (err) {
+      setCampaign((prev) =>
+        prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+      );
+      console.error("Eject failed:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to eject worker.");
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function handleRebind() {
+    if (!id) return;
+    setConfirmRebind(false);
+    setActing(true);
+    setActionError(null);
+    setEjectResult(null);
+    setRebindResult(null);
+
+    const prevStatus = campaign?.status as string | undefined;
+    // Optimistic: flip to running (rebind path: new clone + new slot + status flip)
+    setCampaign((prev) => (prev ? { ...prev, status: "running" } : prev));
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/rebind`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCampaign((prev) =>
+          prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+        );
+        setActionError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to resume campaign (${res.status}).`,
+        );
+        return;
+      }
+      const slotLabel = typeof body.slotLabel === "string" ? body.slotLabel : null;
+      setRebindResult(
+        slotLabel
+          ? `Resumed. ${slotLabel} leased, new clone created.`
+          : "Resumed.",
+      );
+      await refreshData();
+    } catch (err) {
+      setCampaign((prev) =>
+        prev && prevStatus ? { ...prev, status: prevStatus } : prev,
+      );
+      console.error("Rebind failed:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to resume campaign.");
+    } finally {
+      setActing(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-4 sm:p-6 max-w-6xl mx-auto flex items-center justify-center py-24 text-[var(--text-3)]">
@@ -502,6 +634,32 @@ export default function CampaignV2DetailPage() {
                 </button>
               </>
             )}
+            {/* Eject — release the SIP slot + delete clone; preserve campaign +
+                history. Allowed on draft/paused/completed/archived per Step 3
+                spec (task tracker §3). Amber accent: release, not destroy. */}
+            {(status === "draft" || status === "paused" || status === "completed" || status === "archived") && (
+              <button
+                onClick={() => setConfirmEject(true)}
+                disabled={acting}
+                title="Eject worker — releases the SIP slot and deletes the Vapi clone; campaign and history preserved"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+              >
+                <Unplug size={15} /> Eject
+              </button>
+            )}
+            {/* Resume — re-clone the base assistant + lease a fresh slot + flip
+                back to running. Step 4b rebind endpoint. Shown only on
+                inactive (ejected) campaigns. */}
+            {status === "inactive" && (
+              <button
+                onClick={() => setConfirmRebind(true)}
+                disabled={acting}
+                title="Resume — re-clone the base agent and lease a new worker slot"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+              >
+                <Plug size={15} /> Resume
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -523,6 +681,32 @@ export default function CampaignV2DetailPage() {
           <span>{stopResult}</span>
           <button
             onClick={() => setStopResult(null)}
+            className="text-emerald-300/70 hover:text-emerald-200 text-xs"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {ejectResult && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-200 flex items-center justify-between gap-3">
+          <span>{ejectResult}</span>
+          <button
+            onClick={() => setEjectResult(null)}
+            className="text-amber-300/70 hover:text-amber-200 text-xs"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {rebindResult && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-sm text-emerald-300 flex items-center justify-between gap-3">
+          <span>{rebindResult}</span>
+          <button
+            onClick={() => setRebindResult(null)}
             className="text-emerald-300/70 hover:text-emerald-200 text-xs"
             aria-label="Dismiss"
           >
@@ -577,6 +761,120 @@ export default function CampaignV2DetailPage() {
               >
                 <StopCircle size={14} />
                 {acting ? "Stopping..." : "Stop Campaign"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Eject confirmation modal — Step 12a (dashboard rebuild) */}
+      {confirmEject && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-eject-title"
+          onClick={() => !acting && setConfirmEject(false)}
+        >
+          <div
+            className="bg-[var(--bg-card)] border border-amber-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <Unplug size={18} className="text-amber-400" />
+              </div>
+              <h3 id="confirm-eject-title" className="text-base font-semibold text-[var(--text-1)]">
+                Eject worker from &quot;{campaign.name as string}&quot;?
+              </h3>
+            </div>
+            <p className="text-sm text-[var(--text-2)] mb-2 leading-relaxed">
+              This will <span className="font-semibold text-amber-300">release the SIP slot</span> for
+              another campaign and delete the cloned agent on Vapi.
+            </p>
+            <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
+              Campaign history ({numbers.length} number{numbers.length !== 1 ? "s" : ""},{" "}
+              {calls.length} call{calls.length !== 1 ? "s" : ""}) is preserved. You can re-assign a
+              worker later via Resume.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                ref={cancelEjectBtnRef}
+                onClick={() => setConfirmEject(false)}
+                disabled={acting}
+                className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEject}
+                disabled={acting}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                <Unplug size={14} />
+                {acting ? "Ejecting..." : "Eject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resume (Rebind) confirmation modal — Step 12a */}
+      {confirmRebind && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-rebind-title"
+          onClick={() => !acting && setConfirmRebind(false)}
+        >
+          <div
+            className="bg-[var(--bg-card)] border border-emerald-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                <Plug size={18} className="text-emerald-400" />
+              </div>
+              <h3 id="confirm-rebind-title" className="text-base font-semibold text-[var(--text-1)]">
+                Resume &quot;{campaign.name as string}&quot;?
+              </h3>
+            </div>
+            {campaign.base_assistant_id ? (
+              <>
+                <p className="text-sm text-[var(--text-2)] mb-2 leading-relaxed">
+                  This will create a new Vapi clone of the preserved base agent (with the saved
+                  prompt and voice), lease a fresh worker slot, and flip the campaign back to{" "}
+                  <span className="font-semibold text-emerald-300">running</span>.
+                </p>
+                <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
+                  Dialing resumes from existing pending numbers ({numbers.length} preserved). For
+                  cross-campaign double-dial protection use the Resume-diff flow when it ships
+                  (Phase 1 Step 12c).
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-amber-300 mb-5 leading-relaxed">
+                This campaign was created before resume support landed. Pick a base agent on the
+                campaign detail page first, then try Resume again.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                ref={cancelRebindBtnRef}
+                onClick={() => setConfirmRebind(false)}
+                disabled={acting}
+                className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRebind}
+                disabled={acting || !campaign.base_assistant_id}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                <Plug size={14} />
+                {acting ? "Resuming..." : "Resume"}
               </button>
             </div>
           </div>
