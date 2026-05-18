@@ -14,6 +14,7 @@ export interface CampaignV2CreateInput {
   vapiSipUri?: string;
   vapiPoolSlotId?: string; // SIP pool slot id when USE_SIP_POOL=true; null/undefined for legacy per-campaign flow
   baseAssistantId?: string; // Source agent the clone was made from; persisted for re-bind after eject
+  voiceId?: string; // ElevenLabs voice ID chosen at create time; persisted for re-bind so operator intent survives eject. NULL = use base agent's default voice.
   timezone: string;
   startAt?: string | null;
   endAt?: string | null;
@@ -65,6 +66,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       vapi_sip_uri: input.vapiSipUri || null,
       vapi_pool_slot_id: input.vapiPoolSlotId || null,
       base_assistant_id: input.baseAssistantId || null,
+      voice_id: input.voiceId || null,
       system_prompt: input.systemPrompt,
       timezone: input.timezone,
       start_at: input.startAt || null,
