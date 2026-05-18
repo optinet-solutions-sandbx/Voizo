@@ -4,7 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Plug, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -169,6 +169,23 @@ export default function CampaignV2DetailPage() {
   const [rebindResult, setRebindResult] = useState<string | null>(null);
   const cancelEjectBtnRef = useRef<HTMLButtonElement>(null);
   const cancelRebindBtnRef = useRef<HTMLButtonElement>(null);
+  // Step 12b-refresh: Refresh-segment modal is a two-call protocol
+  // (preview → commit). The modal opens in a loading state, fires the
+  // preview-only request, displays the diff, then commits on confirm.
+  type RefreshPreview = {
+    segmentMembersCount: number;
+    existingRowsCount: number;
+    toAdd: { count: number; sample: string[] };
+    toRemove: { count: number; sample: string[] };
+    preservedPending: { count: number };
+    preservedDialed: { inSegment: number; outOfSegment: number; total: number };
+  };
+  const [refreshOpen, setRefreshOpen] = useState(false);
+  const [refreshPreview, setRefreshPreview] = useState<RefreshPreview | null>(null);
+  const [refreshLoading, setRefreshLoading] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshResult, setRefreshResult] = useState<string | null>(null);
+  const cancelRefreshBtnRef = useRef<HTMLButtonElement>(null);
 
   // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
   // auto-focus the safer Cancel button (so an accidental Enter doesn't
@@ -203,6 +220,23 @@ export default function CampaignV2DetailPage() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [confirmRebind, acting]);
+
+  // Refresh-segment modal a11y. The Cancel button is safe (read-only preview
+  // doesn't change DB state until Refresh is clicked), but auto-focusing it
+  // keeps the muscle-memory consistent across all modals.
+  useEffect(() => {
+    if (!refreshOpen) return;
+    cancelRefreshBtnRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !refreshLoading) {
+        setRefreshOpen(false);
+        setRefreshPreview(null);
+        setRefreshError(null);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [refreshOpen, refreshLoading]);
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -518,6 +552,83 @@ export default function CampaignV2DetailPage() {
     }
   }
 
+  // ── Step 12b-refresh: Refresh-segment two-call flow ──
+  // Opening the modal fires the preview-only request (commit=false); the
+  // operator sees the 4-bucket diff and confirms or cancels. Commit fires
+  // a second POST (commit=true) that applies the INSERT + UPDATE.
+  async function openRefreshModal() {
+    if (!id) return;
+    setRefreshOpen(true);
+    setRefreshPreview(null);
+    setRefreshError(null);
+    setRefreshLoading(true);
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/refresh-segment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commit: false }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRefreshError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to fetch segment preview (${res.status}).`,
+        );
+        return;
+      }
+      // Defensive: the endpoint returns a slightly-different success shape
+      // depending on whether segment_id is null, but for the campaigns this
+      // button is enabled on (segment_id non-null), all the expected fields
+      // are present.
+      setRefreshPreview(body as RefreshPreview);
+    } catch (err) {
+      console.error("Refresh preview failed:", err);
+      setRefreshError(err instanceof Error ? err.message : "Failed to fetch segment preview.");
+    } finally {
+      setRefreshLoading(false);
+    }
+  }
+
+  async function handleRefreshCommit() {
+    if (!id || !refreshPreview) return;
+    setRefreshLoading(true);
+    setRefreshError(null);
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/refresh-segment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commit: true }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRefreshError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to apply refresh (${res.status}).`,
+        );
+        return;
+      }
+      const inserted = typeof body.insertedCount === "number" ? body.insertedCount : 0;
+      const softMarked = typeof body.softMarkedCount === "number" ? body.softMarkedCount : 0;
+      const parts: string[] = [];
+      if (inserted > 0) parts.push(`${inserted} new number${inserted !== 1 ? "s" : ""} added`);
+      if (softMarked > 0) parts.push(`${softMarked} pending number${softMarked !== 1 ? "s" : ""} removed from segment`);
+      if (parts.length === 0) parts.push("no changes applied");
+      setRefreshResult(`Segment refreshed: ${parts.join(", ")}.`);
+      setRefreshOpen(false);
+      setRefreshPreview(null);
+      await refreshData();
+    } catch (err) {
+      console.error("Refresh commit failed:", err);
+      setRefreshError(err instanceof Error ? err.message : "Failed to apply refresh.");
+    } finally {
+      setRefreshLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-4 sm:p-6 max-w-6xl mx-auto flex items-center justify-center py-24 text-[var(--text-3)]">
@@ -660,6 +771,31 @@ export default function CampaignV2DetailPage() {
                 <Plug size={15} /> Resume
               </button>
             )}
+            {/* Refresh segment — Step 6 endpoint, two-call protocol. Always
+                rendered per design doc §5.5; disabled with hover hint when
+                running (allowed states per task tracker §6 are
+                draft/paused/inactive/completed/archived) or when the campaign
+                has no source segment to refresh from. */}
+            {(() => {
+              const cannotRunning = status === "running";
+              const cannotNoSegment = campaign.segment_id == null;
+              const disabled = acting || cannotRunning || cannotNoSegment;
+              const title = cannotRunning
+                ? "Pause the campaign first"
+                : cannotNoSegment
+                  ? "No source segment to refresh from"
+                  : "Refresh segment — pull current customer.io members and apply a non-destructive diff";
+              return (
+                <button
+                  onClick={openRefreshModal}
+                  disabled={disabled}
+                  title={title}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                >
+                  <RefreshCw size={15} /> Refresh segment
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -708,6 +844,19 @@ export default function CampaignV2DetailPage() {
           <button
             onClick={() => setRebindResult(null)}
             className="text-emerald-300/70 hover:text-emerald-200 text-xs"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {refreshResult && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-sky-500/30 bg-sky-500/10 text-sm text-sky-300 flex items-center justify-between gap-3">
+          <span>{refreshResult}</span>
+          <button
+            onClick={() => setRefreshResult(null)}
+            className="text-sky-300/70 hover:text-sky-200 text-xs"
             aria-label="Dismiss"
           >
             ✕
@@ -875,6 +1024,118 @@ export default function CampaignV2DetailPage() {
               >
                 <Plug size={14} />
                 {acting ? "Resuming..." : "Resume"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refresh-segment two-state modal — Step 12b-refresh */}
+      {refreshOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-refresh-title"
+          onClick={() => {
+            if (refreshLoading) return;
+            setRefreshOpen(false);
+            setRefreshPreview(null);
+            setRefreshError(null);
+          }}
+        >
+          <div
+            className="bg-[var(--bg-card)] border border-sky-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center shrink-0">
+                <RefreshCw size={18} className={`text-sky-400 ${refreshLoading && !refreshPreview ? "animate-spin" : ""}`} />
+              </div>
+              <h3 id="confirm-refresh-title" className="text-base font-semibold text-[var(--text-1)]">
+                Refresh segment from customer.io?
+              </h3>
+            </div>
+
+            {/* Loading state — preview hasn't returned yet */}
+            {refreshLoading && !refreshPreview && !refreshError && (
+              <p className="text-sm text-[var(--text-2)] mb-5 leading-relaxed">
+                Fetching current segment members from customer.io...
+                <br />
+                <span className="text-xs text-[var(--text-3)]">May take 10-30s for larger segments.</span>
+              </p>
+            )}
+
+            {/* Error state */}
+            {refreshError && (
+              <div className="mb-5 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+                {refreshError}
+              </div>
+            )}
+
+            {/* Preview state — diff loaded */}
+            {refreshPreview && !refreshError && (
+              <>
+                <div className="mb-4 grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-lg bg-[var(--bg-app)] border border-[var(--border)] p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-[var(--text-3)] mb-1">Current</p>
+                    <p className="text-lg font-bold text-[var(--text-1)]">{refreshPreview.existingRowsCount}</p>
+                    <p className="text-[10px] text-[var(--text-3)]">total rows</p>
+                  </div>
+                  <div className="rounded-lg bg-[var(--bg-app)] border border-[var(--border)] p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-[var(--text-3)] mb-1">After</p>
+                    <p className="text-lg font-bold text-[var(--text-1)]">
+                      {refreshPreview.existingRowsCount + refreshPreview.toAdd.count - refreshPreview.toRemove.count}
+                    </p>
+                    <p className="text-[10px] text-[var(--text-3)]">eligible to dial</p>
+                  </div>
+                </div>
+                <div className="mb-5 space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-emerald-300">+ New numbers added</span>
+                    <span className="font-semibold text-emerald-300">{refreshPreview.toAdd.count}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-amber-300">− Pending removed from segment</span>
+                    <span className="font-semibold text-amber-300">{refreshPreview.toRemove.count}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[var(--text-3)]">
+                    <span>= Already pending (preserved)</span>
+                    <span className="font-semibold">{refreshPreview.preservedPending.count}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[var(--text-3)]">
+                    <span>= Already dialed (preserved)</span>
+                    <span className="font-semibold">{refreshPreview.preservedDialed.total}</span>
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
+                  Dial history is never destroyed. Removed-from-segment pending numbers
+                  get soft-marked &apos;removed_from_segment&apos; so they don&apos;t dial again, but
+                  the row stays for the historical record.
+                </p>
+              </>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                ref={cancelRefreshBtnRef}
+                onClick={() => {
+                  setRefreshOpen(false);
+                  setRefreshPreview(null);
+                  setRefreshError(null);
+                }}
+                disabled={refreshLoading}
+                className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRefreshCommit}
+                disabled={refreshLoading || !refreshPreview || refreshError !== null}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-sky-400"
+              >
+                <RefreshCw size={14} className={refreshLoading ? "animate-spin" : ""} />
+                {refreshLoading && refreshPreview ? "Applying..." : "Refresh"}
               </button>
             </div>
           </div>
