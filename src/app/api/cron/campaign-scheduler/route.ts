@@ -266,24 +266,34 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // ── Queue gate: only one campaign runs at a time (MVP constraint) ──
-  // Chris's directive 2026-05-07: avoid Vapi/SquareTalk/Mobivate concurrent-load
-  // surprises by enforcing serial campaign execution. If another campaign is
-  // currently running, defer this tick — the cron fires every minute and the
-  // candidate campaign will be picked up once the running one completes.
-  // True scaling = additional Vapi accounts or higher subscription tier (Phase 3).
+  // ── Queue gate: pool-aware concurrency limit ──
+  // Phase 1 of the dashboard rebuild (design doc §9.1) lifted the original
+  // any-running-defers gate to a pool-aware limit. The SIP pool itself becomes
+  // the rate-limiter: we count vapi_sip_pool rows with status='leased' and
+  // defer if at or above CAMPAIGN_CONCURRENCY_LIMIT (default 3).
+  //
+  // Phased rollout per design doc §5.8:
+  //   Phase 1: limit=3  — after originate-shim 5-concurrent load test passes
+  //   Phase 2: limit=5  — after ~2 weeks of clean Phase 1 ops
+  //
+  // Per-campaign concurrency stays at 1 (sequential dialing within a campaign
+  // keeps retry/chain-next state clean). The lift is at the scheduler level only.
+  //
   // Note: this gate fires AFTER the resume sweep above so already-running
   // campaigns can still advance their retries on this tick.
-  const { count: runningCount } = await supabaseAdmin
-    .from("campaigns_v2")
+  const limit = parseInt(process.env.CAMPAIGN_CONCURRENCY_LIMIT ?? "3", 10);
+  const { count: leasedCount } = await supabaseAdmin
+    .from("vapi_sip_pool")
     .select("id", { count: "exact", head: true })
-    .eq("status", "running");
+    .eq("status", "leased");
 
-  if (runningCount && runningCount > 0) {
+  if ((leasedCount ?? 0) >= limit) {
     return NextResponse.json({
       started: 0,
       queued: true,
-      reason: "another campaign currently running — deferring to next tick",
+      reason: `pool at concurrency limit (${leasedCount}/${limit} leased) — deferring to next tick`,
+      leasedCount: leasedCount ?? 0,
+      concurrencyLimit: limit,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
       sweepResolved: sweeperResults.length,
@@ -301,7 +311,7 @@ export async function GET(request: NextRequest) {
     .not("start_at", "is", null)
     .lte("start_at", now)
     .order("start_at", { ascending: true }) // FIFO when multiple are ready
-    .limit(1); // queue gate enforces 1-at-a-time; no point picking 2
+    .limit(1); // one new start per minute — gentle ramp to the concurrency limit
 
   if (error) {
     console.error("[campaign-scheduler] query error:", error);
