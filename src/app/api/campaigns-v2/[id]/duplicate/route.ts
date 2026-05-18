@@ -2,13 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { createClone } from "@/lib/vapi/cloneAssistant";
 import { leaseSlot, linkSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
-import {
-  getSegmentMembers,
-  getCustomerAttributes,
-  type CustomerIOSegmentMember,
-  type CustomerIOCustomer,
-  type CustomerIOResult,
-} from "@/lib/customerio";
+import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
 
 // Up to: paginated customer.io fetch + per-member attribute lookups (~10-30s for
@@ -35,119 +29,6 @@ const CONTACT_OUTCOMES = [
   "unreached",
   "pending_retry",
 ];
-
-const PHONE_ATTRIBUTE_KEYS = ["phone", "phone_number", "mobile", "mobile_number", "cell", "telephone"];
-
-function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | null {
-  for (const key of PHONE_ATTRIBUTE_KEYS) {
-    const value = attrs[key];
-    if (typeof value === "string" && value.trim().length > 0) return value.trim();
-  }
-  return null;
-}
-
-/**
- * Throttled fan-out to respect customer.io's 10 req/sec per-workspace rate
- * limit. 8 calls per chunk with 150ms pauses keeps worst-case burst safely
- * under cap while completing a 100-member batch in ~10-15s. Same pattern as
- * the existing /api/customerio/segments/[segmentId]/members route — duplicated
- * for now; extract when Step 6 (Manual refresh) lands as the second caller.
- */
-async function chunkedPromiseAll<T, R>(
-  items: T[],
-  chunkSize: number,
-  fn: (item: T) => Promise<R>,
-  delayMs = 150,
-): Promise<R[]> {
-  const results: R[] = [];
-  for (let i = 0; i < items.length; i += chunkSize) {
-    const chunk = items.slice(i, i + chunkSize);
-    const chunkResults = await Promise.all(chunk.map(fn));
-    results.push(...chunkResults);
-    if (i + chunkSize < items.length && delayMs > 0) {
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-  }
-  return results;
-}
-
-/**
- * Identifier-fallback profile lookup. Customer.io's segment-membership and
- * customer-profile tables can be inconsistent — a member's workspace id
- * exists in the segment but not in /customers. Try id → cio_<cio_id> → email
- * in order; only return failure when ALL identifiers fail. Closes the
- * 2026-05-13 "Glenda" silent-drop bug; same pattern as the members route.
- */
-async function lookupMemberProfileWithFallback(
-  member: CustomerIOSegmentMember,
-): Promise<CustomerIOResult<CustomerIOCustomer>> {
-  const identifiers = [
-    member.id,
-    member.cio_id ? `cio_${member.cio_id}` : null,
-    member.email,
-  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-
-  if (identifiers.length === 0) {
-    return { success: false, data: null, error: "No identifiers available on segment member" };
-  }
-
-  let lastError = "All identifiers exhausted";
-  for (const id of identifiers) {
-    const result = await getCustomerAttributes(id);
-    if (result.success) return result;
-    lastError = result.error;
-  }
-  return { success: false, data: null, error: lastError };
-}
-
-/**
- * Paginated fetch of all phones in a customer.io segment.
- *
- * Loops getSegmentMembers with the `next` cursor (1000 per page), fan-outs
- * profile lookups via chunkedPromiseAll, extracts phones via attribute-key
- * variants, normalizes to E.164 via parsePhoneList. Safety cap: 10 pages =
- * 10000 members max. PoC scale is <500 typically.
- */
-async function fetchSegmentPhones(segmentId: number): Promise<
-  | { ok: true; phones: string[]; sampled: number }
-  | { ok: false; status: number; error: string }
-> {
-  const PAGE_CAP = 10;
-  const allRawPhones: string[] = [];
-  let cursor: string | undefined;
-  let pages = 0;
-
-  while (pages < PAGE_CAP) {
-    const batchResult = await getSegmentMembers(segmentId, { start: cursor, limit: 1000 });
-    if (!batchResult.success) {
-      return {
-        ok: false,
-        status: batchResult.error.includes("CUSTOMERIO_APP_API_KEY") ? 500 : 502,
-        error: batchResult.error,
-      };
-    }
-
-    const profiles = await chunkedPromiseAll(
-      batchResult.data.identifiers,
-      8,
-      lookupMemberProfileWithFallback,
-    );
-
-    for (const profile of profiles) {
-      if (!profile.success) continue;
-      const phone = extractPhoneFromAttrs(profile.data.attributes);
-      if (phone) allRawPhones.push(phone);
-    }
-
-    pages++;
-    if (!batchResult.data.next) break;
-    cursor = batchResult.data.next;
-  }
-
-  // parsePhoneList handles E.164 normalization + dedupe.
-  const phones = parsePhoneList(allRawPhones.join("\n"));
-  return { ok: true, phones, sampled: allRawPhones.length };
-}
 
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -270,14 +151,11 @@ export async function POST(
       : undefined;
 
   // ── 1. Read source campaign ──
+  // Supabase TS inference requires the .select() column list to be a single
+  // string literal — concatenation defeats the generic. Keep as one line.
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select(
-      "id, name, system_prompt, base_assistant_id, voice_id, segment_id, " +
-      "timezone, call_windows, max_attempts, retry_interval_minutes, " +
-      "sms_enabled, sms_template, sms_on_goal_reached_only, " +
-      "campaign_type, status",
-    )
+    .select("id, name, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only, campaign_type, status")
     .eq("id", id)
     .single();
 
@@ -315,7 +193,9 @@ export async function POST(
         { status: segmentResult.status },
       );
     }
-    candidatePhones = segmentResult.phones;
+    // parsePhoneList normalizes to E.164 + dedupes; required for matching
+    // against suppression_list / campaign_numbers_v2 (both E.164).
+    candidatePhones = parsePhoneList(segmentResult.phones.join("\n"));
     candidateSource = "segment_refresh";
   } else {
     // Copy source's pending phones as-is (the "duplicate the untouched batch" use case).
