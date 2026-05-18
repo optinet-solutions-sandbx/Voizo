@@ -11,7 +11,11 @@
  *   { baseAssistantId, voiceId?, systemPrompt?, campaignName }
  *
  * Returns:
- *   { assistantId, assistantName, sipUri }
+ *   { assistantId, assistantName, sipUri, baseAssistantId }
+ *
+ * baseAssistantId is echoed from the request so the campaign-create flow can
+ * persist it on the new campaigns_v2 row. The dashboard rebuild's eject/re-bind
+ * primitive reads it to know which base to re-clone from on Resume.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -468,6 +472,7 @@ export async function POST(request: NextRequest) {
       assistantName: clone.name,
       sipUri: slot.sip_uri,
       poolSlotId: slot.id,
+      baseAssistantId,
     });
   }
 
@@ -517,5 +522,6 @@ export async function POST(request: NextRequest) {
     assistantId: clone.id,
     assistantName: clone.name,
     sipUri: phone.sipUri ?? sipUri,
+    baseAssistantId,
   });
 }
