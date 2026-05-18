@@ -13,6 +13,7 @@ export interface CampaignV2CreateInput {
   vapiAssistantName?: string;
   vapiSipUri?: string;
   vapiPoolSlotId?: string; // SIP pool slot id when USE_SIP_POOL=true; null/undefined for legacy per-campaign flow
+  baseAssistantId?: string; // Source agent the clone was made from; persisted for re-bind after eject
   timezone: string;
   startAt?: string | null;
   endAt?: string | null;
@@ -63,6 +64,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       vapi_assistant_name: input.vapiAssistantName || null,
       vapi_sip_uri: input.vapiSipUri || null,
       vapi_pool_slot_id: input.vapiPoolSlotId || null,
+      base_assistant_id: input.baseAssistantId || null,
       system_prompt: input.systemPrompt,
       timezone: input.timezone,
       start_at: input.startAt || null,
