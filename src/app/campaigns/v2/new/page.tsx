@@ -206,6 +206,12 @@ export default function NewCampaignV2Page() {
   const [smsOptout, setSmsOptout] = useState(SMS_OPTOUT_FOOTER);
   const [smsOptoutEditing, setSmsOptoutEditing] = useState(false);
   const [numbersText, setNumbersText] = useState("");
+  // customer.io segment id captured at import time. Single-select sets this;
+  // multi-select / manual-paste leave it null. Persisted as campaigns_v2.segment_id
+  // so Step 5 (Duplicate), Step 6 (Manual refresh), and Step 7 (Resume-diff)
+  // can re-query customer.io for this campaign. NULL = no source segment,
+  // refresh endpoints reject with 400.
+  const [segmentId, setSegmentId] = useState<number | null>(null);
   // Edit/view toggle for the phone numbers panel. Default true (textarea shown)
   // so a fresh form is immediately typeable. CIO import flips to false to show
   // the numbered preview. User can toggle with the Edit/Done buttons.
@@ -339,6 +345,7 @@ export default function NewCampaignV2Page() {
         vapiPoolSlotId: cloneData.poolSlotId,
         baseAssistantId: cloneData.baseAssistantId,
         voiceId: cloneData.voiceId ?? undefined,
+        segmentId: segmentId ?? undefined,
         timezone: timezone.trim(),
         startAt: startMode === "delay"
           ? new Date(Date.now() + delayMinutes * 60_000).toISOString()
@@ -837,8 +844,11 @@ export default function NewCampaignV2Page() {
 
           <div className="grid gap-3">
             <SegmentImporter
-              onImport={(phones) => {
+              onImport={(phones, importedSegmentId) => {
                 setNumbersText(phones.join("\n"));
+                // Capture the segment id for persistence — only populated on
+                // single-segment imports; multi-segment imports pass null.
+                setSegmentId(importedSegmentId);
                 // Switch to view mode so operator immediately sees the
                 // numbered preview of what was captured.
                 setPhoneEditing(false);

@@ -17,7 +17,23 @@ interface Member {
 }
 
 interface Props {
-  onImport: (phones: string[]) => void;
+  /**
+   * Called when the operator confirms an import.
+   *
+   * - segmentId/segmentName are populated when ONE segment is selected
+   *   (single-select row click). Persisted as campaigns_v2.segment_id so
+   *   Step 5 (Duplicate), Step 6 (Manual segment refresh), and Step 7
+   *   (Resume-diff segment membership check) can re-query customer.io.
+   * - segmentId/segmentName are NULL when the operator multi-selects via
+   *   checkboxes — the resulting phone list unions members from N
+   *   segments and there is no single segment to refresh against. The
+   *   refresh endpoints reject NULL segment_id with a friendly 400.
+   */
+  onImport: (
+    phones: string[],
+    segmentId: number | null,
+    segmentName: string | null,
+  ) => void;
 }
 
 export default function SegmentImporter({ onImport }: Props) {
@@ -186,7 +202,11 @@ export default function SegmentImporter({ onImport }: Props) {
       .map((m) => m.phone)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     if (phones.length === 0) return;
-    onImport(phones);
+    // Single-segment imports carry the segment identity through to the
+    // campaign row; multi-segment imports do not (no single source segment).
+    const segmentId = isMultiMode ? null : singleSelectedId;
+    const segmentName = isMultiMode ? null : singleSelectedName;
+    onImport(phones, segmentId, segmentName);
     setExpanded(false);
     setCheckedIds(new Set());
     setSingleSelectedId(null);
