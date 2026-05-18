@@ -4,7 +4,8 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Bot, ChevronDown, Clock, Copy, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -186,6 +187,33 @@ export default function CampaignV2DetailPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
   const cancelRefreshBtnRef = useRef<HTMLButtonElement>(null);
+  // Step 12b-duplicate: Duplicate modal is a three-stage flow:
+  //   stage='form'    — operator types new_name + toggles refresh_segment
+  //   stage='preview' — POST commit=false returns diff buckets; operator
+  //                     picks a skip strategy radio
+  //   stage='committing' — POST commit=true with skip choices; on success
+  //                        navigate to the new campaign's detail page
+  // Override pickers for base/voice/prompt are NOT included in Phase 1 —
+  // operator edits the new campaign after creation if those need to change.
+  type DuplicateStage = "form" | "preview" | "committing";
+  type DuplicatePreview = {
+    candidateSource: string;
+    candidatesCount: number;
+    overlap: { count: number; sample: string[] };
+    suppressed: { count: number; sample: string[] };
+    recentlyCalled: { count: number; sample: string[] };
+  };
+  type SkipStrategy = "overlap_only" | "overlap_and_recent" | "keep_all";
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateStage, setDuplicateStage] = useState<DuplicateStage>("form");
+  const [duplicateName, setDuplicateName] = useState("");
+  const [duplicateRefreshSegment, setDuplicateRefreshSegment] = useState(true);
+  const [duplicateSkipStrategy, setDuplicateSkipStrategy] = useState<SkipStrategy>("overlap_only");
+  const [duplicatePreview, setDuplicatePreview] = useState<DuplicatePreview | null>(null);
+  const [duplicateLoading, setDuplicateLoading] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const cancelDuplicateBtnRef = useRef<HTMLButtonElement>(null);
+  const router = useRouter();
 
   // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
   // auto-focus the safer Cancel button (so an accidental Enter doesn't
@@ -237,6 +265,34 @@ export default function CampaignV2DetailPage() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [refreshOpen, refreshLoading]);
+
+  // Duplicate modal a11y — same pattern. Escape only closes when not in the
+  // committing stage (post-confirm, post-Vapi-clone-creation is irreversible).
+  useEffect(() => {
+    if (!duplicateOpen) return;
+    cancelDuplicateBtnRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && duplicateStage !== "committing") {
+        setDuplicateOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [duplicateOpen, duplicateStage]);
+
+  // Seed the duplicate-name field with "<source> (YYYY-MM-DD)" when opening
+  // the modal. Operator can edit; required to be non-empty before Save.
+  function openDuplicateModal() {
+    const today = new Date().toISOString().slice(0, 10);
+    const sourceName = (campaign?.name as string) ?? "Campaign";
+    setDuplicateName(`${sourceName} (${today})`);
+    setDuplicateRefreshSegment(true);
+    setDuplicateSkipStrategy("overlap_only");
+    setDuplicatePreview(null);
+    setDuplicateError(null);
+    setDuplicateStage("form");
+    setDuplicateOpen(true);
+  }
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -591,6 +647,101 @@ export default function CampaignV2DetailPage() {
     }
   }
 
+  // ── Step 12b-duplicate: form → preview → commit handlers ──
+  async function handleDuplicatePreview() {
+    if (!id) return;
+    const name = duplicateName.trim();
+    if (!name) {
+      setDuplicateError("Name is required.");
+      return;
+    }
+    setDuplicateError(null);
+    setDuplicateLoading(true);
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          new_name: name,
+          refresh_segment: duplicateRefreshSegment,
+          commit: false,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDuplicateError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to fetch duplicate preview (${res.status}).`,
+        );
+        return;
+      }
+      setDuplicatePreview(body as DuplicatePreview);
+      setDuplicateStage("preview");
+    } catch (err) {
+      console.error("Duplicate preview failed:", err);
+      setDuplicateError(err instanceof Error ? err.message : "Failed to fetch duplicate preview.");
+    } finally {
+      setDuplicateLoading(false);
+    }
+  }
+
+  async function handleDuplicateCommit() {
+    if (!id || !duplicatePreview) return;
+    const name = duplicateName.trim();
+    if (!name) return;
+    setDuplicateLoading(true);
+    setDuplicateError(null);
+    setDuplicateStage("committing");
+
+    // Map the operator's radio choice to skip flags. Suppression is always
+    // skipped (informational bucket; never an operator-toggleable option).
+    const skipOverlap = duplicateSkipStrategy !== "keep_all";
+    const skipRecentlyCalled = duplicateSkipStrategy === "overlap_and_recent";
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          new_name: name,
+          refresh_segment: duplicateRefreshSegment,
+          commit: true,
+          skip_overlap: skipOverlap,
+          skip_suppressed: true,
+          skip_recently_called: skipRecentlyCalled,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDuplicateError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to create duplicate (${res.status}).`,
+        );
+        setDuplicateStage("preview");
+        return;
+      }
+      const newId = typeof body.newCampaignId === "string" ? body.newCampaignId : null;
+      if (!newId) {
+        setDuplicateError("Server did not return a new campaign id.");
+        setDuplicateStage("preview");
+        return;
+      }
+      setDuplicateOpen(false);
+      // Navigate to the new campaign's detail page so the operator lands in
+      // the right place to review numbers + press Start when ready.
+      router.push(`/campaigns/v2/${newId}`);
+    } catch (err) {
+      console.error("Duplicate commit failed:", err);
+      setDuplicateError(err instanceof Error ? err.message : "Failed to create duplicate.");
+      setDuplicateStage("preview");
+    } finally {
+      setDuplicateLoading(false);
+    }
+  }
+
   async function handleRefreshCommit() {
     if (!id || !refreshPreview) return;
     setRefreshLoading(true);
@@ -796,6 +947,19 @@ export default function CampaignV2DetailPage() {
                 </button>
               );
             })()}
+            {/* Duplicate — Step 5b endpoint, three-stage modal (form →
+                preview → commit). Always rendered per task tracker §5
+                (any source status is duplicable, except 'recurring' which
+                the backend rejects with 400; the button surfaces that
+                rejection cleanly as an inline error). */}
+            <button
+              onClick={openDuplicateModal}
+              disabled={acting}
+              title="Duplicate this campaign with an optional fresh segment fetch + diff preview"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+            >
+              <Copy size={15} /> Duplicate
+            </button>
           </div>
         </div>
       </div>
@@ -1026,6 +1190,203 @@ export default function CampaignV2DetailPage() {
                 {acting ? "Resuming..." : "Resume"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate modal — Step 12b-duplicate, three-stage flow */}
+      {duplicateOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-duplicate-title"
+          onClick={() => {
+            if (duplicateStage === "committing") return;
+            setDuplicateOpen(false);
+          }}
+        >
+          <div
+            className="bg-[var(--bg-card)] border border-indigo-500/30 rounded-2xl shadow-2xl max-w-lg w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                <Copy size={18} className="text-indigo-400" />
+              </div>
+              <h3 id="confirm-duplicate-title" className="text-base font-semibold text-[var(--text-1)]">
+                {duplicateStage === "form"
+                  ? `Duplicate "${campaign.name as string}"?`
+                  : duplicateStage === "preview"
+                    ? "Review segment diff"
+                    : "Creating duplicate..."}
+              </h3>
+            </div>
+
+            {/* ── Stage A: form ── */}
+            {duplicateStage === "form" && (
+              <>
+                <div className="mb-4">
+                  <label className="block text-xs uppercase tracking-wide text-[var(--text-3)] mb-1.5 font-semibold">
+                    Name <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={duplicateName}
+                    onChange={(e) => setDuplicateName(e.target.value)}
+                    placeholder="New campaign name"
+                    maxLength={200}
+                    className="w-full px-3 py-2 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  <p className="mt-1.5 text-[10px] text-[var(--text-3)]">
+                    Required. Defaults to source name + today&apos;s date; freely editable.
+                  </p>
+                </div>
+                <div className="mb-5">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={duplicateRefreshSegment}
+                      onChange={(e) => setDuplicateRefreshSegment(e.target.checked)}
+                      disabled={campaign.segment_id == null}
+                      className="mt-0.5 h-4 w-4 rounded border-[var(--border)] bg-[var(--bg-app)] text-indigo-500 focus:ring-indigo-500 disabled:opacity-50"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-[var(--text-1)]">Refresh segment from customer.io</p>
+                      <p className="text-[10px] text-[var(--text-3)] leading-relaxed">
+                        {campaign.segment_id == null
+                          ? "Disabled — this campaign has no source segment. Numbers will be copied from the source's pending list."
+                          : "Re-queries customer.io for current segment members. Without this, numbers are copied from the source's pending list."}
+                      </p>
+                    </div>
+                  </label>
+                </div>
+                {duplicateError && (
+                  <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+                    {duplicateError}
+                  </div>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    ref={cancelDuplicateBtnRef}
+                    onClick={() => setDuplicateOpen(false)}
+                    disabled={duplicateLoading}
+                    className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDuplicatePreview}
+                    disabled={duplicateLoading || !duplicateName.trim()}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    {duplicateLoading ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+                    {duplicateLoading ? "Computing diff..." : "Save → Preview"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ── Stage B: preview ── */}
+            {duplicateStage === "preview" && duplicatePreview && (
+              <>
+                <p className="text-xs text-[var(--text-3)] mb-3 leading-relaxed">
+                  {duplicatePreview.candidateSource === "segment_refresh"
+                    ? `Segment refresh returned ${duplicatePreview.candidatesCount} numbers from customer.io.`
+                    : `Source has ${duplicatePreview.candidatesCount} pending numbers.`}
+                </p>
+                <div className="mb-4 space-y-1.5 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-2)]">Overlap with source pending</span>
+                    <span className="font-semibold text-amber-300">{duplicatePreview.overlap.count}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-2)]">Suppressed (auto-skipped)</span>
+                    <span className="font-semibold text-red-300">{duplicatePreview.suppressed.count}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-2)]">Recently called by another campaign (7d)</span>
+                    <span className="font-semibold text-orange-300">{duplicatePreview.recentlyCalled.count}</span>
+                  </div>
+                </div>
+                <fieldset className="mb-4">
+                  <legend className="text-xs uppercase tracking-wide text-[var(--text-3)] mb-2 font-semibold">
+                    Skip strategy
+                  </legend>
+                  <div className="space-y-2">
+                    {([
+                      { value: "overlap_only", label: `Skip the ${duplicatePreview.overlap.count} overlapping number${duplicatePreview.overlap.count !== 1 ? "s" : ""}`, hint: `Dial ${Math.max(0, duplicatePreview.candidatesCount - duplicatePreview.overlap.count - duplicatePreview.suppressed.count)}` },
+                      { value: "overlap_and_recent", label: `Skip overlap + ${duplicatePreview.recentlyCalled.count} recently-called`, hint: `Dial ${Math.max(0, duplicatePreview.candidatesCount - duplicatePreview.overlap.count - duplicatePreview.suppressed.count - duplicatePreview.recentlyCalled.count)}` },
+                      { value: "keep_all", label: `Keep all ${duplicatePreview.candidatesCount}`, hint: "May double-dial customers", warning: true },
+                    ] as const).map((opt) => (
+                      <label
+                        key={opt.value}
+                        className={`flex items-start gap-2.5 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                          duplicateSkipStrategy === opt.value
+                            ? "border-indigo-500/50 bg-indigo-500/10"
+                            : "border-[var(--border)] bg-[var(--bg-app)] hover:border-[var(--text-3)]"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="duplicate-skip-strategy"
+                          value={opt.value}
+                          checked={duplicateSkipStrategy === opt.value}
+                          onChange={() => setDuplicateSkipStrategy(opt.value as SkipStrategy)}
+                          className="mt-0.5 h-4 w-4"
+                        />
+                        <div className="flex-1">
+                          <p className="text-sm text-[var(--text-1)]">{opt.label}</p>
+                          <p className={`text-[10px] ${"warning" in opt && opt.warning ? "text-amber-300" : "text-[var(--text-3)]"}`}>
+                            {opt.hint}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {duplicateError && (
+                  <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+                    {duplicateError}
+                  </div>
+                )}
+                <div className="flex justify-between gap-2">
+                  <button
+                    onClick={() => setDuplicateStage("form")}
+                    disabled={duplicateLoading}
+                    className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    ← Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setDuplicateOpen(false)}
+                      disabled={duplicateLoading}
+                      className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleDuplicateCommit}
+                      disabled={duplicateLoading}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <Copy size={14} />
+                      Create
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* ── Stage C: committing ── */}
+            {duplicateStage === "committing" && (
+              <div className="py-6 flex flex-col items-center gap-3">
+                <Loader2 size={28} className="text-indigo-400 animate-spin" />
+                <p className="text-sm text-[var(--text-2)]">Creating new campaign + Vapi clone...</p>
+                <p className="text-[10px] text-[var(--text-3)]">~3-5 seconds — please don&apos;t close this window.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
