@@ -165,11 +165,32 @@ export default function CampaignV2DetailPage() {
   // Step 12a (dashboard rebuild): Eject + Resume confirmation modals + results.
   // Match the Stop modal pattern for consistency — same shape, same a11y polish.
   const [confirmEject, setConfirmEject] = useState(false);
-  const [confirmRebind, setConfirmRebind] = useState(false);
   const [ejectResult, setEjectResult] = useState<string | null>(null);
   const [rebindResult, setRebindResult] = useState<string | null>(null);
   const cancelEjectBtnRef = useRef<HTMLButtonElement>(null);
-  const cancelRebindBtnRef = useRef<HTMLButtonElement>(null);
+  // Step 12c: Resume-diff modal — supersedes the simple confirm Rebind modal
+  // from Step 12a. Three stages: loading (GET /resume-diff), preview (skip
+  // strategy radios), committing (POST /resume). Replaces confirmRebind +
+  // cancelRebindBtnRef + the simple handleRebind from 12a.
+  type ResumeStage = "loading" | "preview" | "committing";
+  type ResumeDiff = {
+    campaignId: string;
+    campaignName: string;
+    previousStatus: string;
+    pendingCount: number;
+    suppressed: { count: number; sample: string[] };
+    recentlyCalled: { count: number; sample: string[] };
+    outOfSegment: { count: number; sample: string[]; segmentSnapshotSize?: number; note?: string };
+    segmentId: number | null;
+  };
+  type ResumeSkipStrategy = "skip_all" | "skip_suppressed_only";
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeStage, setResumeStage] = useState<ResumeStage>("loading");
+  const [resumeDiff, setResumeDiff] = useState<ResumeDiff | null>(null);
+  const [resumeSkipStrategy, setResumeSkipStrategy] = useState<ResumeSkipStrategy>("skip_all");
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const cancelResumeBtnRef = useRef<HTMLButtonElement>(null);
   // Step 12b-refresh: Refresh-segment modal is a two-call protocol
   // (preview → commit). The modal opens in a loading state, fires the
   // preview-only request, displays the diff, then commits on confirm.
@@ -239,15 +260,20 @@ export default function CampaignV2DetailPage() {
     return () => document.removeEventListener("keydown", handler);
   }, [confirmEject, acting]);
 
+  // Resume-diff modal a11y — Step 12c. Same auto-focus-Cancel + Escape-closes
+  // pattern. Escape NO-OP during the 'committing' stage (POST /resume is
+  // mid-flight, may have already created the new clone + lease).
   useEffect(() => {
-    if (!confirmRebind) return;
-    cancelRebindBtnRef.current?.focus();
+    if (!resumeOpen) return;
+    cancelResumeBtnRef.current?.focus();
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !acting) setConfirmRebind(false);
+      if (e.key === "Escape" && resumeStage !== "committing") {
+        setResumeOpen(false);
+      }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [confirmRebind, acting]);
+  }, [resumeOpen, resumeStage]);
 
   // Refresh-segment modal a11y. The Cancel button is safe (read-only preview
   // doesn't change DB state until Refresh is clicked), but auto-focusing it
@@ -560,51 +586,109 @@ export default function CampaignV2DetailPage() {
     }
   }
 
-  async function handleRebind() {
+  // ── Step 12c: Resume-diff two-stage flow ──
+  // Replaces the simple confirm Rebind from Step 12a. The modal opens in a
+  // loading state, GETs /resume-diff to compute the three buckets, advances
+  // to preview with skip-strategy radios, and POSTs /resume on confirm.
+  // POST /resume internally branches: paused → simple flip; inactive →
+  // executeRebindCore (re-clone + slot lease + status flip). The page
+  // receives a uniform response either way.
+  async function openResumeModal() {
     if (!id) return;
-    setConfirmRebind(false);
-    setActing(true);
+    setResumeOpen(true);
+    setResumeStage("loading");
+    setResumeDiff(null);
+    setResumeError(null);
+    setResumeSkipStrategy("skip_all");
+    setResumeLoading(true);
+
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/resume-diff`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResumeError(
+          typeof body.error === "string"
+            ? body.error
+            : `Failed to compute resume diff (${res.status}).`,
+        );
+        return;
+      }
+      setResumeDiff(body as ResumeDiff);
+      setResumeStage("preview");
+    } catch (err) {
+      console.error("Resume-diff fetch failed:", err);
+      setResumeError(err instanceof Error ? err.message : "Failed to compute resume diff.");
+    } finally {
+      setResumeLoading(false);
+    }
+  }
+
+  async function handleResumeCommit() {
+    if (!id || !resumeDiff) return;
+    setResumeError(null);
+    setResumeStage("committing");
+    setResumeLoading(true);
     setActionError(null);
     setEjectResult(null);
     setRebindResult(null);
 
     const prevStatus = campaign?.status as string | undefined;
-    // Optimistic: flip to running (rebind path: new clone + new slot + status flip)
+    // Optimistic: flip to running. Resume from paused or inactive both end
+    // at status='running'; if it fails, revert.
     setCampaign((prev) => (prev ? { ...prev, status: "running" } : prev));
 
+    // Map radio to skip flags. Suppression is always skipped (informational
+    // bucket; dialer.ts:121-156 also skips at dial time). The radio only
+    // chooses between "skip_all 3 buckets" vs "skip suppressed only" per
+    // design doc section 5.7.
+    const skipRecentlyCalled = resumeSkipStrategy === "skip_all";
+    const skipOutOfSegment = resumeSkipStrategy === "skip_all" && resumeDiff.segmentId != null;
+
     try {
-      const res = await fetch(`/api/campaigns-v2/${id}/rebind`, {
+      const res = await fetch(`/api/campaigns-v2/${id}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          skip_suppressed: true,
+          skip_recently_called: skipRecentlyCalled,
+          skip_out_of_segment: skipOutOfSegment,
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setCampaign((prev) =>
           prev && prevStatus ? { ...prev, status: prevStatus } : prev,
         );
-        setActionError(
+        setResumeError(
           typeof body.error === "string"
             ? body.error
-            : `Failed to resume campaign (${res.status}).`,
+            : `Failed to resume (${res.status}).`,
         );
+        setResumeStage("preview");
         return;
       }
       const slotLabel = typeof body.slotLabel === "string" ? body.slotLabel : null;
+      const softMarked = body.softMarked || {};
+      const softMarkedRecent = typeof softMarked.recentlyCalled === "number" ? softMarked.recentlyCalled : 0;
+      const softMarkedOOS = typeof softMarked.outOfSegment === "number" ? softMarked.outOfSegment : 0;
+      const totalSoftMarked = softMarkedRecent + softMarkedOOS;
+      const parts: string[] = [];
+      if (slotLabel) parts.push(`${slotLabel} leased`);
+      if (totalSoftMarked > 0) parts.push(`${totalSoftMarked} number${totalSoftMarked !== 1 ? "s" : ""} soft-marked`);
       setRebindResult(
-        slotLabel
-          ? `Resumed. ${slotLabel} leased, new clone created.`
-          : "Resumed.",
+        parts.length > 0 ? `Resumed. ${parts.join(", ")}.` : "Resumed.",
       );
+      setResumeOpen(false);
       await refreshData();
     } catch (err) {
       setCampaign((prev) =>
         prev && prevStatus ? { ...prev, status: prevStatus } : prev,
       );
-      console.error("Rebind failed:", err);
-      setActionError(err instanceof Error ? err.message : "Failed to resume campaign.");
+      console.error("Resume commit failed:", err);
+      setResumeError(err instanceof Error ? err.message : "Failed to resume.");
+      setResumeStage("preview");
     } finally {
-      setActing(false);
+      setResumeLoading(false);
     }
   }
 
@@ -912,11 +996,16 @@ export default function CampaignV2DetailPage() {
             {/* Resume — re-clone the base assistant + lease a fresh slot + flip
                 back to running. Step 4b rebind endpoint. Shown only on
                 inactive (ejected) campaigns. */}
+            {/* Resume — Step 12c upgrades the Step 12a simple confirm into a
+                three-bucket diff modal. Shown only on inactive campaigns
+                (paused campaigns use the existing Start button for the
+                simple flip path; if operators want the diff check for
+                paused, that's a Phase 2 UX decision). */}
             {status === "inactive" && (
               <button
-                onClick={() => setConfirmRebind(true)}
+                onClick={openResumeModal}
                 disabled={acting}
-                title="Resume — re-clone the base agent and lease a new worker slot"
+                title="Resume — review the three-bucket diff (suppression, recent, segment) before re-leasing a worker"
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
               >
                 <Plug size={15} /> Resume
@@ -1132,64 +1221,205 @@ export default function CampaignV2DetailPage() {
         </div>
       )}
 
-      {/* Resume (Rebind) confirmation modal — Step 12a */}
-      {confirmRebind && (
+      {/* Resume-diff modal — Step 12c (replaces the simple confirm from 12a).
+          Three-stage: loading (GET /resume-diff in flight), preview (3-bucket
+          diff + skip strategy radios), committing (POST /resume in flight). */}
+      {resumeOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="confirm-rebind-title"
-          onClick={() => !acting && setConfirmRebind(false)}
+          aria-labelledby="resume-diff-title"
+          onClick={() => {
+            if (resumeStage === "committing") return;
+            setResumeOpen(false);
+          }}
         >
           <div
-            className="bg-[var(--bg-card)] border border-emerald-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            className="bg-[var(--bg-card)] border border-emerald-500/30 rounded-2xl shadow-2xl max-w-lg w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
                 <Plug size={18} className="text-emerald-400" />
               </div>
-              <h3 id="confirm-rebind-title" className="text-base font-semibold text-[var(--text-1)]">
+              <h3 id="resume-diff-title" className="text-base font-semibold text-[var(--text-1)]">
                 Resume &quot;{campaign.name as string}&quot;?
               </h3>
             </div>
-            {campaign.base_assistant_id ? (
-              <>
-                <p className="text-sm text-[var(--text-2)] mb-2 leading-relaxed">
-                  This will create a new Vapi clone of the preserved base agent (with the saved
-                  prompt and voice), lease a fresh worker slot, and flip the campaign back to{" "}
-                  <span className="font-semibold text-emerald-300">running</span>.
+
+            {/* ── Stage: loading ── */}
+            {resumeStage === "loading" && (
+              <div className="py-6 flex flex-col items-center gap-3">
+                <Loader2 size={28} className="text-emerald-400 animate-spin" />
+                <p className="text-sm text-[var(--text-2)]">Cross-checking against current state...</p>
+                <p className="text-[10px] text-[var(--text-3)]">
+                  Suppression list · cross-campaign 7-day calls · segment membership
+                  {resumeError && <span className="block mt-2 text-red-300">{resumeError}</span>}
                 </p>
-                <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
-                  Dialing resumes from existing pending numbers ({numbers.length} preserved). For
-                  cross-campaign double-dial protection use the Resume-diff flow when it ships
-                  (Phase 1 Step 12c).
-                </p>
-              </>
-            ) : (
-              <p className="text-sm text-amber-300 mb-5 leading-relaxed">
-                This campaign was created before resume support landed. Pick a base agent on the
-                campaign detail page first, then try Resume again.
-              </p>
+              </div>
             )}
-            <div className="flex justify-end gap-2">
-              <button
-                ref={cancelRebindBtnRef}
-                onClick={() => setConfirmRebind(false)}
-                disabled={acting}
-                className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRebind}
-                disabled={acting || !campaign.base_assistant_id}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-400"
-              >
-                <Plug size={14} />
-                {acting ? "Resuming..." : "Resume"}
-              </button>
-            </div>
+
+            {/* ── Stage: preview ── */}
+            {resumeStage === "preview" && resumeDiff && (
+              <>
+                {/* Pre-Step-2 legacy campaign: base_assistant_id null guard.
+                    The endpoint succeeds for diff computation but POST /resume
+                    will fail when status='inactive' AND base_assistant_id null.
+                    Surface this BEFORE the operator commits. */}
+                {resumeDiff.previousStatus === "inactive" && !campaign.base_assistant_id ? (
+                  <>
+                    <p className="text-sm text-amber-300 mb-4 leading-relaxed">
+                      This campaign was created before resume support landed. Pick a base agent on
+                      the campaign detail page first, then try Resume again.
+                    </p>
+                    <div className="flex justify-end">
+                      <button
+                        ref={cancelResumeBtnRef}
+                        onClick={() => setResumeOpen(false)}
+                        className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-[var(--text-3)] mb-3 leading-relaxed">
+                      {resumeDiff.pendingCount} pending number{resumeDiff.pendingCount !== 1 ? "s" : ""}. Cross-checking against current state:
+                    </p>
+                    <div className="mb-4 space-y-1.5 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--text-2)]">In your suppression list</span>
+                        <span className="font-semibold text-red-300">{resumeDiff.suppressed.count}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--text-2)]">Called by another campaign (7d)</span>
+                        <span className="font-semibold text-orange-300">{resumeDiff.recentlyCalled.count}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--text-2)]">
+                          No longer in segment
+                          {resumeDiff.outOfSegment.note && <span className="ml-1 text-[10px] text-[var(--text-3)]">({resumeDiff.outOfSegment.note})</span>}
+                        </span>
+                        <span className="font-semibold text-amber-300">{resumeDiff.outOfSegment.count}</span>
+                      </div>
+                    </div>
+
+                    <fieldset className="mb-4">
+                      <legend className="text-xs uppercase tracking-wide text-[var(--text-3)] mb-2 font-semibold">
+                        Skip strategy
+                      </legend>
+                      <div className="space-y-2">
+                        {(() => {
+                          const allSkipped =
+                            resumeDiff.suppressed.count +
+                            resumeDiff.recentlyCalled.count +
+                            resumeDiff.outOfSegment.count;
+                          // Suppression auto-skips at dial time; the only operator-toggleable
+                          // groups are recently_called and out_of_segment. Net dialable:
+                          //   skip_all              = pendingCount - all 3 buckets
+                          //   skip_suppressed_only  = pendingCount - suppressed
+                          //   (the diagram counts may double-count phones in multiple buckets;
+                          //   these are upper-bound estimates for operator decision-making.)
+                          const dialSkipAll = Math.max(0, resumeDiff.pendingCount - allSkipped);
+                          const dialSkipSuppressedOnly = Math.max(0, resumeDiff.pendingCount - resumeDiff.suppressed.count);
+                          return ([
+                            {
+                              value: "skip_all" as const,
+                              label: "Skip all three buckets",
+                              hint: `Dial ${dialSkipAll}`,
+                              warning: false,
+                            },
+                            {
+                              value: "skip_suppressed_only" as const,
+                              label: "Skip suppressed only",
+                              hint: `Dial ${dialSkipSuppressedOnly} (risks double-dial)`,
+                              warning: true,
+                            },
+                          ]).map((opt) => (
+                            <label
+                              key={opt.value}
+                              className={`flex items-start gap-2.5 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                resumeSkipStrategy === opt.value
+                                  ? "border-emerald-500/50 bg-emerald-500/10"
+                                  : "border-[var(--border)] bg-[var(--bg-app)] hover:border-[var(--text-3)]"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="resume-skip-strategy"
+                                value={opt.value}
+                                checked={resumeSkipStrategy === opt.value}
+                                onChange={() => setResumeSkipStrategy(opt.value as ResumeSkipStrategy)}
+                                className="mt-0.5 h-4 w-4"
+                              />
+                              <div className="flex-1">
+                                <p className="text-sm text-[var(--text-1)]">{opt.label}</p>
+                                <p className={`text-[10px] ${opt.warning ? "text-amber-300" : "text-[var(--text-3)]"}`}>
+                                  {opt.hint}
+                                </p>
+                              </div>
+                            </label>
+                          ));
+                        })()}
+                      </div>
+                    </fieldset>
+
+                    {resumeError && (
+                      <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+                        {resumeError}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        ref={cancelResumeBtnRef}
+                        onClick={() => setResumeOpen(false)}
+                        disabled={resumeLoading}
+                        className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleResumeCommit}
+                        disabled={resumeLoading}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                      >
+                        <Plug size={14} />
+                        Resume
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {/* ── Stage: committing ── */}
+            {resumeStage === "committing" && (
+              <div className="py-6 flex flex-col items-center gap-3">
+                <Loader2 size={28} className="text-emerald-400 animate-spin" />
+                <p className="text-sm text-[var(--text-2)]">Resuming campaign...</p>
+                <p className="text-[10px] text-[var(--text-3)]">
+                  {campaign.status === "inactive"
+                    ? "Cloning base agent + leasing worker slot."
+                    : "Unpausing the queue."}
+                </p>
+              </div>
+            )}
+
+            {/* Error state (when loading failed entirely) */}
+            {resumeStage === "loading" && resumeError && (
+              <div className="mt-3 flex justify-end">
+                <button
+                  ref={cancelResumeBtnRef}
+                  onClick={() => setResumeOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--text-3)]"
+                >
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
