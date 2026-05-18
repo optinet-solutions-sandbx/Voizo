@@ -338,6 +338,7 @@ export default function NewCampaignV2Page() {
         vapiSipUri: cloneData.sipUri,
         vapiPoolSlotId: cloneData.poolSlotId,
         baseAssistantId: cloneData.baseAssistantId,
+        voiceId: cloneData.voiceId ?? undefined,
         timezone: timezone.trim(),
         startAt: startMode === "delay"
           ? new Date(Date.now() + delayMinutes * 60_000).toISOString()
