@@ -185,3 +185,140 @@ export async function getCustomerAttributes(
     error: null,
   };
 }
+
+// ── Segment phone fetch (paginated, rate-limited, identifier-fallback) ───────
+//
+// Extracted from src/app/api/campaigns-v2/[id]/duplicate/route.ts on 2026-05-18
+// when Step 6 (Manual segment refresh) became the second caller. Both the
+// duplicate route and the refresh-segment route call fetchSegmentPhones; Step 7
+// (Resume-diff) will be the third.
+//
+// The older /api/customerio/segments/[segmentId]/members route still has its
+// own inline copy of chunkedPromiseAll + lookupMemberProfileWithFallback +
+// extractPhone — it returns full Member objects with name + email + phone for
+// the create-flow preview table, not just phones. Different shape, kept
+// separate to avoid an over-eager refactor. If that diverges from this lib in
+// future, reconcile.
+
+/** Phone-attribute keys to try, in priority order. Customer.io workspaces use
+ *  different field names; the create-flow originally surveyed 6 variants. */
+const PHONE_ATTRIBUTE_KEYS = [
+  "phone",
+  "phone_number",
+  "mobile",
+  "mobile_number",
+  "cell",
+  "telephone",
+] as const;
+
+function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | null {
+  for (const key of PHONE_ATTRIBUTE_KEYS) {
+    const value = attrs[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Throttled fan-out to respect customer.io's 10 req/sec per-workspace rate
+ * limit. 8 calls per chunk with 150ms pauses keeps worst-case burst safely
+ * under cap while completing a 100-member batch in ~10-15s.
+ */
+async function chunkedPromiseAll<T, R>(
+  items: T[],
+  chunkSize: number,
+  fn: (item: T) => Promise<R>,
+  delayMs = 150,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+    if (i + chunkSize < items.length && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+/**
+ * Identifier-fallback profile lookup. Customer.io's segment-membership and
+ * customer-profile tables can be inconsistent — a member's workspace `id`
+ * exists in the segment but not in /customers. Try id → cio_<cio_id> → email
+ * in order; only return failure when ALL identifiers fail. Closes the
+ * 2026-05-13 "Glenda" silent-drop bug.
+ */
+async function lookupMemberProfileWithFallback(
+  member: CustomerIOSegmentMember,
+): Promise<CustomerIOResult<CustomerIOCustomer>> {
+  const identifiers = [
+    member.id,
+    member.cio_id ? `cio_${member.cio_id}` : null,
+    member.email,
+  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+
+  if (identifiers.length === 0) {
+    return { success: false, data: null, error: "No identifiers available on segment member" };
+  }
+
+  let lastError = "All identifiers exhausted";
+  for (const id of identifiers) {
+    const result = await getCustomerAttributes(id);
+    if (result.success) return result;
+    lastError = result.error;
+  }
+  return { success: false, data: null, error: lastError };
+}
+
+/**
+ * Paginated fetch of all RAW phone strings in a customer.io segment.
+ *
+ * Loops getSegmentMembers with the `next` cursor (1000 per page), fan-outs
+ * profile lookups via chunkedPromiseAll, extracts phones via attribute-key
+ * variants. Returns the raw phone strings (no normalization) — callers are
+ * responsible for E.164 normalization (typically via parsePhoneList).
+ *
+ * Safety cap: 10 pages = 10000 members max. Phase 1 PoC scale is <500 typical.
+ *
+ * Used by Step 5b (Duplicate) and Step 6 (Manual segment refresh). Step 7
+ * (Resume-diff segment-membership check) will be the third caller.
+ */
+export async function fetchSegmentPhones(segmentId: number): Promise<
+  | { ok: true; phones: string[]; sampled: number }
+  | { ok: false; status: number; error: string }
+> {
+  const PAGE_CAP = 10;
+  const allRawPhones: string[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+
+  while (pages < PAGE_CAP) {
+    const batchResult = await getSegmentMembers(segmentId, { start: cursor, limit: 1000 });
+    if (!batchResult.success) {
+      return {
+        ok: false,
+        status: batchResult.error.includes("CUSTOMERIO_APP_API_KEY") ? 500 : 502,
+        error: batchResult.error,
+      };
+    }
+
+    const profiles = await chunkedPromiseAll(
+      batchResult.data.identifiers,
+      8,
+      lookupMemberProfileWithFallback,
+    );
+
+    for (const profile of profiles) {
+      if (!profile.success) continue;
+      const phone = extractPhoneFromAttrs(profile.data.attributes);
+      if (phone) allRawPhones.push(phone);
+    }
+
+    pages++;
+    if (!batchResult.data.next) break;
+    cursor = batchResult.data.next;
+  }
+
+  return { ok: true, phones: allRawPhones, sampled: allRawPhones.length };
+}
