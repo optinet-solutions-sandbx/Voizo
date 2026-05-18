@@ -55,19 +55,23 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  // ── Origin check (URL-parsed exact host equality) ──
+  // ── Optional origin check (read-only endpoint, GETs often lack Origin) ──
+  // Browsers omit the Origin header on same-origin GET requests in some
+  // contexts (e.g., devtools console fetch, simple navigation-style GETs).
+  // OWASP guidance: CSRF protection applies to state-changing requests, not
+  // read-only ones. So if Origin IS present we enforce exact-host match
+  // (defense in depth), but missing Origin on a GET is allowed.
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
-  if (!origin || !host) {
-    return NextResponse.json({ error: "Forbidden — missing origin" }, { status: 403 });
-  }
-  try {
-    const originUrl = new URL(origin);
-    if (originUrl.host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
+  if (origin && host) {
+    try {
+      const originUrl = new URL(origin);
+      if (originUrl.host !== host) {
+        return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
     }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
   }
 
   const { id } = await params;
