@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
 import crypto from "crypto";
 
 // FS bgapi originate takes 8-22s per call. With 60s budget and limit(2),
@@ -192,6 +193,10 @@ export async function GET(request: NextRequest) {
     .from("campaigns_v2")
     .select("*")
     .eq("status", "running")
+    .neq("campaign_type", "recurring") // Recurring parents have no campaign_numbers_v2 rows by
+                                       // design — they're schedule definitions, not dial lists.
+                                       // Without this filter the self-heal at line 240 would
+                                       // flip them to 'completed' on the next tick.
     .order("updated_at", { ascending: true }) // oldest first → no starvation
     .limit(1);
 
@@ -318,19 +323,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }
 
-  if (!campaigns || campaigns.length === 0) {
-    return NextResponse.json({
-      started: 0,
-      resumed: resumeResults.filter((r) => r.result === "resumed").length,
-      resumeResults,
-      sweepResolved: sweeperResults.length,
-      sweeperResults,
-    });
-  }
-
+  // No early return on empty drafts: the recurring-spawn branch added below
+  // needs to execute on every tick regardless of draft state. The for-loop
+  // below is a no-op when campaigns is empty/null.
   const results: Array<{ id: string; name: string; result: string }> = [];
 
-  for (const campaign of campaigns) {
+  for (const campaign of campaigns ?? []) {
     const campaignId = campaign.id as string;
     const campaignName = campaign.name as string;
 
@@ -401,6 +399,68 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Recurring child-spawn branch ──
+  // For each campaign_type='recurring' parent with status='running', check
+  // whether today's spawn time has arrived and a child hasn't yet been spawned.
+  // The leased budget is refreshed per iteration so we don't over-spawn within
+  // a single tick (draft→running above may have just leased one).
+  //
+  // Children are inserted as status='draft' with start_at=today's window open
+  // in the parent's timezone. The existing draft→running flow above picks them
+  // up at window-open time on a later tick. This avoids the resume-sweep
+  // auto-pause collision that would happen if children were created 'running'
+  // before their window.
+  const recurringResults: Array<{ parentId: string; parentName: string } & SpawnOutcome> = [];
+  const { data: recurringParents, error: recurringErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select(
+      "id, name, timezone, recurrence_pattern, segment_id, base_assistant_id, voice_id, system_prompt, sms_enabled, sms_template, sms_on_goal_reached_only",
+    )
+    .eq("campaign_type", "recurring")
+    .eq("status", "running");
+
+  if (recurringErr) {
+    console.error("[campaign-scheduler] recurring parents query failed:", recurringErr);
+  } else {
+    console.log(`[campaign-scheduler] recurring parents found: ${recurringParents?.length ?? 0}`);
+  }
+
+  if (recurringParents && recurringParents.length > 0) {
+    const vapiKey = process.env.VAPI_PRIVATE_KEY;
+    if (!vapiKey) {
+      console.error("[campaign-scheduler] VAPI_PRIVATE_KEY missing; skipping recurring branch");
+    } else {
+      for (const parent of recurringParents) {
+        // Refresh leased count per-iteration so we don't over-spawn this tick.
+        const { count: nowLeased } = await supabaseAdmin
+          .from("vapi_sip_pool")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "leased");
+        const budget = limit - (nowLeased ?? 0);
+        if (budget <= 0) {
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "budget_full",
+          });
+          break;
+        }
+        const outcome = await spawnChildIfDue(
+          supabaseAdmin,
+          vapiKey,
+          parent as unknown as RecurringParent,
+          new Date(),
+          budget,
+        );
+        recurringResults.push({
+          parentId: parent.id as string,
+          parentName: parent.name as string,
+          ...outcome,
+        });
+      }
+    }
+  }
+
   return NextResponse.json({
     started: results.filter((r) => r.result === "started").length,
     results,
@@ -408,5 +468,7 @@ export async function GET(request: NextRequest) {
     resumeResults,
     sweepResolved: sweeperResults.length,
     sweeperResults,
+    spawned: recurringResults.filter((r) => r.result === "spawned").length,
+    recurringResults,
   });
 }
