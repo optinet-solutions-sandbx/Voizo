@@ -14,8 +14,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { Suspense, useCallback, useEffect, useReducer, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2 } from "lucide-react";
 
 import { createCampaignV2 } from "@/lib/campaignV2Data";
 
@@ -33,7 +34,22 @@ import StepSchedule from "./components/StepSchedule";
 import StepFollowup from "./components/StepFollowup";
 import StepReview from "./components/StepReview";
 
-export default function NewCampaignRoute() {
+/**
+ * Route entrypoint. `useSearchParams()` in Next.js 16 requires a Suspense
+ * boundary at prerender time — the build fails statically with
+ * "useSearchParams() should be wrapped in a suspense boundary" otherwise.
+ * Wrap the searchParams-using component in <Suspense>; the fallback is a
+ * minimal spinner since the branch decision is sub-second on the client.
+ */
+export default function NewCampaignPage() {
+  return (
+    <Suspense fallback={<RouteFallback />}>
+      <NewCampaignRoute />
+    </Suspense>
+  );
+}
+
+function NewCampaignRoute() {
   const search = useSearchParams();
   // Slice 7: wizard is the default. `?classic=1` reverses to the original
   // 1100-line form as a 1-week observation escape hatch. Slice 8 deletes
@@ -42,6 +58,17 @@ export default function NewCampaignRoute() {
     return <ClassicNewCampaignPage />;
   }
   return <WizardPage />;
+}
+
+function RouteFallback() {
+  return (
+    <div className="h-full grid place-items-center text-[var(--text-3)]">
+      <div className="inline-flex items-center gap-2 text-sm">
+        <Loader2 size={16} className="animate-spin" />
+        Loading…
+      </div>
+    </div>
+  );
 }
 
 function WizardPage() {
