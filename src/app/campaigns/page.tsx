@@ -4,12 +4,9 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Search, Plus, Loader2, Trash2, Phone, ArrowUpRight, X,
-  Users, PhoneCall, Zap, Target, Clock,
+  Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
+  Pause, Play, Copy, Clock,
 } from "lucide-react";
-import {
-  AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis,
-} from "recharts";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 import { supabase } from "@/lib/supabase";
 import Pagination from "@/components/Pagination";
@@ -23,52 +20,14 @@ interface CampaignStats {
   successCount: number;
 }
 
-function lastNDays(n: number): string[] {
-  const days: string[] = [];
-  const now = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    days.push(d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
-  }
-  return days;
-}
+type StatusFilter = "all" | "running" | "paused" | "completed" | "draft";
+type TypeFilter = "all" | "fixed" | "recurring";
 
-const DAY_LABELS = lastNDays(7);
+const PAGE_SIZE = 10;
 
-interface TooltipPayloadItem {
-  value: number;
-  payload?: { date?: string; pct?: number };
-}
-
-function ChartTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadItem[] }) {
-  if (!active || !payload?.length) return null;
-  const { date, pct } = payload[0].payload ?? {};
-  return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] text-xs rounded-lg px-2.5 py-1.5 shadow-xl pointer-events-none">
-      <p className="font-semibold text-[var(--text-1)]">{date}</p>
-      <p className="text-[var(--text-2)]">{pct !== undefined ? `${pct}%` : payload[0].value}</p>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { cls: string; dot?: boolean }> = {
-    draft:     { cls: "bg-gray-500/10 text-gray-400 border-gray-500/20" },
-    scheduled: { cls: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
-    running:   { cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", dot: true },
-    paused:    { cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
-    completed: { cls: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
-    archived:  { cls: "bg-gray-500/10 text-gray-400 border-gray-500/20" },
-  };
-  const { cls, dot } = map[status] ?? map.draft;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${cls}`}>
-      {dot && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-      {status}
-    </span>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────
+// Status + when helpers (unchanged business logic from prior implementation)
+// ─────────────────────────────────────────────────────────────────────────
 
 type WhenInfo = { label: string; sub?: string; muted?: boolean };
 
@@ -110,52 +69,24 @@ function relativeStart(iso: string): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-interface StatCardProps {
-  title: string;
-  value: string;
-  subtitle: string;
-  chart: React.ReactNode;
-  accent: string;
-  gradientFrom: string;
-  gradientTo: string;
-  icon: React.ElementType;
-  iconColor: string;
-  tooltip?: string;
-}
-
-function StatCard({ title, value, subtitle, chart, accent, gradientFrom, gradientTo, icon: Icon, iconColor, tooltip }: StatCardProps) {
-  return (
-    <div className={`relative rounded-2xl border border-[var(--border)] p-4 sm:p-5 flex flex-col gap-2 overflow-hidden bg-gradient-to-br ${gradientFrom} ${gradientTo}`}>
-      <div className="flex items-center gap-2">
-        <Icon size={14} className={iconColor} />
-        <p className="text-xs font-medium text-[var(--text-3)] uppercase tracking-wide" title={tooltip}>{title}</p>
-      </div>
-      <div className="h-12 sm:h-14 w-full opacity-80">
-        <ResponsiveContainer width="100%" height="100%">
-          {chart as React.ReactElement}
-        </ResponsiveContainer>
-      </div>
-      <div className="flex items-end justify-between gap-2 mt-auto">
-        <p className={`text-2xl sm:text-3xl font-bold tracking-tight leading-none ${accent}`}>{value}</p>
-        <span className="text-[10px] text-[var(--text-3)] font-medium">{subtitle}</span>
-      </div>
-    </div>
-  );
-}
-
-const PAGE_SIZE = 10;
+// ─────────────────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
   const [campaignStats, setCampaignStats] = useState<Record<string, CampaignStats>>({});
-  const [dailyCalls, setDailyCalls] = useState<{ date: string; calls: number; connects: number; successes: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
 
+  // Initial fetch: campaigns + per-campaign aggregation from numbers + calls.
   useEffect(() => {
     (async () => {
       try {
@@ -172,11 +103,10 @@ export default function CampaignsPage() {
             .in("campaign_id", ids),
           supabase
             .from("calls_v2")
-            .select("campaign_id, campaign_number_id, status, created_at")
+            .select("campaign_id, status")
             .in("campaign_id", ids),
         ]);
 
-        const outcomeByNumberId: Record<string, string> = {};
         const s: Record<string, CampaignStats> = {};
         for (const id of ids) s[id] = { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
         for (const n of numbers ?? []) {
@@ -185,7 +115,6 @@ export default function CampaignsPage() {
             s[cid].totalContacts++;
             if (n.outcome === "sent_sms") s[cid].successCount++;
           }
-          outcomeByNumberId[n.id as string] = (n.outcome as string) ?? "";
         }
         for (const c of calls ?? []) {
           const cid = c.campaign_id as string;
@@ -194,32 +123,6 @@ export default function CampaignsPage() {
           if (c.status === "completed" || c.status === "answered") s[cid].connectCount++;
         }
         setCampaignStats(s);
-
-        const now = new Date();
-        const sevenDaysAgo = new Date(now);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        sevenDaysAgo.setHours(0, 0, 0, 0);
-
-        const daily: Record<string, { calls: number; connects: number; successes: number }> = {};
-        for (let i = 0; i < 7; i++) {
-          const d = new Date(sevenDaysAgo);
-          d.setDate(d.getDate() + i);
-          daily[d.toISOString().slice(0, 10)] = { calls: 0, connects: 0, successes: 0 };
-        }
-        for (const c of calls ?? []) {
-          const day = (c.created_at as string)?.slice(0, 10);
-          if (day && daily[day]) {
-            daily[day].calls++;
-            if (c.status === "completed" || c.status === "answered") daily[day].connects++;
-            const numOutcome = outcomeByNumberId[c.campaign_number_id as string];
-            if (numOutcome === "sent_sms") daily[day].successes++;
-          }
-        }
-        setDailyCalls(
-          Object.entries(daily)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([date, v]) => ({ date, ...v })),
-        );
       } catch (err) {
         console.error("Failed to fetch campaigns:", err);
       } finally {
@@ -228,14 +131,8 @@ export default function CampaignsPage() {
     })();
   }, []);
 
-  // Status-only poll — light (single select on campaigns_v2 only).
-  // Runs at 30s when ≥1 campaign is in a non-terminal state. Updates only the
-  // status + start_at fields and drops campaigns deleted server-side. Heavy
-  // aggregates (numbers/calls/charts) stay mount-only by design — operators
-  // glance at badges here, then click into the detail page (which polls
-  // numbers/calls live every 5s) for real-time stats. New campaigns created
-  // from another tab won't appear until reload — same as before this change.
-  // Polls only when the tab is visible and skips overlapping requests.
+  // Status-only poll — visibility-aware, in-flight guarded, 30s.
+  // Only runs when ≥1 campaign is in a non-terminal state.
   const hasActiveCampaign = useMemo(
     () => campaigns.some((c) => {
       const s = c.status as string;
@@ -276,47 +173,40 @@ export default function CampaignsPage() {
     return () => clearInterval(interval);
   }, [hasActiveCampaign]);
 
+  // Aggregate totals for the stat strip
   const totals = useMemo(() => {
     const vals = Object.values(campaignStats);
     const totalContacts = vals.reduce((s, v) => s + v.totalContacts, 0);
     const totalCalls = vals.reduce((s, v) => s + v.totalCalls, 0);
     const connectCount = vals.reduce((s, v) => s + v.connectCount, 0);
     const successCount = vals.reduce((s, v) => s + v.successCount, 0);
-    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0";
-    const successRate = connectCount > 0 ? ((successCount / connectCount) * 100).toFixed(1) : "0";
+    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
+    const successRate = connectCount > 0 ? ((successCount / connectCount) * 100).toFixed(1) : "0.0";
     return { totalContacts, totalCalls, connectCount, successCount, connectRate, successRate };
   }, [campaignStats]);
 
-  const sparkContacts = useMemo(() => {
-    const vals = Object.values(campaignStats).map((v) => v.totalContacts);
-    const total = vals.reduce((s, v) => s + v, 0) || 1;
-    return vals.slice(-7).map((v, i) => ({ i, v, date: DAY_LABELS[i] ?? "", pct: Math.round((v / total) * 100) }));
-  }, [campaignStats]);
-
-  const sparkCalls = useMemo(() => {
-    const total = dailyCalls.reduce((s, d) => s + d.calls, 0) || 1;
-    return dailyCalls.map((d, i) => ({ i, v: d.calls, date: DAY_LABELS[i] ?? "", pct: Math.round((d.calls / total) * 100) }));
-  }, [dailyCalls]);
-
-  const sparkConnect = useMemo(() => {
-    return dailyCalls.map((d, i) => {
-      const rate = d.calls > 0 ? Math.round((d.connects / d.calls) * 100) : 0;
-      return { i, v: rate, date: DAY_LABELS[i] ?? "", pct: rate };
-    });
-  }, [dailyCalls]);
-
-  const sparkSuccess = useMemo(() => {
-    return dailyCalls.map((d, i) => {
-      const rate = d.connects > 0 ? Math.round((d.successes / d.connects) * 100) : 0;
-      return { i, v: rate, date: DAY_LABELS[i] ?? "", pct: rate };
-    });
-  }, [dailyCalls]);
+  // Counts for filter pills
+  const counts = useMemo(() => ({
+    all: campaigns.length,
+    running: campaigns.filter((c) => c.status === "running").length,
+    paused: campaigns.filter((c) => c.status === "paused").length,
+    completed: campaigns.filter((c) => c.status === "completed").length,
+    draft: campaigns.filter((c) => c.status === "draft").length,
+    fixed: campaigns.filter((c) => (c.campaign_type as string) !== "recurring").length,
+    recurring: campaigns.filter((c) => (c.campaign_type as string) === "recurring").length,
+  }), [campaigns]);
 
   const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return campaigns;
-    const q = searchQuery.toLowerCase();
-    return campaigns.filter((c) => (c.name as string).toLowerCase().includes(q));
-  }, [campaigns, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+    return campaigns.filter((c) => {
+      const status = (c.status as string) || "draft";
+      const type = (c.campaign_type as string) === "recurring" ? "recurring" : "fixed";
+      if (statusFilter !== "all" && status !== statusFilter) return false;
+      if (typeFilter !== "all" && type !== typeFilter) return false;
+      if (q && !(c.name as string).toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [campaigns, searchQuery, statusFilter, typeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -328,14 +218,62 @@ export default function CampaignsPage() {
     setDeleting(true);
     try {
       const res = await fetch(`/api/campaigns-v2/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setCampaigns((prev) => prev.filter((c) => (c.id as string) !== id));
-      }
+      if (res.ok) setCampaigns((prev) => prev.filter((c) => (c.id as string) !== id));
     } catch (err) {
       console.error("Delete failed:", err);
     } finally {
       setDeleting(false);
       setConfirmDeleteId(null);
+    }
+  }
+
+  async function handleStop(id: string) {
+    setActionInFlightId(id);
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/stop`, { method: "POST" });
+      if (res.ok) {
+        setCampaigns((prev) => prev.map((c) => (c.id as string) === id ? { ...c, status: "paused" } : c));
+      }
+    } catch (err) {
+      console.error("Stop failed:", err);
+    } finally {
+      setActionInFlightId(null);
+    }
+  }
+
+  async function handleResume(id: string) {
+    setActionInFlightId(id);
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/resume`, { method: "POST" });
+      if (res.ok) {
+        setCampaigns((prev) => prev.map((c) => (c.id as string) === id ? { ...c, status: "running" } : c));
+      }
+    } catch (err) {
+      console.error("Resume failed:", err);
+    } finally {
+      setActionInFlightId(null);
+    }
+  }
+
+  async function handleDuplicate(id: string, originalName: string) {
+    // Duplicate endpoint requires new_name. Prompt the operator before firing.
+    const newName = window.prompt("Name for the duplicate campaign:", `${originalName} (copy)`);
+    if (!newName || !newName.trim()) return;
+    setActionInFlightId(id);
+    try {
+      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_name: newName.trim() }),
+      });
+      if (res.ok) {
+        const body = await res.json();
+        if (body.campaign?.id) router.push(`/campaigns/v2/${body.campaign.id}`);
+      }
+    } catch (err) {
+      console.error("Duplicate failed:", err);
+    } finally {
+      setActionInFlightId(null);
     }
   }
 
@@ -352,11 +290,11 @@ export default function CampaignsPage() {
   const runningCount = campaigns.filter((c) => (c.status as string) === "running").length;
 
   return (
-    <div className="p-4 sm:p-6 w-full">
+    <div className="p-4 sm:p-6 w-full max-w-[1400px] mx-auto">
       {/* Header */}
       <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-1)] tracking-tight">Campaigns</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-1)]">Campaigns</h1>
           <p className="text-xs text-[var(--text-3)] mt-1">
             {activeCount} campaign{activeCount !== 1 ? "s" : ""}
             {runningCount > 0 && (
@@ -367,91 +305,65 @@ export default function CampaignsPage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Legacy V1 button hidden per Chris — V1 was placeholder only */}
-          <Link
-            href="/campaigns/v2/new"
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-blue-600/25 flex-shrink-0"
-          >
-            <Plus size={15} />
-            New Campaign
-          </Link>
-        </div>
+        <Link
+          href="/campaigns/v2/new"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold shadow-md shadow-blue-500/20 transition hover:bg-blue-400 hover:-translate-y-px flex-shrink-0"
+        >
+          <Plus size={14} strokeWidth={2.5} />
+          New Campaign
+        </Link>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <StatCard
-          title="Contacts"
-          value={totals.totalContacts.toLocaleString()}
-          subtitle="all time"
-          accent="text-indigo-400"
-          icon={Users}
-          iconColor="text-indigo-400"
-          gradientFrom="from-indigo-500/[0.07]"
-          gradientTo="to-transparent"
-          chart={<BarChart data={sparkContacts}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(99,102,241,0.08)" }} /><Bar dataKey="v" fill="#818cf8" radius={[4,4,0,0]} /></BarChart>}
-        />
-        <StatCard
-          title="Calls"
-          value={totals.totalCalls.toLocaleString()}
-          subtitle="last 7 days"
-          accent="text-violet-400"
-          icon={PhoneCall}
-          iconColor="text-violet-400"
-          gradientFrom="from-violet-500/[0.07]"
-          gradientTo="to-transparent"
-          chart={<BarChart data={sparkCalls}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(139,92,246,0.08)" }} /><Bar dataKey="v" fill="#a78bfa" radius={[4,4,0,0]} /></BarChart>}
-        />
-        <StatCard
-          title="Connect Rate"
-          tooltip="Connected calls ÷ Total calls placed × 100"
-          value={totals.connectRate + "%"}
-          subtitle="last 7 days"
-          accent="text-emerald-400"
-          icon={Zap}
-          iconColor="text-emerald-400"
-          gradientFrom="from-emerald-500/[0.07]"
-          gradientTo="to-transparent"
-          chart={<AreaChart data={sparkConnect}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="cgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#34d399" stopOpacity={0.3}/><stop offset="95%" stopColor="#34d399" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#34d399" strokeWidth={2} fill="url(#cgGrad)" dot={false} /></AreaChart>}
-        />
-        <StatCard
-          title="Success Rate"
-          tooltip="Goal-reached calls ÷ Connected calls × 100"
-          value={totals.successRate + "%"}
-          subtitle="last 7 days"
-          accent="text-amber-400"
-          icon={Target}
-          iconColor="text-amber-400"
-          gradientFrom="from-amber-500/[0.07]"
-          gradientTo="to-transparent"
-          chart={<AreaChart data={sparkSuccess}><XAxis dataKey="i" hide /><Tooltip content={<ChartTooltip />} /><defs><linearGradient id="srGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#fbbf24" stopOpacity={0.3}/><stop offset="95%" stopColor="#fbbf24" stopOpacity={0}/></linearGradient></defs><Area type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={2} fill="url(#srGrad)" dot={false} /></AreaChart>}
-        />
-      </div>
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
+        <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} sparkColor="#8b5cf6" />
+        <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400"    sparkColor="#4f8df8" />
+        <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" sparkColor="#10b981" />
+        <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400"   sparkColor="#f59e0b" />
+      </section>
 
-      {/* Search */}
-      <div className="mb-4">
-        <div className="relative w-full max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
+      {/* Toolbar */}
+      <div className="flex items-center gap-2.5 flex-wrap mb-4">
+        <div className="flex-1 min-w-[240px] flex items-center gap-2 px-3.5 py-2.5 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl focus-within:border-blue-500 transition">
+          <Search size={14} className="text-[var(--text-3)]" />
           <input
-            type="text"
-            placeholder="Search campaigns..."
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 text-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            placeholder="Search campaigns…"
+            className="flex-1 bg-transparent border-none outline-none text-sm placeholder-[var(--text-3)] text-[var(--text-1)]"
           />
           {searchQuery && (
-            <button onClick={() => handleSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-2)]">
+            <button onClick={() => handleSearch("")} className="text-[var(--text-3)] hover:text-[var(--text-2)]">
               <X size={13} />
             </button>
           )}
         </div>
+        <FilterGroup
+          options={[
+            { key: "all",       label: `All ${counts.all}` },
+            { key: "running",   label: `Running ${counts.running}` },
+            { key: "paused",    label: `Paused ${counts.paused}` },
+            { key: "completed", label: `Completed ${counts.completed}` },
+            { key: "draft",     label: `Draft ${counts.draft}` },
+          ]}
+          value={statusFilter}
+          onChange={(v) => { setStatusFilter(v); setCurrentPage(1); }}
+        />
+        <FilterGroup
+          options={[
+            { key: "all",       label: `All ${counts.all}` },
+            { key: "fixed",     label: `Fixed ${counts.fixed}` },
+            { key: "recurring", label: `Recurring ${counts.recurring}` },
+          ]}
+          value={typeFilter}
+          onChange={(v) => { setTypeFilter(v); setCurrentPage(1); }}
+        />
       </div>
 
-      {/* Table */}
-      <div className="rounded-xl border border-[var(--border)] overflow-hidden">
+      {/* Table / cards */}
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
         {campaigns.length === 0 ? (
-          <div className="bg-[var(--bg-card)] px-6 py-20 text-center">
+          <div className="px-6 py-20 text-center">
             <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-4">
               <Plus size={22} className="text-blue-400" />
             </div>
@@ -461,43 +373,44 @@ export default function CampaignsPage() {
               <Plus size={14} /> New Campaign
             </Link>
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
+            No campaigns match the current filters.
+          </div>
         ) : (
           <>
             {/* Mobile cards */}
-            <div className="md:hidden divide-y divide-[var(--border)] bg-[var(--bg-app)]">
+            <div className="md:hidden divide-y divide-[var(--border)]">
               {paginated.map((c) => {
-                const s = campaignStats[c.id as string] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
+                const id = c.id as string;
+                const s = campaignStats[id] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
                 const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) + "%" : "0%";
                 const hasActivity = s.totalCalls > 0;
                 const when = formatWhen(c);
+                const isRecurring = (c.campaign_type as string) === "recurring";
                 return (
                   <div
-                    key={c.id as string}
-                    onClick={() => router.push(`/campaigns/v2/${c.id}`)}
+                    key={id}
+                    onClick={() => router.push(`/campaigns/v2/${id}`)}
                     className={`px-4 py-3.5 cursor-pointer transition-colors hover:bg-[var(--bg-hover)] ${!hasActivity ? "opacity-60" : ""}`}
                   >
                     <div className="flex items-start justify-between gap-2 mb-1.5">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <span className="w-5 h-5 rounded-md bg-blue-500/10 flex items-center justify-center">
-                            <ArrowUpRight size={10} className="text-blue-400" />
-                          </span>
-                          <span className="w-5 h-5 rounded-md bg-[var(--bg-elevated)] flex items-center justify-center">
-                            <Phone size={10} className="text-[var(--text-2)]" />
-                          </span>
+                        <div className="w-8 h-8 rounded-lg bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] flex-shrink-0">
+                          {isRecurring ? <Repeat size={13} /> : <Megaphone size={13} />}
                         </div>
                         <span className="font-semibold text-[var(--text-1)] text-sm truncate">{c.name as string}</span>
                       </div>
-                      <StatusBadge status={c.status as string} />
+                      <StatusBadge status={(c.status as string) || "draft"} />
                     </div>
-                    <div className="flex items-center gap-1.5 mb-2.5 ml-7">
+                    <div className="flex items-center gap-1.5 mb-2.5 ml-10">
                       <Clock size={10} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
                       <p className={`text-[11px] truncate ${when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}`}>
                         {when.label}
                         {when.sub && <span className="text-[var(--text-3)] ml-1">· {when.sub}</span>}
                       </p>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-3 gap-3 ml-10">
                       <div>
                         <p className="text-[10px] text-[var(--text-3)] mb-0.5">Contacts</p>
                         <p className="text-xs font-semibold text-[var(--text-2)]">{s.totalContacts.toLocaleString()}</p>
@@ -517,83 +430,85 @@ export default function CampaignsPage() {
             </div>
 
             {/* Desktop table */}
-            <div className="hidden md:block bg-[var(--bg-app)] w-full overflow-x-auto">
-              <table className="w-full min-w-[860px] text-sm">
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full min-w-[900px] text-sm">
                 <thead>
-                  <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
-                    <th className="text-left px-5 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Campaign</th>
-                    <th className="text-left px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">When</th>
-                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Contacts</th>
-                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Calls</th>
-                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Connect</th>
-                    <th className="text-right px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Success</th>
-                    <th className="text-center px-4 py-3.5 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-wider">Status</th>
-                    <th className="w-10" />
+                  <tr>
+                    <Th>Campaign</Th>
+                    <Th>When</Th>
+                    <Th alignRight>Contacts</Th>
+                    <Th alignRight>Calls</Th>
+                    <Th alignRight>Connect</Th>
+                    <Th alignRight>Success</Th>
+                    <Th>Status</Th>
+                    <Th />
                   </tr>
                 </thead>
                 <tbody>
-                  {paginated.map((c, index) => {
-                    const s = campaignStats[c.id as string] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
+                  {paginated.map((c) => {
+                    const id = c.id as string;
+                    const name = c.name as string;
+                    const s = campaignStats[id] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
                     const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) : "0";
                     const successRate = s.connectCount > 0 ? ((s.successCount / s.connectCount) * 100).toFixed(1) : "0";
                     const hasActivity = s.totalCalls > 0;
                     const when = formatWhen(c);
+                    const status = (c.status as string) || "draft";
+                    const isRecurring = (c.campaign_type as string) === "recurring";
+                    const isInFlight = actionInFlightId === id;
                     return (
                       <tr
-                        key={c.id as string}
-                        onClick={() => router.push(`/campaigns/v2/${c.id}`)}
-                        className={`group border-b border-[var(--border)] last:border-b-0 hover:bg-blue-500/[0.04] transition-colors cursor-pointer ${!hasActivity ? "opacity-50 hover:opacity-80" : ""}`}
+                        key={id}
+                        onClick={() => router.push(`/campaigns/v2/${id}`)}
+                        className={`group border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer ${!hasActivity ? "opacity-60 hover:opacity-90" : ""}`}
                       >
-                        <td className="px-5 py-4">
+                        <td className="px-4 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="flex items-center gap-0.5 shrink-0">
-                              <span className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                                <ArrowUpRight size={13} className="text-blue-400" />
-                              </span>
-                              <span className="w-7 h-7 rounded-lg bg-[var(--bg-elevated)] flex items-center justify-center">
-                                <Phone size={13} className="text-[var(--text-3)]" />
-                              </span>
+                            <div className="w-9 h-9 rounded-xl bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] transition group-hover:scale-110 group-hover:-rotate-3 group-hover:bg-blue-500/15 group-hover:text-blue-400 flex-shrink-0">
+                              {isRecurring ? <Repeat size={15} /> : <Megaphone size={15} />}
                             </div>
                             <div className="min-w-0">
-                              <p className="font-semibold text-[var(--text-1)] group-hover:text-blue-400 transition-colors truncate">{c.name as string}</p>
+                              <p className="font-semibold text-[var(--text-1)] group-hover:text-blue-400 transition-colors truncate">{name}</p>
                               {(c.vapi_assistant_name as string) && (
-                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">{c.vapi_assistant_name as string}</p>
+                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate font-mono">{c.vapi_assistant_name as string}</p>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-4">
-                          <div className="flex items-center gap-1.5">
-                            <Clock size={11} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
-                            <div className="min-w-0">
-                              <p className={`text-[12px] truncate ${when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}`}>{when.label}</p>
-                              {when.sub && <p className="text-[10px] text-[var(--text-3)] truncate">{when.sub}</p>}
-                            </div>
-                          </div>
+                        <td className="px-4 py-4 text-xs">
+                          <span className="inline-flex items-center gap-1.5">
+                            <StatusDot status={status} />
+                            <span className={when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}>
+                              {when.label}
+                            </span>
+                          </span>
+                          {when.sub && <p className="text-[10px] text-[var(--text-3)] ml-3 mt-0.5">{when.sub}</p>}
                         </td>
-                        <td className="px-4 py-4 text-right text-[var(--text-2)] tabular-nums">{s.totalContacts.toLocaleString()}</td>
-                        <td className="px-4 py-4 text-right tabular-nums">
+                        <td className="px-4 py-4 text-right text-[var(--text-2)] font-mono tabular-nums">{s.totalContacts.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-right font-mono tabular-nums">
                           <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{s.totalCalls.toLocaleString()}</span>
                         </td>
-                        <td className="px-4 py-4 text-right tabular-nums">
-                          <span className={`${Number(connectRate) > 0 ? "text-emerald-400" : "text-[var(--text-3)]"}`}>
-                            {connectRate}%
-                          </span>
+                        <td className="px-4 py-4 text-right font-mono tabular-nums">
+                          <span className={Number(connectRate) > 0 ? "text-emerald-400" : "text-[var(--text-3)]"}>{connectRate}%</span>
                           <span className="text-[var(--text-3)] text-[11px] ml-1">({s.connectCount})</span>
                         </td>
-                        <td className="px-4 py-4 text-right tabular-nums">
-                          <span className={`${Number(successRate) > 0 ? "text-amber-400" : "text-[var(--text-3)]"}`}>
-                            {successRate}%
-                          </span>
+                        <td className="px-4 py-4 text-right font-mono tabular-nums">
+                          <span className={Number(successRate) > 0 ? "text-amber-400" : "text-[var(--text-3)]"}>{successRate}%</span>
                           <span className="text-[var(--text-3)] text-[11px] ml-1">({s.successCount})</span>
                         </td>
-                        <td className="px-4 py-4 text-center"><StatusBadge status={c.status as string} /></td>
+                        <td className="px-4 py-4"><StatusBadge status={status} /></td>
                         <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
-                          {(c.status as string) !== "running" && (
-                            confirmDeleteId === (c.id as string) ? (
-                              <span className="inline-flex items-center gap-2">
+                          <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition">
+                            {status === "running" ? (
+                              <IconAction title="Pause" onClick={() => handleStop(id)} disabled={isInFlight}><Pause size={13} /></IconAction>
+                            ) : status === "paused" ? (
+                              <IconAction title="Resume" onClick={() => handleResume(id)} disabled={isInFlight}><Play size={13} /></IconAction>
+                            ) : null}
+                            <IconAction title="Duplicate" onClick={() => handleDuplicate(id, name)} disabled={isInFlight}><Copy size={13} /></IconAction>
+                            {confirmDeleteId === id ? (
+                              <span className="inline-flex items-center gap-2 px-2">
                                 <button
-                                  onClick={() => handleDelete(c.id as string)}
+                                  onClick={() => handleDelete(id)}
                                   disabled={deleting}
                                   className="text-[11px] text-red-400 hover:text-red-300 font-semibold disabled:opacity-50"
                                 >
@@ -607,15 +522,13 @@ export default function CampaignsPage() {
                                 </button>
                               </span>
                             ) : (
-                              <button
-                                onClick={() => setConfirmDeleteId(c.id as string)}
-                                className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-3)] hover:text-red-400 rounded-md hover:bg-red-500/10 transition-all"
-                                title="Delete campaign"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )
-                          )}
+                              status !== "running" && (
+                                <IconAction title="Delete" onClick={() => setConfirmDeleteId(id)} danger>
+                                  <Trash2 size={13} />
+                                </IconAction>
+                              )
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -625,16 +538,116 @@ export default function CampaignsPage() {
             </div>
           </>
         )}
-        <div className="border-t border-[var(--border)] bg-[var(--bg-card)] px-5 py-3">
-          <Pagination
-            currentPage={safePage}
-            totalPages={totalPages}
-            totalItems={filtered.length}
-            pageSize={PAGE_SIZE}
-            onPageChange={setCurrentPage}
-          />
-        </div>
+
+        {filtered.length > 0 && (
+          <div className="border-t border-[var(--border)] px-5 py-3">
+            <Pagination
+              currentPage={safePage}
+              totalPages={totalPages}
+              totalItems={filtered.length}
+              pageSize={PAGE_SIZE}
+              onPageChange={setCurrentPage}
+            />
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────
+
+function StatCard({ label, value, accent, sparkColor }: {
+  label: string; value: string; accent?: string; sparkColor: string;
+}) {
+  return (
+    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/20">
+      <div className="text-[11px] uppercase tracking-wider font-medium text-[var(--text-3)]">{label}</div>
+      <div className={`text-[26px] font-bold tabular-nums leading-tight mt-1 ${accent ?? "text-[var(--text-1)]"}`}>{value}</div>
+      <svg width="100%" height="38" viewBox="0 0 200 38" preserveAspectRatio="none" className="mt-1.5 opacity-80">
+        <polyline points="0,28 28,22 56,26 84,16 112,18 140,12 168,14 200,8" fill="none" stroke={sparkColor} strokeWidth="1.8" />
+      </svg>
+    </div>
+  );
+}
+
+function FilterGroup<T extends string>({
+  options, value, onChange,
+}: { options: { key: T; label: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl flex-shrink-0">
+      {options.map(o => (
+        <button
+          key={o.key}
+          onClick={() => onChange(o.key)}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition whitespace-nowrap ${
+            value === o.key
+              ? "bg-[var(--bg-elevated)] text-[var(--text-1)]"
+              : "text-[var(--text-3)] hover:text-[var(--text-1)]"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StatusDot({ status }: { status: string }) {
+  const color = {
+    running: "bg-emerald-500",
+    paused: "bg-amber-500",
+    completed: "bg-blue-500",
+    scheduled: "bg-cyan-500",
+  }[status] ?? "bg-[var(--text-3)]";
+  return <span className={`w-1.5 h-1.5 rounded-full ${color} ${status === "running" ? "animate-pulse" : ""}`} />;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const cls = {
+    draft:     "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]",
+    scheduled: "bg-cyan-500/12 text-cyan-400 border-cyan-500/30",
+    running:   "bg-emerald-500/12 text-emerald-400 border-emerald-500/30",
+    paused:    "bg-amber-500/12 text-amber-400 border-amber-500/30",
+    completed: "bg-blue-500/12 text-blue-400 border-blue-500/30",
+    archived:  "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
+    inactive:  "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
+    skipped:   "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
+  }[status] ?? "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]";
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-mono border ${cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full bg-current ${status === "running" ? "animate-pulse" : ""}`} />
+      {status}
+    </span>
+  );
+}
+
+function Th({ children, alignRight }: { children?: React.ReactNode; alignRight?: boolean }) {
+  return (
+    <th className={`px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] border-b border-[var(--border)] ${alignRight ? "text-right" : "text-left"}`}>
+      {children}
+    </th>
+  );
+}
+
+function IconAction({ children, title, onClick, disabled, danger }: {
+  children: React.ReactNode; title: string;
+  onClick?: () => void; disabled?: boolean; danger?: boolean;
+}) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-7 h-7 rounded-md grid place-items-center transition disabled:opacity-50 disabled:cursor-not-allowed hover:scale-110 ${
+        danger
+          ? "text-[var(--text-3)] hover:bg-red-500/10 hover:text-red-400"
+          : "text-[var(--text-3)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)]"
+      }`}
+    >
+      {children}
+    </button>
   );
 }

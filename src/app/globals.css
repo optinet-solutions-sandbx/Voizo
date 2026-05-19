@@ -7,34 +7,40 @@
   /* color-scheme tells the browser to render native form controls (date
      pickers, time pickers, select dropdowns, scrollbars) in dark mode. */
   color-scheme: dark;
-  --bg-app:      #0d1117;
-  --bg-sidebar:  #080c12;
-  --bg-card:     #161b22;
-  --bg-elevated: #21262d;
-  --bg-hover:    #1c2128;
-  --border:      #21262d;
-  --border-2:    #30363d;
-  --text-1:      #e6edf3;
-  --text-2:      #8b949e;
-  --text-3:      #484f58;
-  --background:  #0d1117;
-  --foreground:  #e6edf3;
+
+  /* Steel-grey palette (Material Admin reference). Warmer than the prior
+     GitHub-dark navy. Cards lift via a slightly lighter background, not via
+     borders — borders are nearly invisible (white at ~6% opacity). */
+  --bg-app:      #2c3036;
+  --bg-sidebar:  #252830;
+  --bg-card:     #383d44;
+  --bg-elevated: #444a52;
+  --bg-hover:    #3d434b;
+  --border:      rgba(255, 255, 255, 0.06);
+  --border-2:    rgba(255, 255, 255, 0.12);
+  --text-1:      #f1f3f5;
+  --text-2:      #aab1b9;
+  --text-3:      #7b828c;
+  --background:  #2c3036;
+  --foreground:  #f1f3f5;
 }
 
 /* ── Light theme ───────────────────────────────────────────────────────────── */
 [data-theme="light"] {
   color-scheme: light;
-  --bg-app:      #f6f8fa;
+
+  /* Light side stays clean & neutral, in line with Material conventions. */
+  --bg-app:      #ecedef;
   --bg-sidebar:  #ffffff;
   --bg-card:     #ffffff;
-  --bg-elevated: #f6f8fa;
-  --bg-hover:    #f3f4f6;
-  --border:      #d0d7de;
-  --border-2:    #c0c8d4;
+  --bg-elevated: #f4f5f6;
+  --bg-hover:    #eef0f2;
+  --border:      rgba(15, 23, 42, 0.08);
+  --border-2:    rgba(15, 23, 42, 0.16);
   --text-1:      #1f2328;
-  --text-2:      #656d76;
-  --text-3:      #9198a1;
-  --background:  #f6f8fa;
+  --text-2:      #5b6470;
+  --text-3:      #8b939c;
+  --background:  #ecedef;
   --foreground:  #1f2328;
 }
 

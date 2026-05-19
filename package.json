@@ -11,19 +11,23 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
     "@xyflow/react": "^12.10.1",
+    "d3-geo": "^3.1.1",
     "lucide-react": "^0.577.0",
     "modesl": "^1.2.1",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "recharts": "^3.8.0",
+    "topojson-client": "^3.1.0",
     "twilio": "^5.13.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/d3-geo": "^3.1.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/topojson-client": "^3.1.5",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",

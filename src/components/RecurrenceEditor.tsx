@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { Plus, X, AlertCircle, CalendarDays, Repeat, Info } from "lucide-react";
 import type { DayOfWeek, RecurrencePattern, RecurrenceEndKind } from "@/lib/types/recurrence";
+import DatePickerField from "./DatePickerField";
+import TimePickerField from "./TimePickerField";
+import StyledSelect from "./StyledSelect";
 
 const DAYS: Array<{ key: DayOfWeek; label: string; letter: string }> = [
   { key: "sun", label: "Sunday", letter: "S" },
@@ -29,6 +32,10 @@ export interface RecurrenceEditorProps {
   errors?: string[];
 }
 
+// `timezone` is part of the call signature so callers don't have to
+// remember whether the pattern is tz-aware (it isn't, for v1). Kept for
+// forward-compat with the design doc's "timezone-aware start_date" note.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function defaultRecurrencePattern(today: Date, _timezone: string): RecurrencePattern {
   const todayStr = today.toISOString().slice(0, 10);
   return {
@@ -244,11 +251,10 @@ export function RecurrenceEditor({
             {/* Start date */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-[var(--text-3)]">Start</span>
-              <input
-                type="date"
+              <DatePickerField
                 value={value.start_date}
-                onChange={(e) => update({ start_date: e.target.value })}
-                className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onChange={(v) => update({ start_date: v })}
+                ariaLabel="Recurrence start date"
               />
             </div>
 
@@ -278,22 +284,23 @@ export function RecurrenceEditor({
             {/* End condition: dropdown + conditional input */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-[var(--text-3)]">Until</span>
-              <select
-                value={value.end_kind}
-                onChange={(e) => handleEndKindChange(e.target.value as RecurrenceEndKind)}
-                className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="never">Further notice</option>
-                <option value="on_date">A specific date</option>
-                <option value="after_n">N occurrences</option>
-              </select>
+              <div className="w-44">
+                <StyledSelect
+                  value={value.end_kind}
+                  onChange={(v) => handleEndKindChange(v as RecurrenceEndKind)}
+                  options={[
+                    { value: "never",   label: "Further notice",  group: "" },
+                    { value: "on_date", label: "A specific date", group: "" },
+                    { value: "after_n", label: "N occurrences",   group: "" },
+                  ]}
+                />
+              </div>
               {value.end_kind === "on_date" && (
-                <input
-                  type="date"
+                <DatePickerField
                   value={value.end_date ?? ""}
+                  onChange={(v) => update({ end_date: v || null })}
                   min={value.start_date}
-                  onChange={(e) => update({ end_date: e.target.value || null })}
-                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  ariaLabel="Recurrence end date"
                 />
               )}
               {value.end_kind === "after_n" && (
@@ -339,21 +346,17 @@ export function RecurrenceEditor({
               <span className="text-sm text-[var(--text-2)]">Different per day</span>
             </label>
             {sameHours && value.days_of_week.length > 0 && (
-              <div className="flex items-center gap-2 ml-auto">
-                <input
-                  type="time"
+              <div className="flex items-center gap-2 ml-auto min-w-[280px]">
+                <TimePickerField
                   value={sharedHours.start}
-                  onChange={(e) => updateAllDayHours({ start: e.target.value })}
-                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  onChange={(v) => updateAllDayHours({ start: v })}
                 />
                 <span className="text-xs text-[var(--text-3)]">to</span>
-                <input
-                  type="time"
+                <TimePickerField
                   value={sharedHours.end}
-                  onChange={(e) => updateAllDayHours({ end: e.target.value })}
-                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  onChange={(v) => updateAllDayHours({ end: v })}
                 />
-                <span className="text-xs text-[var(--text-3)]">in {campaignTimezone}</span>
+                <span className="text-xs text-[var(--text-3)] whitespace-nowrap">in {campaignTimezone}</span>
               </div>
             )}
           </div>
@@ -368,18 +371,14 @@ export function RecurrenceEditor({
                   <div key={key} className="flex items-center gap-3 px-4 py-2.5">
                     <span className="text-sm font-medium text-[var(--text-1)] min-w-[5rem]">{label}</span>
                     <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="time"
+                      <TimePickerField
                         value={hours.start}
-                        onChange={(e) => updateDayHours(key, { start: e.target.value })}
-                        className="px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        onChange={(v) => updateDayHours(key, { start: v })}
                       />
                       <span className="text-xs text-[var(--text-3)]">to</span>
-                      <input
-                        type="time"
+                      <TimePickerField
                         value={hours.end}
-                        onChange={(e) => updateDayHours(key, { end: e.target.value })}
-                        className="px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        onChange={(v) => updateDayHours(key, { end: v })}
                       />
                     </div>
                   </div>
@@ -393,18 +392,18 @@ export function RecurrenceEditor({
         <div>
           <FieldLabel>Exception Dates</FieldLabel>
           <div className="flex flex-wrap items-center gap-2 mb-2">
-            <input
-              type="date"
+            <DatePickerField
               value={pendingException}
+              onChange={setPendingException}
               min={value.start_date}
-              onChange={(e) => setPendingException(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+              ariaLabel="Exception date"
+              placeholder="Pick a date to skip"
             />
             <button
               type="button"
               onClick={addException}
               disabled={!pendingException}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus size={12} />
               Add
@@ -461,14 +460,12 @@ export function RecurrenceEditor({
 
         <div className="mb-4">
           <FieldLabel>Refresh Daily At</FieldLabel>
-          <div className="flex items-center gap-2">
-            <input
-              type="time"
+          <div className="flex items-center gap-2 max-w-md">
+            <TimePickerField
               value={value.segment_refresh_time}
-              onChange={(e) => update({ segment_refresh_time: e.target.value })}
-              className="px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+              onChange={(v) => update({ segment_refresh_time: v })}
             />
-            <span className="text-xs text-[var(--text-3)]">in {campaignTimezone}</span>
+            <span className="text-xs text-[var(--text-3)] whitespace-nowrap">in {campaignTimezone}</span>
           </div>
           <p className="text-xs text-[var(--text-3)] mt-1.5">
             Each scheduled day, a child Fixed campaign spawns at-or-after this time and pulls a fresh customer.io segment snapshot.
