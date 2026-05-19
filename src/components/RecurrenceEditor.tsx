@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, X, AlertCircle, CalendarDays, Repeat } from "lucide-react";
+import { Plus, X, AlertCircle, CalendarDays, Repeat, Info } from "lucide-react";
 import type { DayOfWeek, RecurrencePattern, RecurrenceEndKind } from "@/lib/types/recurrence";
 
 const DAYS: Array<{ key: DayOfWeek; label: string; letter: string }> = [
@@ -48,6 +48,65 @@ export function defaultRecurrencePattern(today: Date, _timezone: string): Recurr
     segment_refresh_time: "08:30",
     spawned_count: 0,
   };
+}
+
+/**
+ * Outlook-style natural-language summary. Inspired by Outlook's
+ * "Occurs every Tuesday and Wednesday effective 5/19/2026 until 11/10/2026"
+ * banner above the recurrence controls. Removes operator ambiguity about
+ * what the form fields actually mean once combined.
+ */
+function summarizeRecurrence(p: RecurrencePattern): string {
+  if (p.days_of_week.length === 0) {
+    return "Pick at least one day to set a schedule.";
+  }
+
+  const orderedDays = DAYS.filter((d) => p.days_of_week.includes(d.key));
+
+  // Collective phrases for common patterns
+  const dayKeys = new Set(p.days_of_week);
+  const isEveryDay = dayKeys.size === 7;
+  const isWeekday =
+    dayKeys.size === 5 && ["mon", "tue", "wed", "thu", "fri"].every((d) => dayKeys.has(d as DayOfWeek));
+  const isWeekend = dayKeys.size === 2 && dayKeys.has("sat") && dayKeys.has("sun");
+
+  const dayPhrase = (() => {
+    if (isEveryDay) return "every day";
+    if (isWeekday) return "every weekday";
+    if (isWeekend) return "every weekend";
+    const names = orderedDays.map((d) => d.label);
+    if (names.length === 1) return `every ${names[0]}`;
+    if (names.length === 2) return `every ${names[0]} and ${names[1]}`;
+    const last = names[names.length - 1];
+    return `every ${names.slice(0, -1).join(", ")}, and ${last}`;
+  })();
+
+  const startPhrase = p.start_date ? ` starting ${formatHumanDate(p.start_date)}` : "";
+
+  const endPhrase = (() => {
+    if (p.end_kind === "never") return " — until further notice";
+    if (p.end_kind === "on_date" && p.end_date) return ` — until ${formatHumanDate(p.end_date)}`;
+    if (p.end_kind === "after_n" && p.end_after_n) {
+      return ` — for ${p.end_after_n} occurrence${p.end_after_n === 1 ? "" : "s"}`;
+    }
+    return "";
+  })();
+
+  return `Spawns ${dayPhrase}${startPhrase}${endPhrase}.`;
+}
+
+function formatHumanDate(yyyyMmDd: string): string {
+  // YYYY-MM-DD → "Mon, May 19, 2026" without bringing in a date library.
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  if (!y || !m || !d) return yyyyMmDd;
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(utc);
 }
 
 export function RecurrenceEditor({
@@ -150,6 +209,8 @@ export function RecurrenceEditor({
     return first ?? { ...DEFAULT_HOURS };
   })();
 
+  const summary = summarizeRecurrence(value);
+
   return (
     <>
       {/* ── Schedule section ─────────────────────────────────────────── */}
@@ -168,59 +229,73 @@ export function RecurrenceEditor({
         {/* Timezone (slot rendered by parent) */}
         {timezoneSlot && <div className="mb-5">{timezoneSlot}</div>}
 
-        {/* Start date */}
+        {/* Recurrence — Outlook-style inline strip with natural-language summary */}
         <div className="mb-5">
-          <FieldLabel>Start Date</FieldLabel>
-          <input
-            type="date"
-            value={value.start_date}
-            onChange={(e) => update({ start_date: e.target.value })}
-            className="px-3 py-2 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
-        </div>
+          <FieldLabel>Recurrence</FieldLabel>
 
-        {/* End condition */}
-        <div className="mb-5">
-          <FieldLabel>End</FieldLabel>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2.5 cursor-pointer">
+          {/* Natural-language summary */}
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 mb-3">
+            <Info size={12} className="text-blue-400 mt-0.5 shrink-0" />
+            <span className="text-xs text-[var(--text-2)] leading-relaxed">{summary}</span>
+          </div>
+
+          {/* Control strip — wraps on narrow widths */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {/* Start date */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--text-3)]">Start</span>
               <input
-                type="radio"
-                name="recurrence-end"
-                checked={value.end_kind === "never"}
-                onChange={() => handleEndKindChange("never")}
-                className="accent-blue-500"
+                type="date"
+                value={value.start_date}
+                onChange={(e) => update({ start_date: e.target.value })}
+                className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
-              <span className="text-sm text-[var(--text-1)]">Never</span>
-            </label>
-            <label className="flex items-center gap-2.5 cursor-pointer">
-              <input
-                type="radio"
-                name="recurrence-end"
-                checked={value.end_kind === "on_date"}
-                onChange={() => handleEndKindChange("on_date")}
-                className="accent-blue-500"
-              />
-              <span className="text-sm text-[var(--text-1)]">On</span>
+            </div>
+
+            {/* Day pills */}
+            <div className="flex items-center gap-1">
+              {DAYS.map(({ key, label, letter }) => {
+                const on = value.days_of_week.includes(key);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => toggleDay(key)}
+                    aria-label={label}
+                    title={label}
+                    className={`w-8 h-8 rounded-md text-xs font-semibold transition-all ${
+                      on
+                        ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                        : "bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-3)] hover:border-blue-500/30"
+                    }`}
+                  >
+                    {letter}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* End condition: dropdown + conditional input */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--text-3)]">Until</span>
+              <select
+                value={value.end_kind}
+                onChange={(e) => handleEndKindChange(e.target.value as RecurrenceEndKind)}
+                className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="never">Further notice</option>
+                <option value="on_date">A specific date</option>
+                <option value="after_n">N occurrences</option>
+              </select>
               {value.end_kind === "on_date" && (
                 <input
                   type="date"
                   value={value.end_date ?? ""}
                   min={value.start_date}
                   onChange={(e) => update({ end_date: e.target.value || null })}
-                  className="ml-2 px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               )}
-            </label>
-            <label className="flex items-center gap-2.5 cursor-pointer">
-              <input
-                type="radio"
-                name="recurrence-end"
-                checked={value.end_kind === "after_n"}
-                onChange={() => handleEndKindChange("after_n")}
-                className="accent-blue-500"
-              />
-              <span className="text-sm text-[var(--text-1)]">After</span>
               {value.end_kind === "after_n" && (
                 <>
                   <input
@@ -230,45 +305,19 @@ export function RecurrenceEditor({
                     onChange={(e) =>
                       update({ end_after_n: e.target.value ? parseInt(e.target.value, 10) : null })
                     }
-                    className="ml-2 w-20 px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="w-20 px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
-                  <span className="text-sm text-[var(--text-3)]">occurrences</span>
+                  <span className="text-xs text-[var(--text-3)]">occ.</span>
                 </>
               )}
-            </label>
-          </div>
-        </div>
-
-        {/* Active days */}
-        <div className="mb-5">
-          <FieldLabel>Active Days</FieldLabel>
-          <div className="flex flex-wrap gap-1.5">
-            {DAYS.map(({ key, label, letter }) => {
-              const on = value.days_of_week.includes(key);
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => toggleDay(key)}
-                  aria-label={label}
-                  title={label}
-                  className={`w-9 h-9 rounded-lg text-sm font-semibold transition-all ${
-                    on
-                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                      : "bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-3)] hover:border-blue-500/30"
-                  }`}
-                >
-                  {letter}
-                </button>
-              );
-            })}
+            </div>
           </div>
         </div>
 
         {/* Call hours */}
         <div className="mb-5">
           <FieldLabel>Call Hours</FieldLabel>
-          <div className="flex flex-wrap gap-4 mb-2">
+          <div className="flex flex-wrap items-center gap-4 mb-2">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="radio"
@@ -289,28 +338,29 @@ export function RecurrenceEditor({
               />
               <span className="text-sm text-[var(--text-2)]">Different per day</span>
             </label>
+            {sameHours && value.days_of_week.length > 0 && (
+              <div className="flex items-center gap-2 ml-auto">
+                <input
+                  type="time"
+                  value={sharedHours.start}
+                  onChange={(e) => updateAllDayHours({ start: e.target.value })}
+                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <span className="text-xs text-[var(--text-3)]">to</span>
+                <input
+                  type="time"
+                  value={sharedHours.end}
+                  onChange={(e) => updateAllDayHours({ end: e.target.value })}
+                  className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <span className="text-xs text-[var(--text-3)]">in {campaignTimezone}</span>
+              </div>
+            )}
           </div>
 
           {value.days_of_week.length === 0 ? (
-            <p className="text-xs text-[var(--text-3)]">Select at least one day to set call hours.</p>
-          ) : sameHours ? (
-            <div className="flex items-center gap-2">
-              <input
-                type="time"
-                value={sharedHours.start}
-                onChange={(e) => updateAllDayHours({ start: e.target.value })}
-                className="px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              <span className="text-xs text-[var(--text-3)]">to</span>
-              <input
-                type="time"
-                value={sharedHours.end}
-                onChange={(e) => updateAllDayHours({ end: e.target.value })}
-                className="px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              <span className="text-xs text-[var(--text-3)] ml-2">in {campaignTimezone}</span>
-            </div>
-          ) : (
+            <p className="text-xs text-[var(--text-3)]">Select at least one day above to set call hours.</p>
+          ) : !sameHours ? (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-app)] divide-y divide-[var(--border)]">
               {DAYS.filter((d) => value.days_of_week.includes(d.key)).map(({ key, label }) => {
                 const hours = value.call_hours_by_day[key] ?? { ...DEFAULT_HOURS };
@@ -336,19 +386,19 @@ export function RecurrenceEditor({
                 );
               })}
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Exception dates */}
         <div>
           <FieldLabel>Exception Dates</FieldLabel>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
             <input
               type="date"
               value={pendingException}
               min={value.start_date}
               onChange={(e) => setPendingException(e.target.value)}
-              className="px-3 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
             <button
               type="button"
