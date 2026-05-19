@@ -3,10 +3,12 @@
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarDays, Clock, Info, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Save, Timer } from "lucide-react";
+import { ArrowLeft, CalendarDays, Clock, Info, ListChecks, Loader2, Megaphone, MessageSquareText, Phone, Play, Repeat, Save, Timer } from "lucide-react";
 import { createCampaignV2, parsePhoneList, type CallWindow } from "@/lib/campaignV2Data";
 import SegmentImporter from "@/components/SegmentImporter";
 import DateTimePicker from "@/components/DateTimePicker";
+import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
+import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 
 // Default SMS content pre-filled on the Create Campaign form.
 // Split into message + link + opt-out so operators can edit each section.
@@ -219,6 +221,15 @@ export default function NewCampaignV2Page() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Campaign type: Fixed = one-shot dial cycle (existing flow). Recurring =
+  // long-lived schedule definition that auto-spawns daily Fixed children.
+  // Recurring parents save with no clone, no slot, status='running'.
+  const [campaignType, setCampaignType] = useState<"fixed" | "recurring">("fixed");
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>(() =>
+    defaultRecurrencePattern(new Date(), "America/Toronto"),
+  );
+  const [recurrenceErrors, setRecurrenceErrors] = useState<string[]>([]);
+
   const parsedNumbers = useMemo(() => parsePhoneList(numbersText), [numbersText]);
 
   // ── SMS composition + validation ──
@@ -297,6 +308,61 @@ export default function NewCampaignV2Page() {
 
     if (!name.trim()) return setError("Campaign name is required.");
     if (!vapiAssistantId.trim()) return setError("Pick a Vapi assistant.");
+
+    // ── Recurring path: no clone, no numbers, no per-day schedule. ──
+    // The recurrence pattern carries the daily schedule. Children are
+    // spawned by the scheduler cron and inherit prompt/voice/base from
+    // the parent. Validation: pattern must be well-formed and a single
+    // segment must be selected (multi-segment imports leave segmentId
+    // NULL, which breaks the daily refresh per migration 1d's contract).
+    if (campaignType === "recurring") {
+      const validation = validateRecurrencePattern(recurrencePattern);
+      if (!validation.ok) {
+        setRecurrenceErrors(validation.errors);
+        return setError("Fix the schedule errors below.");
+      }
+      setRecurrenceErrors([]);
+      if (!segmentId) {
+        return setError(
+          "Recurring campaigns require a single segment. Click one segment row in the importer (not the multi-select checkboxes).",
+        );
+      }
+
+      setSaving(true);
+      try {
+        const { campaign } = await createCampaignV2({
+          name: name.trim(),
+          systemPrompt: systemPrompt,
+          // vapiAssistantId omitted — recurring parents have no clone.
+          baseAssistantId: vapiAssistantId.trim(),
+          voiceId: voiceId || undefined,
+          segmentId,
+          timezone: timezone.trim(),
+          startAt: null,
+          endAt: null,
+          callWindows: [],
+          smsEnabled,
+          smsTemplate: composedSmsTemplate || null,
+          smsOnGoalReachedOnly: true,
+          numbers: [],
+          campaignType: "recurring",
+          recurrencePattern,
+        });
+        router.push(`/campaigns/v2/${campaign.id}`);
+      } catch (err) {
+        console.error("Failed to create recurring Campaign V2:", err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to save recurring campaign. Please check and try again.",
+        );
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // ── Fixed path (unchanged) ──
     if (parsedNumbers.length === 0) return setError("Add at least one valid E.164 phone number.");
 
     const enabledRows = scheduleRows.filter((r) => r.enabled);
@@ -468,6 +534,50 @@ export default function NewCampaignV2Page() {
           </div>
         </section>
 
+        <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <Repeat size={16} className="text-blue-400" />
+            <h2 className="text-base font-semibold text-[var(--text-1)]">Campaign Type</h2>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setCampaignType("fixed")}
+              className={`text-left rounded-xl border px-4 py-3 transition-all ${
+                campaignType === "fixed"
+                  ? "border-blue-500 bg-blue-500/10"
+                  : "border-[var(--border)] bg-[var(--bg-app)] hover:border-blue-500/40"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-0.5">
+                <Play size={14} className={campaignType === "fixed" ? "text-blue-400" : "text-[var(--text-3)]"} />
+                <span className="text-sm font-semibold text-[var(--text-1)]">Fixed</span>
+              </div>
+              <p className="text-xs text-[var(--text-3)]">
+                Dial a list of numbers once, then stop. The classic campaign.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCampaignType("recurring")}
+              className={`text-left rounded-xl border px-4 py-3 transition-all ${
+                campaignType === "recurring"
+                  ? "border-blue-500 bg-blue-500/10"
+                  : "border-[var(--border)] bg-[var(--bg-app)] hover:border-blue-500/40"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-0.5">
+                <Repeat size={14} className={campaignType === "recurring" ? "text-blue-400" : "text-[var(--text-3)]"} />
+                <span className="text-sm font-semibold text-[var(--text-1)]">Recurring</span>
+              </div>
+              <p className="text-xs text-[var(--text-3)]">
+                Auto-spawn a daily child campaign at a scheduled time with a fresh segment.
+              </p>
+            </button>
+          </div>
+        </section>
+
+        {campaignType === "fixed" ? (
         <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
             <CalendarDays size={16} className="text-blue-400" />
@@ -684,6 +794,49 @@ export default function NewCampaignV2Page() {
             <p className="text-xs text-[var(--text-3)]">Select at least one day to set call hours.</p>
           )}
         </section>
+        ) : (
+        <RecurrenceEditor
+          value={recurrencePattern}
+          onChange={setRecurrencePattern}
+          campaignTimezone={timezone}
+          errors={recurrenceErrors}
+          timezoneSlot={
+            <div>
+              <FieldLabel>Timezone</FieldLabel>
+              <StyledSelect
+                value={timezone}
+                onChange={handleTimezoneChange}
+                icon={<Clock size={14} />}
+                placeholder="Select timezone"
+                options={[
+                  { value: "America/Toronto", label: "America/Toronto", group: "Americas" },
+                  { value: "America/New_York", label: "America/New_York", group: "Americas" },
+                  { value: "America/Chicago", label: "America/Chicago", group: "Americas" },
+                  { value: "America/Denver", label: "America/Denver", group: "Americas" },
+                  { value: "America/Los_Angeles", label: "America/Los_Angeles", group: "Americas" },
+                  { value: "America/Vancouver", label: "America/Vancouver", group: "Americas" },
+                  { value: "America/Mexico_City", label: "America/Mexico_City", group: "Americas" },
+                  { value: "Europe/London", label: "Europe/London", group: "Europe" },
+                  { value: "Europe/Athens", label: "Europe/Athens", group: "Europe" },
+                  { value: "Europe/Paris", label: "Europe/Paris", group: "Europe" },
+                  { value: "Europe/Berlin", label: "Europe/Berlin", group: "Europe" },
+                  { value: "Europe/Madrid", label: "Europe/Madrid", group: "Europe" },
+                  { value: "Asia/Manila", label: "Asia/Manila", group: "Asia / Pacific" },
+                  { value: "Asia/Singapore", label: "Asia/Singapore", group: "Asia / Pacific" },
+                  { value: "Asia/Tokyo", label: "Asia/Tokyo", group: "Asia / Pacific" },
+                  { value: "Asia/Dubai", label: "Asia/Dubai", group: "Asia / Pacific" },
+                  { value: "Australia/Sydney", label: "Australia/Sydney", group: "Asia / Pacific" },
+                  { value: "UTC", label: "UTC" },
+                ]}
+              />
+              <p className="text-xs text-[var(--text-3)] mt-2">
+                Recommended hours: <span className="text-[var(--text-2)] font-medium">{getCallingHours(timezone).start}–{getCallingHours(timezone).end}</span>
+                <span className="text-[var(--text-3)] ml-1">({getCallingHours(timezone).note})</span>
+              </p>
+            </div>
+          }
+        />
+        )}
 
         <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 shadow-sm">
           <div className="flex items-center justify-between mb-1">
@@ -840,7 +993,11 @@ export default function NewCampaignV2Page() {
               </span>
             )}
           </div>
-          <p className="text-xs text-[var(--text-3)] mb-4">Import from a segment or paste numbers manually.</p>
+          <p className="text-xs text-[var(--text-3)] mb-4">
+            {campaignType === "recurring"
+              ? "Pick a single segment by clicking its row in the importer. Daily children will pull a fresh segment snapshot at the scheduled refresh time — multi-select isn't supported."
+              : "Import from a segment or paste numbers manually."}
+          </p>
 
           <div className="grid gap-3">
             <SegmentImporter
@@ -855,7 +1012,19 @@ export default function NewCampaignV2Page() {
               }}
             />
 
-            {(parsedNumbers.length === 0 || phoneEditing) ? (
+            {campaignType === "recurring" ? (
+              segmentId ? (
+                <div className="px-3 py-2 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 text-xs text-[var(--text-2)]">
+                  <Info size={12} className="inline mr-1.5 text-blue-400" />
+                  Segment selected (id {segmentId}). Children will refresh from this segment each scheduled day.
+                </div>
+              ) : (
+                <div className="px-3 py-2 rounded-lg bg-amber-500/[0.06] border border-amber-500/20 text-xs text-amber-200">
+                  <Info size={12} className="inline mr-1.5 text-amber-400" />
+                  No segment selected. Click a segment row in the importer to choose one.
+                </div>
+              )
+            ) : (parsedNumbers.length === 0 || phoneEditing) ? (
               <div className="relative">
                 <textarea
                   value={numbersText}
