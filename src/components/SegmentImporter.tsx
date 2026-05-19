@@ -34,9 +34,17 @@ interface Props {
     segmentId: number | null,
     segmentName: string | null,
   ) => void;
+  /**
+   * When true, hides the per-row multi-select checkboxes — operator can
+   * only single-select a segment by clicking the row. Default false (both
+   * modes shown). Wizard's Step 1 passes `true` when campaignType is
+   * "recurring", since recurring rejects multi-segment imports (NULL
+   * segmentId breaks the refresh contract per migration 1d).
+   */
+  singleSelectOnly?: boolean;
 }
 
-export default function SegmentImporter({ onImport }: Props) {
+export default function SegmentImporter({ onImport, singleSelectOnly = false }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [segments, setSegments] = useState<Segment[] | null>(null);
   const [segmentsError, setSegmentsError] = useState<string | null>(null);
@@ -273,10 +281,15 @@ export default function SegmentImporter({ onImport }: Props) {
                 />
               </div>
 
-              {/* Multi-select hint */}
-              {checkedIds.size > 0 && (
+              {/* Multi-select hint (hidden in single-select-only mode) */}
+              {!singleSelectOnly && checkedIds.size > 0 && (
                 <p className="text-xs text-indigo-400">
                   {checkedIds.size} segment{checkedIds.size > 1 ? "s" : ""} checked — numbers will be combined
+                </p>
+              )}
+              {singleSelectOnly && (
+                <p className="text-xs text-[var(--text-3)]">
+                  Pick exactly one segment — recurring campaigns refresh from a single source.
                 </p>
               )}
 
@@ -301,18 +314,20 @@ export default function SegmentImporter({ onImport }: Props) {
                               : "hover:bg-[var(--bg-hover)]"
                         }`}
                       >
-                        {/* Checkbox */}
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleCheckboxToggle(s.id); }}
-                          className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 mr-2.5 transition-colors ${
-                            isChecked
-                              ? "bg-indigo-500 border-indigo-500"
-                              : "border-[var(--border)] hover:border-indigo-400"
-                          }`}
-                        >
-                          {isChecked && <Check size={10} className="text-white" strokeWidth={3} />}
-                        </button>
+                        {/* Checkbox — hidden in single-select-only mode */}
+                        {!singleSelectOnly && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleCheckboxToggle(s.id); }}
+                            className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 mr-2.5 transition-colors ${
+                              isChecked
+                                ? "bg-indigo-500 border-indigo-500"
+                                : "border-[var(--border)] hover:border-indigo-400"
+                            }`}
+                          >
+                            {isChecked && <Check size={10} className="text-white" strokeWidth={3} />}
+                          </button>
+                        )}
 
                         {/* Row click = single select */}
                         <button

@@ -54,3 +54,6 @@ docs/
 .claude/
 CLAUDE.md
 AGENTS.md
+
+# reference prototypes from the design handoff (not source — read-only)
+Frontend/

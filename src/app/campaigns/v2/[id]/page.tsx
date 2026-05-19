@@ -11,20 +11,23 @@ import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessages
 type Row = Record<string, unknown>;
 
 function StatusBadge({ status }: { status: string }) {
+  // Aligned with the dashboard / campaigns list / activity badge convention:
+  // bg-color/12 + border-color/30, with a small pulsing dot for `running`.
   const map: Record<string, string> = {
-    draft: "bg-gray-500/15 text-gray-400 border-gray-500/25",
-    scheduled: "bg-cyan-500/15 text-cyan-400 border-cyan-500/25",
-    running: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
-    paused: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+    draft: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]",
+    scheduled: "bg-cyan-500/12 text-cyan-400 border-cyan-500/30",
+    running: "bg-emerald-500/12 text-emerald-400 border-emerald-500/30",
+    paused: "bg-amber-500/12 text-amber-400 border-amber-500/30",
     // Step 1 (dashboard rebuild) added `inactive`: ejected, slot released,
-    // history preserved. Distinct from `paused` (slot held); slate/neutral
+    // history preserved. Distinct from `paused` (slot held); neutral
     // reflects the "resting, no slot" state.
-    inactive: "bg-slate-500/15 text-slate-300 border-slate-500/25",
-    completed: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-    archived: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+    inactive: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
+    completed: "bg-blue-500/12 text-blue-400 border-blue-500/30",
+    archived: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
   };
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${map[status] ?? map.draft}`}>
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-mono border ${map[status] ?? map.draft}`}>
+      <span className={`w-1.5 h-1.5 rounded-full bg-current ${status === "running" ? "animate-pulse" : ""}`} />
       {status}
     </span>
   );
@@ -115,15 +118,15 @@ const DAY_LABEL: Record<string, string> = {
 };
 
 const OUTCOME_BADGE_CLASS: Record<string, string> = {
-  pending: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
-  in_progress: "bg-blue-500/15 text-blue-400 border border-blue-500/25",
-  pending_retry: "bg-amber-500/15 text-amber-400 border border-amber-500/25",
-  sent_sms: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25",
-  not_interested: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
-  declined_offer: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
-  wrong_number: "bg-gray-500/15 text-gray-400 border border-gray-500/25",
-  unreached: "bg-red-500/15 text-red-400 border border-red-500/25",
-  suppressed: "bg-purple-500/15 text-purple-400 border border-purple-500/25",
+  pending: "bg-[var(--bg-elevated)] text-[var(--text-2)] border border-[var(--border)]",
+  in_progress: "bg-blue-500/12 text-blue-400 border border-blue-500/30",
+  pending_retry: "bg-amber-500/12 text-amber-400 border border-amber-500/30",
+  sent_sms: "bg-emerald-500/12 text-emerald-400 border border-emerald-500/30",
+  not_interested: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
+  declined_offer: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
+  wrong_number: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
+  unreached: "bg-red-500/12 text-red-400 border border-red-500/30",
+  suppressed: "bg-violet-500/12 text-violet-400 border border-violet-500/30",
 };
 
 /**
