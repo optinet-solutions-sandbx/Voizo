@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import type { RecurrencePattern } from "./types/recurrence";
 
 export type CallWindow = {
   day: "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
@@ -9,7 +10,7 @@ export type CallWindow = {
 export interface CampaignV2CreateInput {
   name: string;
   systemPrompt: string;
-  vapiAssistantId: string;
+  vapiAssistantId?: string; // Optional: recurring parents are created without a clone (no worker leased). Required for Fixed campaigns.
   vapiAssistantName?: string;
   vapiSipUri?: string;
   vapiPoolSlotId?: string; // SIP pool slot id when USE_SIP_POOL=true; null/undefined for legacy per-campaign flow
@@ -25,6 +26,8 @@ export interface CampaignV2CreateInput {
   smsOnGoalReachedOnly?: boolean;
   numbers: string[];
   createdBy?: string | null;
+  campaignType?: "fixed" | "recurring"; // Defaults to "fixed". Recurring parents save as status='running' with no clone; children are spawned by the scheduler.
+  recurrencePattern?: RecurrencePattern | null; // Populated for campaignType='recurring'; null otherwise.
 }
 
 export function defaultCallWindows(): CallWindow[] {
@@ -58,11 +61,17 @@ export function parsePhoneList(input: string): string[] {
 }
 
 export async function createCampaignV2(input: CampaignV2CreateInput) {
+  // Recurring parents save directly as 'running' (active schedule definition);
+  // the scheduler scans them by type+status. Fixed campaigns keep the existing
+  // draft→running flow gated by start_at + the queue-gate.
+  const campaignType = input.campaignType ?? "fixed";
+  const status = campaignType === "recurring" ? "running" : "draft";
+
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns_v2")
     .insert({
       name: input.name,
-      vapi_assistant_id: input.vapiAssistantId,
+      vapi_assistant_id: input.vapiAssistantId || null,
       vapi_assistant_name: input.vapiAssistantName || null,
       vapi_sip_uri: input.vapiSipUri || null,
       vapi_pool_slot_id: input.vapiPoolSlotId || null,
@@ -77,7 +86,9 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       sms_enabled: input.smsEnabled,
       sms_template: input.smsTemplate || null,
       sms_on_goal_reached_only: input.smsOnGoalReachedOnly ?? true,
-      status: "draft",
+      status,
+      campaign_type: campaignType,
+      recurrence_pattern: input.recurrencePattern ?? null,
       created_by: input.createdBy || null,
     })
     .select()
@@ -89,7 +100,10 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   // The slot was already leased (assistant_id set) by clone-assistant before
   // this function ran. Now that the campaign row exists, set current_campaign_id
   // for operator observability and to satisfy the partial unique index.
-  if (input.vapiPoolSlotId) {
+  // Both vapiPoolSlotId AND vapiAssistantId are guaranteed for the Fixed flow
+  // (the slot was leased to that specific assistant). Recurring parents enter
+  // with neither — the && narrows the type and keeps the branch dead for them.
+  if (input.vapiPoolSlotId && input.vapiAssistantId) {
     const { linkSlot } = await import("./vapi/sipPool");
     const linked = await linkSlot(supabase, {
       slotId: input.vapiPoolSlotId,
