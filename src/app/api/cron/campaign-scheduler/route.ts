@@ -355,6 +355,14 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
+    // ── Recurring parent campaign guard ──
+    // If it's a recurring parent campaign, it doesn't dial directly. Just leave it running
+    // so it can spawn child campaigns during scheduler ticks.
+    if ((campaign.campaign_type as string) === "recurring") {
+      results.push({ id: campaignId, name: campaignName, result: "started" });
+      continue;
+    }
+
     // ── Find next number and fire first call ──
     const nextNumber = await findNextNumber(campaignId);
     if (!nextNumber) {

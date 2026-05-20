@@ -79,6 +79,7 @@ export async function POST(
     .from("campaigns_v2")
     .select("id", { count: "exact", head: true })
     .eq("status", "running")
+    .neq("campaign_type", "recurring") // Exclude recurring parent campaigns so they don't block starting fixed campaigns
     .neq("id", id); // defensive: exclude self in any race scenario
 
   if (runningCount && runningCount > 0) {
@@ -106,6 +107,16 @@ export async function POST(
       { error: "Campaign already running or completed (concurrent start detected)" },
       { status: 409 },
     );
+  }
+
+  // ── Recurring parent campaign guard ──
+  // If it's a recurring parent campaign, it doesn't dial directly. Just leave it running
+  // so it can spawn child campaigns during scheduler ticks.
+  if ((campaign.campaign_type as string) === "recurring") {
+    return NextResponse.json({
+      message: "Recurring parent campaign started successfully.",
+      status: "running",
+    });
   }
 
   // Find next eligible number

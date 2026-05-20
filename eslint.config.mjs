@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    ".claude/**",
+    ".agent/**",
+    ".antigravitycli/**",
+    "node_modules/**",
   ]),
 ]);
 
