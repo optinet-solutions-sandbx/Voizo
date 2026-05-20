@@ -188,6 +188,19 @@ async function main() {
       const newId = newAssistant.id;
       console.log(`Successfully created assistant! New Vapi ID: ${newId}`);
 
+      console.warn(`\n======================================================================`);
+      console.warn(`⚠️  [CRITICAL MANUAL ACTION REQUIRED]`);
+      console.warn(`----------------------------------------------------------------------`);
+      console.warn(`Vapi's API is write-only for 'server.secret' and does not return it on GET.`);
+      console.warn(`As a result, the newly recreated assistant does NOT have a Webhook Secret.`);
+      console.warn(`\nBefore launching any campaigns with this assistant, you MUST:`);
+      console.warn(`  1. Open the Vapi.ai Dashboard.`);
+      console.warn(`  2. Navigate to assistant: "${backupAssistant.name}" (ID: ${newId}).`);
+      console.warn(`  3. Re-enter your production Webhook Secret in the server configuration.`);
+      console.warn(`\nUntil this is done, webhook signature verification on the backend`);
+      console.warn(`will FAIL, preventing the dialer queue from advancing.`);
+      console.warn(`======================================================================\n`);
+
       // ── Database Update ──
       console.log("\nConnecting to Supabase to update database references...");
       const supabaseSdkPath = path.join(workspacePath, "node_modules", "@supabase", "supabase-js");

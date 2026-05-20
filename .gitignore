@@ -57,3 +57,6 @@ AGENTS.md
 
 # reference prototypes from the design handoff (not source — read-only)
 Frontend/
+
+# operational backups (contains sensitive prompt schemas & competitive IP)
+/backups/
