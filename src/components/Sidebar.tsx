@@ -6,7 +6,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Bell, Search, Megaphone, PhoneOff, BookOpen, Phone, X,
   LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2, Globe2,
-  Activity,
+  Activity, Users,
 } from "lucide-react";
 
 const CampaignIcon = Megaphone;
@@ -19,6 +19,7 @@ const navItems = [
   { label: "Live Activity", href: "/activity",        icon: Activity,        color: "text-cyan-400",    bg: "bg-cyan-500/10"    },
   { label: "Workers",       href: "/workers",         icon: Globe2,          color: "text-emerald-400", bg: "bg-emerald-500/10" },
   { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       color: "text-blue-400",    bg: "bg-blue-500/10"    },
+  { label: "Audience",      href: "/audience",        icon: Users,           color: "text-amber-400",   bg: "bg-amber-500/10"   },
   { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        color: "text-red-400",     bg: "bg-red-500/10"     },
   { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        color: "text-indigo-400",  bg: "bg-indigo-500/10"  },
 ];
@@ -27,6 +28,7 @@ const allPages = [
   { label: "Workers",        href: "/workers",         icon: Globe2,         description: "Worker fleet and world-time view" },
   { label: "Live Activity",  href: "/activity",        icon: Activity,       description: "Live operations console — calls, SMS, outcomes" },
   { label: "Campaigns",      href: "/campaigns",       icon: Megaphone,      description: "Manage your calling campaigns" },
+  { label: "Audience",       href: "/audience",        icon: Users,          description: "Recycled local segments carved from past outcomes" },
   { label: "Do Not Call",    href: "/do-not-call",     icon: PhoneOff,       description: "DNC list management" },
   { label: "Knowledge Bases",href: "/knowledge-bases", icon: BookOpen,       description: "Knowledge base documents" },
   { label: "Phone Numbers",  href: "/phone-numbers",   icon: Phone,          description: "Phone number management" },
