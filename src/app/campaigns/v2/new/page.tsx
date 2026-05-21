@@ -18,12 +18,19 @@ import { Suspense, useCallback, useEffect, useReducer, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
-import { createCampaignV2 } from "@/lib/campaignV2Data";
+import { createCampaignV2, parsePhoneList } from "@/lib/campaignV2Data";
+import {
+  countryLabel,
+  defaultTimezoneForCountry,
+  detectAudienceCountry,
+  isTimezoneValidForCountry,
+} from "@/lib/audienceCountry";
 
 import { ClassicNewCampaignPage } from "./page-classic";
 import {
-  buildCloneRequest, buildCreateInput, createInitialState, validateBeforeSubmit,
-  wizardReducer, type CloneResult, type Step,
+  buildCloneRequest, buildCreateInput, createInitialState, decomposeSmsTemplate,
+  deriveScheduleRows, validateBeforeSubmit, wizardReducer,
+  type CloneResult, type Step,
 } from "./wizardState";
 import Stepper from "./components/Stepper";
 import FooterNav from "./components/FooterNav";
@@ -57,6 +64,27 @@ function NewCampaignRoute() {
   if (search?.get("classic") === "1") {
     return <ClassicNewCampaignPage />;
   }
+  // Audience-tab prefill (Slice 4): ?source=local_segment&id=<uuid> hands a
+  // recycled audience to the wizard. WizardPage fetches the segment server-
+  // side on mount and prefills numbersText + manualPasteMode + name.
+  const source = search?.get("source") ?? null;
+  const id = search?.get("id") ?? null;
+  if (source === "local_segment" && id) {
+    return <WizardPage prefillSegmentId={id} />;
+  }
+  // Duplicate-via-Wizard (2026-05-21): ?source=campaign&id=<uuid>&skip=<csv>
+  // &name=<string>&refresh_segment=<bool>. The detail-page Duplicate modal sets
+  // these params after the operator picks the skip strategy.
+  if (source === "campaign" && id) {
+    return (
+      <WizardPage
+        prefillCampaignId={id}
+        prefillCampaignSkip={search?.get("skip") ?? "overlap,suppressed"}
+        prefillCampaignName={search?.get("name") ?? undefined}
+        prefillCampaignRefreshSegment={search?.get("refresh_segment") !== "false"}
+      />
+    );
+  }
   return <WizardPage />;
 }
 
@@ -71,9 +99,189 @@ function RouteFallback() {
   );
 }
 
-function WizardPage() {
+interface DuplicateSkipped {
+  total: number;
+  shown: number;
+  appliedSkips: string[];
+}
+
+function WizardPage({
+  prefillSegmentId,
+  prefillCampaignId,
+  prefillCampaignSkip,
+  prefillCampaignName,
+  prefillCampaignRefreshSegment,
+}: {
+  prefillSegmentId?: string;
+  prefillCampaignId?: string;
+  prefillCampaignSkip?: string;
+  prefillCampaignName?: string;
+  prefillCampaignRefreshSegment?: boolean;
+}) {
   const router = useRouter();
   const [state, dispatch] = useReducer(wizardReducer, undefined, createInitialState);
+
+  // Tracked separately from WizardState so the StepAudience footnote can show
+  // the operator-chosen skip stats without polluting the campaign create payload.
+  const [duplicateSkipped, setDuplicateSkipped] = useState<DuplicateSkipped | null>(null);
+
+  // Slice 4 (Audience tab): if the URL carries ?source=local_segment&id=<uuid>,
+  // fetch the segment server-side and prefill the wizard's audience fields.
+  // Paginates to handle segments larger than the API's per-page cap (500).
+  // No new wizard state — just dispatches SET_AUDIENCE_FIELDS once on mount.
+  useEffect(() => {
+    if (!prefillSegmentId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const phones: string[] = [];
+        let cursor: string | null = null;
+        let segmentName: string | null = null;
+        // Safety: cap at 20 pages × 500 = 10000 phones (segment API caps
+        // candidates at 5000, so 20 pages is generous defense in depth).
+        for (let i = 0; i < 20; i++) {
+          const qs = new URLSearchParams({ limit: "500" });
+          if (cursor) qs.set("cursor", cursor);
+          const r = await fetch(`/api/audience/segments/${prefillSegmentId}?${qs}`, {
+            cache: "no-store",
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const body = (await r.json()) as {
+            segment: { name: string } | null;
+            numbers: Array<{ phone_e164: string }>;
+            pagination: { nextCursor: string | null; hasMore: boolean };
+          };
+          if (i === 0 && body.segment) segmentName = body.segment.name;
+          for (const n of body.numbers ?? []) phones.push(n.phone_e164);
+          if (!body.pagination?.hasMore || !body.pagination?.nextCursor) break;
+          cursor = body.pagination.nextCursor;
+        }
+        if (cancelled) return;
+        const label = segmentName ? `Recycled · ${segmentName}` : "Recycled · audience";
+        dispatch({
+          type: "SET_AUDIENCE_FIELDS",
+          payload: {
+            name: label,
+            numbersText: phones.join("\n"),
+            manualPasteMode: true,
+            segmentId: null,
+            segmentName: label,
+          },
+        });
+      } catch (err) {
+        console.warn("[wizard] prefill from local segment failed:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [prefillSegmentId]);
+
+  // Duplicate-via-Wizard (2026-05-21): if the URL carries ?source=campaign,
+  // the detail-page modal already showed the operator the diff + skip choices.
+  // We re-fetch the same payload here (with the operator's skip CSV) so the
+  // wizard can dispatch SET_AUDIENCE_FIELDS / SET_AGENT_FIELDS / SET_SCHEDULE_FIELDS
+  // / SET_SMS_FIELDS in one mount-time pass. No new WizardState fields — the
+  // skipped counts live in local state for the StepAudience footnote only.
+  useEffect(() => {
+    if (!prefillCampaignId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams({
+          refresh_segment: String(prefillCampaignRefreshSegment ?? true),
+          skip: prefillCampaignSkip ?? "overlap,suppressed",
+        });
+        const r = await fetch(`/api/campaigns-v2/${prefillCampaignId}/duplicate?${qs}`, {
+          cache: "no-store",
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = (await r.json()) as {
+          source: {
+            name: string;
+            base_assistant_id: string | null;
+            voice_id: string | null;
+            system_prompt: string | null;
+            timezone: string;
+            call_windows: Array<{ day: string; start: string; end: string }> | null;
+            sms_enabled: boolean | null;
+            sms_template: string | null;
+            segment_id: number | null;
+          };
+          prefill: {
+            suggestedName: string;
+            phones: string[];
+            appliedSkips: string[];
+            candidates: string[];
+            overlap: string[];
+            suppressed: string[];
+            recentlyCalled: string[];
+          };
+        };
+        if (cancelled) return;
+        const src = body.source;
+        const pf = body.prefill;
+
+        setDuplicateSkipped({
+          total: pf.candidates.length,
+          shown: pf.phones.length,
+          appliedSkips: pf.appliedSkips ?? [],
+        });
+
+        // Operator's chosen name (from modal) takes precedence over the
+        // server's suggestedName. Fall back if missing.
+        const name = (prefillCampaignName?.trim() || pf.suggestedName || `${src.name} (duplicate)`);
+        const label = `Duplicated from ${src.name}`;
+        dispatch({
+          type: "SET_AUDIENCE_FIELDS",
+          payload: {
+            name,
+            timezone: src.timezone,
+            numbersText: (pf.phones ?? []).join("\n"),
+            manualPasteMode: true,
+            // Pin to null — duplicate campaigns are NOT bound to a Customer.io
+            // segment_id (refresh on the wizard's submit would re-fetch and
+            // potentially diverge from the operator's chosen-filtered list).
+            segmentId: null,
+            segmentName: label,
+          },
+        });
+
+        if (src.base_assistant_id) {
+          dispatch({
+            type: "SET_AGENT_FIELDS",
+            payload: {
+              vapiAssistantId: src.base_assistant_id,
+              baseVoiceId: src.voice_id ?? null,
+              systemPrompt: src.system_prompt ?? "",
+            },
+          });
+        }
+
+        dispatch({
+          type: "SET_SCHEDULE_FIELDS",
+          payload: {
+            campaignType: "fixed",
+            scheduleRows: deriveScheduleRows(src.call_windows, src.timezone),
+            startMode: "now",
+          },
+        });
+
+        const sms = decomposeSmsTemplate(src.sms_template);
+        dispatch({
+          type: "SET_SMS_FIELDS",
+          payload: {
+            smsEnabled: !!src.sms_enabled,
+            smsMessage: sms.message,
+            smsLink: sms.link,
+            smsOptout: sms.optout,
+          },
+        });
+      } catch (err) {
+        if (cancelled) return;
+        console.warn("[wizard] prefill from campaign duplicate failed:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [prefillCampaignId, prefillCampaignSkip, prefillCampaignName, prefillCampaignRefreshSegment]);
 
   // Assistants list — fetched once on WizardPage mount so navigating
   // between steps doesn't refetch. Mirrors classic page-classic.tsx:259-276.
@@ -151,12 +359,39 @@ function WizardPage() {
     }
   }, [state, router]);
 
-  // Continue/Launch button disable: on any step, refuse to advance if the
-  // current step has visible invalid fields. The final step's button
-  // becomes Launch; same validator runs there too.
+  // Step 1 country-vs-timezone advisory (autonomy-first — the dropdown shows
+  // all timezones; this mismatch flag drives the inline banner copy AND the
+  // Next-click confirm gate below. Operators always retain final say.
+  const step1Country =
+    state.step === 1
+      ? detectAudienceCountry(parsePhoneList(state.numbersText)).country
+      : null;
+  const step1TzMismatch =
+    step1Country != null && !isTimezoneValidForCountry(step1Country, state.timezone);
+
+  // Continue/Launch button disable: only true blockers (mid-submit or final-
+  // step validation). TZ mismatch routes through handleNext's confirm instead
+  // of disabling Next — per feedback_operator_autonomy_with_guardrails.
   const nextDisabled =
     state.saving ||
     (state.step === 5 && validateBeforeSubmit(state) !== null);
+
+  // Next-click interceptor for the Step 1 TZ mismatch advisory. Fires a one-
+  // shot window.confirm when the operator's pick disagrees with the detected
+  // audience country — same pattern as StepFollowup's compliance gates.
+  const handleNext = useCallback(() => {
+    if (state.step === 1 && step1TzMismatch && step1Country != null) {
+      const recommended = defaultTimezoneForCountry(step1Country);
+      const msg =
+        `Timezone mismatch detected.\n\n` +
+        `Audience appears to be ${countryLabel(step1Country)}, but you selected ${state.timezone}.\n` +
+        `Call windows in ${state.timezone} may fall during unusual hours for your audience.\n\n` +
+        (recommended ? `Recommended: ${recommended}\n\n` : "") +
+        `Proceed with ${state.timezone} anyway?`;
+      if (!window.confirm(msg)) return;
+    }
+    dispatch({ type: "NEXT" });
+  }, [state.step, step1TzMismatch, step1Country, state.timezone, dispatch]);
 
   return (
     <div className="h-full grid grid-cols-[240px_1fr_340px] max-[1280px]:grid-cols-[200px_1fr_300px] overflow-hidden">
@@ -175,7 +410,9 @@ function WizardPage() {
             <span>New</span>
           </nav>
 
-          {state.step === 1 && <StepAudience state={state} dispatch={dispatch} />}
+          {state.step === 1 && (
+            <StepAudience state={state} dispatch={dispatch} duplicateSkipped={duplicateSkipped} />
+          )}
           {state.step === 2 && (
             <StepAgent
               state={state}
@@ -191,7 +428,7 @@ function WizardPage() {
           <FooterNav
             currentStep={state.step}
             onBack={() => dispatch({ type: "BACK" })}
-            onNext={() => dispatch({ type: "NEXT" })}
+            onNext={handleNext}
             onLaunch={handleLaunch}
             nextDisabled={nextDisabled}
             saving={state.saving}

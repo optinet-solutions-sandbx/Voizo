@@ -4,6 +4,11 @@ import { useMemo, type Dispatch } from "react";
 import { Clock, Globe2, Info, Users } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Data";
+import {
+  allowedTimezonesForCountry,
+  countryLabel,
+  detectAudienceCountry,
+} from "@/lib/audienceCountry";
 import SegmentImporter from "@/components/SegmentImporter";
 
 import {
@@ -14,12 +19,21 @@ import {
 } from "../wizardState";
 import StyledSelect from "@/components/StyledSelect";
 
+interface DuplicateSkipped {
+  total: number;
+  shown: number;
+  appliedSkips: string[];
+}
+
 interface Props {
   state: WizardState;
   dispatch: Dispatch<WizardAction>;
+  /** Set by WizardPage when source=campaign prefill ran. Drives the
+   *  "Duplicated from" banner's skip footnote. Null on non-duplicate flows. */
+  duplicateSkipped?: DuplicateSkipped | null;
 }
 
-export default function StepAudience({ state, dispatch }: Props) {
+export default function StepAudience({ state, dispatch, duplicateSkipped }: Props) {
   const hours = getCallingHours(state.timezone);
   const tzLabel =
     TIMEZONE_OPTIONS.find((o) => o.value === state.timezone)?.label ?? state.timezone;
@@ -30,6 +44,17 @@ export default function StepAudience({ state, dispatch }: Props) {
   const parsedNumbers = useMemo(() => parsePhoneList(state.numbersText), [state.numbersText]);
   const hasContent = state.numbersText.trim().length > 0;
   const hasInvalidContent = hasContent && parsedNumbers.length === 0;
+
+  // Country-aware TZ guardrail (advisory, not lockdown — see
+  // feedback_operator_autonomy_with_guardrails). Detection returns null when
+  // sample is too small (<5) or no prefix is ≥80% dominant. The dropdown
+  // always shows all TIMEZONE_OPTIONS; the banner below surfaces the
+  // recommendation and any mismatch. Final intercept fires on Next-click
+  // via page.tsx's handleNext (one-shot window.confirm).
+  const detection = useMemo(() => detectAudienceCountry(parsedNumbers), [parsedNumbers]);
+  const recommendedTz = allowedTimezonesForCountry(detection.country);
+  const tzMismatch =
+    recommendedTz != null && !recommendedTz.includes(state.timezone);
 
   return (
     <div className="flex-1 flex flex-col">
@@ -105,6 +130,44 @@ export default function StepAudience({ state, dispatch }: Props) {
             </>
           ) : (
             <>
+              {/* Slice 4: Audience-tab recycled-segment banner. Detected via
+                  segmentName prefix — purely derived, no new wizard state. */}
+              {state.segmentName?.startsWith("Recycled · ") && (
+                <div className="px-3 py-2 rounded-lg bg-amber-500/[0.06] border border-amber-500/25 text-xs text-[var(--text-2)] inline-flex items-start gap-1.5">
+                  <Users size={12} className="mt-0.5 text-amber-400 shrink-0" />
+                  <span>
+                    Imported from Audience: <span className="text-[var(--text-1)] font-medium">{state.segmentName.replace(/^Recycled · /, "")}</span>
+                    <span className="text-[var(--text-3)]"> · {parsedNumbers.length} phone{parsedNumbers.length === 1 ? "" : "s"} · DNC-scrubbed at carve</span>
+                  </span>
+                </div>
+              )}
+
+              {/* 2026-05-21: Duplicate-via-Wizard banner. The detail-page modal
+                  already showed the operator the diff; this is a quiet reminder
+                  inside the wizard of what was carried over + what got skipped. */}
+              {state.segmentName?.startsWith("Duplicated from ") && (
+                <div className="px-3 py-2 rounded-lg bg-indigo-500/[0.08] border border-indigo-500/30 text-xs text-[var(--text-2)] inline-flex items-start gap-1.5">
+                  <Users size={12} className="mt-0.5 text-indigo-400 shrink-0" />
+                  <span>
+                    Duplicated from{" "}
+                    <span className="text-[var(--text-1)] font-medium">
+                      {state.segmentName.replace(/^Duplicated from /, "")}
+                    </span>
+                    <span className="text-[var(--text-3)]">
+                      {" · "}{parsedNumbers.length} phone{parsedNumbers.length === 1 ? "" : "s"}
+                      {duplicateSkipped && duplicateSkipped.total > duplicateSkipped.shown && (
+                        <>
+                          {" · "}
+                          {duplicateSkipped.total - duplicateSkipped.shown} skipped
+                          {duplicateSkipped.appliedSkips.length > 0 && (
+                            <> ({duplicateSkipped.appliedSkips.join(", ")})</>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </span>
+                </div>
+              )}
               <textarea
                 value={state.numbersText}
                 onChange={(e) =>
@@ -149,6 +212,45 @@ export default function StepAudience({ state, dispatch }: Props) {
         {/* Auto-detected timezone banner + override select */}
         <div className="flex flex-col gap-2">
           <FieldLabel>Timezone</FieldLabel>
+
+          {/* Country-aware guardrail banner — shown only when ≥80% of sampled
+              phones share a country prefix. Above the existing TZ banner so
+              the lock reason precedes the calling-window detail. */}
+          {detection.country && (
+            <div className={`px-3.5 py-3 rounded-xl border text-[12px] text-[var(--text-2)] leading-relaxed flex items-start gap-2 ${
+              detection.confidence >= 1 && !tzMismatch
+                ? "bg-emerald-500/[0.08] border-emerald-500/30"
+                : "bg-amber-500/[0.08] border-amber-500/30"
+            }`}>
+              <Globe2 size={13} className={`shrink-0 mt-0.5 ${detection.confidence >= 1 && !tzMismatch ? "text-emerald-400" : "text-amber-400"}`} />
+              <span>
+                Detected{" "}
+                <span className="text-[var(--text-1)] font-semibold">
+                  {countryLabel(detection.country)}
+                </span>{" "}
+                from {detection.sampleSize} phone{detection.sampleSize === 1 ? "" : "s"}
+                {detection.confidence < 1 && (
+                  <> ({Math.round(detection.confidence * 100)}% match)</>
+                )}
+                {recommendedTz && recommendedTz.length > 0 && (
+                  <>
+                    {" · recommended "}
+                    <span className="text-[var(--text-1)] font-semibold">{recommendedTz[0]}</span>
+                    {recommendedTz.length > 1 && (
+                      <span className="text-[var(--text-3)]"> +{recommendedTz.length - 1} more</span>
+                    )}
+                  </>
+                )}
+                {tzMismatch && (
+                  <>
+                    {" · your pick "}
+                    <span className="text-[var(--text-1)] font-mono">{state.timezone}</span>
+                    <span className="text-amber-300"> may not match — you&apos;ll be asked to confirm on Next</span>
+                  </>
+                )}
+              </span>
+            </div>
+          )}
 
           <div className="px-3.5 py-3 rounded-xl bg-blue-500/[0.06] border border-blue-500/25 text-[12px] text-[var(--text-2)] leading-relaxed flex items-start gap-2">
             <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />

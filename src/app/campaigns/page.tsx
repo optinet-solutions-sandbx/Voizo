@@ -255,26 +255,12 @@ export default function CampaignsPage() {
     }
   }
 
-  async function handleDuplicate(id: string, originalName: string) {
-    // Duplicate endpoint requires new_name. Prompt the operator before firing.
-    const newName = window.prompt("Name for the duplicate campaign:", `${originalName} (copy)`);
-    if (!newName || !newName.trim()) return;
-    setActionInFlightId(id);
-    try {
-      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_name: newName.trim() }),
-      });
-      if (res.ok) {
-        const body = await res.json();
-        if (body.campaign?.id) router.push(`/campaigns/v2/${body.campaign.id}`);
-      }
-    } catch (err) {
-      console.error("Duplicate failed:", err);
-    } finally {
-      setActionInFlightId(null);
-    }
+  // 2026-05-21: Duplicate is now a pre-wizard diff gate. Route to the source's
+  // detail page with ?action=duplicate so the (existing) modal there opens
+  // automatically. Same modal everyone sees — no shortcut path. The
+  // window.prompt + direct-create flow is deleted (per design pivot).
+  function handleDuplicate(id: string) {
+    router.push(`/campaigns/v2/${id}?action=duplicate`);
   }
 
   if (loading) {
@@ -504,7 +490,7 @@ export default function CampaignsPage() {
                             ) : status === "paused" ? (
                               <IconAction title="Resume" onClick={() => handleResume(id)} disabled={isInFlight}><Play size={13} /></IconAction>
                             ) : null}
-                            <IconAction title="Duplicate" onClick={() => handleDuplicate(id, name)} disabled={isInFlight}><Copy size={13} /></IconAction>
+                            <IconAction title="Duplicate" onClick={() => handleDuplicate(id)} disabled={isInFlight}><Copy size={13} /></IconAction>
                             {confirmDeleteId === id ? (
                               <span className="inline-flex items-center gap-2 px-2">
                                 <button

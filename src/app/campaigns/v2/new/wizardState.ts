@@ -14,6 +14,7 @@
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Data";
+import { allowedTimezonesForCountry, detectAudienceCountry } from "@/lib/audienceCountry";
 
 export type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -146,7 +147,7 @@ export interface WizardState {
  * `timezoneTouched = true` so the auto-detect won't clobber it later (R6).
  */
 export type AudiencePayload = Partial<
-  Pick<WizardState, "name" | "timezone" | "numbersText" | "manualPasteMode">
+  Pick<WizardState, "name" | "timezone" | "numbersText" | "manualPasteMode" | "segmentId" | "segmentName">
 >;
 
 /** Atomic segment-import update — phones + segmentId + segmentName arrive together. */
@@ -233,6 +234,40 @@ function initialScheduleRows(start: string, end: string): ScheduleRow[] {
 }
 
 /**
+ * Convert a source campaign's `call_windows` array into the wizard's
+ * `scheduleRows` shape (all 7 days with an `enabled` flag).
+ *
+ * For each day present in `call_windows`: enabled=true with the saved start/end.
+ * For days NOT in `call_windows`: enabled=false with the timezone's default
+ * calling window as placeholder hours (consistent with createInitialState).
+ *
+ * Used by the Duplicate-via-Wizard prefill at WizardPage mount.
+ */
+export function deriveScheduleRows(
+  callWindows: ReadonlyArray<{ day: string; start: string; end: string }> | null | undefined,
+  timezone: string,
+): ScheduleRow[] {
+  const defaults = getCallingHours(timezone);
+  const byDay = new Map<string, { start: string; end: string }>();
+  for (const cw of callWindows ?? []) {
+    // Defensive normalization (audit M3): V1 source campaigns may store
+    // "Monday" / "MON" / mixed casing. Canonical V2 shape is lowercase
+    // 3-letter ("mon"/"tue"/etc per DAYS). Lowercase + slice(0,3) covers all
+    // observed casings; unknown strings simply don't match a DAYS key and
+    // fall through to disabled+defaults, identical to a missing-day source.
+    if (typeof cw.day !== "string" || cw.day.length === 0) continue;
+    const dayKey = cw.day.toLowerCase().slice(0, 3);
+    byDay.set(dayKey, { start: cw.start, end: cw.end });
+  }
+  return DAYS.map(({ key }) => {
+    const cw = byDay.get(key);
+    return cw
+      ? { day: key, enabled: true, start: cw.start, end: cw.end }
+      : { day: key, enabled: false, start: defaults.start, end: defaults.end };
+  });
+}
+
+/**
  * Lazy initializer for useReducer. Detects the browser timezone on first
  * mount; falls back to DEFAULT_TZ in SSR or locked-down environments.
  * Wired into <WizardPage/> as the third arg of useReducer so it runs
@@ -291,6 +326,34 @@ function detectBrowserTimezone(): string | null {
   return null;
 }
 
+/**
+ * Country-aware timezone cascade (helpful default, NOT a lockdown).
+ *
+ * Behavior — autonomy-first per feedback_operator_autonomy_with_guardrails:
+ *  - If the operator has explicitly picked a timezone (timezoneTouched=true),
+ *    this is a no-op. Their pick wins; banner + Next-click confirm in page.tsx
+ *    surface any mismatch as advisory.
+ *  - Otherwise, detect the audience's country from phone prefixes and set a
+ *    sensible default if the current timezone isn't in the country's allowed
+ *    set. This is system-set, so `timezoneTouched` STAYS false — subsequent
+ *    audience changes can re-cascade if the operator switches countries.
+ *  - No-op when detection returns null (mixed/small/unknown audiences).
+ */
+function applyDetectedTimezone(state: WizardState): WizardState {
+  if (state.timezoneTouched) return state;
+  const { country } = detectAudienceCountry(parsePhoneList(state.numbersText));
+  if (!country) return state;
+  const allowed = allowedTimezonesForCountry(country);
+  if (!allowed || allowed.includes(state.timezone)) return state;
+  const newTz = allowed[0];
+  const hours = getCallingHours(newTz);
+  return {
+    ...state,
+    timezone: newTz,
+    scheduleRows: state.scheduleRows.map((r) => ({ ...r, start: hours.start, end: hours.end })),
+  };
+}
+
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
     case "GOTO_STEP":
@@ -301,7 +364,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return state.step > 1 ? { ...state, step: (state.step - 1) as Step } : state;
 
     case "SET_AUDIENCE_FIELDS": {
-      const next: WizardState = { ...state, ...action.payload };
+      let next: WizardState = { ...state, ...action.payload };
       // Timezone cascade — mirror classic page-classic.tsx:298-303.
       // When the operator picks a new timezone, every per-day row's
       // start/end resets to the new region's calling window. Enabled
@@ -311,6 +374,20 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         next.scheduleRows = state.scheduleRows.map((r) => ({ ...r, start: hours.start, end: hours.end }));
         next.timezoneTouched = true; // R6: any explicit timezone set blocks future auto-detects
       }
+      // Country-aware TZ guardrail: re-run detection any time the audience
+      // changes OR the operator explicitly picks a timezone. The helper is
+      // a no-op when detection returns null OR the chosen TZ is already in
+      // the allowed set — so this just enforces the guardrail without
+      // disturbing legitimate within-set picks (e.g. Vancouver inside +1).
+      const audienceChanged =
+        action.payload.numbersText !== undefined &&
+        action.payload.numbersText !== state.numbersText;
+      const timezoneChanged =
+        action.payload.timezone !== undefined &&
+        action.payload.timezone !== state.timezone;
+      if (audienceChanged || timezoneChanged) {
+        next = applyDetectedTimezone(next);
+      }
       return next;
     }
 
@@ -319,13 +396,15 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       // captured for the Step 11 recurring refresh contract (single-segment
       // imports only). Flip manualPasteMode false so the textarea is hidden
       // in favor of the segment-selected indicator.
-      return {
+      const next: WizardState = {
         ...state,
         numbersText: action.payload.phones.join("\n"),
         segmentId: action.payload.segmentId,
         segmentName: action.payload.segmentName,
         manualPasteMode: false,
       };
+      // Country-aware TZ guardrail — see applyDetectedTimezone comment.
+      return applyDetectedTimezone(next);
     }
 
     case "SET_AGENT_FIELDS":
@@ -372,6 +451,38 @@ function composedSmsTemplate(state: WizardState): string {
     Boolean,
   );
   return parts.join(" ");
+}
+
+/**
+ * Best-effort inverse of `composedSmsTemplate`. Splits a stored `sms_template`
+ * back into { message, link, optout } so the wizard's three SMS fields can be
+ * prefilled when duplicating a campaign.
+ *
+ * Heuristic: peel the default opt-out footer off the end if it matches, then
+ * extract the trailing URL (any http(s) link) into `link`. Custom templates
+ * with no trailing URL fall back to `link: ""` and the message keeps its full
+ * text. composedSmsTemplate(state) over the returned shape reproduces the
+ * original template verbatim either way (modulo whitespace normalization).
+ */
+export function decomposeSmsTemplate(template: string | null | undefined): {
+  message: string;
+  link: string;
+  optout: string;
+} {
+  if (!template) return { message: "", link: "", optout: "" };
+  let working = template.trim();
+  let link = "";
+  let optout = "";
+  if (working.endsWith(SMS_OPTOUT_FOOTER)) {
+    optout = SMS_OPTOUT_FOOTER;
+    working = working.slice(0, -SMS_OPTOUT_FOOTER.length).trim();
+  }
+  const trailingUrl = working.match(/(\s|^)(https?:\/\/\S+)$/);
+  if (trailingUrl) {
+    link = trailingUrl[2];
+    working = working.slice(0, working.length - trailingUrl[2].length).trim();
+  }
+  return { message: working, link, optout };
 }
 
 /** Result returned by POST /api/vapi/clone-assistant on success. */

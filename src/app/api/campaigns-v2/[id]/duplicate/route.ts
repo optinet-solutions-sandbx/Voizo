@@ -1,26 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { createClone } from "@/lib/vapi/cloneAssistant";
-import { leaseSlot, linkSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
 
-// Up to: paginated customer.io fetch + per-member attribute lookups (~10-30s for
-// segments <500 members at the 10 req/sec rate limit), Vapi GET base + POST
-// clone (~2-3s), Vapi PATCH slot (~1s), Supabase queries (~1-2s), best-effort
-// rollback on failure. 60s gives a generous margin for the typical PoC scale.
-export const maxDuration = 60;
+/**
+ * GET /api/campaigns-v2/[id]/duplicate
+ *
+ * Read-only prefill payload for the Duplicate-via-Wizard flow.
+ *
+ * Fetches the source campaign, optionally refreshes its Customer.io segment,
+ * computes the overlap/suppressed/recently-called diff, applies the default
+ * skip strategy (overlap + suppressed silently filtered), and returns the
+ * payload that the wizard consumes on mount.
+ *
+ * No side effects — this endpoint NEVER creates Vapi clones, leases SIP
+ * slots, or inserts campaign rows. All creation logic stays in the wizard's
+ * existing handleLaunch (clone-assistant + createCampaignV2 on submit).
+ *
+ * Query params:
+ *   ?refresh_segment=true|false   (default true)
+ *
+ * Restrictions:
+ *   - Recurring source campaigns rejected with 400.
+ *   - Candidate phone set capped at 1000 (PostgREST .in() practical limit).
+ *
+ * Plan: C:\Users\jasin\.claude\plans\new-shift-picking-gentle-puffin.md
+ * Replaces the prior POST flow (create-on-commit, 3-stage modal) per the
+ * 2026-05-21 redesign — operators always go through the wizard now.
+ */
+
+// Customer.io segment fetch + four parallel diff queries. 30s gives ample
+// margin at PoC scale (segments <500 typical).
+export const maxDuration = 30;
 
 const RECENT_CALL_WINDOW_DAYS = 7;
 
 /**
  * campaign_numbers_v2.outcome values that count as "this phone has been
  * meaningfully contacted within the last 7 days." Used by the cross-campaign
- * recent-call diff bucket. Excludes:
- *   - 'pending'        — no contact yet
- *   - 'wrong_number'   — administrative tag, not a contact event
- *   - 'suppressed'     — administrative tag
- *   - 'in_progress'    — counted via the call ending; pending_retry catches mid-call states
+ * recent-call diff bucket. Mirrors the same constant in resume-diff and the
+ * Audience CRM POST endpoint — keep in sync.
  */
 const CONTACT_OUTCOMES = [
   "sent_sms",
@@ -30,74 +49,21 @@ const CONTACT_OUTCOMES = [
   "pending_retry",
 ];
 
-// ──────────────────────────────────────────────────────────────────────────
-
-/**
- * POST /api/campaigns-v2/[id]/duplicate
- *
- * Creates a new campaign based on a source campaign, optionally with a fresh
- * customer.io segment fetch and operator-chosen skip strategy over three diff
- * buckets (overlap with source pending / suppressed / recently-called-elsewhere).
- *
- * Two-call protocol:
- *   - First call (commit=false or omitted) returns a preview with diff counts +
- *     5-sample-per-bucket peek. No state changes.
- *   - Second call (commit=true) applies skip choices, creates the new clone,
- *     leases a slot, INSERTs the new campaign row + filtered phone rows.
- *
- * Body:
- *   {
- *     new_name: string,                  // required
- *     refresh_segment?: boolean,         // default true
- *     base_assistant_id?: string,        // override; default = source's
- *     voice_id?: string,                 // override; default = source's
- *     system_prompt?: string,            // override; default = source's
- *     worker_slot?: number | "auto",     // numeric not yet supported (Phase 2)
- *     commit?: boolean,                  // default false (preview)
- *     skip_overlap?: boolean,            // default false
- *     skip_suppressed?: boolean,         // default true
- *     skip_recently_called?: boolean,    // default false
- *   }
- *
- * Restrictions:
- *   - Recurring source campaigns rejected with 400 (recurring auto-spawns
- *     children; duplicating a recurring is a Phase 2 concern).
- *   - refresh_segment=true requires source.segment_id non-null. Multi-segment
- *     imports and pre-Step-5a campaigns have no source segment to refresh
- *     against; 400 with a friendly message instructing the operator to either
- *     refresh_segment=false (copy source's numbers) or run a manual refresh
- *     beforehand.
- *
- * Failure rollback (mirrors the rebind pattern):
- *   - createClone fails              → no state changes, return helper error
- *   - leaseSlot returns null          → DELETE the new clone, 503
- *   - patchPhoneAssistant fails       → releaseSlot + DELETE clone, 502
- *   - INSERT campaign fails           → releaseSlot + DELETE clone, 500
- *   - INSERT campaign_numbers fails   → partial state (campaign row exists
- *                                       with 0 numbers + leased slot). Operator
- *                                       deletes the duplicate to retry; ON
- *                                       DELETE CASCADE reclaims the slot.
- *
- * Design: docs/2026-05-15_DOC_Dashboard_Rebuild_Design.md §5.6
- * Task:   .agent/tasks/2026-05-15_TASK_Dashboard_Rebuild_Phase_1.md §5
- */
-export async function POST(
+export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  // ── Origin check (URL-parsed exact host equality) ──
+  // ── Lenient origin check (GET — per feedback_csrf_origin_check_get_lenient).
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
-  if (!origin || !host) {
-    return NextResponse.json({ error: "Forbidden — missing origin" }, { status: 403 });
-  }
-  try {
-    const originUrl = new URL(origin);
-    if (originUrl.host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
+  if (origin && host) {
+    try {
+      if (new URL(origin).host !== host) {
+        return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
     }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
   }
 
   const { id } = await params;
@@ -105,57 +71,38 @@ export async function POST(
     return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
   }
 
-  // ── Body parse ──
-  type DuplicateBody = {
-    new_name?: unknown;
-    refresh_segment?: unknown;
-    base_assistant_id?: unknown;
-    voice_id?: unknown;
-    system_prompt?: unknown;
-    worker_slot?: unknown;
-    commit?: unknown;
-    skip_overlap?: unknown;
-    skip_suppressed?: unknown;
-    skip_recently_called?: unknown;
-  };
-  let body: DuplicateBody;
-  try {
-    body = (await request.json()) as DuplicateBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  const url = new URL(request.url);
+  const refreshSegment = url.searchParams.get("refresh_segment") !== "false";
+  // skip CSV: e.g. "overlap,suppressed" or "overlap,suppressed,recent" or "" (none).
+  // If the param is absent entirely, fall back to the defensive default
+  // (overlap + suppressed). An explicit empty string means "skip nothing".
+  // Unknown values 400 — silent drop hides client/server divergence (audit H4).
+  const VALID_SKIP_VALUES: ReadonlySet<string> = new Set(["overlap", "suppressed", "recent"]);
+  const skipParamRaw = url.searchParams.get("skip");
+  let skipFlags: Set<string>;
+  if (skipParamRaw === null) {
+    skipFlags = new Set(["overlap", "suppressed"]);
+  } else {
+    const tokens = skipParamRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    const unknown = tokens.filter((t) => !VALID_SKIP_VALUES.has(t));
+    if (unknown.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Invalid skip values: ${unknown.join(", ")}. Allowed: overlap, suppressed, recent`,
+        },
+        { status: 400 },
+      );
+    }
+    skipFlags = new Set(tokens);
   }
-
-  const newName = typeof body.new_name === "string" ? body.new_name.trim() : "";
-  if (!newName) {
-    return NextResponse.json({ error: "new_name is required" }, { status: 400 });
-  }
-  if (newName.length > 200) {
-    return NextResponse.json({ error: "new_name too long (max 200 chars)" }, { status: 400 });
-  }
-
-  const refreshSegment = body.refresh_segment !== false; // default true
-  const commit = body.commit === true;
-  const skipOverlap = body.skip_overlap === true;
-  const skipSuppressed = body.skip_suppressed !== false; // default true
-  const skipRecentlyCalled = body.skip_recently_called === true;
-  const baseAssistantOverride =
-    typeof body.base_assistant_id === "string" ? body.base_assistant_id : undefined;
-  const voiceIdOverride = typeof body.voice_id === "string" ? body.voice_id : undefined;
-  const systemPromptOverride =
-    typeof body.system_prompt === "string" ? body.system_prompt : undefined;
-  const requestedWorkerSlot =
-    typeof body.worker_slot === "number"
-      ? body.worker_slot
-      : body.worker_slot === "auto"
-      ? "auto"
-      : undefined;
 
   // ── 1. Read source campaign ──
-  // Supabase TS inference requires the .select() column list to be a single
-  // string literal — concatenation defeats the generic. Keep as one line.
+  // .select() is a single string literal per feedback_supabase_select_single_literal.
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only, campaign_type, status")
+    .select(
+      "id, name, status, campaign_type, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only",
+    )
     .eq("id", id)
     .single();
 
@@ -171,21 +118,14 @@ export async function POST(
   }
 
   // ── 2. Determine candidate phone set ──
+  // refresh_segment=true (default) + source has segment_id → fetch fresh from CIO.
+  // Otherwise (no segment_id, or refresh_segment=false) → copy source's pending
+  // numbers as-is. The frontend doesn't expose the toggle today; the fallback
+  // path is a safety net for legacy campaigns without segment_id.
   let candidatePhones: string[];
   let candidateSource: "segment_refresh" | "source_pending";
 
-  if (refreshSegment) {
-    if (source.segment_id == null) {
-      return NextResponse.json(
-        {
-          error:
-            "Source campaign has no single segment to refresh from " +
-            "(multi-segment import or pre-Step-5a campaign). " +
-            "Pass refresh_segment=false to copy source's pending numbers as-is.",
-        },
-        { status: 400 },
-      );
-    }
+  if (refreshSegment && source.segment_id != null) {
     const segmentResult = await fetchSegmentPhones(source.segment_id as number);
     if (!segmentResult.ok) {
       return NextResponse.json(
@@ -193,12 +133,9 @@ export async function POST(
         { status: segmentResult.status },
       );
     }
-    // parsePhoneList normalizes to E.164 + dedupes; required for matching
-    // against suppression_list / campaign_numbers_v2 (both E.164).
     candidatePhones = parsePhoneList(segmentResult.phones.join("\n"));
     candidateSource = "segment_refresh";
   } else {
-    // Copy source's pending phones as-is (the "duplicate the untouched batch" use case).
     const { data: sourceNumbers, error: numbersErr } = await supabaseAdmin
       .from("campaign_numbers_v2")
       .select("phone_e164")
@@ -218,15 +155,11 @@ export async function POST(
     );
   }
 
-  // PostgREST's .in() has a practical limit (~1000 items in the URL). PoC scale
-  // is <500 typical; cap here for safety. If a real deployment needs more,
-  // paginate the diff queries by phone batches.
   if (candidatePhones.length > 1000) {
     return NextResponse.json(
       {
         error:
-          `Candidate set is ${candidatePhones.length} phones; current diff ` +
-          `implementation caps at 1000. Reach out to engineering to lift the cap.`,
+          `Candidate set is ${candidatePhones.length} phones; current diff implementation caps at 1000.`,
       },
       { status: 413 },
     );
@@ -269,236 +202,56 @@ export async function POST(
   ]);
   const recentSet = new Set((recentRes.data ?? []).map((r) => r.phone_e164 as string));
 
-  const sample = (s: Set<string>) => Array.from(s).slice(0, 5);
-
-  // ── 4. Preview only ──
-  if (!commit) {
-    return NextResponse.json({
-      preview: true,
-      candidateSource,
-      candidatesCount: candidatePhones.length,
-      overlap: { count: overlapSet.size, sample: sample(overlapSet) },
-      suppressed: { count: suppressedSet.size, sample: sample(suppressedSet) },
-      recentlyCalled: { count: recentSet.size, sample: sample(recentSet) },
-    });
-  }
-
-  // ── 5. Apply skip choices ──
-  const finalPhones = candidatePhones.filter((p) => {
-    if (skipOverlap && overlapSet.has(p)) return false;
-    if (skipSuppressed && suppressedSet.has(p)) return false;
-    if (skipRecentlyCalled && recentSet.has(p)) return false;
+  // ── 4. Apply skip strategy based on query params ──
+  // Per plan: modal + wizard each call this endpoint with `?skip=` set to
+  // reflect operator choices. Default (no param) is overlap + suppressed —
+  // never silently include DNC or double-dial candidates. Recently-called
+  // is opt-in (operator toggles in modal).
+  const filteredPhones = candidatePhones.filter((p) => {
+    if (skipFlags.has("overlap") && overlapSet.has(p)) return false;
+    if (skipFlags.has("suppressed") && suppressedSet.has(p)) return false;
+    if (skipFlags.has("recent") && recentSet.has(p)) return false;
     return true;
   });
 
-  if (finalPhones.length === 0) {
-    return NextResponse.json(
-      {
-        error:
-          "Skip choices filter out all candidate phones. Toggle some flags off " +
-          "or pick a different candidate source.",
-        committed: false,
-      },
-      { status: 400 },
-    );
-  }
+  // ── 5. Build suggested name (source.name + today's local date) ──
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  const suggestedName = `${source.name as string} (${yyyy}-${mm}-${dd})`;
 
-  // ── 6. Vapi env ──
-  const vapiKey = process.env.VAPI_PRIVATE_KEY;
-  if (!vapiKey) {
-    return NextResponse.json({ error: "VAPI_PRIVATE_KEY is not set" }, { status: 500 });
-  }
-
-  // ── 7. Resolve overrides + re-clone ──
-  const effectiveBase = baseAssistantOverride ?? (source.base_assistant_id as string | null);
-  if (!effectiveBase) {
-    return NextResponse.json(
-      {
-        error:
-          "Source campaign has no base_assistant_id and no override was provided. " +
-          "Pass base_assistant_id in the body.",
-        committed: false,
-      },
-      { status: 400 },
-    );
-  }
-
-  const cloneResult = await createClone(vapiKey, effectiveBase, {
-    voiceId: voiceIdOverride ?? ((source.voice_id as string | null) ?? undefined),
-    systemPrompt: systemPromptOverride ?? (source.system_prompt as string),
-    campaignName: newName,
-  });
-
-  if (!cloneResult.ok) {
-    return NextResponse.json(
-      { error: cloneResult.error, committed: false },
-      { status: cloneResult.status },
-    );
-  }
-  const clone = cloneResult.clone;
-
-  // ── 8. Lease a slot ──
-  const slot = await leaseSlot(supabaseAdmin, clone.id);
-  if (!slot) {
-    console.warn(`[campaigns-v2/duplicate] SIP pool exhausted; rolling back clone ${clone.id}`);
-    await fetch(`https://api.vapi.ai/assistant/${clone.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${vapiKey}` },
-    }).catch(() => {});
-    return NextResponse.json(
-      {
-        error:
-          "All SIP pool slots are in use. Eject a running campaign first, or wait for one to complete.",
-        committed: false,
-      },
-      { status: 503 },
-    );
-  }
-
-  // ── 9. PATCH slot phone to new clone ──
-  const patchRes = await patchPhoneAssistant(vapiKey, slot.vapi_phone_number_id, clone.id);
-  if (!patchRes.ok) {
-    console.error(`[campaigns-v2/duplicate] Vapi PATCH failed:`, patchRes.body.slice(0, 500));
-    await releaseSlot(supabaseAdmin, slot.id).catch(() => {});
-    await fetch(`https://api.vapi.ai/assistant/${clone.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${vapiKey}` },
-    }).catch(() => {});
-    return NextResponse.json(
-      { error: `Failed to bind SIP slot: ${patchRes.body.slice(0, 200)}`, committed: false },
-      { status: 502 },
-    );
-  }
-
-  // ── 10. INSERT new campaigns_v2 row ──
-  const newCampaignInsert = {
-    name: newName,
-    vapi_assistant_id: clone.id,
-    vapi_assistant_name: clone.name,
-    vapi_sip_uri: slot.sip_uri,
-    vapi_pool_slot_id: slot.id,
-    base_assistant_id: effectiveBase,
-    voice_id: voiceIdOverride ?? source.voice_id ?? null,
-    segment_id: source.segment_id ?? null,
-    system_prompt: systemPromptOverride ?? source.system_prompt,
-    timezone: source.timezone,
-    call_windows: source.call_windows,
-    max_attempts: source.max_attempts,
-    retry_interval_minutes: source.retry_interval_minutes,
-    sms_enabled: source.sms_enabled,
-    sms_template: source.sms_template,
-    sms_on_goal_reached_only: source.sms_on_goal_reached_only,
-    status: "draft",
-    campaign_type: "fixed",
-  };
-
-  const { data: newCampaign, error: insertErr } = await supabaseAdmin
-    .from("campaigns_v2")
-    .insert(newCampaignInsert)
-    .select("id")
-    .single();
-
-  if (insertErr || !newCampaign) {
-    console.error(`[campaigns-v2/duplicate] INSERT campaign failed:`, insertErr);
-    await releaseSlot(supabaseAdmin, slot.id).catch(() => {});
-    await fetch(`https://api.vapi.ai/assistant/${clone.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${vapiKey}` },
-    }).catch(() => {});
-    return NextResponse.json(
-      { error: "Failed to create duplicated campaign row", committed: false },
-      { status: 500 },
-    );
-  }
-
-  // ── 11. INSERT filtered campaign_numbers_v2 rows ──
-  const numberRows = finalPhones.map((phone) => ({
-    campaign_id: newCampaign.id,
-    phone_e164: phone,
-    outcome: "pending" as const,
-  }));
-
-  const { error: numbersErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .insert(numberRows);
-
-  if (numbersErr) {
-    console.error(`[campaigns-v2/duplicate] INSERT numbers failed:`, numbersErr);
-    // Partial state: campaign row exists with 0 numbers + slot leased to it.
-    // The operator can DELETE the duplicate to reclaim the slot (ON DELETE
-    // CASCADE drops the row + the existing DELETE handler releases the slot
-    // + deletes the clone). Cleaner than us trying to roll back here and
-    // potentially leaving a worse state.
-    return NextResponse.json(
-      {
-        error:
-          "Campaign row created but failed to insert phone numbers. " +
-          "Delete the duplicate to retry.",
-        committed: true,
-        partial: true,
-        newCampaignId: newCampaign.id,
-      },
-      { status: 500 },
-    );
-  }
-
-  // ── 12. Back-link slot to campaign ──
-  const linked = await linkSlot(supabaseAdmin, {
-    slotId: slot.id,
-    campaignId: newCampaign.id,
-    expectedAssistantId: clone.id,
-  });
-  if (!linked) {
-    console.warn(
-      `[campaigns-v2/duplicate] linkSlot returned false for slot ${slot.id} ` +
-      `(campaign ${newCampaign.id}, assistant ${clone.id}). Heartbeat will reconcile.`,
-    );
-  }
-
-  // ── 13. Audit + response ──
-  const slotLabel = `voizo-sip-pool-slot-${String(slot.slot_index).padStart(2, "0")}`;
-  const skippedCounts = {
-    overlap: skipOverlap ? overlapSet.size : 0,
-    suppressed: skipSuppressed ? suppressedSet.size : 0,
-    recentlyCalled: skipRecentlyCalled ? recentSet.size : 0,
-  };
-
-  console.log(
-    `[campaigns-v2/duplicate] audit ` +
-    JSON.stringify({
-      sourceCampaignId: id,
-      sourceName: source.name,
-      newCampaignId: newCampaign.id,
-      newCampaignName: newName,
-      newAssistantId: clone.id,
-      slotLabel,
-      candidateSource,
-      candidatesCount: candidatePhones.length,
-      skippedCounts,
-      dialedCount: finalPhones.length,
-      requestedWorkerSlot: requestedWorkerSlot ?? null,
-      timestamp: new Date().toISOString(),
-    }),
-  );
-
-  const warning =
-    typeof requestedWorkerSlot === "number"
-      ? `targeted worker_slot=${requestedWorkerSlot} requested but targeted lease is not yet supported; used auto (${slotLabel})`
-      : undefined;
+  // The frontend (modal + wizard) needs the actual bucket sets — not just
+  // counts — to compute dial counts client-side as the operator toggles
+  // skip flags without round-tripping. Return them as sorted arrays for
+  // deterministic JSON.
+  const sortedBucket = (s: Set<string>) => Array.from(s).sort();
 
   return NextResponse.json({
-    committed: true,
-    sourceCampaignId: id,
-    newCampaignId: newCampaign.id,
-    newAssistantId: clone.id,
-    newAssistantName: clone.name,
-    newPoolSlotId: slot.id,
-    newSipUri: slot.sip_uri,
-    slotLabel,
-    candidateSource,
-    candidatesCount: candidatePhones.length,
-    dialedCount: finalPhones.length,
-    skippedCounts,
-    ...(warning ? { warning } : {}),
+    source: {
+      id: source.id,
+      name: source.name,
+      status: source.status,
+      campaign_type: source.campaign_type,
+      base_assistant_id: source.base_assistant_id,
+      voice_id: source.voice_id,
+      system_prompt: source.system_prompt,
+      timezone: source.timezone,
+      call_windows: source.call_windows,
+      sms_enabled: source.sms_enabled,
+      sms_template: source.sms_template,
+      sms_on_goal_reached_only: source.sms_on_goal_reached_only,
+      segment_id: source.segment_id,
+    },
+    prefill: {
+      suggestedName,
+      candidateSource,
+      candidates: candidatePhones,
+      overlap: sortedBucket(overlapSet),
+      suppressed: sortedBucket(suppressedSet),
+      recentlyCalled: sortedBucket(recentSet),
+      phones: filteredPhones,          // pre-filtered per skipFlags
+      appliedSkips: Array.from(skipFlags),
+    },
   });
 }

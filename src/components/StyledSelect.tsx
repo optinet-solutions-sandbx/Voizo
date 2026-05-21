@@ -19,9 +19,12 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  /** When true, the trigger is unclickable + visually muted. Used by the
+   *  country-aware TZ guardrail when only one option is valid. */
+  disabled?: boolean;
 }
 
-export default function StyledSelect({ icon, options, value, onChange, placeholder }: Props) {
+export default function StyledSelect({ icon, options, value, onChange, placeholder, disabled }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value);
@@ -45,11 +48,14 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
-        className={`w-full flex items-center gap-2.5 ${icon ? "pl-3.5" : "pl-4"} pr-10 py-3 rounded-xl bg-[var(--bg-app)] border text-sm text-left cursor-pointer transition-all ${
-          open
-            ? "border-blue-500 ring-1 ring-blue-500"
-            : "border-[var(--border)] hover:border-blue-500/40"
+        onClick={() => !disabled && setOpen(!open)}
+        disabled={disabled}
+        className={`w-full flex items-center gap-2.5 ${icon ? "pl-3.5" : "pl-4"} pr-10 py-3 rounded-xl bg-[var(--bg-app)] border text-sm text-left transition-all ${
+          disabled
+            ? "border-[var(--border)] opacity-60 cursor-not-allowed"
+            : open
+              ? "border-blue-500 ring-1 ring-blue-500 cursor-pointer"
+              : "border-[var(--border)] hover:border-blue-500/40 cursor-pointer"
         }`}
       >
         {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}

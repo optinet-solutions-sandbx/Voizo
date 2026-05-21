@@ -3,8 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, Copy, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
@@ -217,15 +216,18 @@ export default function CampaignV2DetailPage() {
   //                     picks a skip strategy radio
   //   stage='committing' — POST commit=true with skip choices; on success
   //                        navigate to the new campaign's detail page
-  // Override pickers for base/voice/prompt are NOT included in Phase 1 —
-  // operator edits the new campaign after creation if those need to change.
+  // 2026-05-21 redesign: modal is now a pre-wizard diff gate. Stage "committing"
+  // is a brief "Opening wizard..." flash before router.push — no server work
+  // happens there anymore. The bucket arrays (overlap/suppressed/recentlyCalled)
+  // hold the actual phone strings so dial-count math can update reactively
+  // when the operator toggles the skip strategy radio.
   type DuplicateStage = "form" | "preview" | "committing";
   type DuplicatePreview = {
     candidateSource: string;
-    candidatesCount: number;
-    overlap: { count: number; sample: string[] };
-    suppressed: { count: number; sample: string[] };
-    recentlyCalled: { count: number; sample: string[] };
+    candidates: string[];
+    overlap: string[];
+    suppressed: string[];
+    recentlyCalled: string[];
   };
   type SkipStrategy = "overlap_only" | "overlap_and_recent" | "keep_all";
   const [duplicateOpen, setDuplicateOpen] = useState(false);
@@ -238,6 +240,10 @@ export default function CampaignV2DetailPage() {
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const cancelDuplicateBtnRef = useRef<HTMLButtonElement>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Auto-open the duplicate modal when arriving from the campaigns-list Copy icon.
+  // Tracked via a ref so we only fire once per mount, even if campaign re-renders.
+  const duplicateAutoOpenedRef = useRef(false);
 
   // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
   // auto-focus the safer Cancel button (so an accidental Enter doesn't
@@ -311,6 +317,25 @@ export default function CampaignV2DetailPage() {
 
   // Seed the duplicate-name field with "<source> (YYYY-MM-DD)" when opening
   // the modal. Operator can edit; required to be non-empty before Save.
+  // Auto-open the duplicate modal when arriving from the campaigns-list Copy
+  // icon (which sets ?action=duplicate). The ref guards against polling-refresh
+  // re-opening the modal mid-session; resetting it when the URL clears means
+  // a fresh Copy-click (or bookmark revisit) re-opens correctly. router.replace
+  // strips the query so refresh doesn't re-pop the modal.
+  useEffect(() => {
+    const action = searchParams?.get("action");
+    if (action !== "duplicate") {
+      duplicateAutoOpenedRef.current = false;
+      return;
+    }
+    if (!campaign) return;
+    if (duplicateAutoOpenedRef.current) return;
+    duplicateAutoOpenedRef.current = true;
+    openDuplicateModal();
+    router.replace(`/campaigns/v2/${id}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, searchParams]);
+
   function openDuplicateModal() {
     const today = new Date().toISOString().slice(0, 10);
     const sourceName = (campaign?.name as string) ?? "Campaign";
@@ -734,7 +759,10 @@ export default function CampaignV2DetailPage() {
     }
   }
 
-  // ── Step 12b-duplicate: form → preview → commit handlers ──
+  // ── Duplicate flow (2026-05-21 redesign): form → preview → continue-to-wizard ──
+  // No more POST commit:true here. The wizard's existing handleLaunch handles
+  // clone-assistant + createCampaignV2 on submit. This modal is just a diff
+  // gate that lets the operator pick skip flags before the wizard opens.
   async function handleDuplicatePreview() {
     if (!id) return;
     const name = duplicateName.trim();
@@ -746,15 +774,11 @@ export default function CampaignV2DetailPage() {
     setDuplicateLoading(true);
 
     try {
-      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          new_name: name,
-          refresh_segment: duplicateRefreshSegment,
-          commit: false,
-        }),
-      });
+      // GET with refresh_segment param; no `skip` param so the endpoint returns
+      // the raw bucket sets and an unfiltered candidates list. Modal computes
+      // its own filtered counts client-side based on the current radio.
+      const qs = new URLSearchParams({ refresh_segment: String(duplicateRefreshSegment) });
+      const res = await fetch(`/api/campaigns-v2/${id}/duplicate?${qs}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setDuplicateError(
@@ -764,7 +788,18 @@ export default function CampaignV2DetailPage() {
         );
         return;
       }
-      setDuplicatePreview(body as DuplicatePreview);
+      const prefill = body.prefill;
+      if (!prefill) {
+        setDuplicateError("Server response missing prefill payload.");
+        return;
+      }
+      setDuplicatePreview({
+        candidateSource: prefill.candidateSource ?? "segment_refresh",
+        candidates: prefill.candidates ?? [],
+        overlap: prefill.overlap ?? [],
+        suppressed: prefill.suppressed ?? [],
+        recentlyCalled: prefill.recentlyCalled ?? [],
+      });
       setDuplicateStage("preview");
     } catch (err) {
       console.error("Duplicate preview failed:", err);
@@ -774,59 +809,30 @@ export default function CampaignV2DetailPage() {
     }
   }
 
-  async function handleDuplicateCommit() {
+  function handleDuplicateContinue() {
     if (!id || !duplicatePreview) return;
     const name = duplicateName.trim();
     if (!name) return;
-    setDuplicateLoading(true);
     setDuplicateError(null);
     setDuplicateStage("committing");
 
-    // Map the operator's radio choice to skip flags. Suppression is always
-    // skipped (informational bucket; never an operator-toggleable option).
-    const skipOverlap = duplicateSkipStrategy !== "keep_all";
-    const skipRecentlyCalled = duplicateSkipStrategy === "overlap_and_recent";
+    // Map radio choice to skip CSV. Suppressed always skipped — DNC compliance
+    // gate per CLAUDE.md non-negotiable #4; never operator-overridable.
+    const skipFlags: string[] = ["suppressed"];
+    if (duplicateSkipStrategy !== "keep_all") skipFlags.push("overlap");
+    if (duplicateSkipStrategy === "overlap_and_recent") skipFlags.push("recent");
+    const skipCsv = skipFlags.join(",");
 
-    try {
-      const res = await fetch(`/api/campaigns-v2/${id}/duplicate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          new_name: name,
-          refresh_segment: duplicateRefreshSegment,
-          commit: true,
-          skip_overlap: skipOverlap,
-          skip_suppressed: true,
-          skip_recently_called: skipRecentlyCalled,
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setDuplicateError(
-          typeof body.error === "string"
-            ? body.error
-            : `Failed to create duplicate (${res.status}).`,
-        );
-        setDuplicateStage("preview");
-        return;
-      }
-      const newId = typeof body.newCampaignId === "string" ? body.newCampaignId : null;
-      if (!newId) {
-        setDuplicateError("Server did not return a new campaign id.");
-        setDuplicateStage("preview");
-        return;
-      }
-      setDuplicateOpen(false);
-      // Navigate to the new campaign's detail page so the operator lands in
-      // the right place to review numbers + press Start when ready.
-      router.push(`/campaigns/v2/${newId}`);
-    } catch (err) {
-      console.error("Duplicate commit failed:", err);
-      setDuplicateError(err instanceof Error ? err.message : "Failed to create duplicate.");
-      setDuplicateStage("preview");
-    } finally {
-      setDuplicateLoading(false);
-    }
+    const params = new URLSearchParams({
+      source: "campaign",
+      id,
+      skip: skipCsv,
+      name,
+      refresh_segment: String(duplicateRefreshSegment),
+    });
+
+    setDuplicateOpen(false);
+    router.push(`/campaigns/v2/new?${params}`);
   }
 
   async function handleRefreshCommit() {
@@ -1514,7 +1520,7 @@ export default function CampaignV2DetailPage() {
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   >
                     {duplicateLoading ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
-                    {duplicateLoading ? "Computing diff..." : "Save → Preview"}
+                    {duplicateLoading ? "Computing diff..." : "Preview diff"}
                   </button>
                 </div>
               </>
@@ -1525,21 +1531,21 @@ export default function CampaignV2DetailPage() {
               <>
                 <p className="text-xs text-[var(--text-3)] mb-3 leading-relaxed">
                   {duplicatePreview.candidateSource === "segment_refresh"
-                    ? `Segment refresh returned ${duplicatePreview.candidatesCount} numbers from customer.io.`
-                    : `Source has ${duplicatePreview.candidatesCount} pending numbers.`}
+                    ? `Segment refresh returned ${duplicatePreview.candidates.length} numbers from customer.io.`
+                    : `Source has ${duplicatePreview.candidates.length} pending numbers.`}
                 </p>
                 <div className="mb-4 space-y-1.5 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-2)]">Overlap with source pending</span>
-                    <span className="font-semibold text-amber-300">{duplicatePreview.overlap.count}</span>
+                    <span className="font-semibold text-amber-300">{duplicatePreview.overlap.length}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-2)]">Suppressed (auto-skipped)</span>
-                    <span className="font-semibold text-red-300">{duplicatePreview.suppressed.count}</span>
+                    <span className="font-semibold text-red-300">{duplicatePreview.suppressed.length}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-2)]">Recently called by another campaign (7d)</span>
-                    <span className="font-semibold text-orange-300">{duplicatePreview.recentlyCalled.count}</span>
+                    <span className="font-semibold text-orange-300">{duplicatePreview.recentlyCalled.length}</span>
                   </div>
                 </div>
                 <fieldset className="mb-4">
@@ -1548,9 +1554,9 @@ export default function CampaignV2DetailPage() {
                   </legend>
                   <div className="space-y-2">
                     {([
-                      { value: "overlap_only", label: `Skip the ${duplicatePreview.overlap.count} overlapping number${duplicatePreview.overlap.count !== 1 ? "s" : ""}`, hint: `Dial ${Math.max(0, duplicatePreview.candidatesCount - duplicatePreview.overlap.count - duplicatePreview.suppressed.count)}` },
-                      { value: "overlap_and_recent", label: `Skip overlap + ${duplicatePreview.recentlyCalled.count} recently-called`, hint: `Dial ${Math.max(0, duplicatePreview.candidatesCount - duplicatePreview.overlap.count - duplicatePreview.suppressed.count - duplicatePreview.recentlyCalled.count)}` },
-                      { value: "keep_all", label: `Keep all ${duplicatePreview.candidatesCount}`, hint: "May double-dial customers", warning: true },
+                      { value: "overlap_only", label: `Skip the ${duplicatePreview.overlap.length} overlapping number${duplicatePreview.overlap.length !== 1 ? "s" : ""}`, hint: `Dial ${Math.max(0, duplicatePreview.candidates.length - duplicatePreview.overlap.length - duplicatePreview.suppressed.length)}` },
+                      { value: "overlap_and_recent", label: `Skip overlap + ${duplicatePreview.recentlyCalled.length} recently-called`, hint: `Dial ${Math.max(0, duplicatePreview.candidates.length - duplicatePreview.overlap.length - duplicatePreview.suppressed.length - duplicatePreview.recentlyCalled.length)}` },
+                      { value: "keep_all", label: `Keep all ${duplicatePreview.candidates.length}`, hint: "May double-dial customers", warning: true },
                     ] as const).map((opt) => (
                       <label
                         key={opt.value}
@@ -1600,24 +1606,24 @@ export default function CampaignV2DetailPage() {
                       Cancel
                     </button>
                     <button
-                      onClick={handleDuplicateCommit}
+                      onClick={handleDuplicateContinue}
                       disabled={duplicateLoading}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     >
                       <Copy size={14} />
-                      Create
+                      Continue to wizard
                     </button>
                   </div>
                 </div>
               </>
             )}
 
-            {/* ── Stage C: committing ── */}
+            {/* ── Stage C: navigating ── brief flash before router.push lands */}
             {duplicateStage === "committing" && (
               <div className="py-6 flex flex-col items-center gap-3">
                 <Loader2 size={28} className="text-indigo-400 animate-spin" />
-                <p className="text-sm text-[var(--text-2)]">Creating new campaign + Vapi clone...</p>
-                <p className="text-[10px] text-[var(--text-3)]">~3-5 seconds — please don&apos;t close this window.</p>
+                <p className="text-sm text-[var(--text-2)]">Opening wizard...</p>
+                <p className="text-[10px] text-[var(--text-3)]">Review the prefilled fields, then Launch.</p>
               </div>
             )}
           </div>
