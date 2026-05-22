@@ -494,7 +494,7 @@ export default function Globe({
                 <X size={12} />
               </button>
             )}
-            <div className="flex items-center justify-between gap-2 mb-1">
+            <div className={`flex items-center justify-between gap-2 mb-1 ${isPinned ? "pr-8" : ""}`}>
               <span className="text-sm font-semibold text-[var(--text-1)]">Worker {p.slot.slotIndex}</span>
               <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono border ${badgeClass}`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-current" />

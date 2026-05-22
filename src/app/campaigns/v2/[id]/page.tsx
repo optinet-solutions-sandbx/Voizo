@@ -994,12 +994,12 @@ export default function CampaignV2DetailPage() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(status === "draft" || status === "paused") && !isScheduled && (
               <button
                 onClick={handleStart}
                 disabled={acting}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
               >
                 <Play size={15} /> Start
               </button>
@@ -1009,7 +1009,7 @@ export default function CampaignV2DetailPage() {
                 <button
                   onClick={handlePause}
                   disabled={acting}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-yellow-600 hover:bg-yellow-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-yellow-600 hover:bg-yellow-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
                 >
                   <Pause size={15} /> Pause
                 </button>
@@ -1021,7 +1021,7 @@ export default function CampaignV2DetailPage() {
                   onClick={() => setConfirmStop(true)}
                   disabled={acting}
                   title="Emergency stop — stops queueing new calls; any in-flight call ends naturally within ~60s"
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
                 >
                   <StopCircle size={15} /> Stop
                 </button>
@@ -1035,7 +1035,7 @@ export default function CampaignV2DetailPage() {
                 onClick={() => setConfirmEject(true)}
                 disabled={acting}
                 title="Eject worker — releases the SIP slot and deletes the Vapi clone; campaign and history preserved"
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
               >
                 <Unplug size={15} /> Eject
               </button>
@@ -1053,7 +1053,7 @@ export default function CampaignV2DetailPage() {
                 onClick={openResumeModal}
                 disabled={acting}
                 title="Resume — review the three-bucket diff (suppression, recent, segment) before re-leasing a worker"
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
               >
                 <Plug size={15} /> Resume
               </button>
@@ -1077,7 +1077,7 @@ export default function CampaignV2DetailPage() {
                   onClick={openRefreshModal}
                   disabled={disabled}
                   title={title}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium whitespace-nowrap transition-colors"
                 >
                   <RefreshCw size={15} /> Refresh segment
                 </button>
@@ -1092,7 +1092,7 @@ export default function CampaignV2DetailPage() {
               onClick={openDuplicateModal}
               disabled={acting}
               title="Duplicate this campaign with an optional fresh segment fetch + diff preview"
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
             >
               <Copy size={15} /> Duplicate
             </button>
