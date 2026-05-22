@@ -14,6 +14,12 @@ import { rejectIfCrossOrigin, rejectIfCrossOriginStrict } from "@/lib/csrf";
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
 
+// Strict UUID v1-5 shape. Mirrors the regex in /api/campaigns-v2/[id]/is-test
+// (A6, 2026-05-22). Replaces the prior lenient `id.length > 40` check that
+// accepted any 36-char string. Operator gets "Invalid segment ID" instead
+// of PostgREST's "invalid input syntax for type uuid".
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ── GET ───────────────────────────────────────────────────────────────────
 
 export async function GET(
@@ -24,7 +30,7 @@ export async function GET(
   if (csrf) return csrf;
 
   const { id } = await params;
-  if (!id || typeof id !== "string" || id.length > 40) {
+  if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
     return NextResponse.json({ error: "Invalid segment ID" }, { status: 400 });
   }
 
@@ -89,7 +95,7 @@ export async function DELETE(
   if (csrf) return csrf;
 
   const { id } = await params;
-  if (!id || typeof id !== "string" || id.length > 40) {
+  if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
     return NextResponse.json({ error: "Invalid segment ID" }, { status: 400 });
   }
 

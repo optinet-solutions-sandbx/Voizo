@@ -95,9 +95,13 @@ export default function VoizoSegmentImporter({ onImport, selectedId }: Props) {
       try {
         // Fetch ALL pages — local segments are typically <500 phones,
         // but the API caps per-page at 500. Walk cursor until exhausted.
+        // H5: iteration cap (10000 phones max) guards against a buggy server
+        // returning hasMore=true with the same cursor — would otherwise hang
+        // the browser. Mirrors the cap used in /campaigns/v2/new prefill effect.
+        const MAX_PAGES = 20;
         const phones: string[] = [];
         let cursor: string | null = null;
-        for (;;) {
+        for (let i = 0; i < MAX_PAGES; i++) {
           const url = `/api/audience/segments/${segment.id}?limit=500${cursor ? `&cursor=${cursor}` : ""}`;
           const r = await fetch(url, { cache: "no-store" });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);

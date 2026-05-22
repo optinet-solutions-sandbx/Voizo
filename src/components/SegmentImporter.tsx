@@ -290,6 +290,16 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
 
   return (
     <div className="flex flex-col gap-2">
+      {/* H4: top-level membersError so chip-click failures are visible even
+          when the importer card is collapsed. The expanded card has its own
+          membersError display (line ~470); both render the same state so
+          either path surfaces the error. */}
+      {membersError && !expanded && (
+        <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
+          {membersError}
+        </div>
+      )}
+
       {pinnedSegmentList.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Pinned</span>
