@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
 import { executeRebindCore } from "@/lib/vapi/rebindCore";
+import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 
 // Up to: paginated customer.io fetch (~10-30s, segments under 500), three
 // Supabase diff queries, two soft-mark UPDATEs, optional Vapi rebind chain
@@ -11,13 +12,6 @@ export const maxDuration = 60;
 
 const RESUMABLE_STATUSES = new Set(["inactive", "paused"]);
 const RECENT_CALL_WINDOW_DAYS = 7;
-const CONTACT_OUTCOMES = [
-  "sent_sms",
-  "not_interested",
-  "declined_offer",
-  "unreached",
-  "pending_retry",
-];
 
 /**
  * POST /api/campaigns-v2/[id]/resume

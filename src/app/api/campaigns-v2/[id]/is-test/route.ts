@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { rejectIfCrossOriginStrict } from "@/lib/csrf";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * PATCH /api/campaigns-v2/[id]/is-test
@@ -16,23 +19,6 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
  * Design: docs/2026-05-22_DOC_Audience_Suggestions_MVP.md §5.4
  */
 
-function rejectIfCrossOriginStrict(request: NextRequest): NextResponse | null {
-  // State-changing — Origin must be present and match host.
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) {
-    return NextResponse.json({ error: "Forbidden — missing origin" }, { status: 403 });
-  }
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
-
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -41,7 +27,7 @@ export async function PATCH(
   if (csrf) return csrf;
 
   const { id } = await params;
-  if (!id || typeof id !== "string" || id.length > 40) {
+  if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
     return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
   }
 

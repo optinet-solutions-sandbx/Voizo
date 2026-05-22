@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { rejectIfCrossOrigin, rejectIfCrossOriginStrict } from "@/lib/csrf";
 
 /**
  * /api/audience/segments/[id]
@@ -12,38 +13,6 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
-
-function rejectIfCrossOrigin(request: NextRequest): NextResponse | null {
-  // Lenient: GETs allow missing Origin per feedback_csrf_origin_check_get_lenient.
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) return null;
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
-
-function rejectIfCrossOriginStrict(request: NextRequest): NextResponse | null {
-  // Strict: DELETE is state-changing — Origin must be present and match host.
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) {
-    return NextResponse.json({ error: "Forbidden — missing origin" }, { status: 403 });
-  }
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
 
 // ── GET ───────────────────────────────────────────────────────────────────
 

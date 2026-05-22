@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { rejectIfCrossOrigin, rejectIfCrossOriginStrict } from "@/lib/csrf";
+import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
+import { MAX_CANDIDATES } from "@/lib/audienceLimits";
 
 /**
  * /api/audience/segments
@@ -40,55 +43,6 @@ const ALLOWED_OUTCOMES = new Set([
 // after recycling. We soft-mark these on the source as 'removed_from_segment'
 // during commit. See the soft-mark block at the end of POST.
 const NON_TERMINAL_OUTCOMES = new Set(["pending", "pending_retry"]);
-
-// "Recently contacted" outcomes — the recency scrub looks for these on
-// campaign_numbers_v2 rows on OTHER campaigns to avoid double-dialing a
-// phone within the window. Mirrors resume-diff CONTACT_OUTCOMES.
-const CONTACT_OUTCOMES = [
-  "sent_sms",
-  "not_interested",
-  "declined_offer",
-  "unreached",
-  "pending_retry",
-];
-
-// PostgREST .in() practical cap. PoC scale is well under.
-const MAX_CANDIDATES = 5000;
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-function rejectIfCrossOrigin(request: NextRequest): NextResponse | null {
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) return null;
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
-
-function rejectIfCrossOriginStrict(request: NextRequest): NextResponse | null {
-  // Strict for state-changing requests: Origin must be present and match host.
-  // Per feedback_csrf_origin_check_get_lenient: GETs allow missing Origin,
-  // POST/DELETE do not.
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) {
-    return NextResponse.json({ error: "Forbidden — missing origin" }, { status: 403 });
-  }
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
 
 interface FilterInput {
   sourceCampaignId: string;

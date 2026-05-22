@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
+import { rejectIfCrossOrigin } from "@/lib/csrf";
+import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
+import { MAX_CANDIDATES } from "@/lib/audienceLimits";
 
 /**
  * GET /api/campaigns-v2/[id]/duplicate
@@ -22,7 +25,7 @@ import { parsePhoneList } from "@/lib/campaignV2Data";
  *
  * Restrictions:
  *   - Recurring source campaigns rejected with 400.
- *   - Candidate phone set capped at 1000 (PostgREST .in() practical limit).
+ *   - Candidate phone set capped at MAX_CANDIDATES (see src/lib/audienceLimits.ts).
  *
  * Plan: C:\Users\jasin\.claude\plans\new-shift-picking-gentle-puffin.md
  * Replaces the prior POST flow (create-on-commit, 3-stage modal) per the
@@ -35,36 +38,12 @@ export const maxDuration = 30;
 
 const RECENT_CALL_WINDOW_DAYS = 7;
 
-/**
- * campaign_numbers_v2.outcome values that count as "this phone has been
- * meaningfully contacted within the last 7 days." Used by the cross-campaign
- * recent-call diff bucket. Mirrors the same constant in resume-diff and the
- * Audience CRM POST endpoint — keep in sync.
- */
-const CONTACT_OUTCOMES = [
-  "sent_sms",
-  "not_interested",
-  "declined_offer",
-  "unreached",
-  "pending_retry",
-];
-
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  // ── Lenient origin check (GET — per feedback_csrf_origin_check_get_lenient).
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) {
-        return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-    }
-  }
+  const csrf = rejectIfCrossOrigin(request);
+  if (csrf) return csrf;
 
   const { id } = await params;
   if (!id || typeof id !== "string" || id.length > 40) {
@@ -155,11 +134,11 @@ export async function GET(
     );
   }
 
-  if (candidatePhones.length > 1000) {
+  if (candidatePhones.length > MAX_CANDIDATES) {
     return NextResponse.json(
       {
         error:
-          `Candidate set is ${candidatePhones.length} phones; current diff implementation caps at 1000.`,
+          `Candidate set is ${candidatePhones.length} phones; current diff implementation caps at ${MAX_CANDIDATES}.`,
       },
       { status: 413 },
     );

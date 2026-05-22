@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
+import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 
 // Up to: paginated customer.io segment fetch (for the out-of-segment bucket
 // when segment_id is non-null). 60s budget mirrors duplicate/refresh-segment.
@@ -9,20 +10,6 @@ export const maxDuration = 60;
 
 const RESUMABLE_STATUSES = new Set(["inactive", "paused"]);
 const RECENT_CALL_WINDOW_DAYS = 7;
-
-/**
- * Same definition as Step 5b duplicate route — "this phone has been
- * meaningfully contacted in the last 7 days." Excludes 'pending' (no contact
- * yet), 'in_progress' (counted via pending_retry transition), and
- * 'wrong_number'/'suppressed' (administrative tags, not contact events).
- */
-const CONTACT_OUTCOMES = [
-  "sent_sms",
-  "not_interested",
-  "declined_offer",
-  "unreached",
-  "pending_retry",
-];
 
 /**
  * GET /api/campaigns-v2/[id]/resume-diff

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { rejectIfCrossOrigin } from "@/lib/csrf";
 
 /**
  * GET /api/audience/suggestions
@@ -26,21 +27,6 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 
 const MIN_CANDIDATES = 5;
 const MAX_SUGGESTIONS = 20;
-
-function rejectIfCrossOrigin(request: NextRequest): NextResponse | null {
-  // Lenient (GET) per feedback_csrf_origin_check_get_lenient.
-  const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (!origin || !host) return null;
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden — cross-origin" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
-  }
-  return null;
-}
 
 interface SuggestionRow {
   source_campaign_id: string;

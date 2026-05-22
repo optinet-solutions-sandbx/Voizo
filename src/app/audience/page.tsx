@@ -19,6 +19,7 @@ import {
 
 import CreateSegmentDrawer, { type CreateSegmentPrefill } from "./components/CreateSegmentDrawer";
 import SuggestedSegmentsPanel, { type Suggestion } from "./components/SuggestedSegmentsPanel";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 interface SegmentRow {
   id: string;
@@ -196,7 +197,7 @@ export default function AudiencePage() {
     try {
       const r = await fetch(`/api/audience/segments/${id}`, { method: "DELETE" });
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        const body = await parseJsonBody(r);
         throw new Error(body.error ?? `HTTP ${r.status}`);
       }
       setSegments((prev) => {

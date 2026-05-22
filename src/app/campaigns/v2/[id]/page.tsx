@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 type Row = Record<string, unknown>;
 
@@ -485,7 +486,7 @@ export default function CampaignV2DetailPage() {
         setCampaign((prev) =>
           prev && prevStatus ? { ...prev, status: prevStatus } : prev,
         );
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         setActionError(
           typeof body.error === "string"
             ? body.error
@@ -545,7 +546,7 @@ export default function CampaignV2DetailPage() {
         setCampaign((prev) =>
           prev && prevStatus ? { ...prev, status: prevStatus } : prev,
         );
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         setActionError(
           typeof body.error === "string"
             ? body.error
@@ -553,7 +554,7 @@ export default function CampaignV2DetailPage() {
         );
         return;
       }
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       const inFlight = body?.inFlightCount ?? 0;
       // Honest copy: we stopped the queue, but in-flight calls end naturally.
       // Don't promise "terminated" when the live audio session is still
@@ -593,7 +594,7 @@ export default function CampaignV2DetailPage() {
 
     try {
       const res = await fetch(`/api/campaigns-v2/${id}/eject`, { method: "POST" });
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setCampaign((prev) =>
           prev && prevStatus ? { ...prev, status: prevStatus } : prev,
@@ -644,7 +645,7 @@ export default function CampaignV2DetailPage() {
 
     try {
       const res = await fetch(`/api/campaigns-v2/${id}/resume-diff`);
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setResumeError(
           typeof body.error === "string"
@@ -694,7 +695,7 @@ export default function CampaignV2DetailPage() {
           skip_out_of_segment: skipOutOfSegment,
         }),
       });
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setCampaign((prev) =>
           prev && prevStatus ? { ...prev, status: prevStatus } : prev,
@@ -749,7 +750,7 @@ export default function CampaignV2DetailPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ commit: false }),
       });
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setRefreshError(
           typeof body.error === "string"
@@ -791,7 +792,7 @@ export default function CampaignV2DetailPage() {
       // its own filtered counts client-side based on the current radio.
       const qs = new URLSearchParams({ refresh_segment: String(duplicateRefreshSegment) });
       const res = await fetch(`/api/campaigns-v2/${id}/duplicate?${qs}`);
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setDuplicateError(
           typeof body.error === "string"
@@ -858,7 +859,7 @@ export default function CampaignV2DetailPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ commit: true }),
       });
-      const body = await res.json().catch(() => ({}));
+      const body = await parseJsonBody(res);
       if (!res.ok) {
         setRefreshError(
           typeof body.error === "string"
@@ -900,7 +901,7 @@ export default function CampaignV2DetailPage() {
         body: JSON.stringify({ is_test: newValue }),
       });
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        const body = await parseJsonBody(r);
         throw new Error(body.error ?? `HTTP ${r.status}`);
       }
       await refreshData();
