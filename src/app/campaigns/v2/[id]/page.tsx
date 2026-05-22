@@ -7,6 +7,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 import { parseJsonBody } from "@/lib/jsonBody";
+import DynamicSchedule from "@/components/DynamicSchedule";
 
 type Row = Record<string, unknown>;
 
@@ -1130,11 +1131,25 @@ export default function CampaignV2DetailPage() {
         </div>
       </div>
 
-      {isScheduled && (
-        <p className="mb-4 text-sm text-emerald-400">
-          Starts {new Date(campaign.start_at as string).toLocaleString()}
-        </p>
-      )}
+      {/* P5: Live schedule chip. Renders countdown to start (scheduled),
+          running duration (running), or final span (completed) in the
+          campaign's target timezone with a "your time" sub-label when the
+          operator's browser tz differs. Updates every 1s. */}
+      {(() => {
+        const startAt = campaign.start_at as string | null;
+        if (!startAt) return null;
+        const endAt = (campaign.end_at as string | null) ?? null;
+        const timezone = (campaign.timezone as string | null) ?? "UTC";
+        return (
+          <DynamicSchedule
+            className="mb-4"
+            startAt={startAt}
+            endAt={endAt}
+            status={status}
+            timezone={timezone}
+          />
+        );
+      })()}
 
       {actionError && (
         <div className="mb-4 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
@@ -1821,10 +1836,14 @@ export default function CampaignV2DetailPage() {
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
             <Clock size={12} /> Schedule
           </div>
-          <p className="text-sm text-[var(--text-2)]">
-            {campaign.start_at ? new Date(campaign.start_at as string).toLocaleString() : "Not set"}
-            {campaign.end_at ? ` — ${new Date(campaign.end_at as string).toLocaleString()}` : ""}
-          </p>
+          {/* P5: same DynamicSchedule as the top chip; renders the relevant
+              state (future / running / completed) in target tz + browser tz. */}
+          <DynamicSchedule
+            startAt={(campaign.start_at as string | null) ?? null}
+            endAt={(campaign.end_at as string | null) ?? null}
+            status={status}
+            timezone={(campaign.timezone as string | null) ?? "UTC"}
+          />
         </div>
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
