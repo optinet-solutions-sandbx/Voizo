@@ -246,9 +246,47 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
   }
 
   // 2026-05-22: pinned-segment quick-pick chips. Resolved from the eagerly-
-  // fetched segments list. Click a chip → same import path as the row click
-  // inside the expanded dropdown.
+  // fetched segments list. Click a chip → one-shot fetch + onImport (bypasses
+  // the row-click preview path which only loads members for inspection).
   const pinnedSegmentList = (segments ?? []).filter((s) => pinnedIds.has(String(s.id)));
+
+  async function handlePinnedChipClick(segmentId: number, segmentName: string) {
+    // Reuse loadingIds for visual feedback on the chip (matches the row
+    // spinner pattern). The chip click is one-shot — fetch then onImport
+    // directly, no preview state to populate.
+    setLoadingIds((prev) => {
+      const next = new Set(prev);
+      next.add(segmentId);
+      return next;
+    });
+    setMembersError(null);
+    try {
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setMembersError(body.error || `Failed to load members (${res.status})`);
+        return;
+      }
+      const body = await res.json();
+      const members = (body.members ?? []) as Member[];
+      const phones = members
+        .map((m) => m.phone)
+        .filter((p): p is string => typeof p === "string" && p.length > 0);
+      if (phones.length === 0) {
+        setMembersError("Segment has no phone numbers");
+        return;
+      }
+      onImport(phones, segmentId, segmentName);
+    } catch (err) {
+      setMembersError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(segmentId);
+        return next;
+      });
+    }
+  }
 
   return (
     <div className="flex flex-col gap-2">
@@ -259,9 +297,9 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
             <button
               key={s.id}
               type="button"
-              onClick={() => handleRowClick(s.id, s.name)}
+              onClick={() => handlePinnedChipClick(s.id, s.name)}
               disabled={loadingIds.has(s.id)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 transition-colors max-w-[260px]"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-elevated)] border border-[var(--border)] text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-50 transition-colors max-w-[260px]"
               title={`Import ${s.name}`}
             >
               <Star size={11} className="fill-amber-400 text-amber-400 shrink-0" />

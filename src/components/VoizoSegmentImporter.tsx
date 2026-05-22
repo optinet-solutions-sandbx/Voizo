@@ -163,7 +163,7 @@ export default function VoizoSegmentImporter({ onImport, selectedId }: Props) {
               type="button"
               onClick={() => selectSegment(s)}
               disabled={phonesLoading && activeId === s.id}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 transition-colors max-w-[260px]"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-elevated)] border border-[var(--border)] text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-50 transition-colors max-w-[260px]"
               title={`Import ${s.name}`}
             >
               <Star size={11} className="fill-amber-400 text-amber-400 shrink-0" />
