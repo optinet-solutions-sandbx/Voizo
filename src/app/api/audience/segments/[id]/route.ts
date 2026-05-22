@@ -124,15 +124,45 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid segment ID" }, { status: 400 });
   }
 
+  // Snapshot the source_campaign_id + phones BEFORE deletion so we can
+  // un-soft-mark the source rows afterward. The POST handler flips source
+  // campaign_numbers_v2 rows from pending/pending_retry to
+  // 'removed_from_segment' when a segment is created (double-dial guard).
+  // Without this restore step, deleting the segment leaves those source
+  // rows orphaned — they can't be re-dialed by the source AND can't be
+  // recycled into a new segment. Discovered in prod 2026-05-22.
+  const { data: segment, error: segErr } = await supabaseAdmin
+    .from("local_segments")
+    .select("source_campaign_id")
+    .eq("id", id)
+    .single();
+
+  if (segErr || !segment) {
+    return NextResponse.json({ error: "Segment not found" }, { status: 404 });
+  }
+
+  const { data: numbers, error: numErr } = await supabaseAdmin
+    .from("local_segment_numbers")
+    .select("phone_e164")
+    .eq("segment_id", id);
+
+  if (numErr) {
+    // Non-fatal — log + proceed with delete. Without phones, we can't
+    // un-soft-mark, so the operator may need to restore manually (rare).
+    console.warn(
+      `[audience] segment ${id} delete: could not read numbers before delete: ${numErr.message}`,
+    );
+  }
+
   // FK on local_segment_numbers has ON DELETE CASCADE — no manual cleanup.
-  const { error, count } = await supabaseAdmin
+  const { error: delErr, count } = await supabaseAdmin
     .from("local_segments")
     .delete({ count: "exact" })
     .eq("id", id);
 
-  if (error) {
+  if (delErr) {
     return NextResponse.json(
-      { error: `Failed to delete segment: ${error.message}` },
+      { error: `Failed to delete segment: ${delErr.message}` },
       { status: 500 },
     );
   }
@@ -141,6 +171,30 @@ export async function DELETE(
     return NextResponse.json({ error: "Segment not found" }, { status: 404 });
   }
 
-  console.log(`[audience] segment deleted: id=${id}`);
-  return NextResponse.json({ deleted: true, id });
+  // Un-soft-mark source rows: flip outcome from 'removed_from_segment' back
+  // to 'pending'. Filter on outcome='removed_from_segment' so we never stomp
+  // newer terminal outcomes (e.g. source paused then resumed then dialed).
+  let restoredCount = 0;
+  const phones = (numbers ?? []).map((n) => n.phone_e164 as string);
+  if (phones.length > 0) {
+    const { data: restored, error: restErr } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({ outcome: "pending" })
+      .eq("campaign_id", segment.source_campaign_id as string)
+      .in("phone_e164", phones)
+      .eq("outcome", "removed_from_segment")
+      .select("id");
+
+    if (restErr) {
+      console.warn(
+        `[audience] segment ${id} deleted but un-soft-mark failed for source ` +
+          `${segment.source_campaign_id}: ${restErr.message}`,
+      );
+    } else {
+      restoredCount = restored?.length ?? 0;
+    }
+  }
+
+  console.log(`[audience] segment deleted: id=${id} restored=${restoredCount}`);
+  return NextResponse.json({ deleted: true, id, restored: restoredCount });
 }

@@ -120,8 +120,13 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated }: Props)
     fetchCampaignsV2()
       .then((all) => {
         if (cancelled) return;
+        // Source statuses: completed/paused are the primary cases. 'inactive'
+        // is included because ejected campaigns still have recyclable history
+        // (no race risk since the dialer is off). 'running' is intentionally
+        // excluded — the API rejects with 409 anyway (audit H3) and we don't
+        // want operators picking a still-dialing campaign by mistake.
         const filtered = (all as Array<{ id: string; name: string; status: string }>)
-          .filter((c) => c.status === "completed" || c.status === "paused")
+          .filter((c) => c.status === "completed" || c.status === "paused" || c.status === "inactive")
           .map((c) => ({ id: c.id, name: c.name, status: c.status }));
         setCampaigns(filtered);
         setCampaignsError(null);
