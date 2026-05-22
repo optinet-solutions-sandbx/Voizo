@@ -131,6 +131,54 @@ export function detectAudienceCountry(phones: string[]): DetectionResult {
   return { country: topCountry, confidence, sampleSize: detected };
 }
 
+export interface AudienceBreakdown {
+  /** Per-country share, sorted descending. Only includes recognized prefixes. */
+  byCountry: Array<{ country: string; count: number; share: number }>;
+  /** Number of phones that resolved to a known country code. */
+  sampleSize: number;
+  /** True when no single country reaches the confidence threshold and at
+   *  least 2 countries each have ≥15% share — i.e., genuinely mixed. */
+  isMixed: boolean;
+}
+
+/**
+ * M2: Returns the full per-country breakdown of an audience for the mixed-
+ * country advisory. Pairs with detectAudienceCountry (which returns null in
+ * the mixed case) so the wizard can decide between "appears to be X" copy
+ * vs "spans X% / Y%" copy.
+ *
+ * Same sampling rules as detectAudienceCountry: up to 20 phones, requires
+ * ≥5 in the sample, ignores unrecognized prefixes. `isMixed` is true when
+ * no country reaches CONFIDENCE_THRESHOLD AND there are 2+ countries with
+ * meaningful share — guards against the "noise" case where 19 AU + 1
+ * unknown country shows up as 95%/5%.
+ */
+export function analyzeAudienceCountry(phones: string[]): AudienceBreakdown {
+  const sample = phones.slice(0, SAMPLE_LIMIT);
+  if (sample.length < MIN_SAMPLE_SIZE) {
+    return { byCountry: [], sampleSize: 0, isMixed: false };
+  }
+  const counts = new Map<string, number>();
+  let detected = 0;
+  for (const p of sample) {
+    const c = detectCountry(p);
+    if (c) {
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+      detected++;
+    }
+  }
+  if (detected === 0) {
+    return { byCountry: [], sampleSize: 0, isMixed: false };
+  }
+  const byCountry = Array.from(counts.entries())
+    .map(([country, count]) => ({ country, count, share: count / detected }))
+    .sort((a, b) => b.share - a.share);
+  const top = byCountry[0];
+  const meaningful = byCountry.filter((b) => b.share >= 0.15);
+  const isMixed = top.share < CONFIDENCE_THRESHOLD && meaningful.length >= 2;
+  return { byCountry, sampleSize: detected, isMixed };
+}
+
 /** Returns the allowed-TZ array for a country, or null if no constraint. */
 export function allowedTimezonesForCountry(country: string | null): string[] | null {
   if (!country) return null;

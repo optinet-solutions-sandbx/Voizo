@@ -20,6 +20,7 @@ import { Loader2 } from "lucide-react";
 
 import { createCampaignV2, parsePhoneList } from "@/lib/campaignV2Data";
 import {
+  analyzeAudienceCountry,
   countryLabel,
   defaultTimezoneForCountry,
   detectAudienceCountry,
@@ -125,6 +126,15 @@ function WizardPage({
   // Tracked separately from WizardState so the StepAudience footnote can show
   // the operator-chosen skip stats without polluting the campaign create payload.
   const [duplicateSkipped, setDuplicateSkipped] = useState<DuplicateSkipped | null>(null);
+
+  // M1: notice when the source's SMS template contained 2+ URLs. The wizard's
+  // SMS-link field only tracks the trailing URL; the others stay embedded in
+  // the Message field. Operators sometimes delete the embedded ones thinking
+  // they're cruft — this banner warns them not to.
+  const [smsMultiUrlNotice, setSmsMultiUrlNotice] = useState<{
+    urlCount: number;
+    trackedLink: string;
+  } | null>(null);
 
   // Slice 4 (Audience tab): if the URL carries ?source=local_segment&id=<uuid>,
   // fetch the segment server-side and prefill the wizard's audience fields.
@@ -312,6 +322,14 @@ function WizardPage({
         });
 
         const sms = decomposeSmsTemplate(src.sms_template);
+        // M1: count URLs in the source template. decomposeSmsTemplate only
+        // extracts the trailing one; others stay in sms.message. Surface
+        // a banner so the operator doesn't delete the embedded URLs by
+        // mistake when editing the Message field.
+        const urlMatches = (src.sms_template ?? "").match(/https?:\/\/\S+/g) ?? [];
+        if (urlMatches.length > 1) {
+          setSmsMultiUrlNotice({ urlCount: urlMatches.length, trackedLink: sms.link });
+        }
         dispatch({
           type: "SET_SMS_FIELDS",
           payload: {
@@ -408,10 +426,12 @@ function WizardPage({
   // Step 1 country-vs-timezone advisory (autonomy-first — the dropdown shows
   // all timezones; this mismatch flag drives the inline banner copy AND the
   // Next-click confirm gate below. Operators always retain final say.
-  const step1Country =
-    state.step === 1
-      ? detectAudienceCountry(parsePhoneList(state.numbersText)).country
-      : null;
+  const step1Phones = state.step === 1 ? parsePhoneList(state.numbersText) : [];
+  const step1Country = state.step === 1 ? detectAudienceCountry(step1Phones).country : null;
+  // M2: when no single country dominates but the audience clearly spans
+  // multiple, surface the breakdown so the operator picks tz with full info.
+  const step1MixedAnalysis = state.step === 1 ? analyzeAudienceCountry(step1Phones) : null;
+  const step1IsMixed = !!step1MixedAnalysis?.isMixed;
   const step1TzMismatch =
     step1Country != null && !isTimezoneValidForCountry(step1Country, state.timezone);
 
@@ -456,6 +476,22 @@ function WizardPage({
             <span>New</span>
           </nav>
 
+          {state.step === 1 && step1IsMixed && step1MixedAnalysis && (
+            // M2: mixed-country audience advisory. Surfaces when no single
+            // country reaches the 80% confidence threshold AND ≥2 countries
+            // have meaningful share. Informational — operator still proceeds
+            // with whatever timezone they choose.
+            <div className="mb-3 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-300">
+              <p className="font-medium">Mixed-country audience detected</p>
+              <p className="mt-1 text-[13px] text-amber-200/80">
+                {step1MixedAnalysis.byCountry
+                  .filter((b) => b.share >= 0.05)
+                  .map((b) => `${countryLabel(b.country) || b.country} ${Math.round(b.share * 100)}%`)
+                  .join(" · ")}
+                {" — pick the timezone that matches the majority. Voizo dials in one timezone per campaign; others may get calls at unusual hours."}
+              </p>
+            </div>
+          )}
           {state.step === 1 && (
             <StepAudience state={state} dispatch={dispatch} duplicateSkipped={duplicateSkipped} />
           )}
@@ -468,6 +504,22 @@ function WizardPage({
             />
           )}
           {state.step === 3 && <StepSchedule state={state} dispatch={dispatch} />}
+          {state.step === 4 && smsMultiUrlNotice && (
+            // M1: multi-URL SMS template notice. decomposeSmsTemplate only
+            // extracts the trailing URL — the others stay embedded in the
+            // Message field. Tell the operator so they don't strip the
+            // embedded ones thinking they're cruft.
+            <div className="mb-3 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-300">
+              <p className="font-medium">Multi-URL template detected</p>
+              <p className="mt-1 text-[13px] text-amber-200/80">
+                The source template contained {smsMultiUrlNotice.urlCount} URLs. The
+                Link field tracks the trailing one (
+                <span className="font-mono text-[12px]">{smsMultiUrlNotice.trackedLink || "—"}</span>
+                ). Any earlier URLs stay embedded in the Message field — don&apos;t
+                remove them unless intentional.
+              </p>
+            </div>
+          )}
           {state.step === 4 && <StepFollowup state={state} dispatch={dispatch} />}
           {state.step === 5 && <StepReview state={state} dispatch={dispatch} />}
 
