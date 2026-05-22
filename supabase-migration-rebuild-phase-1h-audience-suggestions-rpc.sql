@@ -31,6 +31,15 @@
 
 begin;
 
+-- DROP-then-CREATE (not CREATE OR REPLACE) because Postgres rejects
+-- column-type changes in RETURNS TABLE via REPLACE — error 42P13:
+-- "cannot change return type of existing function". We hit this when
+-- the H4 audit fix changed pending_count/pending_retry_count from
+-- bigint to integer. Wrapped in a transaction so the DROP→CREATE
+-- window is atomic; concurrent callers block (don't error) on the
+-- AccessExclusiveLock during DDL.
+drop function if exists public.get_audience_suggestions(integer, integer);
+
 create or replace function public.get_audience_suggestions(
   p_min_candidates int default 5,
   p_max_results    int default 20
