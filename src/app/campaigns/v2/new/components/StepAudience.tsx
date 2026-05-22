@@ -10,6 +10,7 @@ import {
   detectAudienceCountry,
 } from "@/lib/audienceCountry";
 import SegmentImporter from "@/components/SegmentImporter";
+import VoizoSegmentImporter from "@/components/VoizoSegmentImporter";
 
 import {
   getCallingHours,
@@ -99,11 +100,45 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
           </label>
         </div>
 
-        {/* Customer.io segment */}
-        <div className="flex flex-col gap-2">
-          <FieldLabel required>Customer.io segment</FieldLabel>
+        {/* 2026-05-22: Step 1 source picker — three-tab strip. The active tab
+            swaps the picker below; each tab's selection is preserved in its
+            own WizardState fields (cioPhones / voizoPhones / manualPhones)
+            so flipping tabs doesn't lose work. */}
+        <div className="flex flex-col gap-3">
+          <FieldLabel required>Audience source</FieldLabel>
 
-          {state.audienceSource !== "manual" ? (
+          {/* Tab strip */}
+          <div className="inline-flex items-center gap-0.5 p-0.5 bg-[var(--bg-elevated)] border border-[var(--border)] rounded-lg self-start">
+            {([
+              { key: "cio",    label: "Customer.io" },
+              { key: "voizo",  label: "Voizo" },
+              { key: "manual", label: "Paste manually" },
+            ] as const).map((tab) => {
+              const active = state.audienceSource === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() =>
+                    dispatch({
+                      type: "SET_AUDIENCE_FIELDS",
+                      payload: { audienceSource: tab.key },
+                    })
+                  }
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    active
+                      ? "bg-[var(--bg-card)] text-[var(--text-1)] shadow-sm"
+                      : "text-[var(--text-3)] hover:text-[var(--text-2)]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* CIO picker */}
+          {state.audienceSource === "cio" && (
             <>
               <SegmentImporter
                 singleSelectOnly={state.campaignType === "recurring"}
@@ -114,7 +149,6 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   })
                 }
               />
-
               {state.segmentName && state.segmentId != null && (
                 <div className="px-3 py-2 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 text-xs text-[var(--text-2)] inline-flex items-start gap-1.5">
                   <Users size={12} className="mt-0.5 text-blue-400 shrink-0" />
@@ -124,28 +158,44 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   </span>
                 </div>
               )}
-
-              <p className="text-[11px] text-[var(--text-3)]">
-                Or{" "}
-                <button
-                  type="button"
-                  onClick={() =>
-                    dispatch({
-                      type: "SET_AUDIENCE_FIELDS",
-                      payload: { audienceSource: "manual" },
-                    })
-                  }
-                  className="text-blue-400 hover:text-blue-300 underline-offset-2 hover:underline"
-                >
-                  paste numbers manually
-                </button>{" "}
-                if you don&apos;t have a segment.
-              </p>
             </>
-          ) : (
+          )}
+
+          {/* Voizo picker */}
+          {state.audienceSource === "voizo" && (
             <>
-              {/* Slice 4: Audience-tab recycled-segment banner. Detected via
-                  segmentName prefix — purely derived, no new wizard state. */}
+              <VoizoSegmentImporter
+                selectedId={state.voizoSegmentId}
+                onImport={(phones, segmentId, segmentName) =>
+                  dispatch({
+                    type: "SET_AUDIENCE_FIELDS",
+                    payload: {
+                      voizoSegmentId: segmentId,
+                      voizoSegmentName: segmentName,
+                      voizoPhones: phones.join("\n"),
+                      numbersText: phones.join("\n"),
+                    },
+                  })
+                }
+              />
+              {state.voizoSegmentName && state.voizoSegmentId != null && (
+                <div className="px-3 py-2 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 text-xs text-[var(--text-2)] inline-flex items-start gap-1.5">
+                  <Users size={12} className="mt-0.5 text-blue-400 shrink-0" />
+                  <span>
+                    Selected: <span className="text-[var(--text-1)] font-medium">{state.voizoSegmentName}</span>
+                    <span className="text-[var(--text-3)]"> · {parsedNumbers.length} phone{parsedNumbers.length === 1 ? "" : "s"}</span>
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Manual paste */}
+          {state.audienceSource === "manual" && (
+            <>
+              {/* Slice 4 banner — Recycled · segments arriving via Audience-tab
+                  prefill. Kept for back-compat when older prefill paths land
+                  on the manual tab; new Audience-tab entry lands on Voizo tab. */}
               {state.segmentName?.startsWith("Recycled · ") && (
                 <div className="px-3 py-2 rounded-lg bg-amber-500/[0.06] border border-amber-500/25 text-xs text-[var(--text-2)] inline-flex items-start gap-1.5">
                   <Users size={12} className="mt-0.5 text-amber-400 shrink-0" />
@@ -182,6 +232,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   </span>
                 </div>
               )}
+
               <textarea
                 value={state.numbersText}
                 onChange={(e) =>
@@ -194,31 +245,15 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                 placeholder={"Paste or type numbers here, one per line\ne.g. +14035550100"}
                 className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y font-mono text-sm transition-colors"
               />
-              <div className="flex items-baseline justify-between gap-3">
-                {hasInvalidContent ? (
-                  <p className="text-xs text-red-400">
-                    No valid E.164 numbers found. Numbers must start with + followed by 8–15 digits.
-                  </p>
-                ) : parsedNumbers.length > 0 ? (
-                  <p className="text-xs text-emerald-400">
-                    {parsedNumbers.length} valid number{parsedNumbers.length === 1 ? "" : "s"}
-                  </p>
-                ) : (
-                  <span />
-                )}
-                <button
-                  type="button"
-                  onClick={() =>
-                    dispatch({
-                      type: "SET_AUDIENCE_FIELDS",
-                      payload: { audienceSource: "cio" },
-                    })
-                  }
-                  className="text-xs text-blue-400 hover:text-blue-300 underline-offset-2 hover:underline"
-                >
-                  Back to segment picker
-                </button>
-              </div>
+              {hasInvalidContent ? (
+                <p className="text-xs text-red-400">
+                  No valid E.164 numbers found. Numbers must start with + followed by 8–15 digits.
+                </p>
+              ) : parsedNumbers.length > 0 ? (
+                <p className="text-xs text-emerald-400">
+                  {parsedNumbers.length} valid number{parsedNumbers.length === 1 ? "" : "s"}
+                </p>
+              ) : null}
             </>
           )}
         </div>
