@@ -8,6 +8,7 @@ import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareTe
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
+import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 
 type Row = Record<string, unknown>;
 
@@ -814,6 +815,10 @@ export default function CampaignV2DetailPage() {
         suppressed: prefill.suppressed ?? [],
         recentlyCalled: prefill.recentlyCalled ?? [],
       });
+      // M8: cache the full response so the wizard mount can consume it
+      // without re-fetching (saves one CIO call per duplicate operation).
+      // Single-use, 60s TTL — see src/lib/duplicatePrefillCache.ts.
+      setDuplicatePrefillCache(id, body, duplicateRefreshSegment);
       setDuplicateStage("preview");
     } catch (err) {
       console.error("Duplicate preview failed:", err);

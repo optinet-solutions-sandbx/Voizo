@@ -25,6 +25,7 @@ import {
   detectAudienceCountry,
   isTimezoneValidForCountry,
 } from "@/lib/audienceCountry";
+import { consumeDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 
 import { ClassicNewCampaignPage } from "./page-classic";
 import {
@@ -181,20 +182,19 @@ function WizardPage({
   // wizard can dispatch SET_AUDIENCE_FIELDS / SET_AGENT_FIELDS / SET_SCHEDULE_FIELDS
   // / SET_SMS_FIELDS in one mount-time pass. No new WizardState fields — the
   // skipped counts live in local state for the StepAudience footnote only.
+  //
+  // M8 (2026-05-22): the modal's fetch result is cached in duplicatePrefillCache
+  // module-level state. If present + fresh, we consume it here and skip the
+  // network call entirely — saves the second CIO fetch (10-30s) per duplicate.
   useEffect(() => {
     if (!prefillCampaignId) return;
     let cancelled = false;
     (async () => {
       try {
-        const qs = new URLSearchParams({
-          refresh_segment: String(prefillCampaignRefreshSegment ?? true),
-          skip: prefillCampaignSkip ?? "overlap,suppressed",
-        });
-        const r = await fetch(`/api/campaigns-v2/${prefillCampaignId}/duplicate?${qs}`, {
-          cache: "no-store",
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const body = (await r.json()) as {
+        const refreshSeg = prefillCampaignRefreshSegment ?? true;
+        const skipCsv = prefillCampaignSkip ?? "overlap,suppressed";
+
+        type DuplicateBody = {
           source: {
             name: string;
             base_assistant_id: string | null;
@@ -216,6 +216,52 @@ function WizardPage({
             recentlyCalled: string[];
           };
         };
+
+        let body: DuplicateBody | null = consumeDuplicatePrefillCache(
+          prefillCampaignId,
+          refreshSeg,
+        ) as DuplicateBody | null;
+
+        if (body) {
+          // Cache hit — the modal already paid the CIO fetch cost. The cached
+          // prefill.phones was server-filtered with the modal's skip (default
+          // overlap+suppressed); re-apply the operator's actual skipCsv here
+          // on the raw candidate + bucket arrays. Same algorithm as the
+          // server's section "Apply skip strategy based on query params".
+          const skipFlags = new Set(
+            skipCsv.split(",").map((s) => s.trim()).filter(Boolean),
+          );
+          const overlap = new Set(body.prefill.overlap ?? []);
+          const suppressed = new Set(body.prefill.suppressed ?? []);
+          const recent = new Set(body.prefill.recentlyCalled ?? []);
+          const candidates = body.prefill.candidates ?? [];
+          const filteredPhones = candidates.filter((p) => {
+            if (skipFlags.has("overlap") && overlap.has(p)) return false;
+            if (skipFlags.has("suppressed") && suppressed.has(p)) return false;
+            if (skipFlags.has("recent") && recent.has(p)) return false;
+            return true;
+          });
+          body = {
+            ...body,
+            prefill: {
+              ...body.prefill,
+              phones: filteredPhones,
+              appliedSkips: Array.from(skipFlags),
+            },
+          };
+        } else {
+          // Cache miss — fetch (slow path, mirrors the modal's original call).
+          const qs = new URLSearchParams({
+            refresh_segment: String(refreshSeg),
+            skip: skipCsv,
+          });
+          const r = await fetch(`/api/campaigns-v2/${prefillCampaignId}/duplicate?${qs}`, {
+            cache: "no-store",
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          body = (await r.json()) as DuplicateBody;
+        }
+
         if (cancelled) return;
         const src = body.source;
         const pf = body.prefill;
