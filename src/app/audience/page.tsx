@@ -70,17 +70,20 @@ export default function AudiencePage() {
   // worklist from /api/audience/suggestions. Refreshes whenever segments
   // change so freshly-committed segments cause their source to disappear
   // from the panel (the RPC dedups on local_segments existence).
-  const loadSuggestions = useCallback(async () => {
+  const loadSuggestions = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/audience/suggestions", { cache: "no-store" });
+      const r = await fetch("/api/audience/suggestions", { cache: "no-store", signal });
+      if (signal?.aborted) return;
       if (!r.ok) {
         console.warn(`[audience] suggestions fetch failed: HTTP ${r.status}`);
         setSuggestions([]);
         return;
       }
       const body = (await r.json()) as { suggestions: Suggestion[] };
+      if (signal?.aborted) return;
       setSuggestions(body.suggestions ?? []);
     } catch (err) {
+      if ((err as Error).name === "AbortError") return;
       console.warn(`[audience] suggestions fetch error: ${(err as Error).message}`);
       setSuggestions([]);
     }
@@ -109,16 +112,19 @@ export default function AudiencePage() {
   // List load. Auto-selects the first segment iff nothing is selected yet —
   // this avoids a "select a segment to inspect" placeholder on first load
   // when at least one exists. Subsequent reloads preserve the selection.
-  const loadSegments = useCallback(async () => {
+  const loadSegments = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/audience/segments", { cache: "no-store" });
+      const r = await fetch("/api/audience/segments", { cache: "no-store", signal });
+      if (signal?.aborted) return;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as { segments: SegmentRow[] };
+      if (signal?.aborted) return;
       const list = body.segments ?? [];
       setSegments(list);
       setSelectedId((prev) => prev ?? list[0]?.id ?? null);
       setError(null);
     } catch (err) {
+      if ((err as Error).name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Failed to load segments");
     }
   }, []);
@@ -126,14 +132,32 @@ export default function AudiencePage() {
   // Initial + polling — both segments and suggestions are read-only fetches,
   // batched on the same 30s tick so the operator-facing state is always
   // consistent (no flicker of stale suggestions vs newly-committed segments).
+  //
+  // A2: Per-tick AbortController — each new tick aborts the previous tick's
+  // in-flight requests so a slow response from a ghost tick can't clobber
+  // fresh state. Cleanup on unmount aborts whatever's in flight.
+  //
+  // A7: visibilityState gate inside the interval body — skip polling work
+  // when the operator is in another tab. The initial load on mount still
+  // fires regardless (typical mount is in a visible tab).
   useEffect(() => {
-    loadSegments();
-    loadSuggestions();
+    let currentCtrl: AbortController | null = null;
+    const pollOnce = () => {
+      if (currentCtrl) currentCtrl.abort();
+      currentCtrl = new AbortController();
+      const signal = currentCtrl.signal;
+      loadSegments(signal);
+      loadSuggestions(signal);
+    };
+    pollOnce();
     const id = window.setInterval(() => {
-      loadSegments();
-      loadSuggestions();
+      if (document.visibilityState !== "visible") return;
+      pollOnce();
     }, POLL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (currentCtrl) currentCtrl.abort();
+    };
   }, [loadSegments, loadSuggestions]);
 
   // Detail fetch on selection change — AbortController prevents an in-flight
