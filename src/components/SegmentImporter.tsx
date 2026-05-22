@@ -67,8 +67,13 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
   const [singleLoading, setSingleLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
 
+  // 2026-05-22: fetch eagerly on mount (used to gate on `expanded`). The
+  // pinned-quick-pick chip row above the card needs segment names to resolve
+  // pinned IDs, so the list has to be available even before the operator
+  // expands the dropdown. One extra network call on Step 1 mount — same call
+  // we always made on first expand, just earlier.
   useEffect(() => {
-    if (!expanded || segments !== null) return;
+    if (segments !== null) return;
     (async () => {
       try {
         const res = await fetch("/api/customerio/segments");
@@ -83,7 +88,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
         setSegmentsError(err instanceof Error ? err.message : "Network error");
       }
     })();
-  }, [expanded, segments]);
+  }, [segments]);
 
   const filteredSegments = useMemo(() => {
     if (!segments) return [];
@@ -240,7 +245,33 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     setSearch("");
   }
 
+  // 2026-05-22: pinned-segment quick-pick chips. Resolved from the eagerly-
+  // fetched segments list. Click a chip → same import path as the row click
+  // inside the expanded dropdown.
+  const pinnedSegmentList = (segments ?? []).filter((s) => pinnedIds.has(String(s.id)));
+
   return (
+    <div className="flex flex-col gap-2">
+      {pinnedSegmentList.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Pinned</span>
+          {pinnedSegmentList.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => handleRowClick(s.id, s.name)}
+              disabled={loadingIds.has(s.id)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 transition-colors max-w-[260px]"
+              title={`Import ${s.name}`}
+            >
+              <Star size={11} className="fill-amber-400 text-amber-400 shrink-0" />
+              <span className="truncate">{s.name}</span>
+              {loadingIds.has(s.id) && <Loader2 size={10} className="animate-spin shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-app)] overflow-hidden">
       {/* Header toggle */}
       <button
@@ -460,6 +491,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
           )}
         </div>
       )}
+    </div>
     </div>
   );
 }

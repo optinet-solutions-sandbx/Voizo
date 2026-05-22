@@ -148,8 +148,32 @@ export default function VoizoSegmentImporter({ onImport, selectedId }: Props) {
     );
   }
 
+  // 2026-05-22: pinned-segment quick-pick chips. Click a chip = same selectSegment
+  // path as the list row click. Hidden when no pins exist.
+  const pinnedSegmentList = (segments ?? []).filter((s) => pinnedIds.has(s.id));
+
   return (
     <div className="flex flex-col gap-2">
+      {pinnedSegmentList.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Pinned</span>
+          {pinnedSegmentList.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => selectSegment(s)}
+              disabled={phonesLoading && activeId === s.id}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 transition-colors max-w-[260px]"
+              title={`Import ${s.name}`}
+            >
+              <Star size={11} className="fill-amber-400 text-amber-400 shrink-0" />
+              <span className="truncate">{s.name}</span>
+              {phonesLoading && activeId === s.id && <Loader2 size={10} className="animate-spin shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative">
         <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
