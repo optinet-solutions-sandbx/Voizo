@@ -650,7 +650,14 @@ function WorkerLine({ s, now }: { s: PoolSlot; now: Date }) {
   const callDur = s.inFlightCall ? formatDur(s.inFlightCall.durationMs) : null;
 
   return (
-    <div className="flex items-center gap-3 py-2.5 border-b border-[var(--border)] last:border-b-0">
+    // P4: clickable row -> /workers?focus=<slot>. The workers landing reads
+    // the param and pans the globe to the worker's pin via the pan-to-pin
+    // effect in Globe.tsx. Hover bg signals affordance without disrupting
+    // the existing border-b divider rhythm.
+    <Link
+      href={`/workers?focus=${s.slotIndex}`}
+      className="flex items-center gap-3 py-2.5 border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors"
+    >
       <div className={`w-8 h-8 rounded-lg grid place-items-center ${tone}`}>
         <Icon size={14} />
       </div>
@@ -666,7 +673,7 @@ function WorkerLine({ s, now }: { s: PoolSlot; now: Date }) {
       <div className={`font-mono text-[11px] flex-shrink-0 ${isOnCall ? "text-blue-400" : "text-[var(--text-3)]"}`}>
         {callDur ?? localTime ?? "—"}
       </div>
-    </div>
+    </Link>
   );
 }
 

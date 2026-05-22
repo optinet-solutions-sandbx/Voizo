@@ -12,7 +12,8 @@
 
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
 
@@ -23,16 +24,52 @@ import CollapsibleColumn from "./CollapsibleColumn";
 import { useWorkersState } from "./use-workers-state";
 import { useNow } from "./use-now";
 
+// Suspense wrapper required by Next.js when a page uses useSearchParams in
+// a statically-prerenderable client component. The inner WorkersPageInner
+// reads ?focus=<slot> on mount (P4); Next would otherwise bail the static
+// prerender. Fallback shows the same loader as the data-loading state.
 export default function WorkersPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="relative h-full flex items-center justify-center">
+          <div className="flex items-center gap-2 text-[var(--text-3)] text-sm">
+            <Loader2 size={16} className="animate-spin" />
+            Loading worker pool…
+          </div>
+        </div>
+      }
+    >
+      <WorkersPageInner />
+    </Suspense>
+  );
+}
+
+function WorkersPageInner() {
   const { isDark } = useTheme();
   const now = useNow();
   const { data, loading, error } = useWorkersState();
+  const searchParams = useSearchParams();
 
   const slots = data?.slots ?? [];
 
   // Cross-component selection state (shared between Globe + Panel)
   const [hoveredSlotIndex, setHoveredSlotIndex] = useState<number | null>(null);
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
+
+  // P4: ?focus=<slot> arrives when an operator clicks a worker on the
+  // dashboard mini-list. Seed selectedSlotIndex on mount so Globe's
+  // pan-to-pin effect animates to that worker's location. Mount-only —
+  // navigating away and back is treated as a fresh entry.
+  useEffect(() => {
+    const focusParam = searchParams.get("focus");
+    if (!focusParam) return;
+    const idx = Number.parseInt(focusParam, 10);
+    if (Number.isFinite(idx) && idx >= 0) {
+      setSelectedSlotIndex(idx);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Header / status counts
   const onCall = slots.filter(s => s.status === "leased" && s.inFlightCall).length;

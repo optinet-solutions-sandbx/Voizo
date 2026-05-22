@@ -164,6 +164,50 @@ export default function Globe({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // P4: Pan-to-pin when selectedSlotIndex changes. Triggers on panel clicks,
+  // pin clicks, and ?focus=<slot> URL param arrivals. Skip if the user is
+  // mid-drag (don't fight them) or if the slot has no campaign (free
+  // workers have no globe location). Animates rotDeg/tiltDeg over ~600ms
+  // with ease-in-out cubic. Shortest-path longitude (wraps delta to
+  // [-180, 180]) so AU→UK pans the short way around.
+  useEffect(() => {
+    if (selectedSlotIndex == null) return;
+    const slot = slots.find(s => s.slotIndex === selectedSlotIndex);
+    if (!slot?.campaign) return;
+    const c = coordsForTimezone(slot.campaign.timezone);
+    if (!c) return;
+
+    const startRot = rotDeg;
+    const startTilt = tiltDeg;
+    const targetRot = -c.lon;
+    const targetTilt = clamp(-c.lat * 0.5, -85, 85);
+
+    let deltaRot = targetRot - startRot;
+    if (deltaRot > 180) deltaRot -= 360;
+    if (deltaRot < -180) deltaRot += 360;
+    const deltaTilt = targetTilt - startTilt;
+
+    // Already centered — don't animate a 0-degree pan.
+    if (Math.abs(deltaRot) < 1 && Math.abs(deltaTilt) < 1) return;
+
+    const duration = 600;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      setRotDeg(startRot + deltaRot * eased);
+      setTiltDeg(startTilt + deltaTilt * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // Intentionally only depend on selectedSlotIndex: don't re-trigger on
+    // rotDeg/tiltDeg changes (would feedback-loop with our own setState) or
+    // on slots polling refresh (would re-pan every 5s).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSlotIndex]);
+
   const cx = size.w / 2;
   const cy = size.h / 2;
   const R = Math.min(size.w, size.h) * 0.42;
