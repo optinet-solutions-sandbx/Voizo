@@ -91,10 +91,15 @@ function SmsDetailRow({ sms }: { sms: Row }) {
 
 // Outcome ordering, labels, and badge classes for the per-campaign breakdown row.
 // Order = the natural lifecycle progression: not yet → in flight → terminal states.
+// `removed_from_segment` is appended last — it's a soft-mark set by the Audience
+// CRM's segment-creation flow (api/audience/segments/route.ts) to prevent the
+// source campaign from re-dialing phones that have been recycled into a local
+// segment. Without it here, those phones don't render in the breakdown chip row
+// even though they're in the campaign (audit N3, 2026-05-22).
 const OUTCOME_DISPLAY_ORDER = [
   "pending", "in_progress", "pending_retry",
   "sent_sms", "not_interested", "declined_offer", "wrong_number",
-  "unreached", "suppressed",
+  "unreached", "suppressed", "removed_from_segment",
 ] as const;
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -107,6 +112,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   wrong_number: "Wrong number",
   unreached: "Unreached",
   suppressed: "Suppressed",
+  removed_from_segment: "Removed (in segment)",
 };
 
 const DAY_LABEL: Record<string, string> = {
@@ -126,6 +132,7 @@ const OUTCOME_BADGE_CLASS: Record<string, string> = {
   wrong_number: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
   unreached: "bg-red-500/12 text-red-400 border border-red-500/30",
   suppressed: "bg-violet-500/12 text-violet-400 border border-violet-500/30",
+  removed_from_segment: "bg-indigo-500/12 text-indigo-400 border border-indigo-500/30",
 };
 
 /**
