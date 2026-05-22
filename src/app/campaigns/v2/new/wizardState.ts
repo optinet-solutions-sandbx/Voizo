@@ -95,6 +95,13 @@ export const TIMEZONE_OPTIONS: TimezoneOption[] = [
   { value: "UTC",                 label: "UTC",                    group: "Other" },
 ];
 
+// 2026-05-22: Three-source discriminator for Step 1's source picker tab strip.
+// Replaces the binary manualPasteMode field. Each source has its own phone
+// cache (cioPhones / voizoPhones / manualPhones) so flipping tabs preserves
+// operator work. The active source's cache mirrors into numbersText, which
+// remains the single source of truth for downstream consumers.
+export type AudienceSource = "cio" | "voizo" | "manual";
+
 export interface WizardState {
   step: Step;
 
@@ -102,8 +109,13 @@ export interface WizardState {
   name: string;
   timezone: string;
   timezoneTouched: boolean;        // R6: prevents auto-tz from clobbering manual edits
-  numbersText: string;
-  manualPasteMode: boolean;
+  numbersText: string;             // Derived: mirrors the active source's phone cache. Operator-facing single source of truth for downstream consumers (buildCreateInput etc.).
+  audienceSource: AudienceSource;  // 2026-05-22 — replaces manualPasteMode
+  cioPhones: string;               // CIO source cache (newline-joined)
+  voizoSegmentId: string | null;   // local_segments UUID (Voizo source)
+  voizoSegmentName: string | null; // Voizo segment display name
+  voizoPhones: string;             // Voizo source cache (newline-joined)
+  manualPhones: string;            // Manual paste source cache (operator's textarea content)
   segmentId: number | null;
   segmentName: string | null;
   isTest: boolean;                 // Marks the campaign as a test; excludes from /audience suggestions. Defaults false.
@@ -148,7 +160,7 @@ export interface WizardState {
  * `timezoneTouched = true` so the auto-detect won't clobber it later (R6).
  */
 export type AudiencePayload = Partial<
-  Pick<WizardState, "name" | "timezone" | "numbersText" | "manualPasteMode" | "segmentId" | "segmentName" | "isTest">
+  Pick<WizardState, "name" | "timezone" | "numbersText" | "audienceSource" | "segmentId" | "segmentName" | "voizoSegmentId" | "voizoSegmentName" | "cioPhones" | "voizoPhones" | "manualPhones" | "isTest">
 >;
 
 /** Atomic segment-import update — phones + segmentId + segmentName arrive together. */
@@ -288,7 +300,12 @@ export function createInitialState(): WizardState {
     timezone: detectedTz,
     timezoneTouched: false,
     numbersText: "",
-    manualPasteMode: false,
+    audienceSource: "cio",
+    cioPhones: "",
+    voizoSegmentId: null,
+    voizoSegmentName: null,
+    voizoPhones: "",
+    manualPhones: "",
     segmentId: null,
     segmentName: null,
     isTest: false,
@@ -376,14 +393,29 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         next.scheduleRows = state.scheduleRows.map((r) => ({ ...r, start: hours.start, end: hours.end }));
         next.timezoneTouched = true; // R6: any explicit timezone set blocks future auto-detects
       }
+      // 2026-05-22: keep numbersText synced with the active source's cache.
+      // The active tab's phones are the operator-facing "what will I dial"
+      // truth; downstream consumers (buildCreateInput etc.) read numbersText.
+      // Two cases:
+      //   - Payload set numbersText directly → operator typed in the manual
+      //     textarea (or a prefill effect set it). Mirror to manualPhones
+      //     when on the manual tab so the cache stays consistent.
+      //   - Payload didn't set numbersText → derive from active source's cache.
+      if ("numbersText" in action.payload) {
+        if (next.audienceSource === "manual") next.manualPhones = next.numbersText;
+      } else {
+        const activeSource = next.audienceSource;
+        next.numbersText =
+          activeSource === "cio" ? next.cioPhones :
+          activeSource === "voizo" ? next.voizoPhones :
+          next.manualPhones;
+      }
       // Country-aware TZ guardrail: re-run detection any time the audience
       // changes OR the operator explicitly picks a timezone. The helper is
       // a no-op when detection returns null OR the chosen TZ is already in
       // the allowed set — so this just enforces the guardrail without
       // disturbing legitimate within-set picks (e.g. Vancouver inside +1).
-      const audienceChanged =
-        action.payload.numbersText !== undefined &&
-        action.payload.numbersText !== state.numbersText;
+      const audienceChanged = next.numbersText !== state.numbersText;
       const timezoneChanged =
         action.payload.timezone !== undefined &&
         action.payload.timezone !== state.timezone;
@@ -396,14 +428,17 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case "IMPORT_SEGMENT": {
       // Atomic update — phones replace numbersText, segmentId + segmentName
       // captured for the Step 11 recurring refresh contract (single-segment
-      // imports only). Flip manualPasteMode false so the textarea is hidden
-      // in favor of the segment-selected indicator.
+      // imports only). 2026-05-22: also flips audienceSource to "cio" and
+      // caches the phones into cioPhones so the CIO tab keeps its selection
+      // when the operator briefly visits another tab and returns.
+      const phonesText = action.payload.phones.join("\n");
       const next: WizardState = {
         ...state,
-        numbersText: action.payload.phones.join("\n"),
+        numbersText: phonesText,
+        cioPhones: phonesText,
         segmentId: action.payload.segmentId,
         segmentName: action.payload.segmentName,
-        manualPasteMode: false,
+        audienceSource: "cio",
       };
       // Country-aware TZ guardrail — see applyDetectedTimezone comment.
       return applyDetectedTimezone(next);

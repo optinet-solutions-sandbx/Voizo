@@ -68,7 +68,7 @@ function NewCampaignRoute() {
   }
   // Audience-tab prefill (Slice 4): ?source=local_segment&id=<uuid> hands a
   // recycled audience to the wizard. WizardPage fetches the segment server-
-  // side on mount and prefills numbersText + manualPasteMode + name.
+  // side on mount and prefills numbersText + audienceSource + name.
   const source = search?.get("source") ?? null;
   const id = search?.get("id") ?? null;
   if (source === "local_segment" && id) {
@@ -174,7 +174,13 @@ function WizardPage({
           payload: {
             name: label,
             numbersText: phones.join("\n"),
-            manualPasteMode: true,
+            // 2026-05-22: Audience-tab entry → Voizo source tab pre-selected.
+            // voizoSegmentId/Name lets StepAudience render the "Selected: X"
+            // indicator instead of the old "Recycled ·" banner in manual mode.
+            audienceSource: "voizo",
+            voizoSegmentId: prefillSegmentId,
+            voizoSegmentName: segmentName ?? null,
+            voizoPhones: phones.join("\n"),
             segmentId: null,
             segmentName: label,
           },
@@ -292,7 +298,12 @@ function WizardPage({
             name,
             timezone: src.timezone,
             numbersText: (pf.phones ?? []).join("\n"),
-            manualPasteMode: true,
+            // 2026-05-22: duplicate ships a frozen phone list, not a live
+            // segment link — operator lands on the Paste manually tab with
+            // the phones populated. manualPhones cache mirrors numbersText
+            // so the Paste tab keeps its selection across tab flips.
+            audienceSource: "manual",
+            manualPhones: (pf.phones ?? []).join("\n"),
             // Pin to null — duplicate campaigns are NOT bound to a Customer.io
             // segment_id (refresh on the wizard's submit would re-fetch and
             // potentially diverge from the operator's chosen-filtered list).

@@ -103,7 +103,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
         <div className="flex flex-col gap-2">
           <FieldLabel required>Customer.io segment</FieldLabel>
 
-          {!state.manualPasteMode ? (
+          {state.audienceSource !== "manual" ? (
             <>
               <SegmentImporter
                 singleSelectOnly={state.campaignType === "recurring"}
@@ -132,7 +132,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   onClick={() =>
                     dispatch({
                       type: "SET_AUDIENCE_FIELDS",
-                      payload: { manualPasteMode: true },
+                      payload: { audienceSource: "manual" },
                     })
                   }
                   className="text-blue-400 hover:text-blue-300 underline-offset-2 hover:underline"
@@ -211,7 +211,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   onClick={() =>
                     dispatch({
                       type: "SET_AUDIENCE_FIELDS",
-                      payload: { manualPasteMode: false },
+                      payload: { audienceSource: "cio" },
                     })
                   }
                   className="text-xs text-blue-400 hover:text-blue-300 underline-offset-2 hover:underline"
