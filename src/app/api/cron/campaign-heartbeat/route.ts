@@ -171,22 +171,29 @@ export async function GET(request: NextRequest) {
   // ──────────────────────────────────────────────────────────────────────
   // SIP Pool reconciliation (Phase 2)
   // ──────────────────────────────────────────────────────────────────────
-  // Three rules, gated by env so a missing key never crashes the heartbeat:
+  // Four rules, gated by env so a missing key never crashes the heartbeat:
   //   Rule 1: AUTO-RELEASE — leased slot with no campaign_id, >5min old
   //           (createCampaignV2 never completed after clone-assistant leased)
   //   Rule 2: AUTO-RELEASE — leased slot with campaign in terminal state >10min
   //           (DELETE bypassed or campaign auto-completed without DELETE)
   //   Rule 3: DETECT ONLY — assistantId on Vapi disagrees with DB; log loudly,
   //           manual intervention required (cause is ambiguous)
+  //   Rule 4: AUTO-RECOVER — slot in maintenance >6h (eject's PATCH-detach
+  //           failed earlier; retry via reconcileRelease which already does
+  //           PATCH retry + DELETE assistant + free-or-maintenance fallback.
+  //           Added 2026-05-22 after the May 21 Cloudflare 522/504 incident.)
   //
   // Decisions LOCKED 2026-05-15 by Jas: Option C hybrid (auto for 1+2, detect
   // for 3) and best-effort Vapi assistant DELETE on Rule 1/2 firings.
+  // Rule 4 locked with Jas 2026-05-22.
   const poolReconciliation: {
     rule1Released: Array<{ slotIndex: number; assistantId: string | null; leasedAt: string }>;
     rule2Released: Array<{ slotIndex: number; campaignId: string; campaignStatus: string }>;
     rule3Drift: Array<{ slotIndex: number; dbAssistantId: string | null; vapiAssistantId: string | null }>;
+    rule4Recovered: Array<{ slotIndex: number; assistantId: string | null; leasedAt: string }>;
+    rule4StillStuck: Array<{ slotIndex: number; assistantId: string | null; leasedAt: string }>;
     warnings: string[];
-  } = { rule1Released: [], rule2Released: [], rule3Drift: [], warnings: [] };
+  } = { rule1Released: [], rule2Released: [], rule3Drift: [], rule4Recovered: [], rule4StillStuck: [], warnings: [] };
 
   const vapiKey = process.env.VAPI_PRIVATE_KEY;
   if (!vapiKey) {
@@ -303,6 +310,52 @@ export async function GET(request: NextRequest) {
           }
         } catch (err) {
           poolReconciliation.warnings.push(`Rule 3 fetch error ${slotLabel}: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    // ── Rule 4: maintenance-trapped slot recovery >6h old ──
+    // Separate SELECT because the leased-slot loop above only operates on
+    // status='leased'. When eject's PATCH-detach failed earlier (Vapi 5xx /
+    // Cloudflare 522/504), the slot was parked here. reconcileRelease re-runs
+    // the same sequence and either lands the slot in 'free' (Vapi recovered)
+    // or refreshes the maintenance notes (Vapi still failing — try again
+    // next heartbeat). 6h threshold avoids storming Vapi during incidents.
+    const RULE4_CUTOFF = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    const { data: maintenanceSlots, error: maintErr } = await supabaseAdmin
+      .from("vapi_sip_pool")
+      .select("id, slot_index, vapi_phone_number_id, current_assistant_id, current_campaign_id, leased_at")
+      .eq("status", "maintenance")
+      .lt("leased_at", RULE4_CUTOFF)
+      .order("slot_index");
+
+    if (maintErr) {
+      console.error("[campaign-heartbeat] Rule 4 query error:", maintErr);
+      poolReconciliation.warnings.push(`Rule 4 query error: ${maintErr.message}`);
+    } else if (maintenanceSlots && maintenanceSlots.length > 0) {
+      for (const slot of maintenanceSlots) {
+        const slotLabel = `voizo-sip-pool-slot-${String(slot.slot_index).padStart(2, "0")}`;
+        console.warn(
+          `[campaign-heartbeat] RULE 4 — retrying maintenance ${slotLabel}: ` +
+          `assistant=${slot.current_assistant_id ?? "null"} leased_at=${slot.leased_at}`,
+        );
+        const released = await reconcileRelease(
+          slot.id,
+          slot.slot_index,
+          slot.vapi_phone_number_id,
+          slot.current_assistant_id,
+          vapiKey,
+          poolReconciliation.warnings,
+        );
+        const record = {
+          slotIndex: slot.slot_index,
+          assistantId: slot.current_assistant_id,
+          leasedAt: slot.leased_at,
+        };
+        if (released) {
+          poolReconciliation.rule4Recovered.push(record);
+        } else {
+          poolReconciliation.rule4StillStuck.push(record);
         }
       }
     }
