@@ -14,14 +14,18 @@ import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 
+// P2 Option C (2026-05-22): semantic-accents-only. All inactive nav chips
+// neutralize except Do Not Call, which keeps the red warning hue as the one
+// color in the sidebar that carries safety meaning. Active state stays blue
+// regardless (desktop) or red-for-DNC + blue-otherwise (mobile bottom nav).
 const navItems = [
-  { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, color: "text-purple-400",  bg: "bg-purple-500/10"  },
-  { label: "Live Activity", href: "/activity",        icon: Activity,        color: "text-cyan-400",    bg: "bg-cyan-500/10"    },
-  { label: "Workers",       href: "/workers",         icon: Globe2,          color: "text-emerald-400", bg: "bg-emerald-500/10" },
-  { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       color: "text-blue-400",    bg: "bg-blue-500/10"    },
-  { label: "Audience",      href: "/audience",        icon: Users,           color: "text-amber-400",   bg: "bg-amber-500/10"   },
-  { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        color: "text-red-400",     bg: "bg-red-500/10"     },
-  { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        color: "text-indigo-400",  bg: "bg-indigo-500/10"  },
+  { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Live Activity", href: "/activity",        icon: Activity,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Workers",       href: "/workers",         icon: Globe2,          color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Audience",      href: "/audience",        icon: Users,           color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        color: "text-red-400",         bg: "bg-red-500/10"           },
+  { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
 ];
 
 const allPages = [
@@ -354,9 +358,14 @@ function MobileBottomNav() {
       {navItems.map((item) => {
         const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
         const Icon = item.icon;
+        // P2 Option C: active mobile-tab is blue by default, red for DNC.
+        // Can't reuse item.color here — desktop chips share that field for
+        // the neutralized inactive chip, which would render gray-on-gray
+        // when active on mobile. Keep the active signal strong.
+        const activeColor = item.href === "/do-not-call" ? "text-red-400" : "text-blue-400";
         return (
           <Link key={item.href} href={item.href}
-            className={`flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 transition-colors ${isActive ? item.color : "text-[var(--text-3)] hover:text-[var(--text-2)]"}`}>
+            className={`flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 transition-colors ${isActive ? activeColor : "text-[var(--text-3)] hover:text-[var(--text-2)]"}`}>
             <Icon size={19} />
             <span className="text-[10px] font-medium leading-none">{item.label}</span>
           </Link>
