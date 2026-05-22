@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check, Star } from "lucide-react";
+import { usePinnedSegments } from "@/lib/pinnedSegments";
 
 interface Segment {
   id: number;
@@ -50,6 +51,10 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
   const [segmentsError, setSegmentsError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
+  // 2026-05-22: per-operator pinned CIO segments. Star icon in row renderer
+  // toggles; pinned float to top when no search query is active.
+  const [pinnedIds, togglePin] = usePinnedSegments("cio");
+
   // Multi-select state
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [membersBySegment, setMembersBySegment] = useState<Map<number, Member[]>>(new Map());
@@ -86,8 +91,19 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     const list = term
       ? segments.filter((s) => s.name.toLowerCase().includes(term))
       : segments;
-    return list.slice(0, 50);
-  }, [segments, search]);
+    // 2026-05-22: when there's no active search query, sort pinned-first
+    // (preserving inner order). Search wins over pin order so operators
+    // always find their query results first.
+    const ordered = term
+      ? list
+      : [...list].sort((a, b) => {
+          const aP = pinnedIds.has(String(a.id));
+          const bP = pinnedIds.has(String(b.id));
+          if (aP === bP) return 0;
+          return aP ? -1 : 1;
+        });
+    return ordered.slice(0, 50);
+  }, [segments, search, pinnedIds]);
 
   // Fetch members for a segment (cached in membersBySegment)
   const fetchSegmentMembers = useCallback(async (segmentId: number): Promise<Member[]> => {
@@ -346,6 +362,22 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
                               ? "bg-indigo-500/10 text-indigo-400"
                               : "bg-[var(--bg-elevated)] text-[var(--text-3)]"
                           }`}>{s.type}</span>
+                        </button>
+
+                        {/* 2026-05-22: pin/star — operator favorite for the
+                            Step 1 source picker. stopPropagation so the
+                            star click doesn't also fire row-select. */}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); togglePin(String(s.id)); }}
+                          className="ml-2 p-1 text-[var(--text-3)] hover:text-amber-400 transition-colors flex-shrink-0"
+                          aria-label={pinnedIds.has(String(s.id)) ? "Unpin segment" : "Pin segment"}
+                          title={pinnedIds.has(String(s.id)) ? "Unpin" : "Pin to top"}
+                        >
+                          <Star
+                            size={13}
+                            className={pinnedIds.has(String(s.id)) ? "fill-amber-400 text-amber-400" : ""}
+                          />
                         </button>
                       </div>
                     );
