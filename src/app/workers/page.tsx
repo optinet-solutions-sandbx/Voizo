@@ -164,7 +164,7 @@ function WorkersPageInner() {
 
       {/* Hint + sync stamp */}
       <div className="absolute bottom-4 left-4 z-10 text-[11px] text-[var(--text-3)] font-mono pointer-events-none">
-        Drag to rotate <span className="opacity-50 mx-1">·</span> Click pin to inspect
+        Drag to navigate <span className="opacity-50 mx-1">·</span> Click pin to inspect <span className="opacity-50 mx-1">·</span> Scroll to zoom
       </div>
       <div className="absolute bottom-4 right-4 z-10 text-[11px] text-[var(--text-3)] font-mono inline-flex items-center gap-2">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/60 animate-pulse" />
