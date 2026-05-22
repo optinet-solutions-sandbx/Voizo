@@ -83,6 +83,20 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
           <p className="text-[11px] text-[var(--text-3)] mt-[-2px]">
             A descriptive name helps you find this in the campaigns list later.
           </p>
+          <label className="flex items-start gap-2 cursor-pointer select-none mt-1">
+            <input
+              type="checkbox"
+              checked={state.isTest}
+              onChange={(e) =>
+                dispatch({ type: "SET_AUDIENCE_FIELDS", payload: { isTest: e.target.checked } })
+              }
+              className="mt-[2px] accent-blue-500"
+            />
+            <span className="text-[11px] text-[var(--text-3)] leading-snug">
+              Mark as test campaign
+              <span className="text-[var(--text-3)] opacity-70"> — excluded from Audience suggestions. You can change this any time on the campaign detail page.</span>
+            </span>
+          </label>
         </div>
 
         {/* Customer.io segment */}

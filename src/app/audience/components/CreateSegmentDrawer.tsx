@@ -33,10 +33,25 @@ export interface SegmentRow {
   created_by: string | null;
 }
 
+/**
+ * Prefill payload from the SuggestedSegmentsPanel "Carve segment" click.
+ * The drawer opens with source-campaign pre-selected, name pre-filled, and
+ * outcomes pre-ticked — operator can still tweak everything before saving.
+ *
+ * Passing `null` (or omitting) restores the default empty-form behavior so
+ * the existing "Create segment" button still works unchanged.
+ */
+export interface CreateSegmentPrefill {
+  sourceCampaignId: string;
+  name: string;
+  outcomes: string[];
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: (segment: SegmentRow) => void;
+  prefill?: CreateSegmentPrefill | null;
 }
 
 interface CampaignOption {
@@ -78,7 +93,7 @@ const SAFE_KEYS: ReadonlyArray<string> = SAFE_OUTCOMES.map((o) => o.key);
 
 const PREVIEW_DEBOUNCE_MS = 400;
 
-export default function CreateSegmentDrawer({ open, onClose, onCreated }: Props) {
+export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill }: Props) {
   const [name, setName] = useState("");
   const [sourceCampaignId, setSourceCampaignId] = useState("");
   const [campaigns, setCampaigns] = useState<CampaignOption[] | null>(null);
@@ -97,13 +112,31 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated }: Props)
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Reset form when drawer opens — fresh state every time.
+  // Reset form when drawer opens OR when prefill identity changes. If a
+  // prefill was passed (from the "Carve segment" button on
+  // SuggestedSegmentsPanel), apply it to the form initial state — operator
+  // can still tweak everything before saving. Otherwise fall back to the
+  // empty defaults (manual-flow behavior).
+  //
+  // Why prefill is in deps (audit 2026-05-22 HIGH H1): if the operator
+  // clicks Carve A then Carve B while the drawer is still open, the parent's
+  // `createPrefill` state updates to B. Without prefill in deps, the form
+  // would stay showing A (stale). Parent only calls setCreatePrefill on
+  // intentional transitions (carve / close / created), so prefill identity
+  // never changes spuriously — including it in deps doesn't reset on
+  // unrelated re-renders.
   useEffect(() => {
     if (!open) return;
-    setName("");
-    setSourceCampaignId("");
+    if (prefill) {
+      setName(prefill.name);
+      setSourceCampaignId(prefill.sourceCampaignId);
+      setOutcomes(new Set(prefill.outcomes));
+    } else {
+      setName("");
+      setSourceCampaignId("");
+      setOutcomes(new Set(SAFE_KEYS));
+    }
     setIncludeDeclined(false);
-    setOutcomes(new Set(SAFE_KEYS));
     setDncScrubbed(true);
     setRecentWindowDays(7);
     setPreview(null);
@@ -111,7 +144,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated }: Props)
     setFrictionOpen(false);
     setSaving(false);
     setSaveError(null);
-  }, [open]);
+  }, [open, prefill]);
 
   // Load campaigns once per open (filtered to completed + paused per the plan).
   useEffect(() => {
@@ -121,12 +154,20 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated }: Props)
       .then((all) => {
         if (cancelled) return;
         // Source statuses: completed/paused are the primary cases. 'inactive'
-        // is included because ejected campaigns still have recyclable history
-        // (no race risk since the dialer is off). 'running' is intentionally
-        // excluded — the API rejects with 409 anyway (audit H3) and we don't
-        // want operators picking a still-dialing campaign by mistake.
+        // (ejected) and 'archived' (terminal) are also included because the
+        // dialer is off in both — no race risk. Matches the get_audience_suggestions
+        // RPC filter for parity: any campaign the RPC can surface must also be
+        // selectable in the manual flow (audit 2026-05-22 BLOCKER B1).
+        // 'running' is intentionally excluded — the API rejects with 409 anyway
+        // (yesterday's audit H3) and we don't want operators picking a still-
+        // dialing campaign by mistake.
         const filtered = (all as Array<{ id: string; name: string; status: string }>)
-          .filter((c) => c.status === "completed" || c.status === "paused" || c.status === "inactive")
+          .filter((c) =>
+            c.status === "completed" ||
+            c.status === "paused" ||
+            c.status === "inactive" ||
+            c.status === "archived",
+          )
           .map((c) => ({ id: c.id, name: c.name, status: c.status }));
         setCampaigns(filtered);
         setCampaignsError(null);

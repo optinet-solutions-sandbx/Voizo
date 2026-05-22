@@ -106,6 +106,7 @@ export interface WizardState {
   manualPasteMode: boolean;
   segmentId: number | null;
   segmentName: string | null;
+  isTest: boolean;                 // Marks the campaign as a test; excludes from /audience suggestions. Defaults false.
 
   // Step 2 — Agent
   vapiAssistantId: string;
@@ -147,7 +148,7 @@ export interface WizardState {
  * `timezoneTouched = true` so the auto-detect won't clobber it later (R6).
  */
 export type AudiencePayload = Partial<
-  Pick<WizardState, "name" | "timezone" | "numbersText" | "manualPasteMode" | "segmentId" | "segmentName">
+  Pick<WizardState, "name" | "timezone" | "numbersText" | "manualPasteMode" | "segmentId" | "segmentName" | "isTest">
 >;
 
 /** Atomic segment-import update — phones + segmentId + segmentName arrive together. */
@@ -290,6 +291,7 @@ export function createInitialState(): WizardState {
     manualPasteMode: false,
     segmentId: null,
     segmentName: null,
+    isTest: false,
 
     vapiAssistantId: "",
     baseVoiceId: null,
@@ -530,6 +532,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       numbers: [],
       campaignType: "recurring",
       recurrencePattern: state.recurrencePattern,
+      isTest: state.isTest,
     };
   }
 
@@ -570,6 +573,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     smsTemplate: composedSmsTemplate(state) || null,
     smsOnGoalReachedOnly: true,
     numbers: parsePhoneList(state.numbersText),
+    isTest: state.isTest,
   };
 }
 

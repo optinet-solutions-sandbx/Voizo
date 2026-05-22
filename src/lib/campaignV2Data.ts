@@ -28,6 +28,7 @@ export interface CampaignV2CreateInput {
   createdBy?: string | null;
   campaignType?: "fixed" | "recurring"; // Defaults to "fixed". Recurring parents save as status='running' with no clone; children are spawned by the scheduler.
   recurrencePattern?: RecurrencePattern | null; // Populated for campaignType='recurring'; null otherwise.
+  isTest?: boolean; // Marks the campaign as a test run. Excluded from /api/audience/suggestions; operator-controllable in the wizard + detail page header.
 }
 
 export function defaultCallWindows(): CallWindow[] {
@@ -89,6 +90,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       status,
       campaign_type: campaignType,
       recurrence_pattern: input.recurrencePattern ?? null,
+      is_test: input.isTest ?? false,
       created_by: input.createdBy || null,
     })
     .select()

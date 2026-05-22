@@ -17,7 +17,8 @@ import {
   Search, ShieldCheck, Trash2, Users,
 } from "lucide-react";
 
-import CreateSegmentDrawer from "./components/CreateSegmentDrawer";
+import CreateSegmentDrawer, { type CreateSegmentPrefill } from "./components/CreateSegmentDrawer";
+import SuggestedSegmentsPanel, { type Suggestion } from "./components/SuggestedSegmentsPanel";
 
 interface SegmentRow {
   id: string;
@@ -58,9 +59,44 @@ export default function AudiencePage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [createOpen, setCreateOpen] = useState(false);
+  const [createPrefill, setCreatePrefill] = useState<CreateSegmentPrefill | null>(null);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<SegmentRow | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const router = useRouter();
+
+  // Suggestions load (audience-suggestions MVP). Fetches the operator-facing
+  // worklist from /api/audience/suggestions. Refreshes whenever segments
+  // change so freshly-committed segments cause their source to disappear
+  // from the panel (the RPC dedups on local_segments existence).
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const r = await fetch("/api/audience/suggestions", { cache: "no-store" });
+      if (!r.ok) {
+        console.warn(`[audience] suggestions fetch failed: HTTP ${r.status}`);
+        setSuggestions([]);
+        return;
+      }
+      const body = (await r.json()) as { suggestions: Suggestion[] };
+      setSuggestions(body.suggestions ?? []);
+    } catch (err) {
+      console.warn(`[audience] suggestions fetch error: ${(err as Error).message}`);
+      setSuggestions([]);
+    }
+  }, []);
+
+  // Carve handler — opens the drawer with the suggestion's defaults pre-filled.
+  // Operator can still tweak name + outcomes + scrub settings before saving.
+  // Drawer's onCreated callback will trigger a segments + suggestions refresh,
+  // and the carved source will disappear from the panel (dedup'd by the RPC).
+  const handleCarve = useCallback((s: Suggestion) => {
+    setCreatePrefill({
+      sourceCampaignId: s.source_campaign_id,
+      name: s.suggested_defaults.name,
+      outcomes: s.suggested_defaults.outcomes_included,
+    });
+    setCreateOpen(true);
+  }, []);
 
   // 30s clock — enough precision for "5m ago" / "2h ago" labels. Cheaper
   // than the 1s clock /activity uses (no "Xs ago" labels here).
@@ -86,12 +122,18 @@ export default function AudiencePage() {
     }
   }, []);
 
-  // Initial + polling
+  // Initial + polling — both segments and suggestions are read-only fetches,
+  // batched on the same 30s tick so the operator-facing state is always
+  // consistent (no flicker of stale suggestions vs newly-committed segments).
   useEffect(() => {
     loadSegments();
-    const id = window.setInterval(loadSegments, POLL_MS);
+    loadSuggestions();
+    const id = window.setInterval(() => {
+      loadSegments();
+      loadSuggestions();
+    }, POLL_MS);
     return () => clearInterval(id);
-  }, [loadSegments]);
+  }, [loadSegments, loadSuggestions]);
 
   // Detail fetch on selection change — AbortController prevents an in-flight
   // detail load from clobbering a newer one when the operator clicks quickly.
@@ -163,11 +205,15 @@ export default function AudiencePage() {
         return remaining;
       });
       setConfirmDelete(null);
+      // Delete un-soft-marks the source's rows (DELETE endpoint restores
+      // outcome='removed_from_segment' → 'pending'). That source may now
+      // re-appear in suggestions if it crosses the candidate threshold.
+      loadSuggestions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete segment");
       setConfirmDelete(null);
     }
-  }, [confirmDelete, selectedId]);
+  }, [confirmDelete, selectedId, loadSuggestions]);
 
   const stats = useMemo(() => {
     if (!segments) {
@@ -235,6 +281,12 @@ export default function AudiencePage() {
         <StatCard label="Most recent" value={stats.mostRecent ? formatRelative(stats.mostRecent, now) : "—"}
           icon={<Clock size={14} className="text-violet-400" />} />
       </div>
+
+      {/* Suggested-segments panel (audience-suggestions MVP). Hidden when the
+          worklist is empty — see SuggestedSegmentsPanel for the early-return.
+          Suggestions are non-destructive; clicking "Carve segment" opens the
+          drawer with prefill, no DB writes until the operator commits. */}
+      <SuggestedSegmentsPanel suggestions={suggestions} onCarve={handleCarve} />
 
       {/* Main 2-col */}
       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5">
@@ -325,12 +377,20 @@ export default function AudiencePage() {
 
       <CreateSegmentDrawer
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        prefill={createPrefill}
+        onClose={() => {
+          setCreateOpen(false);
+          // Clear prefill so a subsequent manual "Create segment" click starts empty.
+          setCreatePrefill(null);
+        }}
         onCreated={(seg) => {
           // Prepend (server returns rows ordered by created_at desc).
           setSegments((prev) => (prev ? [seg, ...prev.filter((s) => s.id !== seg.id)] : [seg]));
           setSelectedId(seg.id);
           setCreateOpen(false);
+          setCreatePrefill(null);
+          // Refresh suggestions — the newly-committed source disappears from the panel.
+          loadSuggestions();
         }}
       />
 

@@ -4,7 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, Copy, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 
 type Row = Record<string, unknown>;
@@ -166,6 +166,11 @@ export default function CampaignV2DetailPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("numbers");
   const [acting, setActing] = useState(false);
+  // Separate from `acting` so the is_test toggle doesn't block other actions
+  // and vice versa, but still guards against rapid-click N-PATCHes
+  // (audit 2026-05-22 HIGH H2). Operator clicks 5 times → only the first
+  // PATCH fires; subsequent clicks no-op until refreshData resolves.
+  const [togglingIsTest, setTogglingIsTest] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [expandedSms, setExpandedSms] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -880,6 +885,32 @@ export default function CampaignV2DetailPage() {
     }
   }
 
+  // is_test toggle (audit-suggestions MVP). Mark/unmark this campaign as
+  // a test run — excluded from /api/audience/suggestions only. No other
+  // behavior changes. Refetches campaign on success to reflect new state.
+  // togglingIsTest guards against rapid-click N-PATCHes — audit 2026-05-22 H2.
+  async function handleToggleIsTest() {
+    if (!id || !campaign || togglingIsTest) return;
+    const newValue = !((campaign.is_test as boolean | undefined) ?? false);
+    setTogglingIsTest(true);
+    try {
+      const r = await fetch(`/api/campaigns-v2/${id}/is-test`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_test: newValue }),
+      });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${r.status}`);
+      }
+      await refreshData();
+    } catch (err) {
+      console.warn(`[detail] is_test toggle failed: ${(err as Error).message}`);
+    } finally {
+      setTogglingIsTest(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-4 sm:p-6 max-w-6xl mx-auto flex items-center justify-center py-24 text-[var(--text-3)]">
@@ -1065,6 +1096,35 @@ export default function CampaignV2DetailPage() {
             >
               <Copy size={15} /> Duplicate
             </button>
+            {/* is_test toggle (Audience Suggestions MVP). State toggle, not an
+                action button — visually quieter than Eject/Resume/Refresh/Duplicate.
+                Filled amber when on, dashed outline when off. Per
+                memory/feedback_operator_autonomy_with_guardrails: operator can
+                flip freely; flag only affects /audience suggestions visibility.
+                Matches sibling padding (px-4 py-2.5) + whitespace-nowrap so the
+                label stays on one line at any header width. */}
+            {(() => {
+              const isTest = (campaign.is_test as boolean | undefined) ?? false;
+              return (
+                <button
+                  onClick={handleToggleIsTest}
+                  disabled={acting || togglingIsTest}
+                  title={
+                    isTest
+                      ? "Unmark as test — this campaign will appear in Audience suggestions"
+                      : "Mark as test — this campaign will be excluded from Audience suggestions"
+                  }
+                  className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-colors disabled:opacity-60 ${
+                    isTest
+                      ? "bg-amber-500/15 text-amber-400 border border-amber-500/40 hover:bg-amber-500/25"
+                      : "border border-dashed border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-[var(--border)]"
+                  }`}
+                >
+                  <FlaskConical size={14} />
+                  {isTest ? "Test campaign" : "Mark as test"}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
