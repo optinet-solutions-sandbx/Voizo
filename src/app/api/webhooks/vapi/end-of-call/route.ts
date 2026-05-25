@@ -562,13 +562,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true, idempotent: "already processed" });
   }
 
-  // ── Update calls_v2 with transcript and goal_reached ──
+  // Extract recording URL from Vapi's artifact (canonical path) with legacy
+  // fallback. Persisted to calls_v2.recording_url for the export feature
+  // (avoids per-call Vapi API re-fetches at export time per Vapi support's own
+  // recommendation). Top-level vapiCall.recordingUrl is marked deprecated by
+  // Vapi but currently still populated as of 2026-05-25 — kept as a fallback.
+  const recordingMono = (artifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
+  const recordingUrl =
+    (typeof recordingMono?.combinedUrl === "string" ? recordingMono.combinedUrl : null) ??
+    (typeof vapiCall?.recordingUrl === "string" ? vapiCall.recordingUrl : null);
+
+  // ── Update calls_v2 with transcript, goal_reached, and recording_url ──
   await supabaseAdmin
     .from("calls_v2")
     .update({
       vapi_call_id: vapiCallId || null,
       transcript: transcript ? { text: transcript } : null,
       goal_reached: goalReached,
+      recording_url: recordingUrl,
     })
     .eq("id", callRow.id);
 
