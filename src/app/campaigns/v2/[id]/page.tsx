@@ -4,8 +4,9 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, MessageSquareText, Phone, Play, Pause, Settings, Loader2, StopCircle, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, Download, MessageSquareText, Phone, Play, Pause, Settings, Loader2, StopCircle, AlertTriangle } from "lucide-react";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
+import { useCampaignExport, type ExportType } from "@/lib/useCampaignExport";
 
 type Row = Record<string, unknown>;
 
@@ -158,6 +159,18 @@ export default function CampaignV2DetailPage() {
   const [stopResult, setStopResult] = useState<string | null>(null);
   const cancelStopBtnRef = useRef<HTMLButtonElement>(null);
 
+  // Export Reports dropdown state. The hook drives both CSV-only and
+  // CSV+audio exports — see src/lib/useCampaignExport.ts. Audio bundles
+  // route through /api/recordings/proxy to bypass storage.vapi.ai CORS.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const {
+    startExport,
+    cancel: cancelExport,
+    exporting,
+    progress: exportProgress,
+    error: exportError,
+  } = useCampaignExport(id);
+
   // Modal a11y polish (2026-05-11): when the Emergency Stop modal opens,
   // auto-focus the safer Cancel button (so an accidental Enter doesn't
   // confirm the destructive action) and let Escape dismiss it.
@@ -170,6 +183,16 @@ export default function CampaignV2DetailPage() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [confirmStop, acting]);
+
+  // Close the Export dropdown on Escape, matching the confirm-stop modal a11y.
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExportMenuOpen(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [exportMenuOpen]);
 
   // Fetch all campaign data — used on mount and by polling.
   // Wrapped in useCallback so the interval always calls the latest version
@@ -502,6 +525,75 @@ export default function CampaignV2DetailPage() {
                 </button>
               </>
             )}
+            {/* Export Reports — visible in all campaign states. CSV-only
+                or CSV+audio bundles via useCampaignExport. */}
+            <div className="relative">
+              <button
+                onClick={() => setExportMenuOpen((v) => !v)}
+                disabled={exporting}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] hover:bg-[var(--bg-hover)] disabled:opacity-70 text-[var(--text-2)] text-sm font-medium transition-colors"
+              >
+                {exporting ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Download size={15} />
+                )}
+                {exporting ? "Exporting..." : "Export"}
+                <ChevronDown
+                  size={12}
+                  className={`transition-transform ${exportMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {exportMenuOpen && !exporting && (
+                <div className="absolute right-0 mt-2 w-72 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] shadow-xl z-50 overflow-hidden divide-y divide-[var(--border)]">
+                  <div className="px-3 py-2 text-[10px] uppercase font-semibold text-[var(--text-3)] tracking-wide">
+                    CSV Reports
+                  </div>
+                  <div className="py-1">
+                    {([
+                      ["all", "All Calls"],
+                      ["sms_sent", "SMS Sent"],
+                      ["not_interested_or_declined", "Not Interested / Declined"],
+                      ["voicemail", "Voicemails"],
+                      ["unreached_or_retry", "Unreached / Awaiting Retry"],
+                      ["wrong_number", "Wrong Numbers"],
+                    ] as [ExportType, string][]).map(([type, label]) => (
+                      <button
+                        key={`csv-${type}`}
+                        onClick={() => {
+                          setExportMenuOpen(false);
+                          startExport(type, false);
+                        }}
+                        className="w-full text-left px-4 py-2 text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+                      >
+                        {label} (.csv)
+                      </button>
+                    ))}
+                  </div>
+                  <div className="px-3 py-2 text-[10px] uppercase font-semibold text-[var(--text-3)] tracking-wide">
+                    Audio Bundles (.zip)
+                  </div>
+                  <div className="py-1">
+                    {([
+                      ["all", "All Recordings"],
+                      ["voicemail", "Voicemails Only"],
+                      ["sms_sent", "SMS-Reached Only"],
+                    ] as [ExportType, string][]).map(([type, label]) => (
+                      <button
+                        key={`zip-${type}`}
+                        onClick={() => {
+                          setExportMenuOpen(false);
+                          startExport(type, true);
+                        }}
+                        className="w-full text-left px-4 py-2 text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -580,6 +672,59 @@ export default function CampaignV2DetailPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Export progress overlay — covers the screen during a CSV/audio export.
+          Mirrors the confirm-stop modal pattern (fixed inset-0 z-50, backdrop
+          blur). Cancel triggers the hook's AbortController so the operator can
+          bail mid-zip. */}
+      {exporting && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="export-progress-title"
+        >
+          <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center">
+            <Loader2 size={28} className="text-blue-400 animate-spin mx-auto mb-3" />
+            <h4
+              id="export-progress-title"
+              className="text-sm font-semibold text-[var(--text-1)] mb-1"
+            >
+              Processing Export
+            </h4>
+            <p className="text-xs text-[var(--text-3)] mb-4">{exportProgress.stage}</p>
+            {exportProgress.total > 0 && (
+              <>
+                <div className="w-full bg-[var(--bg-app)] rounded-full h-2 mb-3 overflow-hidden">
+                  <div
+                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.round((exportProgress.current / exportProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-[10px] text-[var(--text-3)] mb-4">
+                  {exportProgress.current} / {exportProgress.total}
+                </p>
+              </>
+            )}
+            <button
+              onClick={cancelExport}
+              className="px-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-[var(--text-2)] hover:text-[var(--text-1)] text-xs font-medium transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Export error banner — shows after a failed/cancelled export.
+          Persists until the next export attempt clears it. */}
+      {exportError && !exporting && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+          Export: {exportError}
         </div>
       )}
 
