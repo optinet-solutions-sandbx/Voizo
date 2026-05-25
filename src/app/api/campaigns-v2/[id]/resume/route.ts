@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
 import { executeRebindCore } from "@/lib/vapi/rebindCore";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 import { parseJsonBody } from "@/lib/jsonBody";
 
@@ -28,12 +29,13 @@ const RECENT_CALL_WINDOW_DAYS = 7;
  *                                    suppressed phones at dial time
  *                                    regardless; the flag is a UI affordance)
  *
- *   2. Branches on source status to restart dialing:
- *      - paused → simple atomic UPDATE status='running' + last_resumed_at=now
- *                 (clone + slot still alive; just unpause the queue)
- *      - inactive → call executeRebindCore (createClone + leaseSlot +
- *                   patchPhoneAssistant + atomic UPDATE inactive → running +
- *                   last_resumed_at=now)
+ *   2. Always calls executeRebindCore (Phase 4 of the SIP-slot release design
+ *      unified the paused and inactive paths). Pre-rebind cleanup hook handles
+ *      "old-shape paused" rows (those with non-null vapi_pool_slot_id from
+ *      pre-Phase-0 data) by releasing the stale slot + deleting the stale
+ *      clone before the rebind acquires fresh ones — §6.6 of the design doc.
+ *      For "new-shape paused" (Phase 0+ flag-on data with null pointers)
+ *      and inactive, the hook is a no-op via idempotent null-input guard.
  *
  * Body:
  *   {
@@ -114,9 +116,11 @@ export async function POST(
   // ── 1. Read source campaign ──
   // Single string literal for the SELECT — concatenation defeats Supabase's
   // TypeScript inference, per the lesson from Step 5b.
+  // vapi_assistant_id + vapi_pool_slot_id added in Phase 4 so the §6.6
+  // pre-rebind cleanup hook can detect "old-shape paused" rows.
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, status, segment_id, base_assistant_id, voice_id, system_prompt")
+    .select("id, name, status, segment_id, base_assistant_id, voice_id, system_prompt, vapi_assistant_id, vapi_pool_slot_id")
     .eq("id", id)
     .single();
 
@@ -263,100 +267,87 @@ export async function POST(
     softMarkedOutOfSegment = count ?? 0;
   }
 
-  // ── 5. Branch on source.status to restart dialing ──
+  // ── 5. Restart dialing via executeRebindCore (unified path) ──
+  // Phase 4: both paused and inactive resumes go through the rebind path.
+  // For "old-shape paused" (pre-Phase-0 data with non-null vapi pointers),
+  // run the pre-rebind cleanup hook first so we don't orphan the stale slot
+  // + clone when leaseSlot acquires fresh ones. The helper is idempotent on
+  // null inputs, so "new-shape paused" (Phase 0+ flag-on data with null
+  // pointers) and inactive campaigns no-op safely through it.
   const previousStatus = source.status as string;
   const campaignName = source.name as string;
-  let rebindResult:
-    | {
-        newAssistantId: string;
-        newAssistantName: string;
-        newPoolSlotId: string;
-        newSipUri: string;
-        slotLabel: string;
-        leasedAt: string;
-      }
-    | undefined;
 
-  if (previousStatus === "paused") {
-    // Simple status flip — clone + slot still alive from when the queue paused.
-    const leasedAt = new Date().toISOString();
-    const { data: updated, error: updateErr } = await supabaseAdmin
-      .from("campaigns_v2")
-      .update({ status: "running", last_resumed_at: leasedAt })
-      .eq("id", id)
-      .eq("status", "paused")
-      .select("id")
-      .single();
-    if (updateErr || !updated) {
-      console.error(`[campaigns-v2/resume] paused → running flip failed for ${id}:`, updateErr);
-      return NextResponse.json(
-        {
-          error:
-            "Campaign status changed during resume (someone else acted on this campaign). " +
-            "Soft-marks already applied — refresh the dashboard.",
-          resumed: false,
-          partial: true,
-          softMarkedRecentlyCalled,
-          softMarkedOutOfSegment,
-        },
-        { status: 409 },
-      );
-    }
-  } else {
-    // inactive — call rebindCore for the Vapi/DB chain.
-    if (!source.base_assistant_id) {
-      return NextResponse.json(
-        {
-          error:
-            "Campaign has no base_assistant_id. Pick a base agent on the campaign detail page first.",
-          resumed: false,
-          partial: true,
-          softMarkedRecentlyCalled,
-          softMarkedOutOfSegment,
-        },
-        { status: 400 },
-      );
-    }
-
-    const vapiKey = process.env.VAPI_PRIVATE_KEY;
-    if (!vapiKey) {
-      return NextResponse.json(
-        { error: "VAPI_PRIVATE_KEY is not set" },
-        { status: 500 },
-      );
-    }
-
-    const result = await executeRebindCore(supabaseAdmin, vapiKey, {
-      id: id,
-      name: campaignName,
-      base_assistant_id: source.base_assistant_id as string,
-      voice_id: (source.voice_id as string | null) ?? null,
-      system_prompt: source.system_prompt as string,
-    });
-
-    if (!result.ok) {
-      return NextResponse.json(
-        {
-          error: result.error,
-          resumed: false,
-          partial: true,
-          softMarkedRecentlyCalled,
-          softMarkedOutOfSegment,
-        },
-        { status: result.status },
-      );
-    }
-
-    const slotLabel = `voizo-sip-pool-slot-${String(result.slot.slot_index).padStart(2, "0")}`;
-    rebindResult = {
-      newAssistantId: result.clone.id,
-      newAssistantName: result.clone.name,
-      newPoolSlotId: result.slot.id,
-      newSipUri: result.slot.sip_uri,
-      slotLabel,
-      leasedAt: result.leasedAt,
-    };
+  if (!source.base_assistant_id) {
+    return NextResponse.json(
+      {
+        error:
+          "Campaign has no base_assistant_id. Pick a base agent on the campaign detail page first.",
+        resumed: false,
+        partial: true,
+        softMarkedRecentlyCalled,
+        softMarkedOutOfSegment,
+      },
+      { status: 400 },
+    );
   }
+
+  const vapiKey = process.env.VAPI_PRIVATE_KEY;
+  if (!vapiKey) {
+    return NextResponse.json(
+      { error: "VAPI_PRIVATE_KEY is not set" },
+      { status: 500 },
+    );
+  }
+
+  // ── 5a. §6.6 pre-rebind cleanup hook ──
+  // Detects "old-shape paused" rows where the slot + clone are still
+  // alive (vapi_pool_slot_id non-null). Without this, the next rebind
+  // would lease a SECOND slot and leave the original one orphaned.
+  // Idempotent: null inputs → no-op fast path.
+  const preCleanup = await performCampaignVapiCleanup(supabaseAdmin, {
+    vapiKey,
+    campaignName,
+    vapiAssistantId: source.vapi_assistant_id as string | null,
+    vapiPoolSlotId: source.vapi_pool_slot_id as string | null,
+  });
+  if (preCleanup.vapiWarnings.length > 0) {
+    console.warn(
+      `[campaigns-v2/resume] pre-rebind cleanup warnings for ${campaignName}:`,
+      preCleanup.vapiWarnings,
+    );
+  }
+
+  // ── 5b. Rebind ──
+  const result = await executeRebindCore(supabaseAdmin, vapiKey, {
+    id: id,
+    name: campaignName,
+    base_assistant_id: source.base_assistant_id as string,
+    voice_id: (source.voice_id as string | null) ?? null,
+    system_prompt: source.system_prompt as string,
+  });
+
+  if (!result.ok) {
+    return NextResponse.json(
+      {
+        error: result.error,
+        resumed: false,
+        partial: true,
+        softMarkedRecentlyCalled,
+        softMarkedOutOfSegment,
+      },
+      { status: result.status },
+    );
+  }
+
+  const slotLabel = `voizo-sip-pool-slot-${String(result.slot.slot_index).padStart(2, "0")}`;
+  const rebindResult = {
+    newAssistantId: result.clone.id,
+    newAssistantName: result.clone.name,
+    newPoolSlotId: result.slot.id,
+    newSipUri: result.slot.sip_uri,
+    slotLabel,
+    leasedAt: result.leasedAt,
+  };
 
   // ── 6. Audit + response ──
   const warning =
@@ -372,9 +363,9 @@ export async function POST(
       previousStatus,
       softMarkedRecentlyCalled,
       softMarkedOutOfSegment,
-      newAssistantId: rebindResult?.newAssistantId ?? null,
-      newPoolSlotId: rebindResult?.newPoolSlotId ?? null,
-      slotLabel: rebindResult?.slotLabel ?? null,
+      newAssistantId: rebindResult.newAssistantId,
+      newPoolSlotId: rebindResult.newPoolSlotId,
+      slotLabel: rebindResult.slotLabel,
       requestedWorkerSlot: requestedWorkerSlot ?? null,
       timestamp: new Date().toISOString(),
     }),
@@ -389,7 +380,7 @@ export async function POST(
       recentlyCalled: softMarkedRecentlyCalled,
       outOfSegment: softMarkedOutOfSegment,
     },
-    ...(rebindResult ?? {}),
+    ...rebindResult,
     ...(warning ? { warning } : {}),
   });
 }

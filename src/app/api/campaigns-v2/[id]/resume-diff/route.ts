@@ -115,6 +115,10 @@ export async function GET(
         ...(source.segment_id == null ? { note: "no source segment" } : {}),
       },
       segmentId: source.segment_id ?? null,
+      // Phase 4: all resumes go through executeRebindCore (createClone +
+      // leaseSlot + patchPhoneAssistant) — typically 1–3s of latency. The
+      // dashboard's Resume modal should surface this to the operator.
+      rebindRequired: true,
     });
   }
 
@@ -204,5 +208,9 @@ export async function GET(
       ...(outOfSegmentNote ? { note: outOfSegmentNote } : {}),
     },
     segmentId: source.segment_id ?? null,
+    // Phase 4: all resumes go through executeRebindCore (createClone +
+    // leaseSlot + patchPhoneAssistant) — typically 1–3s of latency. The
+    // dashboard's Resume modal should surface this to the operator.
+    rebindRequired: true,
   });
 }

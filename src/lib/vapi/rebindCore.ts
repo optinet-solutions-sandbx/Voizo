@@ -1,18 +1,24 @@
 /**
- * executeRebindCore — the Vapi/DB work of taking an `inactive` campaign back
- * to `running`. Reusable across:
+ * executeRebindCore — the Vapi/DB work of taking a `paused` or `inactive`
+ * campaign back to `running`. Reusable across:
  *   - POST /api/campaigns-v2/[id]/rebind         (Step 4b — direct operator
- *                                                  rebind without diff)
+ *                                                  rebind without diff;
+ *                                                  inactive only in practice)
  *   - POST /api/campaigns-v2/[id]/resume         (Step 7 — operator resume
- *                                                  with three-bucket diff,
- *                                                  but only when the source
- *                                                  is `inactive`; `paused`
- *                                                  resumes skip this helper
- *                                                  and just flip status)
+ *                                                  with three-bucket diff;
+ *                                                  Phase 4 of the SIP-slot
+ *                                                  release design unified
+ *                                                  both paused and inactive
+ *                                                  resumes onto this path)
  *
  * The helper assumes the caller has already:
  *   - Performed the origin/CSRF check
- *   - Validated the campaign row exists and status === 'inactive'
+ *   - Validated the campaign row exists and status IN ('paused', 'inactive')
+ *   - For "old-shape paused" (pre-Phase-4 data where vapi_pool_slot_id is
+ *     non-null), the caller has already run performCampaignVapiCleanup to
+ *     release the stale slot and delete the stale clone (§6.6 of the design
+ *     doc). Otherwise this helper will lease a SECOND slot, orphaning the
+ *     first.
  *   - Confirmed campaign.base_assistant_id is non-null
  *   - Loaded the VAPI_PRIVATE_KEY from env
  *
@@ -23,13 +29,10 @@
  *   4. linkSlot — best-effort back-link; failure logs a warning, continues
  *   5. Atomic UPDATE campaigns_v2 SET vapi_assistant_id, vapi_pool_slot_id,
  *      vapi_sip_uri, status='running', last_resumed_at=now() WHERE id=$
- *      AND status='inactive' — race-guarded; 409 if 0 rows match
+ *      AND status IN ('paused','inactive') — race-guarded; 409 if 0 rows match
  *
  * Returns a discriminated union so callers can translate to NextResponse with
  * the appropriate HTTP status and shape.
- *
- * Bit-exact behavior to the pre-extraction rebind route handler. Verified
- * regression-clean before commit by re-running the Step 4b rebind verification.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -132,11 +135,13 @@ export async function executeRebindCore(
   }
 
   // ── 5. Atomic terminal status flip ──
-  // .eq("status", "inactive") guards against an unexpected concurrent state
-  // change. If 0 rows match, the new clone + slot are live on Vapi but the
-  // DB row didn't flip — operator can run Eject again to reconcile (eject
-  // is idempotent in that state: clone GET → 404 silently, slot release
-  // returns false silently, UPDATE succeeds on whatever row state moved on).
+  // .in("status", ["paused", "inactive"]) guards against an unexpected
+  // concurrent state change. Allows both pause and inactive as resume-source
+  // states (Phase 4 of the SIP-slot release design unified them). If 0 rows
+  // match, the new clone + slot are live on Vapi but the DB row didn't flip
+  // — operator can run Eject again to reconcile (eject is idempotent in
+  // that state: clone GET → 404 silently, slot release returns false
+  // silently, UPDATE succeeds on whatever row state moved on).
   const leasedAt = new Date().toISOString();
   const { data: updated, error: updateErr } = await supabase
     .from("campaigns_v2")
@@ -148,7 +153,7 @@ export async function executeRebindCore(
       last_resumed_at: leasedAt,
     })
     .eq("id", campaign.id)
-    .eq("status", "inactive")
+    .in("status", ["paused", "inactive"])
     .select("id")
     .single();
 
@@ -161,8 +166,8 @@ export async function executeRebindCore(
       ok: false,
       status: 409,
       error:
-        "Campaign status changed during rebind (someone else acted on this campaign). " +
-        "The new clone and slot are live on Vapi. Eject the campaign again to reconcile.",
+        "Campaign status changed during resume (someone else acted on this campaign). " +
+        "The new clone and slot are live on Vapi. Eject the campaign and try again to reconcile.",
     };
   }
 
