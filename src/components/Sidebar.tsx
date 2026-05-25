@@ -6,7 +6,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Bell, Search, Megaphone, PhoneOff, BookOpen, Phone, X,
   LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2, Globe2,
-  Activity, Users,
+  Activity, Users, Lock, LockOpen,
 } from "lucide-react";
 
 const CampaignIcon = Megaphone;
@@ -27,6 +27,8 @@ const navItems = [
   { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        color: "text-red-400",         bg: "bg-red-500/10"           },
   { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
 ];
+
+const SIDEBAR_LOCK_KEY = "voizo-sidebar-locked";
 
 const allPages = [
   { label: "Workers",        href: "/workers",         icon: Globe2,         description: "Worker fleet and world-time view" },
@@ -59,14 +61,19 @@ interface SearchResult {
   icon?: any;
 }
 
-function GlobalSearch() {
+interface GlobalSearchProps {
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+}
+
+function GlobalSearch({ inputRef: externalInputRef }: GlobalSearchProps = {}) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const internalInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = externalInputRef ?? internalInputRef;
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -278,48 +285,105 @@ function NotificationBell({ size = 18 }: { size?: number }) {
   );
 }
 
-function SidebarContent() {
+interface SidebarContentProps {
+  collapsed: boolean;
+  locked: boolean;
+  setLocked: (locked: boolean) => void;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
+  onSearchIconClick: () => void;
+}
+
+function SidebarContent({
+  collapsed, locked, setLocked, searchInputRef, onSearchIconClick,
+}: SidebarContentProps) {
   const pathname = usePathname();
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center px-4 h-[57px] border-b border-[var(--border)]">
-        <Link href="/workers" className="flex items-center gap-2.5 group">
-          <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:bg-blue-500 group-hover:shadow-blue-500/30 transition-all">
-            <span className="text-white text-xs font-bold">V</span>
+      <div className={`flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "gap-3"}`}>
+        <Link href="/workers" className={`flex items-center group ${collapsed ? "flex-col gap-1" : "gap-3"}`}>
+          <div className="w-11 h-11 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:bg-blue-500 group-hover:shadow-blue-500/30 transition-all flex-shrink-0">
+            <span className="text-white text-base font-bold">V</span>
           </div>
-          <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
+          {!collapsed && (
+            <div className="flex flex-col leading-none">
+              <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
+              <span className="text-[9px] tracking-wider uppercase text-[var(--text-3)] mt-0.5">DIALER</span>
+            </div>
+          )}
         </Link>
+        {collapsed && (
+          <span className="text-[9px] tracking-wider uppercase text-[var(--text-3)] leading-none">DIALER</span>
+        )}
       </div>
 
-      <div className="px-3 py-3 border-b border-[var(--border)]">
-        <GlobalSearch />
+      <div className={`border-b border-[var(--border)] ${collapsed ? "px-2 py-2" : "px-3 py-3"}`}>
+        {collapsed ? (
+          <button
+            type="button"
+            title="Search"
+            aria-label="Open search"
+            onClick={onSearchIconClick}
+            className="w-full flex items-center justify-center py-2 rounded-lg text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] transition-colors"
+          >
+            <Search size={16} />
+          </button>
+        ) : (
+          <GlobalSearch inputRef={searchInputRef} />
+        )}
       </div>
 
       <nav className="flex-1 px-2 py-3 overflow-y-auto">
-        <p className="px-2 mb-2 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-widest">Menu</p>
+        {!collapsed && (
+          <p className="px-2 mb-2 text-[10px] font-semibold text-[var(--text-3)] uppercase tracking-widest">Menu</p>
+        )}
         <ul className="space-y-0.5">
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;
             return (
               <li key={item.href}>
-                <Link href={item.href}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                <Link
+                  href={item.href}
+                  title={collapsed ? item.label : undefined}
+                  className={`flex items-center ${collapsed ? "justify-center px-1.5" : "gap-3 px-3"} py-2.5 rounded-lg text-sm font-medium transition-all ${
                     isActive
                       ? "bg-blue-600 text-white shadow-md shadow-blue-600/25"
                       : "text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
                   }`}
                 >
-                  <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
-                    <Icon size={13} className={isActive ? "text-white" : item.color} />
+                  <div className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
+                    <Icon size={14} className={isActive ? "text-white" : item.color} />
                   </div>
-                  {item.label}
+                  {!collapsed && item.label}
                 </Link>
               </li>
             );
           })}
         </ul>
       </nav>
+
+      <div className={`border-t border-[var(--border)] ${collapsed ? "px-2 py-2 flex justify-center" : "px-3 py-2 flex justify-end"}`}>
+        <button
+          type="button"
+          onClick={() => setLocked(!locked)}
+          title={locked ? "Unlock — auto-collapse on mouse-leave" : "Lock sidebar open"}
+          aria-pressed={locked}
+          className={`flex items-center gap-1.5 rounded-lg transition-all ${
+            collapsed ? "w-7 h-7 justify-center" : "px-2 py-1.5"
+          } ${
+            locked
+              ? "bg-[var(--bg-card)] border border-[var(--border-2)] text-[var(--text-1)]"
+              : "border border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)]"
+          }`}
+        >
+          {locked ? <Lock size={12} /> : <LockOpen size={12} />}
+          {!collapsed && (
+            <span className="text-[10px] tracking-wide uppercase">
+              {locked ? "Locked" : "Auto"}
+            </span>
+          )}
+        </button>
+      </div>
 
     </div>
   );
@@ -376,12 +440,58 @@ function MobileBottomNav() {
 }
 
 export default function Sidebar() {
+  const [locked, setLocked] = useState<boolean>(() => {
+    // Lazy initializer reads localStorage on first mount (client-only via
+    // "use client") — avoids first-paint flash. Mirrors the pattern in
+    // src/app/workers/CollapsibleColumn.tsx:38-46.
+    try {
+      const v = localStorage.getItem(SIDEBAR_LOCK_KEY);
+      if (v === "true") return true;
+      if (v === "false") return false;
+    } catch { /* ignore — fall through to default */ }
+    return false; // default AUTO (collapsed)
+  });
+  const [hovered, setHovered] = useState(false);
+  const collapsed = !locked && !hovered;
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_LOCK_KEY, String(locked)); }
+    catch { /* ignore */ }
+  }, [locked]);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingSearchFocusRef = useRef(false);
+
+  useEffect(() => {
+    // When the sidebar transitions from collapsed→expanded because the user
+    // clicked the Search icon, focus the input after it renders.
+    if (!collapsed && pendingSearchFocusRef.current) {
+      pendingSearchFocusRef.current = false;
+      // Defer one frame so the input has mounted and width animation has begun.
+      requestAnimationFrame(() => { searchInputRef.current?.focus(); });
+    }
+  }, [collapsed]);
+
   return (
     <>
       <MobileTopBar />
       <MobileBottomNav />
-      <aside className="hidden md:flex w-60 min-w-[240px] bg-[var(--bg-sidebar)] border-r border-[var(--border)] flex-col h-screen">
-        <SidebarContent />
+      <aside
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className="hidden md:flex bg-[var(--bg-sidebar)] border-r border-[var(--border)] flex-col h-screen overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(.2,.7,.2,1)]"
+        style={{ width: collapsed ? 64 : 240 }}
+      >
+        <SidebarContent
+          collapsed={collapsed}
+          locked={locked}
+          setLocked={setLocked}
+          searchInputRef={searchInputRef}
+          onSearchIconClick={() => {
+            pendingSearchFocusRef.current = true;
+            setLocked(true);
+          }}
+        />
       </aside>
     </>
   );
