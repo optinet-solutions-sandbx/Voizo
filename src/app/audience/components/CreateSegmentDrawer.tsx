@@ -14,10 +14,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, ChevronDown, Loader2, Megaphone, Phone,
-  ShieldCheck, Sparkles, X,
+  AlertTriangle, Check, ChevronDown, Layers, Loader2, Megaphone, Phone,
+  ShieldCheck, X,
 } from "lucide-react";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 export interface SegmentRow {
   id: string;
@@ -237,7 +238,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill 
       })
         .then(async (r) => {
           if (!r.ok) {
-            const body = await r.json().catch(() => ({} as { error?: string }));
+            const body = (await parseJsonBody(r)) as { error?: string };
             throw new Error(body.error ?? `HTTP ${r.status}`);
           }
           return r.json() as Promise<{ preview: PreviewShape }>;
@@ -289,7 +290,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill 
         }),
       });
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        const body = (await parseJsonBody(r)) as { error?: string };
         throw new Error(body.error ?? `HTTP ${r.status}`);
       }
       const body = (await r.json()) as { segment: SegmentRow };
@@ -319,7 +320,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill 
         <div className="flex items-start justify-between gap-3 p-5 border-b border-[var(--border)]">
           <div className="min-w-0">
             <h2 id="create-seg-title" className="text-base font-bold tracking-tight inline-flex items-center gap-2">
-              <Sparkles size={16} className="text-amber-400" /> Create segment
+              <Layers size={16} className="text-amber-400" /> Create segment
             </h2>
             <p className="text-xs text-[var(--text-3)] mt-0.5">
               Carve outcome-tagged contacts from a finished campaign into a reusable list.
@@ -470,7 +471,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill 
               disabled={!canSubmit}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition"
             >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
               {saving ? "Saving…" : "Save segment"}
             </button>
           </div>
@@ -706,7 +707,7 @@ function FrictionModal({
             onClick={onContinue}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium transition"
           >
-            <Sparkles size={14} /> Save anyway
+            <ShieldCheck size={14} /> Save anyway
           </button>
         </div>
       </div>

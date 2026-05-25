@@ -9,6 +9,7 @@ import SegmentImporter from "@/components/SegmentImporter";
 import DateTimePicker from "@/components/DateTimePicker";
 import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 // Default SMS content pre-filled on the Create Campaign form.
 // Split into message + link + opt-out so operators can edit each section.
@@ -261,7 +262,7 @@ export function ClassicNewCampaignPage() {
       try {
         const res = await fetch("/api/vapi/assistants");
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
+          const body = await parseJsonBody(res);
           setAssistantsError(body.error || `Failed to load assistants (${res.status})`);
           setAssistants([]);
           return;
@@ -401,7 +402,7 @@ export function ClassicNewCampaignPage() {
       });
 
       if (!cloneRes.ok) {
-        const errBody = await cloneRes.json().catch(() => ({}));
+        const errBody = await parseJsonBody(cloneRes);
         throw new Error(errBody.error || `Clone failed (${cloneRes.status})`);
       }
 

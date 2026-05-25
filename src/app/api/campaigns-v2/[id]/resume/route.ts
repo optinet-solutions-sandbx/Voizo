@@ -4,6 +4,7 @@ import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Data";
 import { executeRebindCore } from "@/lib/vapi/rebindCore";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 // Up to: paginated customer.io fetch (~10-30s, segments under 500), three
 // Supabase diff queries, two soft-mark UPDATEs, optional Vapi rebind chain
@@ -95,7 +96,7 @@ export async function POST(
   };
   let body: ResumeBody;
   try {
-    body = (await request.json().catch(() => ({}))) as ResumeBody;
+    body = (await parseJsonBody(request)) as ResumeBody;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -164,7 +165,7 @@ export async function POST(
   // soft-mark. recentlyCalled and outOfSegment we compute only if their
   // respective skip flag is true (avoids unnecessary work).
   let recentSet = new Set<string>();
-  let outOfSegmentSet = new Set<string>();
+  const outOfSegmentSet = new Set<string>();
 
   if (pendingPhones.length > 0 && skipRecentlyCalled) {
     const recentCutoffIso = new Date(

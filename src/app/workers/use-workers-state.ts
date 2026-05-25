@@ -9,6 +9,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Types — match the API response.
@@ -62,7 +63,7 @@ export function useWorkersState() {
     try {
       const res = await fetch("/api/workers/state", { cache: "no-store" });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       const body = (await res.json()) as WorkersStateResponse;

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check, Star } from "lucide-react";
 import { usePinnedSegments } from "@/lib/pinnedSegments";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 interface Segment {
   id: number;
@@ -78,7 +79,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
       try {
         const res = await fetch("/api/customerio/segments");
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
+          const body = await parseJsonBody(res);
           setSegmentsError(body.error || `Failed to load segments (${res.status})`);
           return;
         }
@@ -120,7 +121,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     try {
       const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         throw new Error(body.error || `Failed (${res.status})`);
       }
       const body = await res.json();
@@ -178,7 +179,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     try {
       const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         setMembersError(body.error || `Failed to load members (${res.status})`);
         return;
       }
@@ -263,7 +264,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     try {
       const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await parseJsonBody(res);
         setMembersError(body.error || `Failed to load members (${res.status})`);
         return;
       }

@@ -161,7 +161,7 @@ export async function GET(
   const recentSet = new Set((recentRes.data ?? []).map((r) => r.phone_e164 as string));
 
   // ── 4. Compute the outOfSegment bucket (only if segment_id non-null) ──
-  let outOfSegmentSet = new Set<string>();
+  const outOfSegmentSet = new Set<string>();
   let outOfSegmentNote: string | undefined;
   let segmentSnapshotSize: number | undefined;
 

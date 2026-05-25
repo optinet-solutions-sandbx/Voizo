@@ -27,6 +27,7 @@ import {
   isTimezoneValidForCountry,
 } from "@/lib/audienceCountry";
 import { consumeDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 import { ClassicNewCampaignPage } from "./page-classic";
 import {
@@ -370,7 +371,7 @@ function WizardPage({
       try {
         const res = await fetch("/api/vapi/assistants");
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
+          const body = await parseJsonBody(res);
           setAssistantsError(body.error || `Failed to load assistants (${res.status})`);
           setAssistants([]);
           return;
@@ -415,7 +416,7 @@ function WizardPage({
         body: JSON.stringify(buildCloneRequest(state)),
       });
       if (!cloneRes.ok) {
-        const errBody = await cloneRes.json().catch(() => ({}));
+        const errBody = await parseJsonBody(cloneRes);
         throw new Error(errBody.error || `Clone failed (${cloneRes.status})`);
       }
       const clone = (await cloneRes.json()) as CloneResult;

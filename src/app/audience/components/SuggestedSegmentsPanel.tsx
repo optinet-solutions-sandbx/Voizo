@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight, Recycle } from "lucide-react";
 
 /**
  * SuggestedSegmentsPanel — proactive worklist for the Audience tab.
@@ -69,7 +69,7 @@ export default function SuggestedSegmentsPanel({ suggestions, onCarve }: Props) 
   return (
     <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/[0.04] p-4 mb-4">
       <div className="flex items-center gap-2 mb-3">
-        <Sparkles size={15} className="text-indigo-400" />
+        <Recycle size={15} className="text-indigo-400" />
         <h2 className="text-sm font-semibold text-[var(--text-1)]">
           Suggested for recycling ({suggestions.length})
         </h2>

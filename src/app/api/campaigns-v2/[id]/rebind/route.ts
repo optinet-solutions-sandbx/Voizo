@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { executeRebindCore } from "@/lib/vapi/rebindCore";
+import { parseJsonBody } from "@/lib/jsonBody";
 
 // Vapi cleanup chains up to 4 HTTP calls (GET base, POST new clone, PATCH slot,
 // optional rollback DELETE on failure). 30s mirrors the stop and eject budgets.
@@ -78,7 +79,7 @@ export async function POST(
   // ── Body parse (optional) ──
   let requestedWorkerSlot: number | "auto" | undefined;
   try {
-    const body = await request.json().catch(() => ({}));
+    const body = await parseJsonBody(request);
     const ws = (body as { worker_slot?: unknown })?.worker_slot;
     if (typeof ws === "number") {
       requestedWorkerSlot = ws;
