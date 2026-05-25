@@ -381,6 +381,15 @@ export async function POST(
       outOfSegment: softMarkedOutOfSegment,
     },
     ...rebindResult,
+    // Surface pre-rebind cleanup warnings so the operator UI can flag
+    // stale Vapi resources (e.g., an old slot that landed in 'maintenance'
+    // because the PATCH-null failed). Code-review feedback (2026-05-25):
+    // these were only console.warn'd before — operators had no signal that
+    // a resume left orphan resources behind. Heartbeat Rule 4 still retries
+    // maintenance recovery at 6h; this is informational, not load-bearing.
+    ...(preCleanup.vapiWarnings.length > 0
+      ? { preRebindWarnings: preCleanup.vapiWarnings }
+      : {}),
     ...(warning ? { warning } : {}),
   });
 }
