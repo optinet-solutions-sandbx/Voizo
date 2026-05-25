@@ -19,6 +19,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
+import { pauseReleasesSlot } from "@/lib/featureFlags";
 
 // Chain-next dial in this handler calls the originate-shim, which blocks 8-22s
 // on FS bgapi (memory project_freeswitch_bgapi_slow). Default Vercel timeout
@@ -140,7 +142,7 @@ export async function POST(request: NextRequest) {
 
   const { data: campaign } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("max_attempts, retry_interval_minutes, status, vapi_assistant_id, vapi_sip_uri, call_windows, timezone")
+    .select("name, max_attempts, retry_interval_minutes, status, vapi_assistant_id, vapi_pool_slot_id, vapi_sip_uri, call_windows, timezone")
     .eq("id", campaignId)
     .single();
 
@@ -194,10 +196,41 @@ export async function POST(request: NextRequest) {
   const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
   const timezone = campaign.timezone as string | null;
   if (callWindows && timezone && !isWithinCallWindow(callWindows, timezone)) {
-    await supabaseAdmin
+    // When PAUSE_RELEASES_SLOT is on (Phase 1+), clear Vapi pointers + run
+    // the shared cleanup helper. Flag off → today's behavior preserved.
+    //
+    // Also adds the .eq("status", "running") guard that was missing on the
+    // pre-existing UPDATE (design doc §1.3.c) — minor race fix free with
+    // this slice.
+    const releaseOnPause = pauseReleasesSlot();
+    const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+    const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+    const campaignName = campaign.name as string;
+
+    const updatePayload: Record<string, unknown> = { status: "paused" };
+    if (releaseOnPause) {
+      updatePayload.vapi_assistant_id = null;
+      updatePayload.vapi_pool_slot_id = null;
+      updatePayload.vapi_sip_uri = null;
+      updatePayload.last_paused_at = new Date().toISOString();
+    }
+
+    const { data: pausedUpdate } = await supabaseAdmin
       .from("campaigns_v2")
-      .update({ status: "paused" })
-      .eq("id", campaignId);
+      .update(updatePayload)
+      .eq("id", campaignId)
+      .eq("status", "running")
+      .select("id")
+      .single();
+
+    if (pausedUpdate && releaseOnPause) {
+      await performCampaignVapiCleanup(supabaseAdmin, {
+        vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+        campaignName,
+        vapiAssistantId: capturedAssistantId,
+        vapiPoolSlotId: capturedSlotId,
+      });
+    }
     return NextResponse.json({ received: true, next: "outside call window — paused" });
   }
 

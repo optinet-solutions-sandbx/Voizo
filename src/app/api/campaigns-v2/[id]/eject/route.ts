@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 
 // Vapi cleanup chains up to 3 HTTP calls (PATCH phone detach, GET clone inspect,
 // DELETE clone). 30s mirrors the stop endpoint's defensive budget.
@@ -92,120 +93,20 @@ export async function POST(
   const campaignName = (campaign.name as string) ?? id;
   const previousStatus = campaign.status as EjectableStatus;
 
-  // ── 2. Vapi cleanup (mirrors DELETE handler) ──
-  // Two paths routed by data, NOT by USE_SIP_POOL flag — keeps flag flips
-  // safe under in-flight campaigns:
-  //   - vapi_pool_slot_id present → pool path
-  //   - vapi_pool_slot_id null    → legacy per-campaign SIP path
-  const vapiKey = process.env.VAPI_PRIVATE_KEY;
-  const vapiWarnings: string[] = [];
-  let slotReleased: string | null = null;
-
-  if (vapiKey && campaign.vapi_assistant_id) {
-    if (campaign.vapi_pool_slot_id) {
-      // ── Pool path ──
-      const { data: slot } = await supabaseAdmin
-        .from("vapi_sip_pool")
-        .select("id, slot_index, vapi_phone_number_id")
-        .eq("id", campaign.vapi_pool_slot_id)
-        .maybeSingle();
-
-      if (slot) {
-        // PATCH null FIRST (detach assistant from SIP route) so no in-flight
-        // call hits a just-deleted assistant.
-        const { patchPhoneAssistant, releaseSlot } = await import("@/lib/vapi/sipPool");
-        const patch = await patchPhoneAssistant(vapiKey, slot.vapi_phone_number_id, null);
-        if (!patch.ok) {
-          vapiWarnings.push(`pool detach failed (${patch.status})`);
-          // Detach failed → mark slot maintenance so it doesn't get auto-leased
-          // again until operator clears it.
-          await supabaseAdmin
-            .from("vapi_sip_pool")
-            .update({
-              status: "maintenance",
-              notes: `eject detach failed @ ${new Date().toISOString()}: ${patch.body.slice(0, 200)}`,
-            })
-            .eq("id", slot.id);
-        } else {
-          const released = await releaseSlot(supabaseAdmin, slot.id).catch((err: Error) => {
-            vapiWarnings.push(`pool release failed: ${err.message}`);
-            return false;
-          });
-          if (released) {
-            slotReleased = `voizo-sip-pool-slot-${String(slot.slot_index).padStart(2, "0")}`;
-          }
-        }
-      } else {
-        vapiWarnings.push(`pool slot ${campaign.vapi_pool_slot_id} not found in vapi_sip_pool`);
-      }
-    } else {
-      // ── Legacy path (per-campaign SIP) ──
-      // Preserved bit-exact from the DELETE handler's pre-pool code.
-      try {
-        const phonesRes = await fetch("https://api.vapi.ai/phone-number", {
-          headers: { Authorization: `Bearer ${vapiKey}`, Accept: "application/json" },
-        });
-        if (phonesRes.ok) {
-          const phones = await phonesRes.json();
-          const match = phones.find(
-            (p: { assistantId?: string }) => p.assistantId === campaign.vapi_assistant_id,
-          );
-          if (match?.id) {
-            const delPhone = await fetch(`https://api.vapi.ai/phone-number/${match.id}`, {
-              method: "DELETE",
-              headers: { Authorization: `Bearer ${vapiKey}` },
-            });
-            if (!delPhone.ok) {
-              vapiWarnings.push(`phone cleanup failed (${delPhone.status})`);
-            }
-          }
-        }
-      } catch (err) {
-        vapiWarnings.push(`phone lookup failed: ${(err as Error).message}`);
-      }
-    }
-
-    // ── Common: delete the cloned assistant (with voizoClone safety guard) ──
-    // The guard is the same one that protects DELETE from the 2026-05-15
-    // incident where deleting an old paused campaign nuked the base agent
-    // (see campaigns-v2/[id]/route.ts:124-174 for the original incident
-    // commentary). GET assistant → require metadata.voizoClone === true →
-    // only then DELETE. If guard fails: log loudly, leave the (likely-base)
-    // assistant alive, accept the orphan clone as the lesser evil.
-    try {
-      const inspectRes = await fetch(
-        `https://api.vapi.ai/assistant/${campaign.vapi_assistant_id}`,
-        { headers: { Authorization: `Bearer ${vapiKey}` } },
-      );
-      if (inspectRes.status === 404) {
-        // Already gone — nothing to do.
-      } else if (!inspectRes.ok) {
-        vapiWarnings.push(
-          `assistant inspect failed (${inspectRes.status}); skipped delete for safety`,
-        );
-      } else {
-        const assistant = await inspectRes.json();
-        if (assistant.metadata?.voizoClone === true) {
-          const delAssistant = await fetch(
-            `https://api.vapi.ai/assistant/${campaign.vapi_assistant_id}`,
-            { method: "DELETE", headers: { Authorization: `Bearer ${vapiKey}` } },
-          );
-          if (!delAssistant.ok && delAssistant.status !== 404) {
-            vapiWarnings.push(`assistant cleanup failed (${delAssistant.status})`);
-          }
-        } else {
-          console.warn(
-            `[campaigns-v2/eject] REFUSED to delete assistant ${campaign.vapi_assistant_id} ` +
-            `(name: "${assistant.name ?? "unknown"}") — metadata.voizoClone is not true. ` +
-            `Possible base agent or pre-metadata clone. Manual Vapi cleanup needed if intentional.`,
-          );
-          vapiWarnings.push(`assistant not a voizoClone — skipped delete for safety`);
-        }
-      }
-    } catch (err) {
-      vapiWarnings.push(`assistant inspect/delete failed: ${(err as Error).message}`);
-    }
-  }
+  // ── 2. Vapi cleanup via shared helper ──
+  // Helper at src/lib/vapi/campaignVapiCleanup.ts is bit-exact behaviorally
+  // equivalent to the previous inline block. Two paths inside (pool vs
+  // legacy) routed by data, voizoClone safety guard preserved.
+  const vapiKey = process.env.VAPI_PRIVATE_KEY ?? "";
+  const { slotReleased, vapiWarnings } = await performCampaignVapiCleanup(
+    supabaseAdmin,
+    {
+      vapiKey,
+      campaignName,
+      vapiAssistantId: campaign.vapi_assistant_id as string | null,
+      vapiPoolSlotId: campaign.vapi_pool_slot_id as string | null,
+    },
+  );
 
   // ── 3. Terminal status flip ──
   // .in("status", EJECTABLE_STATUSES) guards against an operator-clicked

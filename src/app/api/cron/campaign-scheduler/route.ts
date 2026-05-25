@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
+import { pauseReleasesSlot } from "@/lib/featureFlags";
 import crypto from "crypto";
 
 // FS bgapi originate takes 8-22s per call. With 60s budget and limit(2),
@@ -224,15 +226,45 @@ export async function GET(request: NextRequest) {
     // `paused` for parity with the chain-next webhook (voice-status/route.ts).
     // Without this, the campaign would silently sit in `running` for hours
     // until the window opens — confusing operators and blocking the queue gate.
+    //
+    // When PAUSE_RELEASES_SLOT is on (Phase 1+), also clear Vapi pointers
+    // and release the slot via the shared helper, so the cron gate's
+    // leased-slot count reflects actual occupancy (paused campaigns no
+    // longer pin a worker).
     const cw = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
     const tz = campaign.timezone as string;
     if (cw && cw.length > 0 && !isWithinCallWindow(cw, tz)) {
-      await supabaseAdmin
+      const releaseOnPause = pauseReleasesSlot();
+      const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+      const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+
+      const updatePayload: Record<string, unknown> = { status: "paused" };
+      if (releaseOnPause) {
+        updatePayload.vapi_assistant_id = null;
+        updatePayload.vapi_pool_slot_id = null;
+        updatePayload.vapi_sip_uri = null;
+        updatePayload.last_paused_at = new Date().toISOString();
+      }
+
+      const { data: pausedUpdate } = await supabaseAdmin
         .from("campaigns_v2")
-        .update({ status: "paused" })
+        .update(updatePayload)
         .eq("id", campaignId)
-        .eq("status", "running");
-      resumeResults.push({ id: campaignId, name: campaignName, result: "paused_outside_window" });
+        .eq("status", "running")
+        .select("id")
+        .single();
+
+      let resultLabel = "paused_outside_window";
+      if (pausedUpdate && releaseOnPause) {
+        const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+          vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+          campaignName,
+          vapiAssistantId: capturedAssistantId,
+          vapiPoolSlotId: capturedSlotId,
+        });
+        if (slotReleased) resultLabel = "paused_outside_window:slot_released";
+      }
+      resumeResults.push({ id: campaignId, name: campaignName, result: resultLabel });
       continue;
     }
 

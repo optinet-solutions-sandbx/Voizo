@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
+import { pauseReleasesSlot } from "@/lib/featureFlags";
 
 // In-flight Vapi call termination may issue 1 HTTP DELETE per active call.
 // Queue gate at 1 means typically max 1 termination; defensive 30s budget.
@@ -60,16 +62,52 @@ export async function POST(
     return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
   }
 
-  // ── 1. Atomic status flip: running → paused ──
+  // ── 1. Read the campaign first ──
+  // When PAUSE_RELEASES_SLOT is on (Phase 1+), we need vapi_assistant_id
+  // and vapi_pool_slot_id BEFORE the UPDATE clears them so the cleanup
+  // helper has what it needs. Reading first costs one DB roundtrip but
+  // keeps the race-guarded atomic UPDATE intact below.
+  const { data: campaign, error: selectErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("id, name, status, vapi_assistant_id, vapi_pool_slot_id")
+    .eq("id", id)
+    .single();
+
+  if (selectErr || !campaign || campaign.status !== "running") {
+    return NextResponse.json(
+      {
+        error: "Campaign not currently running (already paused / completed / archived, or not found).",
+        paused: false,
+      },
+      { status: 409 },
+    );
+  }
+
+  const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+  const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+  const campaignName = (campaign.name as string) ?? id;
+
+  // ── 2. Atomic status flip: running → paused ──
   // The .eq("status","running") guard prevents stomping a concurrent
-  // Pause or a state already resolved by a different path. If the
-  // campaign isn't currently `running`, this is a no-op and we return 409.
+  // Pause or a state already resolved by a different path. When the
+  // PAUSE_RELEASES_SLOT flag is on, ALSO clear the Vapi pointer fields
+  // in the same UPDATE so the campaign row reflects "no longer holding
+  // resources" before the cleanup runs.
+  const releaseOnPause = pauseReleasesSlot();
+  const updatePayload: Record<string, unknown> = { status: "paused" };
+  if (releaseOnPause) {
+    updatePayload.vapi_assistant_id = null;
+    updatePayload.vapi_pool_slot_id = null;
+    updatePayload.vapi_sip_uri = null;
+    updatePayload.last_paused_at = new Date().toISOString();
+  }
+
   const { data: updated, error: updateErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .update({ status: "paused" })
+    .update(updatePayload)
     .eq("id", id)
     .eq("status", "running")
-    .select("id, name")
+    .select("id")
     .single();
 
   if (updateErr || !updated) {
@@ -82,8 +120,7 @@ export async function POST(
     );
   }
 
-  const campaignName = (updated.name as string) ?? id;
-  console.log(`[campaign-stop] ${campaignName}: status flipped running → paused`);
+  console.log(`[campaign-stop] ${campaignName}: status flipped running → paused${releaseOnPause ? " (slot release on)" : ""}`);
 
   // ── 2. Find in-flight calls + attempt Vapi termination ──
   // Queue gate at 1 means we typically see 0 or 1 in-flight call here.
@@ -171,6 +208,23 @@ export async function POST(
     }
   }
 
+  // ── 3. Flag-gated Vapi cleanup (Phase 0 SIP slot release on pause) ──
+  // When flag is OFF (default): no-op, clone + slot stay alive (today's behavior).
+  // When flag is ON (Phase 1+): release the slot + delete the clone via the
+  // shared helper, same as eject path.
+  let slotReleased: string | null = null;
+  const vapiWarnings: string[] = [];
+  if (releaseOnPause) {
+    const result = await performCampaignVapiCleanup(supabaseAdmin, {
+      vapiKey: vapiKey ?? "",
+      campaignName,
+      vapiAssistantId: capturedAssistantId,
+      vapiPoolSlotId: capturedSlotId,
+    });
+    slotReleased = result.slotReleased;
+    vapiWarnings.push(...result.vapiWarnings);
+  }
+
   // Audit log — structured single line for post-incident review.
   const inFlightCount = inFlightCalls?.length ?? 0;
   console.log(
@@ -180,6 +234,8 @@ export async function POST(
       campaignName,
       inFlightCount,
       terminations: terminationResults,
+      slotReleased,
+      vapiWarnings,
       timestamp: new Date().toISOString(),
     }),
   );
@@ -193,6 +249,8 @@ export async function POST(
     // not terminate live audio in this release. terminationResults is for
     // future Phase 1 follow-up that wires actual call termination.
     terminations: terminationResults,
+    ...(slotReleased ? { slotReleased } : {}),
+    ...(vapiWarnings.length > 0 ? { vapiWarnings } : {}),
     note: inFlightCount > 0
       ? `${inFlightCount} in-flight call(s) will end naturally within ~60 seconds.`
       : "No calls were in flight.",
