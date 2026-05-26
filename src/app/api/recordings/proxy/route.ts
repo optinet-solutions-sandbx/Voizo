@@ -38,9 +38,17 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // redirect: "error" — refuse to chase redirects. The `startsWith` guard
+  // only validates the initial URL; without this, a future Vapi CDN that
+  // 302s elsewhere would let the proxy reach hosts outside the allowlist.
+  // signal: 30s timeout — caps Vercel function tie-up if Vapi storage
+  // hangs. Single-recording audio is <5 MB typical; 30s is generous.
   let upstream: Response;
   try {
-    upstream = await fetch(urlParam);
+    upstream = await fetch(urlParam, {
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
   } catch (err) {
     return NextResponse.json(
       { error: `Upstream fetch failed: ${(err as Error).message}` },
