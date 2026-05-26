@@ -595,6 +595,20 @@ export async function POST(request: NextRequest) {
   // fetch the call object once. ~200ms latency; only triggers on miss; well
   // within the 20s webhook timeout configured in cloneAssistant.ts. Failure
   // is logged and non-fatal — the rest of the UPDATE proceeds without a URL.
+  // Unconditional diagnostic (2026-05-26 commit 9): logs the runtime state at
+  // the moment of the re-fetch decision so we can see why the fallback may be
+  // silently skipping. Observed in prod: artifact was empty, vapiCallId was
+  // present, but no [end-of-call] markers appeared in logs — pointing at the
+  // `if (vapiKey)` check returning false. This line tells us definitively
+  // whether process.env.VAPI_PRIVATE_KEY is accessible in the webhook function's
+  // runtime. Remove after diagnosis is complete.
+  console.log(
+    `[end-of-call-debug] pre-refetch: hasRecordingUrl=${Boolean(recordingUrl)} ` +
+    `vapiCallId=${vapiCallId ?? "missing"} ` +
+    `hasVapiKey=${Boolean(process.env.VAPI_PRIVATE_KEY)} ` +
+    `vapiKeyLen=${(process.env.VAPI_PRIVATE_KEY ?? "").length}`,
+  );
+
   if (!recordingUrl && vapiCallId) {
     try {
       const vapiKey = process.env.VAPI_PRIVATE_KEY;
