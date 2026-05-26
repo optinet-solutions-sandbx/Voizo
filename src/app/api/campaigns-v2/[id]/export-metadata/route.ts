@@ -69,10 +69,23 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // Origin guard — block external tooling. Substring match (the prior
+  // `origin.includes(host)`) was unsafe because hosts like
+  // `evil-voizo-eight.vercel.app` contain `voizo-eight.vercel.app` as a
+  // substring and bypassed the check. Parse Origin and compare hostnames
+  // exactly. Missing Origin is allowed (browsers omit it on same-origin
+  // GETs — read-only GET endpoint so leniency is intentional, matches the
+  // csrf-origin-check-get-lenient guidance).
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
-  if (origin && host && !origin.includes(host)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (origin && host) {
+    try {
+      if (new URL(origin).host !== host) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   const { id: campaignId } = await params;
