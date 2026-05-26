@@ -610,9 +610,15 @@ export async function POST(request: NextRequest) {
   );
 
   if (!recordingUrl && vapiCallId) {
-    try {
-      const vapiKey = process.env.VAPI_PRIVATE_KEY;
-      if (vapiKey) {
+    const vapiKey = process.env.VAPI_PRIVATE_KEY;
+    if (!vapiKey) {
+      console.error(
+        `[end-of-call] VAPI_PRIVATE_KEY missing at webhook runtime — ` +
+        `recording URL recovery disabled. Cron /api/cron/recording-backfill ` +
+        `will retry. vapiCallId=${vapiCallId}`,
+      );
+    } else {
+      try {
         const refetch = await fetch(`https://api.vapi.ai/call/${encodeURIComponent(vapiCallId)}`, {
           headers: { Authorization: `Bearer ${vapiKey}` },
           signal: AbortSignal.timeout(5000),
@@ -630,9 +636,9 @@ export async function POST(request: NextRequest) {
         } else {
           console.warn(`[end-of-call] vapi re-fetch returned ${refetch.status} for call ${vapiCallId}`);
         }
+      } catch (err) {
+        console.warn(`[end-of-call] vapi recording re-fetch failed for call ${vapiCallId}:`, err);
       }
-    } catch (err) {
-      console.warn(`[end-of-call] vapi recording re-fetch failed for call ${vapiCallId}:`, err);
     }
   }
 
