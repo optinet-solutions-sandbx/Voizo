@@ -69,10 +69,23 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // Origin guard — block external tooling. Substring match (the prior
+  // `origin.includes(host)`) was unsafe because hosts like
+  // `evil-voizo-eight.vercel.app` contain `voizo-eight.vercel.app` as a
+  // substring and bypassed the check. Parse Origin and compare hostnames
+  // exactly. Missing Origin is allowed (browsers omit it on same-origin
+  // GETs — read-only GET endpoint so leniency is intentional, matches the
+  // csrf-origin-check-get-lenient guidance).
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
-  if (origin && host && !origin.includes(host)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (origin && host) {
+    try {
+      if (new URL(origin).host !== host) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   const { id: campaignId } = await params;
@@ -123,9 +136,21 @@ export async function GET(
     query = query.eq("outcome", "wrong_number");
   }
 
+  // Explicit upper bound. PostgREST defaults to 1000 rows when no range is
+  // requested, which silently truncates exports for any campaign with >1000
+  // leads matching the filter. 10k is a generous PoC ceiling — anything
+  // larger should paginate (separate follow-up). Note: this caps the lead
+  // (campaign_numbers_v2) rows; embedded calls_v2 / sms_messages_v2 arrays
+  // are not separately bounded per PostgREST behavior.
+  query = query.range(0, 9999);
+
   const { data: numbers, error } = await query;
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Log server-side with full detail; return generic message to the
+    // client to avoid leaking column / constraint / RLS hints. Behind
+    // Basic Auth so impact is bounded, but least-disclosure is the rule.
+    console.error("[export-metadata] supabase query failed:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 
   let processed = ((numbers as unknown as RawNumber[] | null) ?? []).map((n) => {

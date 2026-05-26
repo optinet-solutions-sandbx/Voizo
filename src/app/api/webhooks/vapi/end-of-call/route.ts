@@ -241,7 +241,15 @@ export async function POST(request: NextRequest) {
   // Temporary diagnostic for Vapi support ticket — full call object inspection.
   // Requested by Vapi Composer to determine if analysisPlan is present on the
   // call object in the webhook payload. Remove once Vapi resolves the issue.
-  const artifact = vapiCall?.artifact as Record<string, unknown> | undefined;
+  //
+  // Artifact-path note (2026-05-26): Vapi's end-of-call-report webhook payload
+  // delivers `artifact` as a sibling of `message.call`, NOT nested inside it.
+  // The earlier `vapiCall?.artifact` binding yielded undefined for every real
+  // webhook (visible only in the silent NULL recording_url writes after Phase 1
+  // shipped). Read `message.artifact` first; keep `vapiCall.artifact` as a
+  // fallback in case Vapi ever ships the alternate shape — confirmed empirically
+  // against an API-fetched call object where artifact IS on the call.
+  const artifact = (message.artifact ?? vapiCall?.artifact) as Record<string, unknown> | undefined;
   console.log(
     `[vapi-diag] call-object: ` +
     JSON.stringify({
@@ -565,12 +573,54 @@ export async function POST(request: NextRequest) {
   // Extract recording URL from Vapi's artifact (canonical path) with legacy
   // fallback. Persisted to calls_v2.recording_url for the export feature
   // (avoids per-call Vapi API re-fetches at export time per Vapi support's own
-  // recommendation). Top-level vapiCall.recordingUrl is marked deprecated by
-  // Vapi but currently still populated as of 2026-05-25 — kept as a fallback.
+  // recommendation). The deprecated top-level recordingUrl actually lives at
+  // `artifact.recordingUrl` in the webhook payload (sibling of `recording`),
+  // not on the call object — verified 2026-05-26 against a real PH test call.
   const recordingMono = (artifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
-  const recordingUrl =
+  let recordingUrl: string | null =
     (typeof recordingMono?.combinedUrl === "string" ? recordingMono.combinedUrl : null) ??
-    (typeof vapiCall?.recordingUrl === "string" ? vapiCall.recordingUrl : null);
+    (typeof artifact?.recordingUrl === "string" ? (artifact.recordingUrl as string) : null);
+
+  // Async-race fallback (2026-05-26): Vapi serializes the end-of-call-report
+  // payload at the moment the call ENDS, then asynchronously uploads the
+  // recording to storage.vapi.ai over the following ~3-10 seconds. For short
+  // calls especially, the recording isn't ready by the time Vapi snapshots
+  // the webhook body — so the URL is missing from the payload we receive,
+  // even though it lands in storage seconds later. Empirically verified
+  // 2026-05-26 against a 26-second test call: recording uploaded 5.3s
+  // after call-end; our handler ran 8s after call-end; payload URL was
+  // null but the GET /call/{id} API returned all three URL paths populated.
+  //
+  // Fallback: when the webhook payload lacks the URL and we have vapiCallId,
+  // fetch the call object once. ~200ms latency; only triggers on miss; well
+  // within the 20s webhook timeout configured in cloneAssistant.ts. Failure
+  // is logged and non-fatal — the rest of the UPDATE proceeds without a URL.
+  if (!recordingUrl && vapiCallId) {
+    try {
+      const vapiKey = process.env.VAPI_PRIVATE_KEY;
+      if (vapiKey) {
+        const refetch = await fetch(`https://api.vapi.ai/call/${encodeURIComponent(vapiCallId)}`, {
+          headers: { Authorization: `Bearer ${vapiKey}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (refetch.ok) {
+          const callObj = await refetch.json() as Record<string, unknown>;
+          const objArtifact = callObj.artifact as Record<string, unknown> | undefined;
+          const objMono = (objArtifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
+          recordingUrl =
+            (typeof objMono?.combinedUrl === "string" ? objMono.combinedUrl : null) ??
+            (typeof objArtifact?.recordingUrl === "string" ? (objArtifact.recordingUrl as string) : null);
+          if (recordingUrl) {
+            console.log(`[end-of-call] recording URL recovered via API re-fetch for call ${vapiCallId}`);
+          }
+        } else {
+          console.warn(`[end-of-call] vapi re-fetch returned ${refetch.status} for call ${vapiCallId}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[end-of-call] vapi recording re-fetch failed for call ${vapiCallId}:`, err);
+    }
+  }
 
   // ── Update calls_v2 with transcript, goal_reached, and recording_url ──
   await supabaseAdmin
