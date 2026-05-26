@@ -241,7 +241,15 @@ export async function POST(request: NextRequest) {
   // Temporary diagnostic for Vapi support ticket — full call object inspection.
   // Requested by Vapi Composer to determine if analysisPlan is present on the
   // call object in the webhook payload. Remove once Vapi resolves the issue.
-  const artifact = vapiCall?.artifact as Record<string, unknown> | undefined;
+  //
+  // Artifact-path note (2026-05-26): Vapi's end-of-call-report webhook payload
+  // delivers `artifact` as a sibling of `message.call`, NOT nested inside it.
+  // The earlier `vapiCall?.artifact` binding yielded undefined for every real
+  // webhook (visible only in the silent NULL recording_url writes after Phase 1
+  // shipped). Read `message.artifact` first; keep `vapiCall.artifact` as a
+  // fallback in case Vapi ever ships the alternate shape — confirmed empirically
+  // against an API-fetched call object where artifact IS on the call.
+  const artifact = (message.artifact ?? vapiCall?.artifact) as Record<string, unknown> | undefined;
   console.log(
     `[vapi-diag] call-object: ` +
     JSON.stringify({
@@ -565,12 +573,13 @@ export async function POST(request: NextRequest) {
   // Extract recording URL from Vapi's artifact (canonical path) with legacy
   // fallback. Persisted to calls_v2.recording_url for the export feature
   // (avoids per-call Vapi API re-fetches at export time per Vapi support's own
-  // recommendation). Top-level vapiCall.recordingUrl is marked deprecated by
-  // Vapi but currently still populated as of 2026-05-25 — kept as a fallback.
+  // recommendation). The deprecated top-level recordingUrl actually lives at
+  // `artifact.recordingUrl` in the webhook payload (sibling of `recording`),
+  // not on the call object — verified 2026-05-26 against a real PH test call.
   const recordingMono = (artifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
   const recordingUrl =
     (typeof recordingMono?.combinedUrl === "string" ? recordingMono.combinedUrl : null) ??
-    (typeof vapiCall?.recordingUrl === "string" ? vapiCall.recordingUrl : null);
+    (typeof artifact?.recordingUrl === "string" ? (artifact.recordingUrl as string) : null);
 
   // ── Update calls_v2 with transcript, goal_reached, and recording_url ──
   await supabaseAdmin
