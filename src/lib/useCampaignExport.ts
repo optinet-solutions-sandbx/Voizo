@@ -73,6 +73,7 @@ export interface ExportProgress {
 }
 
 const AUDIO_CONCURRENCY = 5;
+const AUDIO_BUNDLE_MAX = 500;
 
 // Prevent CSV formula injection. Cells whose first character is one of
 // = + - @ \t \r are interpreted as a formula by Excel / LibreOffice / Sheets
@@ -97,7 +98,10 @@ function csvPhoneCell(phone: string): string {
 }
 
 function buildCsv(leads: ExportLead[], includeSmsCols: boolean): string {
-  const BOM = "﻿";
+  // UTF-8 BOM (U+FEFF). Written as the explicit escape — a literal U+FEFF
+  // is invisible in source, and a formatter or invisible-Unicode lint rule
+  // could silently strip it, breaking Excel's encoding detection.
+  const BOM = "\uFEFF";
   const headers = [
     "Phone",
     "Outcome",
@@ -231,7 +235,12 @@ export function useCampaignExport(campaignId: string) {
           throw new Error(`Metadata fetch returned HTTP ${res.status}`);
         }
         const payload = await res.json();
-        const leads: ExportLead[] = payload.data ?? [];
+        // Defensive: the endpoint could return `{error: "..."}` with HTTP 200
+        // in unexpected paths; Array.isArray guards against `.length` crashing
+        // on a non-array.
+        const leads: ExportLead[] = Array.isArray(payload?.data)
+          ? (payload.data as ExportLead[])
+          : [];
 
         if (leads.length === 0) {
           throw new Error("No data matches this filter.");
@@ -268,6 +277,19 @@ export function useCampaignExport(campaignId: string) {
         const total = queue.length;
         if (total === 0) {
           throw new Error("No call recordings exist for this filter.");
+        }
+
+        // Cap audio bundles. JSZip materializes the entire archive in
+        // browser memory before download; 500 recordings × ~2 MB ≈ 1 GB
+        // resident heap, which OOMs Chrome around 2 GB. Refuse rather
+        // than crash the tab. Operators can refine the filter or split
+        // the export by outcome category.
+        if (total > AUDIO_BUNDLE_MAX) {
+          throw new Error(
+            `Audio bundles are limited to ${AUDIO_BUNDLE_MAX} recordings ` +
+              `(this filter has ${total}). Refine the filter or split by ` +
+              `outcome category.`,
+          );
         }
 
         setProgress({
