@@ -136,9 +136,21 @@ export async function GET(
     query = query.eq("outcome", "wrong_number");
   }
 
+  // Explicit upper bound. PostgREST defaults to 1000 rows when no range is
+  // requested, which silently truncates exports for any campaign with >1000
+  // leads matching the filter. 10k is a generous PoC ceiling — anything
+  // larger should paginate (separate follow-up). Note: this caps the lead
+  // (campaign_numbers_v2) rows; embedded calls_v2 / sms_messages_v2 arrays
+  // are not separately bounded per PostgREST behavior.
+  query = query.range(0, 9999);
+
   const { data: numbers, error } = await query;
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Log server-side with full detail; return generic message to the
+    // client to avoid leaking column / constraint / RLS hints. Behind
+    // Basic Auth so impact is bounded, but least-disclosure is the rule.
+    console.error("[export-metadata] supabase query failed:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 
   let processed = ((numbers as unknown as RawNumber[] | null) ?? []).map((n) => {
