@@ -382,7 +382,7 @@ export async function createClone(
         maxRetries: 6,
       },
     },
-    // ── Webhook server config: HARD PIN Voizo's URL (no fallback to base) ──
+    // ── Webhook server config: PIN to Voizo's URL (no fallback to base) ──
     // Previously fell back to base.server.url if set, allowing Maria's test
     // webhook URLs to silently capture clone end-of-call events. Voizo must
     // own webhook routing — base authority over this field was a footgun.
@@ -390,12 +390,25 @@ export async function createClone(
     // never dispatches, and the call shows "completed" forever with no
     // outcome on the dashboard.
     //
-    // If we ever need a different webhook URL per environment, pull from
-    // process.env (e.g., NEXT_PUBLIC_APP_URL) — never from base.
+    // URL resolution (2026-05-26): the URL is now env-driven via
+    // VAPI_WEBHOOK_URL with the prod URL as a fallback. This lets us route
+    // new clones' end-of-call events to a Vercel preview deployment when we
+    // need to verify webhook-handler code changes BEFORE merging to main.
+    // Without this, the previous hard-pin meant preview-deployment dashboards
+    // still routed their clones' webhooks to prod, masking webhook bugs that
+    // only surfaced after main was merged. The env var is operator-controlled
+    // (not assistant-config-controlled), so the original threat model — base
+    // assistants overriding our webhook URL via their own server config — is
+    // unchanged. Set VAPI_WEBHOOK_URL in Vercel's Preview env scope only;
+    // never in Production env (production should always use the prod URL
+    // via the explicit default below).
     server: (() => {
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
+      const webhookUrl =
+        process.env.VAPI_WEBHOOK_URL ??
+        "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
       return {
-        url: "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call",
+        url: webhookUrl,
         timeoutSeconds: 20,
         ...(webhookSecret ? { secret: webhookSecret } : {}),
       };
