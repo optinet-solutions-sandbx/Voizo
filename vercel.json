@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/campaign-heartbeat",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/recording-backfill",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
