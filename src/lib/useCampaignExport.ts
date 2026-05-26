@@ -74,9 +74,19 @@ export interface ExportProgress {
 
 const AUDIO_CONCURRENCY = 5;
 
+// Prevent CSV formula injection. Cells whose first character is one of
+// = + - @ \t \r are interpreted as a formula by Excel / LibreOffice / Sheets
+// when the operator opens the export. Transcript text and Mobivate
+// error_message values are attacker-influenced (caller speech is STT'd into
+// transcript; Mobivate error strings come from the SMS provider) — both
+// could legitimately start with one of those chars. Prefixing with a single
+// quote disarms the formula without changing the visible value beyond the
+// leading apostrophe. csvPhoneCell intentionally remains a formula and is
+// exempt — it's our own controlled `="+44..."` literal.
 function csvCell(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return `"${s.replace(/"/g, '""')}"`;
 }
 
