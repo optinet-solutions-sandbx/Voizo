@@ -159,12 +159,15 @@ export async function POST(
       .single();
 
     if (completedUpdate && releaseOnComplete) {
-      await performCampaignVapiCleanup(supabaseAdmin, {
+      const { vapiWarnings } = await performCampaignVapiCleanup(supabaseAdmin, {
         vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
         campaignName,
         vapiAssistantId: capturedAssistantId,
         vapiPoolSlotId: capturedSlotId,
       });
+      if (vapiWarnings.length > 0) {
+        console.warn(`[campaigns-v2.start.complete] ${campaignName}: cleanup warnings: ${vapiWarnings.join(" | ")}`);
+      }
     }
     return NextResponse.json({ message: "No eligible numbers to dial. Campaign completed." });
   }

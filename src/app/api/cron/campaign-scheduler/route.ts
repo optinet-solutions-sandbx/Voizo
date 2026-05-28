@@ -302,13 +302,16 @@ export async function GET(request: NextRequest) {
 
         let resultLabel = "auto_completed";
         if (completedUpdate && releaseOnComplete) {
-          const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+          const { slotReleased, vapiWarnings } = await performCampaignVapiCleanup(supabaseAdmin, {
             vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
             campaignName,
             vapiAssistantId: capturedAssistantId,
             vapiPoolSlotId: capturedSlotId,
           });
           if (slotReleased) resultLabel = "auto_completed:slot_released";
+          if (vapiWarnings.length > 0) {
+            console.warn(`[scheduler.resume.complete] ${campaignName}: cleanup warnings: ${vapiWarnings.join(" | ")}`);
+          }
         }
         resumeResults.push({ id: campaignId, name: campaignName, result: resultLabel });
       }
@@ -459,13 +462,16 @@ export async function GET(request: NextRequest) {
 
       let resultLabel = "no_eligible_numbers";
       if (completedUpdate && releaseOnComplete) {
-        const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+        const { slotReleased, vapiWarnings } = await performCampaignVapiCleanup(supabaseAdmin, {
           vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
           campaignName,
           vapiAssistantId: capturedAssistantId,
           vapiPoolSlotId: capturedSlotId,
         });
         if (slotReleased) resultLabel = "no_eligible_numbers:slot_released";
+        if (vapiWarnings.length > 0) {
+          console.warn(`[scheduler.start.complete] ${campaignName}: cleanup warnings: ${vapiWarnings.join(" | ")}`);
+        }
       }
       results.push({ id: campaignId, name: campaignName, result: resultLabel });
       continue;

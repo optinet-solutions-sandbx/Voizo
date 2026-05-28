@@ -287,7 +287,15 @@ export default function StepSchedule({ state, dispatch }: Props) {
                   : new Date(state.scheduledDate);
               if (Number.isNaN(effectiveStart.getTime())) return null;
 
-              const expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+              // Intl.DateTimeFormat throws RangeError on malformed timezone.
+              // The form-submit validator will surface a friendlier error;
+              // here we just suppress the banner so the render doesn't crash.
+              let expectedDay: string;
+              try {
+                expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+              } catch {
+                return null;
+              }
               const enabledDayKeys = enabledRows.map((r) => r.day);
               if (enabledDayKeys.includes(expectedDay as Day)) return null;
 

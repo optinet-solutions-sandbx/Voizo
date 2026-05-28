@@ -657,7 +657,18 @@ export function validateBeforeSubmit(state: WizardState): string | null {
       state.startMode === "delay"
         ? new Date(Date.now() + state.delayMinutes * 60_000)
         : new Date(state.scheduledDate);
-    const expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+    if (Number.isNaN(effectiveStart.getTime())) {
+      return "Pick a valid start date.";
+    }
+    let expectedDay: string;
+    try {
+      // Throws RangeError if state.timezone is empty/malformed. Should be
+      // unreachable via the wizard UI (timezone is a controlled dropdown),
+      // but guard defensively so a corrupted state doesn't crash the form.
+      expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+    } catch {
+      return "Campaign timezone is invalid. Re-pick the audience or timezone.";
+    }
     const enabledDays = new Set<string>(enabledRows.map((r) => r.day));
     if (!enabledDays.has(expectedDay)) {
       return `Start time falls on ${expectedDay.toUpperCase()} (in ${state.timezone}) but no call window is enabled for ${expectedDay.toUpperCase()}. Toggle ${expectedDay.toUpperCase()} on above, or change the start time.`;
