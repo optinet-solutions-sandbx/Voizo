@@ -273,13 +273,44 @@ export async function GET(request: NextRequest) {
       // Nothing due AND nothing waiting → genuinely complete (self-heal).
       // Conditional WHERE status='running' prevents stomping a concurrent
       // operator Pause action.
+      //
+      // When PAUSE_RELEASES_SLOT is on, also clear Vapi pointers + release
+      // the SIP slot via the shared cleanup helper. The flag controls BOTH
+      // pause and complete eject by design — single operator knob, shared
+      // semantics with the outside-window pause block above. Without this,
+      // 5 consecutive auto-completions exhaust the SIP pool with Manual
+      // Eject as the only recovery.
       if (!(await hasPendingRetry(campaignId))) {
-        await supabaseAdmin
+        const releaseOnComplete = pauseReleasesSlot();
+        const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+        const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+
+        const completePayload: Record<string, unknown> = { status: "completed" };
+        if (releaseOnComplete) {
+          completePayload.vapi_assistant_id = null;
+          completePayload.vapi_pool_slot_id = null;
+          completePayload.vapi_sip_uri = null;
+        }
+
+        const { data: completedUpdate } = await supabaseAdmin
           .from("campaigns_v2")
-          .update({ status: "completed" })
+          .update(completePayload)
           .eq("id", campaignId)
-          .eq("status", "running");
-        resumeResults.push({ id: campaignId, name: campaignName, result: "auto_completed" });
+          .eq("status", "running")
+          .select("id")
+          .single();
+
+        let resultLabel = "auto_completed";
+        if (completedUpdate && releaseOnComplete) {
+          const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+            vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+            campaignName,
+            vapiAssistantId: capturedAssistantId,
+            vapiPoolSlotId: capturedSlotId,
+          });
+          if (slotReleased) resultLabel = "auto_completed:slot_released";
+        }
+        resumeResults.push({ id: campaignId, name: campaignName, result: resultLabel });
       }
       continue;
     }
@@ -404,12 +435,39 @@ export async function GET(request: NextRequest) {
         results.push({ id: campaignId, name: campaignName, result: "idle_waiting_retry" });
         continue;
       }
-      await supabaseAdmin
+      // Genuinely empty draft → completed. Mirror the resume-sweep auto-complete:
+      // when PAUSE_RELEASES_SLOT is on, also release the SIP slot so the pool
+      // count tracks actual occupancy. Same flag covers pause + complete.
+      const releaseOnComplete = pauseReleasesSlot();
+      const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+      const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+
+      const completePayload: Record<string, unknown> = { status: "completed" };
+      if (releaseOnComplete) {
+        completePayload.vapi_assistant_id = null;
+        completePayload.vapi_pool_slot_id = null;
+        completePayload.vapi_sip_uri = null;
+      }
+
+      const { data: completedUpdate } = await supabaseAdmin
         .from("campaigns_v2")
-        .update({ status: "completed" })
+        .update(completePayload)
         .eq("id", campaignId)
-        .eq("status", "running");
-      results.push({ id: campaignId, name: campaignName, result: "no_eligible_numbers" });
+        .eq("status", "running")
+        .select("id")
+        .single();
+
+      let resultLabel = "no_eligible_numbers";
+      if (completedUpdate && releaseOnComplete) {
+        const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+          vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+          campaignName,
+          vapiAssistantId: capturedAssistantId,
+          vapiPoolSlotId: capturedSlotId,
+        });
+        if (slotReleased) resultLabel = "no_eligible_numbers:slot_released";
+      }
+      results.push({ id: campaignId, name: campaignName, result: resultLabel });
       continue;
     }
 

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
+import { pauseReleasesSlot } from "@/lib/featureFlags";
 
 // FreeSWITCH bgapi originate callback fires 8-22s after the command is sent on
 // this box (memory project_freeswitch_bgapi_slow). The originate-shim's own
@@ -132,11 +134,38 @@ export async function POST(
         waiting: true,
       });
     }
-    await supabaseAdmin
+    // Operator hit Start on a campaign with no dialable work → completed.
+    // Mirror the auto-eject pattern from the scheduler + chain-next webhook:
+    // when PAUSE_RELEASES_SLOT is on, capture Vapi pointers and run the
+    // shared cleanup helper. Same flag covers pause and complete eject.
+    const releaseOnComplete = pauseReleasesSlot();
+    const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+    const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+    const campaignName = campaign.name as string;
+
+    const completePayload: Record<string, unknown> = { status: "completed" };
+    if (releaseOnComplete) {
+      completePayload.vapi_assistant_id = null;
+      completePayload.vapi_pool_slot_id = null;
+      completePayload.vapi_sip_uri = null;
+    }
+
+    const { data: completedUpdate } = await supabaseAdmin
       .from("campaigns_v2")
-      .update({ status: "completed" })
+      .update(completePayload)
       .eq("id", id)
-      .eq("status", "running");
+      .eq("status", "running")
+      .select("id")
+      .single();
+
+    if (completedUpdate && releaseOnComplete) {
+      await performCampaignVapiCleanup(supabaseAdmin, {
+        vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+        campaignName,
+        vapiAssistantId: capturedAssistantId,
+        vapiPoolSlotId: capturedSlotId,
+      });
+    }
     return NextResponse.json({ message: "No eligible numbers to dial. Campaign completed." });
   }
 

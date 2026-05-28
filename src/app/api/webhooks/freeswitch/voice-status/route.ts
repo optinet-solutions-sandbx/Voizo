@@ -242,11 +242,38 @@ export async function POST(request: NextRequest) {
     if (await hasPendingRetry(campaignId)) {
       return NextResponse.json({ received: true, next: "idle — waiting for retry window" });
     }
-    await supabaseAdmin
+    // Mirror the outside-window pause block above: when PAUSE_RELEASES_SLOT
+    // is on, capture Vapi pointers, clear them in the same UPDATE, and run
+    // the shared cleanup helper. Same flag intentionally controls both pause
+    // and complete eject (single operator knob, shared semantics).
+    const releaseOnComplete = pauseReleasesSlot();
+    const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+    const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+    const campaignName = campaign.name as string;
+
+    const completePayload: Record<string, unknown> = { status: "completed" };
+    if (releaseOnComplete) {
+      completePayload.vapi_assistant_id = null;
+      completePayload.vapi_pool_slot_id = null;
+      completePayload.vapi_sip_uri = null;
+    }
+
+    const { data: completedUpdate } = await supabaseAdmin
       .from("campaigns_v2")
-      .update({ status: "completed" })
+      .update(completePayload)
       .eq("id", campaignId)
-      .eq("status", "running");
+      .eq("status", "running")
+      .select("id")
+      .single();
+
+    if (completedUpdate && releaseOnComplete) {
+      await performCampaignVapiCleanup(supabaseAdmin, {
+        vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+        campaignName,
+        vapiAssistantId: capturedAssistantId,
+        vapiPoolSlotId: capturedSlotId,
+      });
+    }
     return NextResponse.json({ received: true, next: "campaign completed" });
   }
 
