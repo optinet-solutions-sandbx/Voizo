@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
 // One backfill tick: SELECT up to 100 candidate rows, fetch each from Vapi
@@ -105,6 +106,7 @@ export async function GET(request: NextRequest) {
 
   if (!rows || rows.length === 0) {
     console.log("[recording-backfill] no candidate rows");
+    await recordHeartbeat(supabaseAdmin, CRON_NAMES.recordingBackfill);
     return NextResponse.json({ scanned: 0, fetched: 0, updated: 0, errors: 0, no_url_yet: 0 });
   }
 
@@ -141,6 +143,7 @@ export async function GET(request: NextRequest) {
     `errors=${counts.errors} no_url_yet=${counts.no_url_yet}`,
   );
 
+  await recordHeartbeat(supabaseAdmin, CRON_NAMES.recordingBackfill);
   return NextResponse.json(counts);
 }
 

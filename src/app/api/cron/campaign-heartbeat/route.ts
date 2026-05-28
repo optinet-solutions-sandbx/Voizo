@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
+import { CRON_NAMES, postSlackAlert, recordHeartbeat } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
 // Heartbeat runs every 30 min (vercel.json crons). Per running campaign we
@@ -69,6 +70,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!running || running.length === 0) {
+    await recordHeartbeat(supabaseAdmin, CRON_NAMES.heartbeat);
     return NextResponse.json({ checked: 0, stuck: [] });
   }
 
@@ -361,6 +363,74 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Slack alerts ──
+  // Two independent conditions; up to 2 messages per tick (max 48/day per
+  // category at the 30-min cadence). Sustained anomalies = repeated messages;
+  // dedup is a follow-up per the Priority 3 roadmap section.
+  //
+  // Stuck running campaigns: WARN (operator action — pause/investigate).
+  if (stuck.length > 0) {
+    const stuckDetails = stuck.map(
+      (s) => `${s.name} (${s.id}) — ${s.pendingNumbers} pending, last updated ${s.lastUpdated}`,
+    );
+    await postSlackAlert(
+      "WARN",
+      `${stuck.length} stuck running campaign${stuck.length === 1 ? "" : "s"}`,
+      stuckDetails,
+    );
+  }
+
+  // Pool reconciliation: INFO if all events are auto-recovered (rules 1/2/4
+  // recovered), WARN if any actionable event present (rule 3 drift or rule 4
+  // still-stuck). Skip post when no rule fired this tick.
+  const hasActionable =
+    poolReconciliation.rule3Drift.length > 0 ||
+    poolReconciliation.rule4StillStuck.length > 0;
+  const hasAutoRecovery =
+    poolReconciliation.rule1Released.length > 0 ||
+    poolReconciliation.rule2Released.length > 0 ||
+    poolReconciliation.rule4Recovered.length > 0;
+  if (hasActionable || hasAutoRecovery) {
+    const reconciliationDetails: string[] = [];
+    for (const r of poolReconciliation.rule1Released) {
+      reconciliationDetails.push(
+        `Rule 1 (orphan auto-released): slot=${r.slotIndex} assistant=${r.assistantId ?? "null"}`,
+      );
+    }
+    for (const r of poolReconciliation.rule2Released) {
+      reconciliationDetails.push(
+        `Rule 2 (terminal auto-released): slot=${r.slotIndex} campaign=${r.campaignId} status=${r.campaignStatus}`,
+      );
+    }
+    for (const r of poolReconciliation.rule3Drift) {
+      reconciliationDetails.push(
+        `Rule 3 (drift — manual action): slot=${r.slotIndex} db=${r.dbAssistantId ?? "null"} vapi=${r.vapiAssistantId ?? "null"}`,
+      );
+    }
+    for (const r of poolReconciliation.rule4Recovered) {
+      reconciliationDetails.push(
+        `Rule 4 (maintenance recovered): slot=${r.slotIndex}`,
+      );
+    }
+    for (const r of poolReconciliation.rule4StillStuck) {
+      reconciliationDetails.push(
+        `Rule 4 (still stuck): slot=${r.slotIndex} leased_at=${r.leasedAt}`,
+      );
+    }
+    const counts: string[] = [];
+    if (poolReconciliation.rule1Released.length > 0) counts.push(`${poolReconciliation.rule1Released.length} orphan`);
+    if (poolReconciliation.rule2Released.length > 0) counts.push(`${poolReconciliation.rule2Released.length} terminal`);
+    if (poolReconciliation.rule3Drift.length > 0) counts.push(`${poolReconciliation.rule3Drift.length} drift`);
+    if (poolReconciliation.rule4Recovered.length > 0) counts.push(`${poolReconciliation.rule4Recovered.length} recovered`);
+    if (poolReconciliation.rule4StillStuck.length > 0) counts.push(`${poolReconciliation.rule4StillStuck.length} still-stuck`);
+    await postSlackAlert(
+      hasActionable ? "WARN" : "INFO",
+      `Pool reconciliation: ${counts.join(", ")}`,
+      reconciliationDetails,
+    );
+  }
+
+  await recordHeartbeat(supabaseAdmin, CRON_NAMES.heartbeat);
   return NextResponse.json({
     checked: running.length,
     stuck,

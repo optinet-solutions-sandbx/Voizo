@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { CRON_NAMES, postSlackAlert, recordHeartbeat } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
 // Read-only watchdog: two short SELECTs + JS-side categorization. Well under
@@ -225,24 +226,32 @@ export async function GET(request: NextRequest) {
   // Per-anomaly detail lines (only when something is wrong). Each line is
   // self-contained so a downstream Slack alerter can post one message per
   // anomaly without re-querying.
+  const anomalyDetailLines: string[] = [];
   if (severity !== "OK") {
     const logFn = severity === "ALERT" ? console.error : console.warn;
     for (const a of anomalies) {
-      if (a.type === "stuck_lease") {
-        logFn(
-          `[stuck-slot-watchdog] STUCK slot=${a.slot_index} ` +
-          `campaign="${a.campaign_name}" status=${a.campaign_status} ` +
-          `hours_leased=${a.hours_leased}`,
-        );
-      } else {
-        logFn(
-          `[stuck-slot-watchdog] ORPHAN slot=${a.slot_index} ` +
-          `leased_at=${a.leased_at} assistant=${a.current_assistant_id ?? "null"}`,
-        );
-      }
+      const line =
+        a.type === "stuck_lease"
+          ? `STUCK slot=${a.slot_index} campaign="${a.campaign_name}" status=${a.campaign_status} hours_leased=${a.hours_leased}`
+          : `ORPHAN slot=${a.slot_index} leased_at=${a.leased_at} assistant=${a.current_assistant_id ?? "null"}`;
+      logFn(`[stuck-slot-watchdog] ${line}`);
+      anomalyDetailLines.push(line);
     }
   }
 
+  // Slack alert on anomaly. severity narrows to "WARN" | "ALERT" inside this
+  // branch and matches the slack.ts Severity union. Awaited (not fire-and-forget)
+  // so Vercel doesn't suspend the function before the POST completes; the
+  // dispatcher's 3s AbortSignal.timeout bounds the wait.
+  if (severity !== "OK") {
+    const title =
+      severity === "ALERT"
+        ? `Pool watchdog ALERT: ${totalCount} anomaly/anomalies (max ${maxHours.toFixed(1)}h)`
+        : `Pool watchdog WARN: ${totalCount} anomaly/anomalies`;
+    await postSlackAlert(severity, title, anomalyDetailLines);
+  }
+
+  await recordHeartbeat(supabaseAdmin, CRON_NAMES.stuckSlotWatchdog);
   return NextResponse.json({
     severity,
     anomalies,

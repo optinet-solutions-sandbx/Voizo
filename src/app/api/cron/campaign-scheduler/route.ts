@@ -4,6 +4,7 @@ import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
+import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
 // FS bgapi originate takes 8-22s per call. With 60s budget and limit(2),
@@ -359,6 +360,7 @@ export async function GET(request: NextRequest) {
     .eq("status", "leased");
 
   if ((leasedCount ?? 0) >= limit) {
+    await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
     return NextResponse.json({
       started: 0,
       queued: true,
@@ -565,6 +567,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
   return NextResponse.json({
     started: results.filter((r) => r.result === "started").length,
     results,
