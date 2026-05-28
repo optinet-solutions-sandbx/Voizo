@@ -14,6 +14,7 @@ import {
 import TimePickerField from "@/components/TimePickerField";
 import DateTimePickerField from "@/components/DateTimePickerField";
 import StyledSelect from "@/components/StyledSelect";
+import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
 
 interface Props {
   state: WizardState;
@@ -264,6 +265,54 @@ export default function StepSchedule({ state, dispatch }: Props) {
                       <span className="font-semibold">Immediately</span>.
                     </p>
                   )}
+                </div>
+              );
+            })()}
+
+            {/* Day-of-week consistency warning.
+                See [[project_campaign_day_window_mismatch]] — silent failure
+                mode where the dialer logs `outside_call_window` and the
+                campaign sits in draft past its visible start time. validateBeforeSubmit
+                blocks the SUBMIT; this banner gives the operator a chance to fix
+                it without bouncing off the submit button. */}
+            {(() => {
+              const hasFutureStart =
+                state.startMode === "delay"
+                || (state.startMode === "scheduled" && Boolean(state.scheduledDate));
+              if (!hasFutureStart) return null;
+
+              const effectiveStart =
+                state.startMode === "delay"
+                  ? new Date(Date.now() + state.delayMinutes * 60_000)
+                  : new Date(state.scheduledDate);
+              if (Number.isNaN(effectiveStart.getTime())) return null;
+
+              const expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+              const enabledDayKeys = enabledRows.map((r) => r.day);
+              if (enabledDayKeys.includes(expectedDay as Day)) return null;
+
+              const enabledDayLabels = enabledDayKeys.map((d) => d.toUpperCase()).join(", ");
+              return (
+                <div className="px-3.5 py-2.5 rounded-xl flex items-start gap-2 text-xs bg-amber-500/[0.08] text-amber-200 border border-amber-500/25">
+                  <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
+                  <p className="leading-snug">
+                    Start time falls on{" "}
+                    <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
+                    <span className="text-amber-300/70">({tzShort})</span>{" — "}
+                    {enabledDayKeys.length === 0
+                      ? "no days are enabled above."
+                      : (
+                          <>
+                            only{" "}
+                            <span className="font-semibold text-amber-100">{enabledDayLabels}</span>{" "}
+                            {enabledDayKeys.length === 1 ? "is" : "are"} enabled.
+                          </>
+                        )}
+                    {" "}
+                    Toggle{" "}
+                    <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
+                    on, or change the start time — otherwise calls won&apos;t fire.
+                  </p>
                 </div>
               );
             })()}

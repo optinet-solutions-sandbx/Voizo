@@ -15,6 +15,7 @@ import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Data";
 import { allowedTimezonesForCountry, detectAudienceCountry } from "@/lib/audienceCountry";
+import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
 
 export type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -641,6 +642,25 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   for (const r of enabledRows) {
     if (r.start >= r.end) {
       return `${r.day.toUpperCase()} start time must be before end time.`;
+    }
+  }
+
+  // Day-of-week consistency: if the campaign auto-starts at a specific time
+  // (delay or scheduled), make sure the day-of-week of the effective start
+  // -- evaluated in the campaign timezone -- matches an enabled call window.
+  // Silent failure mode otherwise: scheduler logs "outside_call_window" and
+  // the campaign sits in draft past its start_at with no calls firing.
+  // 4 prior incidents (3 AU + 1 CA tonight) per
+  // [[project_campaign_day_window_mismatch]].
+  if (state.startMode === "delay" || (state.startMode === "scheduled" && state.scheduledDate)) {
+    const effectiveStart =
+      state.startMode === "delay"
+        ? new Date(Date.now() + state.delayMinutes * 60_000)
+        : new Date(state.scheduledDate);
+    const expectedDay = dayOfWeekInTimezone(effectiveStart, state.timezone);
+    const enabledDays = new Set<string>(enabledRows.map((r) => r.day));
+    if (!enabledDays.has(expectedDay)) {
+      return `Start time falls on ${expectedDay.toUpperCase()} (in ${state.timezone}) but no call window is enabled for ${expectedDay.toUpperCase()}. Toggle ${expectedDay.toUpperCase()} on above, or change the start time.`;
     }
   }
 
