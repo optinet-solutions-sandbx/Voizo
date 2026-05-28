@@ -304,6 +304,39 @@ export async function createClone(
     // memory: unconfigured caps let wrong numbers cost $0.15/call for 3-min
     // carrier loops).
     maxDurationSeconds: 180,
+    // ── End-call phrase triggers (cost guardrail, 2026-05-28) ──
+    // Final leg of the three-part wrong-number cost guardrail. Vapi auto-ends
+    // the call when the customer's transcribed speech contains one of these
+    // phrases -- saving the ~5-10s of tail-end agent talk that would otherwise
+    // occur as the agent composes a goodbye. Pairs with maxDurationSeconds
+    // (hard cap), silenceTimeoutSeconds (dead-air cap), and system-prompt
+    // rule #4 (voicemail/intercept detection).
+    //
+    // Phrase selection rationale (Slow-and-Correct pick, 2026-05-28):
+    //   - Only goodbye-variant phrases. NO opt-out phrases ("don't call again",
+    //     "stop calling", "not interested") -- those would trip Vapi to cut
+    //     the call before Rule #3 in VOIZO_SYSTEM_PREFIX (acknowledge opt-out
+    //     respectfully) can fire, and several are too mid-sentence-ambiguous
+    //     for safe auto-cut ("I was not interested before, but..."). Revisit
+    //     if/when programmatic opt-out scrubbing into suppression_list lands.
+    //   - Multi-word phrases preferred -- single-word tokens ("bye", "stop")
+    //     have too many false-positive substrings in natural speech ("by the
+    //     way", "stop sign", "buy this").
+    //   - Voizo REPLACES base's endCallPhrases. Matches the existing pattern
+    //     for cost-guardrail fields above (silenceTimeoutSeconds,
+    //     maxDurationSeconds, voicemailMessage): Voizo owns runtime cost
+    //     guardrails; base assistants own persona.
+    endCallPhrases: [
+      "goodbye",
+      "good bye",
+      "have a good day",
+      "have a great day",
+      "have a nice day",
+      "have a wonderful day",
+      "thank you for calling",
+      "talk to you later",
+      "take care",
+    ],
     // ── Silent hangup on voicemail (compliance + cost, 2026-05-15) ──
     // When Vapi's voicemail detection fires, it speaks `voicemailMessage` at
     // the beep before ending. The inherited base value ("Please call back
