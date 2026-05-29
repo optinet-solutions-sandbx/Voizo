@@ -51,6 +51,7 @@ export interface DueCheckResult {
     | "before_start_date"
     | "end_reached"
     | "not_an_active_day"
+    | "off_week"
     | "in_exception_dates"
     | "before_spawn_time";
 }
@@ -155,6 +156,27 @@ function endOfDayIsoInTz(now: Date, tz: string): string {
 
 // ── Due-check (pure logic) ───────────────────────────────────────────────
 
+/**
+ * Whole Sunday-aligned calendar weeks between two YYYY-MM-DD dates. Both dates
+ * are already resolved to the campaign timezone by the caller, so this is pure
+ * UTC date arithmetic and therefore DST-immune. Each date is snapped back to
+ * the Sunday that begins its calendar week before diffing, so all active
+ * weekdays within one calendar week share the same parity (iCalendar RRULE
+ * INTERVAL semantics, WKST=SU — matches the editor's Sunday-first day pills).
+ */
+function weeksSinceStartAligned(startDate: string, today: string): number {
+  const MS_PER_DAY = 86_400_000;
+  const toUtcMidnight = (s: string): number => {
+    const [y, m, d] = s.split("-").map(Number);
+    return Date.UTC(y, m - 1, d);
+  };
+  const startMs = toUtcMidnight(startDate);
+  const todayMs = toUtcMidnight(today);
+  const startWeek = startMs - new Date(startMs).getUTCDay() * MS_PER_DAY;
+  const todayWeek = todayMs - new Date(todayMs).getUTCDay() * MS_PER_DAY;
+  return Math.round((todayWeek - startWeek) / (7 * MS_PER_DAY));
+}
+
 export function isDueToday(
   pattern: RecurrencePattern,
   campaignTimezone: string,
@@ -178,6 +200,18 @@ export function isDueToday(
   }
 
   if (!pattern.days_of_week.includes(dow)) return { due: false, reason: "not_an_active_day" };
+
+  // repeat_every_weeks: skip weeks that aren't an active multiple of the
+  // interval, counting Sunday-aligned calendar weeks from start_date. The
+  // `interval > 1` guard keeps the common interval=1 (and any malformed
+  // 0/negative) a no-op — identical to pre-2026-05-29 behavior. No UI sets
+  // this field > 1 yet (audit 2026-05-29 F9); this closes the latent trap so a
+  // future interval control can't silently over-spawn (each spawn = a Vapi
+  // clone + leased SIP slot + per-minute spend).
+  const interval = pattern.repeat_every_weeks ?? 1;
+  if (interval > 1 && weeksSinceStartAligned(pattern.start_date, today) % interval !== 0) {
+    return { due: false, reason: "off_week" };
+  }
 
   if (pattern.exception_dates.includes(today)) return { due: false, reason: "in_exception_dates" };
 
