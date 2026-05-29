@@ -67,32 +67,50 @@ export async function postSlackAlert(
   title: string,
   details: string[],
 ): Promise<boolean> {
-  const webhookUrl = process.env.SLACK_ALERT_WEBHOOK_URL;
-  if (!webhookUrl) {
-    // [[loud-over-silent-skips]]: log the falsy branch loudly so a missing
-    // env var surfaces in Vercel logs rather than becoming an invisible
-    // permanent silence. Never log the URL itself.
-    console.warn(
-      `[alerts] SLACK_ALERT_WEBHOOK_URL not present - skipping post: [${severity}] ${title}`,
-    );
-    return false;
-  }
-
-  const detailLines =
-    details.length > MAX_DETAIL_LINES
-      ? [
-          ...details.slice(0, MAX_DETAIL_LINES),
-          `+${details.length - MAX_DETAIL_LINES} more (truncated for Slack size cap)`,
-        ]
-      : details;
-
   const text = [
     `VOIZO ALERT [${severity}] - ${title}`,
-    ...detailLines.map((d) => `- ${d}`),
+    ...truncateDetails(details).map((d) => `- ${d}`),
     "",
     "Runbook: docs/2026-05-28_DOC_Automation_Hardening_Roadmap.md#priority-3",
   ].join("\n");
+  return postToSlack(text, `severity=${severity} title="${title}"`);
+}
 
+/**
+ * Informational run-narration (NOT an alert): no "ALERT" wording, no runbook
+ * footer. Used by the recurring child-spawn branch to report normal activity
+ * ("segment refreshed -> dialing X today, {window}"). Same transport, redaction,
+ * and 3s timeout as postSlackAlert. Audit 2026-05-29 A.
+ */
+export async function postSlackNote(title: string, details: string[]): Promise<boolean> {
+  const text = [`VOIZO • ${title}`, ...truncateDetails(details).map((d) => `- ${d}`)].join("\n");
+  return postToSlack(text, `note title="${title}"`);
+}
+
+/** Truncate detail lines to the Slack size cap (shared by alert + note). */
+function truncateDetails(details: string[]): string[] {
+  return details.length > MAX_DETAIL_LINES
+    ? [
+        ...details.slice(0, MAX_DETAIL_LINES),
+        `+${details.length - MAX_DETAIL_LINES} more (truncated for Slack size cap)`,
+      ]
+    : details;
+}
+
+/**
+ * Shared Slack POST transport. Gated on SLACK_ALERT_WEBHOOK_URL (logs loudly if
+ * absent), 3s timeout so a slow Slack can't eat the cron budget, never throws,
+ * never logs the webhook URL. Returns true only on 2xx. `logContext` appears in
+ * error logs only (never the message body / URL).
+ */
+async function postToSlack(text: string, logContext: string): Promise<boolean> {
+  const webhookUrl = process.env.SLACK_ALERT_WEBHOOK_URL;
+  if (!webhookUrl) {
+    // [[loud-over-silent-skips]]: surface a missing env var loudly rather than
+    // letting it become an invisible permanent silence. Never log the URL.
+    console.warn(`[alerts] SLACK_ALERT_WEBHOOK_URL not present - skipping post: ${logContext}`);
+    return false;
+  }
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
@@ -104,7 +122,7 @@ export async function postSlackAlert(
       const body = await res.text().catch(() => "(unreadable)");
       const sanitized = body.replaceAll(webhookUrl, "[REDACTED_WEBHOOK_URL]");
       console.error(
-        `[alerts] post failed: HTTP ${res.status} severity=${severity} title="${title}" body=${sanitized.slice(0, 200)}`,
+        `[alerts] post failed: HTTP ${res.status} ${logContext} body=${sanitized.slice(0, 200)}`,
       );
       return false;
     }
@@ -112,9 +130,7 @@ export async function postSlackAlert(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const sanitized = reason.replaceAll(webhookUrl, "[REDACTED_WEBHOOK_URL]");
-    console.error(
-      `[alerts] post threw: severity=${severity} title="${title}" reason=${sanitized}`,
-    );
+    console.error(`[alerts] post threw: ${logContext} reason=${sanitized}`);
     return false;
   }
 }
@@ -149,4 +165,19 @@ export async function recordHeartbeat(
     const reason = err instanceof Error ? err.message : String(err);
     console.warn(`[alerts] heartbeat write threw for ${name}: ${reason}`);
   }
+}
+
+/**
+ * Dedup predicate for recurring spawn_failed alerts. A misconfigured parent
+ * fails on every cron tick (~60s), so only alert when there is no prior alert
+ * or the last one is older than windowMs (default 6h). State is keyed per parent
+ * in recurring_alert_state. Audit 2026-05-29 A2.
+ */
+export function shouldAlertSpawnFail(
+  lastAlertedAtIso: string | null,
+  nowMs: number,
+  windowMs: number = 6 * 60 * 60 * 1000,
+): boolean {
+  if (!lastAlertedAtIso) return true;
+  return nowMs - Date.parse(lastAlertedAtIso) > windowMs;
 }

@@ -5,7 +5,7 @@ import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
-import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
+import { CRON_NAMES, recordHeartbeat, postSlackNote, postSlackAlert, shouldAlertSpawnFail } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
 // FS bgapi originate takes 8-22s per call. With 60s budget and limit(2),
@@ -582,6 +582,47 @@ export async function GET(request: NextRequest) {
           parentName: parent.name as string,
           ...outcome,
         });
+
+        // A: narrate this spawn to Slack (#voizo-alerts). `spawned` and
+        // `segment_empty_skipped` fire at most once per parent per day (the
+        // per-day idempotency check makes later ticks return already_spawned_today),
+        // so no throttle is needed. `spawn_failed` IS deduped via
+        // recurring_alert_state (a misconfigured parent fails every tick), so a
+        // broken parent posts at most once per ~6h. Transient outcomes
+        // (deferred_low_budget / budget_full / off_week / already_spawned_today /
+        // not_due) are intentionally NOT posted — they would be per-tick noise.
+        const parentTz = parent.timezone as string;
+        if (outcome.result === "spawned") {
+          await postSlackNote("Recurring spawn", [
+            `${parent.name as string}: segment refreshed -> dialing ${outcome.dialCount} player(s) today, ` +
+              `${outcome.windowStart}-${outcome.windowEnd} ${parentTz}.`,
+          ]);
+          // A recovered parent should be able to alert again on a future failure.
+          await supabaseAdmin.from("recurring_alert_state").delete().eq("parent_id", parent.id as string);
+        } else if (outcome.result === "segment_empty_skipped") {
+          await postSlackNote("Recurring spawn", [
+            `${parent.name as string}: segment empty today -> skipped (no worker leased).`,
+          ]);
+        } else if (outcome.result === "spawn_failed") {
+          const { data: alertRow } = await supabaseAdmin
+            .from("recurring_alert_state")
+            .select("last_alerted_at")
+            .eq("parent_id", parent.id as string)
+            .maybeSingle();
+          if (shouldAlertSpawnFail((alertRow?.last_alerted_at as string | null) ?? null, Date.now())) {
+            await postSlackAlert("WARN", "Recurring spawn failed", [
+              `${parent.name as string}: ${outcome.details}`,
+            ]);
+            await supabaseAdmin.from("recurring_alert_state").upsert(
+              {
+                parent_id: parent.id as string,
+                reason: outcome.details,
+                last_alerted_at: new Date().toISOString(),
+              },
+              { onConflict: "parent_id" },
+            );
+          }
+        }
       }
     }
   }
