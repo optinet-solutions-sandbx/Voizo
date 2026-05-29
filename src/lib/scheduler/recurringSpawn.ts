@@ -51,16 +51,18 @@ export interface DueCheckResult {
     | "before_start_date"
     | "end_reached"
     | "not_an_active_day"
+    | "off_week"
     | "in_exception_dates"
     | "before_spawn_time";
 }
 
 export type SpawnOutcome =
-  | { result: "spawned"; childId: string }
+  | { result: "spawned"; childId: string; dialCount: number; windowStart: string; windowEnd: string }
   | { result: "segment_empty_skipped"; childId: string }
   | { result: "already_spawned_today"; childId: string }
   | { result: "not_due"; reason: DueCheckResult["reason"] }
   | { result: "budget_full" }
+  | { result: "lost_spawn_race" }
   | { result: "spawn_failed"; details: string };
 
 // ── Timezone helpers (Intl.DateTimeFormat — zero deps, DST-aware) ────────
@@ -155,6 +157,27 @@ function endOfDayIsoInTz(now: Date, tz: string): string {
 
 // ── Due-check (pure logic) ───────────────────────────────────────────────
 
+/**
+ * Whole Sunday-aligned calendar weeks between two YYYY-MM-DD dates. Both dates
+ * are already resolved to the campaign timezone by the caller, so this is pure
+ * UTC date arithmetic and therefore DST-immune. Each date is snapped back to
+ * the Sunday that begins its calendar week before diffing, so all active
+ * weekdays within one calendar week share the same parity (iCalendar RRULE
+ * INTERVAL semantics, WKST=SU — matches the editor's Sunday-first day pills).
+ */
+function weeksSinceStartAligned(startDate: string, today: string): number {
+  const MS_PER_DAY = 86_400_000;
+  const toUtcMidnight = (s: string): number => {
+    const [y, m, d] = s.split("-").map(Number);
+    return Date.UTC(y, m - 1, d);
+  };
+  const startMs = toUtcMidnight(startDate);
+  const todayMs = toUtcMidnight(today);
+  const startWeek = startMs - new Date(startMs).getUTCDay() * MS_PER_DAY;
+  const todayWeek = todayMs - new Date(todayMs).getUTCDay() * MS_PER_DAY;
+  return Math.round((todayWeek - startWeek) / (7 * MS_PER_DAY));
+}
+
 export function isDueToday(
   pattern: RecurrencePattern,
   campaignTimezone: string,
@@ -178,6 +201,18 @@ export function isDueToday(
   }
 
   if (!pattern.days_of_week.includes(dow)) return { due: false, reason: "not_an_active_day" };
+
+  // repeat_every_weeks: skip weeks that aren't an active multiple of the
+  // interval, counting Sunday-aligned calendar weeks from start_date. The
+  // `interval > 1` guard keeps the common interval=1 (and any malformed
+  // 0/negative) a no-op — identical to pre-2026-05-29 behavior. No UI sets
+  // this field > 1 yet (audit 2026-05-29 F9); this closes the latent trap so a
+  // future interval control can't silently over-spawn (each spawn = a Vapi
+  // clone + leased SIP slot + per-minute spend).
+  const interval = pattern.repeat_every_weeks ?? 1;
+  if (interval > 1 && weeksSinceStartAligned(pattern.start_date, today) % interval !== 0) {
+    return { due: false, reason: "off_week" };
+  }
 
   if (pattern.exception_dates.includes(today)) return { due: false, reason: "in_exception_dates" };
 
@@ -332,8 +367,18 @@ export async function spawnChildIfDue(
     .select("id")
     .single();
   if (insertErr || !childRow) {
+    // We already cloned + leased this tick; release both regardless of the
+    // failure reason (no orphan left behind).
     await releaseSlot(supabase, slot.id).catch(() => {});
     await deleteCloneBestEffort(vapiKey, clone.id);
+    // 23505 = unique_violation on (parent_campaign_id, start_at): a concurrent
+    // scheduler tick already inserted today's child for this parent. That DB
+    // constraint is the race-proof idempotency guard (the SELECT at step 2 is a
+    // best-effort fast path). The other tick won and we've cleaned up, so this
+    // is a benign lost race — not a failure, no double dial. Audit 2026-05-29 F3.
+    if (insertErr?.code === "23505") {
+      return { result: "lost_spawn_race" };
+    }
     return {
       result: "spawn_failed",
       details: `INSERT child campaign: ${insertErr?.message ?? "no row returned"}`,
@@ -378,7 +423,13 @@ export async function spawnChildIfDue(
     console.warn(`[recurringSpawn] ${parent.id}: counter update failed:`, err);
   });
 
-  return { result: "spawned", childId: childRow.id };
+  return {
+    result: "spawned",
+    childId: childRow.id,
+    dialCount: phones.length,
+    windowStart: hours.start,
+    windowEnd: hours.end,
+  };
 }
 
 // ── Internals ────────────────────────────────────────────────────────────
@@ -454,13 +505,28 @@ async function updateParentSpawnCounters(
   if (error) throw error;
 }
 
-async function deleteCloneBestEffort(vapiKey: string, cloneId: string): Promise<void> {
+export async function deleteCloneBestEffort(vapiKey: string, cloneId: string): Promise<void> {
+  // Best-effort, but LOUD. A silently-swallowed failure here orphans a billable
+  // Vapi assistant (no quota monitoring — see project_openai_credential_vapi).
+  // Both failure modes are logged: an HTTP non-2xx (the previous code only
+  // caught *thrown* errors, so a 401 from a rotated key / 404 / 5xx returned
+  // "successfully" and orphaned the clone) and a network throw. No key is
+  // logged — it lives in the request header, never in the URL/status/message.
+  // Audit 2026-05-29 F13. Heartbeat reconciliation still surfaces any orphan.
   try {
-    await fetch(`https://api.vapi.ai/assistant/${encodeURIComponent(cloneId)}`, {
+    const res = await fetch(`https://api.vapi.ai/assistant/${encodeURIComponent(cloneId)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${vapiKey}` },
     });
-  } catch {
-    // Best-effort cleanup; heartbeat reconciliation will surface orphans.
+    if (!res.ok) {
+      console.warn(
+        `[recurringSpawn] deleteCloneBestEffort: Vapi DELETE returned ${res.status} for clone ${cloneId} — assistant may be orphaned.`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[recurringSpawn] deleteCloneBestEffort: Vapi DELETE threw for clone ${cloneId} ` +
+        `(${err instanceof Error ? err.message : String(err)}) — assistant may be orphaned.`,
+    );
   }
 }
