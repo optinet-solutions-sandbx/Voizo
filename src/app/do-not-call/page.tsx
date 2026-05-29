@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { PhoneOff, Plus, X, Upload, Phone, Search, Loader2, AlertCircle, Trash2 } from "lucide-react";
+import { PhoneOff, X, Phone, Search, Loader2, AlertCircle, Trash2 } from "lucide-react";
+import { PlusIcon } from "@/components/icons/animated/plus";
+import { UploadIcon } from "@/components/icons/animated/upload";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchDncEntries, insertDncEntries, deleteDncEntry, DncEntry } from "@/lib/dncData";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
@@ -101,7 +104,7 @@ export default function DoNotCallPage() {
         </div>
         <button onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
-          <Plus size={15} />
+          <HoverIcon icon={PlusIcon} size={15} />
           <span className="hidden sm:inline">Add Phone Numbers</span>
           <span className="sm:hidden">Add</span>
         </button>
@@ -309,7 +312,7 @@ function AddPhoneNumbersModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
                       <p className="text-xs text-[var(--text-3)]">Drop CSV file here or</p>
                       <button className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 border border-[var(--border)] rounded-full text-xs text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition-colors"
                         onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>
-                        <Upload size={11} /> Select file
+                        <HoverIcon icon={UploadIcon} size={11} /> Select file
                       </button>
                     </>
                   )}

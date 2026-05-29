@@ -4,7 +4,10 @@ import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, Clock, Copy, Download, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
+import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
+import { DownloadIcon } from "@/components/icons/animated/download";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
 import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
@@ -1110,7 +1113,7 @@ export default function CampaignV2DetailPage() {
                   title={title}
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium whitespace-nowrap transition-colors"
                 >
-                  <RefreshCw size={15} /> Refresh segment
+                  <HoverIcon icon={RefreshCWIcon} size={15} /> Refresh segment
                 </button>
               );
             })()}
@@ -1140,7 +1143,7 @@ export default function CampaignV2DetailPage() {
                 {exporting ? (
                   <Loader2 size={15} className="animate-spin" />
                 ) : (
-                  <Download size={15} />
+                  <HoverIcon icon={DownloadIcon} size={15} />
                 )}
                 {exporting ? "Exporting..." : "Export"}
                 <ChevronDown

@@ -13,19 +13,36 @@ const CampaignIcon = Megaphone;
 import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
+// Animated sidebar nav icons (lucide-animated.com, motion-powered). These run
+// only on the desktop nav; mobile + search keep the static lucide-react icons.
+import { useReducedMotion } from "motion/react";
+import { LayoutGridIcon } from "@/components/icons/animated/layout-grid";
+import { ActivityIcon } from "@/components/icons/animated/activity";
+import { EarthIcon } from "@/components/icons/animated/earth";
+import { SendIcon } from "@/components/icons/animated/send";
+import { UsersIcon } from "@/components/icons/animated/users";
+import { PhoneMissedIcon } from "@/components/icons/animated/phone-missed";
+import { BookTextIcon } from "@/components/icons/animated/book-text";
+import type { AnimatedIcon, AnimatedIconHandle } from "@/components/icons/animated/types";
 
 // P2 Option C (2026-05-22): semantic-accents-only. All inactive nav chips
 // neutralize except Do Not Call, which keeps the red warning hue as the one
 // color in the sidebar that carries safety meaning. Active state stays blue
 // regardless (desktop) or red-for-DNC + blue-otherwise (mobile bottom nav).
-const navItems = [
-  { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Live Activity", href: "/activity",        icon: Activity,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Workers",       href: "/workers",         icon: Globe2,          color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Audience",      href: "/audience",        icon: Users,           color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        color: "text-red-400",         bg: "bg-red-500/10"           },
-  { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+//
+// `icon` (static lucide-react) drives mobile nav + search; `animatedIcon` drives
+// the desktop nav rows. lucide-animated has no exact twin for LayoutDashboard /
+// Megaphone / PhoneOff / BookOpen, so those map to the nearest animated icon.
+const navItems: {
+  label: string; href: string; icon: typeof Activity; animatedIcon: AnimatedIcon; color: string; bg: string;
+}[] = [
+  { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, animatedIcon: LayoutGridIcon,  color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Live Activity", href: "/activity",        icon: Activity,        animatedIcon: ActivityIcon,    color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Workers",       href: "/workers",         icon: Globe2,          animatedIcon: EarthIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       animatedIcon: SendIcon,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Audience",      href: "/audience",        icon: Users,           animatedIcon: UsersIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        animatedIcon: PhoneMissedIcon, color: "text-red-400",         bg: "bg-red-500/10"           },
+  { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        animatedIcon: BookTextIcon,    color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
 ];
 
 const SIDEBAR_LOCK_KEY = "voizo-sidebar-locked";
@@ -285,6 +302,39 @@ function NotificationBell({ size = 18 }: { size?: number }) {
   );
 }
 
+// A single desktop nav row. Owns a ref to its animated icon and plays the
+// animation while the whole row is hovered (not just the 14px glyph). Honors
+// the user's reduced-motion preference — no animation when reduce is set.
+function NavRow({ item, isActive, collapsed }: {
+  item: (typeof navItems)[number];
+  isActive: boolean;
+  collapsed: boolean;
+}) {
+  const iconRef = useRef<AnimatedIconHandle>(null);
+  const reduce = useReducedMotion();
+  const Icon = item.animatedIcon;
+  return (
+    <li>
+      <Link
+        href={item.href}
+        title={collapsed ? item.label : undefined}
+        onMouseEnter={() => { if (!reduce) iconRef.current?.startAnimation(); }}
+        onMouseLeave={() => iconRef.current?.stopAnimation()}
+        className={`flex items-center ${collapsed ? "justify-center px-1.5" : "gap-3 px-3"} py-2.5 rounded-lg text-sm font-medium transition-all ${
+          isActive
+            ? "bg-blue-600 text-white shadow-md shadow-blue-600/25"
+            : "text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
+        }`}
+      >
+        <div className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
+          <Icon ref={iconRef} size={14} className={isActive ? "text-white" : item.color} />
+        </div>
+        {!collapsed && item.label}
+      </Link>
+    </li>
+  );
+}
+
 interface SidebarContentProps {
   collapsed: boolean;
   locked: boolean;
@@ -339,25 +389,7 @@ function SidebarContent({
         <ul className="space-y-0.5">
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-            const Icon = item.icon;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  title={collapsed ? item.label : undefined}
-                  className={`flex items-center ${collapsed ? "justify-center px-1.5" : "gap-3 px-3"} py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    isActive
-                      ? "bg-blue-600 text-white shadow-md shadow-blue-600/25"
-                      : "text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
-                  }`}
-                >
-                  <div className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
-                    <Icon size={14} className={isActive ? "text-white" : item.color} />
-                  </div>
-                  {!collapsed && item.label}
-                </Link>
-              </li>
-            );
+            return <NavRow key={item.href} item={item} isActive={isActive} collapsed={collapsed} />;
           })}
         </ul>
       </nav>
@@ -421,7 +453,7 @@ function MobileBottomNav() {
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-[var(--bg-sidebar)] border-t border-[var(--border)] flex items-center">
       {navItems.map((item) => {
         const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-        const Icon = item.icon;
+        const Icon = item.animatedIcon;
         // P2 Option C: active mobile-tab is blue by default, red for DNC.
         // Can't reuse item.color here — desktop chips share that field for
         // the neutralized inactive chip, which would render gray-on-gray

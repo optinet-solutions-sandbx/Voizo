@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Search, Plus, MoreHorizontal, Phone, ExternalLink } from "lucide-react";
+import { Search, MoreHorizontal, Phone, ExternalLink } from "lucide-react";
+import { PlusIcon } from "@/components/icons/animated/plus";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 
 const CATEGORIES = [
   { label: "Connected", count: 1 },
@@ -163,7 +165,7 @@ function ConnectedView() {
               Connected
             </span>
             <button className="w-7 h-7 rounded-full border border-[var(--border)] flex items-center justify-center text-[var(--text-2)] hover:bg-[var(--bg-hover)] transition-colors">
-              <Plus size={14} />
+              <HoverIcon icon={PlusIcon} size={14} />
             </button>
           </div>
         </div>

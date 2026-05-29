@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { Plus, X, Trash2, BookOpen, Archive, RotateCcw, Search } from "lucide-react";
+import { X, Trash2, BookOpen, Archive, RotateCcw, Search } from "lucide-react";
+import { PlusIcon } from "@/components/icons/animated/plus";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
 import {
@@ -111,7 +113,7 @@ export default function KnowledgeBasesPage() {
         </div>
         <button onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
-          <Plus size={15} />
+          <HoverIcon icon={PlusIcon} size={15} />
           <span className="hidden sm:inline">Create New</span>
           <span className="sm:hidden">New</span>
         </button>

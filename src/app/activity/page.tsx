@@ -16,8 +16,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertCircle, Hash, MessageSquare,
-  PhoneCall, PhoneOff, Phone, RefreshCw, Target, XCircle,
+  PhoneCall, PhoneOff, Phone, Target, XCircle,
 } from "lucide-react";
+import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 
 interface CallEvent {
   id: string;
@@ -128,7 +130,7 @@ export default function ActivityPage() {
             title="Refresh now"
             className="inline-flex items-center gap-1.5 text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--border-2)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw size={12} className={isRefreshing ? "animate-spin" : ""} />
+            <HoverIcon icon={RefreshCWIcon} size={12} className={isRefreshing ? "animate-spin" : ""} />
             {isRefreshing ? "Refreshing…" : "Refresh"}
           </button>
           <span className="text-[10px] text-[var(--text-3)] font-mono">auto every 30s</span>

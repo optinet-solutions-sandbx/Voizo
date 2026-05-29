@@ -7,6 +7,8 @@ import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
   Pause, Play, Copy, Clock,
 } from "lucide-react";
+import { PlusIcon } from "@/components/icons/animated/plus";
+import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 import { supabase } from "@/lib/supabase";
 import Pagination from "@/components/Pagination";
@@ -295,7 +297,7 @@ export default function CampaignsPage() {
           href="/campaigns/v2/new"
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold shadow-md shadow-blue-500/20 transition hover:bg-blue-400 hover:-translate-y-px flex-shrink-0"
         >
-          <Plus size={14} strokeWidth={2.5} />
+          <HoverIcon icon={PlusIcon} size={14} />
           New Campaign
         </Link>
       </div>
@@ -356,7 +358,7 @@ export default function CampaignsPage() {
             <p className="text-sm font-medium text-[var(--text-1)] mb-1">No campaigns yet</p>
             <p className="text-xs text-[var(--text-3)] mb-4">Create your first AI-powered outbound campaign</p>
             <Link href="/campaigns/v2/new" className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors">
-              <Plus size={14} /> New Campaign
+              <HoverIcon icon={PlusIcon} size={14} /> New Campaign
             </Link>
           </div>
         ) : filtered.length === 0 ? (

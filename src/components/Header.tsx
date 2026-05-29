@@ -2,9 +2,16 @@
 
 import { usePathname } from "next/navigation";
 import { useRef, useState, useEffect } from "react";
-import { Bell, Sun, Moon, PhoneOff, BookOpen, Megaphone } from "lucide-react";
+import { Bell, PhoneOff, BookOpen, Megaphone } from "lucide-react";
 import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
+// Animated header controls (lucide-animated.com). The static lucide `Bell` above
+// is still used for the decorative empty-state inside the notifications dropdown.
+import { useReducedMotion } from "motion/react";
+import { BellIcon } from "@/components/icons/animated/bell";
+import { SunIcon } from "@/components/icons/animated/sun";
+import { MoonIcon } from "@/components/icons/animated/moon";
+import type { AnimatedIconHandle } from "@/components/icons/animated/types";
 
 const navItems = [
   { label: "Workers",       href: "/workers",         title: "Workers"       },
@@ -22,6 +29,8 @@ function NotificationBell() {
   const { notifications, unreadCount, markAllRead } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const bellRef = useRef<AnimatedIconHandle>(null);
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -40,9 +49,11 @@ function NotificationBell() {
     <div ref={ref} className="relative">
       <button
         onClick={handleOpen}
+        onMouseEnter={() => { if (!reduce) bellRef.current?.startAnimation(); }}
+        onMouseLeave={() => bellRef.current?.stopAnimation()}
         className="relative p-2 rounded-xl text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-elevated)] transition-colors"
       >
-        <Bell size={18} />
+        <BellIcon ref={bellRef} size={18} />
         {unreadCount > 0 && (
           <span className="absolute top-1 right-1 min-w-[15px] h-[15px] px-0.5 bg-blue-500 rounded-full flex items-center justify-center text-white text-[8px] font-bold leading-none">
             {unreadCount > 9 ? "9+" : unreadCount}
@@ -108,6 +119,8 @@ function NotificationBell() {
 export default function Header() {
   const pathname = usePathname();
   const { isDark, toggle } = useTheme();
+  const themeIconRef = useRef<AnimatedIconHandle>(null);
+  const reduce = useReducedMotion();
 
   const match = navItems.find((n) => pathname === n.href || pathname.startsWith(n.href + "/"));
   const pageTitle = match?.title ?? "Dashboard";
@@ -120,10 +133,12 @@ export default function Header() {
         {/* Dark / Light toggle */}
         <button
           onClick={toggle}
+          onMouseEnter={() => { if (!reduce) themeIconRef.current?.startAnimation(); }}
+          onMouseLeave={() => themeIconRef.current?.stopAnimation()}
           title={isDark ? "Switch to light mode" : "Switch to dark mode"}
           className="p-2 rounded-xl text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-elevated)] transition-colors"
         >
-          {isDark ? <Sun size={18} /> : <Moon size={18} />}
+          {isDark ? <SunIcon ref={themeIconRef} size={18} /> : <MoonIcon ref={themeIconRef} size={18} />}
         </button>
 
         {/* Notification bell */}
