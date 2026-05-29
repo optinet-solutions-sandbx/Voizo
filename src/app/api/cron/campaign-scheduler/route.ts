@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
+import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
@@ -29,6 +30,11 @@ export const maxDuration = 60;
  * clause prevents double-start if two cron ticks overlap.
  */
 export async function GET(request: NextRequest) {
+  // F11: stamp tick start so the recurring branch can defer a spawn it can't
+  // safely finish within maxDuration (a hard-timeout mid-spawn orphans a
+  // billable clone + a leased SIP slot). See lib/scheduler/spawnBudget.ts.
+  const tickStartedAt = Date.now();
+
   // ── Auth: verify Vercel cron secret ──
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -516,7 +522,9 @@ export async function GET(request: NextRequest) {
   // up at window-open time on a later tick. This avoids the resume-sweep
   // auto-pause collision that would happen if children were created 'running'
   // before their window.
-  const recurringResults: Array<{ parentId: string; parentName: string } & SpawnOutcome> = [];
+  const recurringResults: Array<
+    { parentId: string; parentName: string } & (SpawnOutcome | { result: "deferred_low_budget" })
+  > = [];
   const { data: recurringParents, error: recurringErr } = await supabaseAdmin
     .from("campaigns_v2")
     .select(
@@ -537,6 +545,17 @@ export async function GET(request: NextRequest) {
       console.error("[campaign-scheduler] VAPI_PRIVATE_KEY missing; skipping recurring branch");
     } else {
       for (const parent of recurringParents) {
+        // F11: never START a spawn we can't finish this tick. A hard maxDuration
+        // kill between leaseSlot and the final INSERT/linkSlot would orphan a
+        // billable clone + a leased slot. Defer the rest to the next tick (60s).
+        if (recurringBudgetExhausted(Date.now() - tickStartedAt, maxDuration)) {
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "deferred_low_budget",
+          });
+          break;
+        }
         // Refresh leased count per-iteration so we don't over-spawn this tick.
         const { count: nowLeased } = await supabaseAdmin
           .from("vapi_sip_pool")
