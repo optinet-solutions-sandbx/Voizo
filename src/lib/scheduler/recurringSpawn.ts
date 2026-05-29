@@ -61,6 +61,7 @@ export type SpawnOutcome =
   | { result: "already_spawned_today"; childId: string }
   | { result: "not_due"; reason: DueCheckResult["reason"] }
   | { result: "budget_full" }
+  | { result: "lost_spawn_race" }
   | { result: "spawn_failed"; details: string };
 
 // ── Timezone helpers (Intl.DateTimeFormat — zero deps, DST-aware) ────────
@@ -332,8 +333,18 @@ export async function spawnChildIfDue(
     .select("id")
     .single();
   if (insertErr || !childRow) {
+    // We already cloned + leased this tick; release both regardless of the
+    // failure reason (no orphan left behind).
     await releaseSlot(supabase, slot.id).catch(() => {});
     await deleteCloneBestEffort(vapiKey, clone.id);
+    // 23505 = unique_violation on (parent_campaign_id, start_at): a concurrent
+    // scheduler tick already inserted today's child for this parent. That DB
+    // constraint is the race-proof idempotency guard (the SELECT at step 2 is a
+    // best-effort fast path). The other tick won and we've cleaned up, so this
+    // is a benign lost race — not a failure, no double dial. Audit 2026-05-29 F3.
+    if (insertErr?.code === "23505") {
+      return { result: "lost_spawn_race" };
+    }
     return {
       result: "spawn_failed",
       details: `INSERT child campaign: ${insertErr?.message ?? "no row returned"}`,
