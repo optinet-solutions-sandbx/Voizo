@@ -454,13 +454,28 @@ async function updateParentSpawnCounters(
   if (error) throw error;
 }
 
-async function deleteCloneBestEffort(vapiKey: string, cloneId: string): Promise<void> {
+export async function deleteCloneBestEffort(vapiKey: string, cloneId: string): Promise<void> {
+  // Best-effort, but LOUD. A silently-swallowed failure here orphans a billable
+  // Vapi assistant (no quota monitoring — see project_openai_credential_vapi).
+  // Both failure modes are logged: an HTTP non-2xx (the previous code only
+  // caught *thrown* errors, so a 401 from a rotated key / 404 / 5xx returned
+  // "successfully" and orphaned the clone) and a network throw. No key is
+  // logged — it lives in the request header, never in the URL/status/message.
+  // Audit 2026-05-29 F13. Heartbeat reconciliation still surfaces any orphan.
   try {
-    await fetch(`https://api.vapi.ai/assistant/${encodeURIComponent(cloneId)}`, {
+    const res = await fetch(`https://api.vapi.ai/assistant/${encodeURIComponent(cloneId)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${vapiKey}` },
     });
-  } catch {
-    // Best-effort cleanup; heartbeat reconciliation will surface orphans.
+    if (!res.ok) {
+      console.warn(
+        `[recurringSpawn] deleteCloneBestEffort: Vapi DELETE returned ${res.status} for clone ${cloneId} — assistant may be orphaned.`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[recurringSpawn] deleteCloneBestEffort: Vapi DELETE threw for clone ${cloneId} ` +
+        `(${err instanceof Error ? err.message : String(err)}) — assistant may be orphaned.`,
+    );
   }
 }
