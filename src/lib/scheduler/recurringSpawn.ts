@@ -57,7 +57,7 @@ export interface DueCheckResult {
 }
 
 export type SpawnOutcome =
-  | { result: "spawned"; childId: string }
+  | { result: "spawned"; childId: string; dialCount: number; windowStart: string; windowEnd: string }
   | { result: "segment_empty_skipped"; childId: string }
   | { result: "already_spawned_today"; childId: string }
   | { result: "not_due"; reason: DueCheckResult["reason"] }
@@ -412,7 +412,13 @@ export async function spawnChildIfDue(
     console.warn(`[recurringSpawn] ${parent.id}: counter update failed:`, err);
   });
 
-  return { result: "spawned", childId: childRow.id };
+  return {
+    result: "spawned",
+    childId: childRow.id,
+    dialCount: phones.length,
+    windowStart: hours.start,
+    windowEnd: hours.end,
+  };
 }
 
 // ── Internals ────────────────────────────────────────────────────────────
