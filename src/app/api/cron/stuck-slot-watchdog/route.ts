@@ -46,7 +46,23 @@ type OrphanLeaseAnomaly = {
   leased_at: string | null;
 };
 
-type Anomaly = StuckLeaseAnomaly | OrphanLeaseAnomaly;
+// H3 (audit 2026-06-01): third anomaly class — a leased slot whose
+// current_campaign_id references a campaign row that doesn't exist. FK is
+// ON DELETE SET NULL so this should be impossible normally, but a manual
+// SQL DELETE with deferred FK, or a temporary FK drop during migration,
+// can produce it. Without this type the slot is invisible to both
+// orphan_lease (campaign_id is set) and stuck_lease (no row to read).
+type UnknownCampaignAnomaly = {
+  type: "unknown_campaign";
+  pool_id: string;
+  slot_index: number;
+  current_campaign_id: string;
+  current_assistant_id: string | null;
+  leased_at: string;
+  hours_leased: number;
+};
+
+type Anomaly = StuckLeaseAnomaly | OrphanLeaseAnomaly | UnknownCampaignAnomaly;
 
 type Severity = "OK" | "WARN" | "ALERT";
 
@@ -166,16 +182,31 @@ export async function GET(request: NextRequest) {
     for (const slot of agedLeased ?? []) {
       if (slot.current_campaign_id == null) continue; // handled as orphan above
       const c = campaignMap.get(slot.current_campaign_id as string);
-      // Defensive: FK guarantees the row should exist (with ON DELETE SET NULL
-      // the campaign_id is nulled rather than left dangling), but the heartbeat
-      // race or a manual SQL DELETE could leave a brief window. Treat as if
-      // we found nothing.
-      if (!c) continue;
-      const campaignStatus = c.status as string;
-      if (!["paused", "completed", "inactive"].includes(campaignStatus)) continue;
 
       const leasedAtStr = slot.leased_at as string;
       const hoursLeased = (Date.now() - new Date(leasedAtStr).getTime()) / (60 * 60 * 1000);
+      const hoursLeasedRounded = Math.round(hoursLeased * 10) / 10;
+
+      // H3 (audit 2026-06-01): campaign row missing for a slot that names one.
+      // FK is ON DELETE SET NULL so this should be impossible, but a manual SQL
+      // DELETE with deferred FK or a temporary FK drop during migration can
+      // produce it. Pre-2026-06-01 this branch was a silent `continue` — the
+      // slot fell off both anomaly types. Now surfaced as its own class.
+      if (!c) {
+        anomalies.push({
+          type: "unknown_campaign",
+          pool_id: slot.id as string,
+          slot_index: slot.slot_index as number,
+          current_campaign_id: slot.current_campaign_id as string,
+          current_assistant_id: slot.current_assistant_id as string | null,
+          leased_at: leasedAtStr,
+          hours_leased: hoursLeasedRounded,
+        });
+        continue;
+      }
+
+      const campaignStatus = c.status as string;
+      if (!["paused", "completed", "inactive"].includes(campaignStatus)) continue;
 
       anomalies.push({
         type: "stuck_lease",
@@ -185,7 +216,7 @@ export async function GET(request: NextRequest) {
         campaign_name: c.name as string,
         campaign_status: campaignStatus as "paused" | "completed" | "inactive",
         leased_at: leasedAtStr,
-        hours_leased: Math.round(hoursLeased * 10) / 10,
+        hours_leased: hoursLeasedRounded,
       });
     }
   }
@@ -193,9 +224,16 @@ export async function GET(request: NextRequest) {
   // ── Severity calculation ──
   const stuckCount = anomalies.filter((a) => a.type === "stuck_lease").length;
   const orphanCount = anomalies.filter((a) => a.type === "orphan_lease").length;
+  const unknownCount = anomalies.filter((a) => a.type === "unknown_campaign").length;
   const totalCount = anomalies.length;
+  // maxHours computed across stuck_lease + unknown_campaign (both carry hours_leased).
+  // Orphans also have leased_at but are kept out of the max for backward-compat
+  // with the existing log/Slack format that calls this "max_hours" of stuck slots.
   const maxHours = anomalies
-    .filter((a): a is StuckLeaseAnomaly => a.type === "stuck_lease")
+    .filter(
+      (a): a is StuckLeaseAnomaly | UnknownCampaignAnomaly =>
+        a.type === "stuck_lease" || a.type === "unknown_campaign",
+    )
     .reduce((m, a) => Math.max(m, a.hours_leased), 0);
 
   let severity: Severity;
@@ -213,7 +251,8 @@ export async function GET(request: NextRequest) {
   // grep them out reliably.
   const summaryLog =
     `[stuck-slot-watchdog] severity=${severity} stuck=${stuckCount} ` +
-    `orphan=${orphanCount} max_hours=${maxHours.toFixed(1)} threshold_hours=${STUCK_THRESHOLD_HOURS}`;
+    `orphan=${orphanCount} unknown=${unknownCount} max_hours=${maxHours.toFixed(1)} ` +
+    `threshold_hours=${STUCK_THRESHOLD_HOURS}`;
 
   if (severity === "ALERT") {
     console.error(summaryLog);
@@ -230,10 +269,15 @@ export async function GET(request: NextRequest) {
   if (severity !== "OK") {
     const logFn = severity === "ALERT" ? console.error : console.warn;
     for (const a of anomalies) {
-      const line =
-        a.type === "stuck_lease"
-          ? `STUCK slot=${a.slot_index} campaign="${a.campaign_name}" status=${a.campaign_status} hours_leased=${a.hours_leased}`
-          : `ORPHAN slot=${a.slot_index} leased_at=${a.leased_at} assistant=${a.current_assistant_id ?? "null"}`;
+      let line: string;
+      if (a.type === "stuck_lease") {
+        line = `STUCK slot=${a.slot_index} campaign="${a.campaign_name}" status=${a.campaign_status} hours_leased=${a.hours_leased}`;
+      } else if (a.type === "orphan_lease") {
+        line = `ORPHAN slot=${a.slot_index} leased_at=${a.leased_at} assistant=${a.current_assistant_id ?? "null"}`;
+      } else {
+        // unknown_campaign
+        line = `UNKNOWN slot=${a.slot_index} campaign_id=${a.current_campaign_id} hours_leased=${a.hours_leased} assistant=${a.current_assistant_id ?? "null"}`;
+      }
       logFn(`[stuck-slot-watchdog] ${line}`);
       anomalyDetailLines.push(line);
     }
@@ -258,6 +302,7 @@ export async function GET(request: NextRequest) {
     summary: {
       stuck_count: stuckCount,
       orphan_count: orphanCount,
+      unknown_count: unknownCount,
       total_count: totalCount,
       max_hours: maxHours,
       threshold_hours: STUCK_THRESHOLD_HOURS,
