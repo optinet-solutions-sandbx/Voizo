@@ -122,6 +122,24 @@ export async function GET(request: NextRequest) {
     }
     const lastMs = new Date(lastIso).getTime();
     const secondsSince = Math.round((nowMs - lastMs) / 1000);
+    // M3 (audit 2026-06-01): treat corrupt timestamps and future-clock-skewed
+    // timestamps as `missing`, not silent-healthy. Without this guard:
+    //   - new Date("garbage").getTime() = NaN → NaN > threshold = false → "healthy"
+    //   - a far-future last_success_at → secondsSince < 0 → also "healthy"
+    // Both mask a real failure.
+    if (!Number.isFinite(secondsSince) || secondsSince < 0) {
+      console.warn(
+        `[alerts-hourly] non-finite or negative secondsSince for ${name} ` +
+        `(lastIso=${lastIso}); treating as missing`,
+      );
+      return {
+        name,
+        threshold_seconds: threshold,
+        last_success_at: lastIso,
+        seconds_since: null,
+        state: "missing",
+      };
+    }
     return {
       name,
       threshold_seconds: threshold,
