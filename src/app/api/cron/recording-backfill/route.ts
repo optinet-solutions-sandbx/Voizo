@@ -28,11 +28,14 @@ const FETCH_TIMEOUT_MS = 5000;
 // observed ~5-10s upload latency.
 const MIN_AGE_MS = 60 * 1000;
 
-// Upper bound: stop trying after this. Calls older than 24h that still
-// have NULL recording_url are either truly recording-less (unanswered,
-// voicemail-only) or permanently orphaned at Vapi's end. The webhook
-// already logs these cases; the cron stops wasting Vapi quota on them.
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Upper bound: stop trying after this. Sized to absorb prolonged cron-platform
+// outages: pre-2026-06-01 this was 24h and a >24h Vercel cron outage or env-var
+// availability gap would permanently abandon calls whose URLs Vapi eventually
+// uploaded. 7d extends the recovery window without unbounded growth; candidate
+// rows still narrow via `recording_url IS NULL AND vapi_call_id IS NOT NULL`
+// so cost is bounded by the genuine-failure rate, not the wall-clock window.
+// Audit 2026-06-01 H2.
+const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * GET /api/cron/recording-backfill
