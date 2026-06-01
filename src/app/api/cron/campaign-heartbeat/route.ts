@@ -199,8 +199,18 @@ export async function GET(request: NextRequest) {
 
   const vapiKey = process.env.VAPI_PRIVATE_KEY;
   if (!vapiKey) {
-    poolReconciliation.warnings.push("VAPI_PRIVATE_KEY not set — pool reconciliation skipped");
-    console.warn("[campaign-heartbeat] VAPI_PRIVATE_KEY not set — pool reconciliation skipped");
+    // M4 (audit 2026-06-01): loud-over-silent per [[loud-over-silent-skips]].
+    // Pre-fix, missing VAPI_PRIVATE_KEY silently disabled all 4 reconciliation
+    // rules while recordHeartbeat still wrote a fresh row → alerts-hourly saw
+    // green → operator unaware that pool reconciliation had been off for hours.
+    // Now: Slack WARN at every 30-min tick until the key is restored (~48/day).
+    const msg = "VAPI_PRIVATE_KEY not set — pool reconciliation skipped";
+    poolReconciliation.warnings.push(msg);
+    console.warn(`[campaign-heartbeat] ${msg}`);
+    await postSlackAlert("WARN", "Pool reconciliation degraded", [
+      "VAPI_PRIVATE_KEY missing at heartbeat runtime — reconciliation rules 1/2/3/4 all skipped this tick.",
+      "Check Vercel env var availability + recent deploys (see [[reference_vercel_env_var_no_redeploy]]).",
+    ]);
   } else {
     const { data: leasedSlots, error: poolErr } = await supabaseAdmin
       .from("vapi_sip_pool")
