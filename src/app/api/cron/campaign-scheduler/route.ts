@@ -360,10 +360,28 @@ export async function GET(request: NextRequest) {
   // Note: this gate fires AFTER the resume sweep above so already-running
   // campaigns can still advance their retries on this tick.
   const limit = parseInt(process.env.CAMPAIGN_CONCURRENCY_LIMIT ?? "3", 10);
-  const { count: leasedCount } = await supabaseAdmin
+  // H1 (audit 2026-06-01): destructure `error` so a transient Supabase blip
+  // can't silently set leasedCount=undefined → (undefined ?? 0) >= limit = false
+  // → cron bypasses the pool-aware concurrency gate. Fail-closed: on count error,
+  // defer this tick (200 not 500) and let the next minute retry.
+  const { count: leasedCount, error: poolCountErr } = await supabaseAdmin
     .from("vapi_sip_pool")
     .select("id", { count: "exact", head: true })
     .eq("status", "leased");
+
+  if (poolCountErr) {
+    console.error("[campaign-scheduler] pool count query failed — deferring tick:", poolCountErr);
+    await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
+    return NextResponse.json({
+      started: 0,
+      queued: true,
+      reason: `pool count query failed: ${poolCountErr.message}`,
+      resumed: resumeResults.filter((r) => r.result === "resumed").length,
+      resumeResults,
+      sweepResolved: sweeperResults.length,
+      sweeperResults,
+    });
+  }
 
   if ((leasedCount ?? 0) >= limit) {
     await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
