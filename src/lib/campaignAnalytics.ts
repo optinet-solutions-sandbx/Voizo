@@ -245,6 +245,37 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
 
   const startAt = (campaign.start_at ?? campaign.created_at) ?? null;
 
+  // ── Dispositions (G2: outcome ?? 'pending'; G7: 'wrong_number' is dead, never counted as signal) ──
+  const failureMix: FailureMix = { no_answer: 0, busy: 0, failed: 0, canceled: 0 };
+  for (const c of calls) {
+    const s = c.status ?? "";
+    if (s === "no_answer") failureMix.no_answer++;
+    else if (s === "busy") failureMix.busy++;
+    else if (s === "failed") failureMix.failed++;
+    else if (s === "canceled") failureMix.canceled++;
+  }
+  const nonConnectTotal = failureMix.no_answer + failureMix.busy + failureMix.failed + failureMix.canceled;
+
+  const outcomeCounts: Record<string, number> = {};
+  let neverDialed = 0;
+  for (const n of numbers) {
+    const o = n.outcome ?? "pending";
+    outcomeCounts[o] = (outcomeCounts[o] ?? 0) + 1;
+    if (!dialed.has(n.id) && (o === "pending" || o === "pending_retry")) neverDialed++;
+  }
+
+  const unreached = outcomeCounts["unreached"] ?? 0;
+  const sentSms = outcomeCounts["sent_sms"] ?? 0;
+  const notInterested = outcomeCounts["not_interested"] ?? 0;
+  const declined = outcomeCounts["declined_offer"] ?? 0;
+  const engaged = sentSms + notInterested + declined;
+
+  const preDialLeakage: PreDialLeakage = {
+    suppressed: safeDiv(outcomeCounts["suppressed"] ?? 0, targeted) ?? 0,
+    removed_from_segment: safeDiv(outcomeCounts["removed_from_segment"] ?? 0, targeted) ?? 0,
+    recently_called_elsewhere: safeDiv(outcomeCounts["recently_called_elsewhere"] ?? 0, targeted) ?? 0,
+  };
+
   return {
     id,
     name: campaign.name,
@@ -264,13 +295,13 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     yield: safeDiv(goalNums.size, targeted),
     connectRate: safeDiv(connected, terminal),
     reachability: safeDiv(connectedNums.size, dialed.size),
+    neverDialedShare: safeDiv(neverDialed, targeted),
+    exhaustionRate: safeDiv(unreached, targeted), // primary denominator (= targeted); spec §7.2's "+ alt denom excluding pending/in_progress" is a deferred Phase-1.x refinement
+    activeDeclineRate: safeDiv(notInterested + declined, engaged),
+    preDialLeakage,
+    failureMix,
+    nonConnectTotal,
     // ── filled in by later tasks ──
-    neverDialedShare: null,
-    exhaustionRate: null,
-    activeDeclineRate: null,
-    preDialLeakage: { suppressed: 0, removed_from_segment: 0, recently_called_elsewhere: 0 },
-    failureMix: { no_answer: 0, busy: 0, failed: 0, canceled: 0 },
-    nonConnectTotal: 0,
     durationMedian: null,
     durationP95: null,
     talkSeconds: 0,
