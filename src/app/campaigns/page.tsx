@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
-  Pause, Play, Copy, Clock, BarChart3, List,
+  Pause, Play, Copy, Clock, BarChart3, List, Download,
 } from "lucide-react";
+import { triggerDownload } from "@/lib/download";
+import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
@@ -367,6 +369,30 @@ function CampaignsPageInner() {
             value={dateFilter}
             onChange={(v) => { setDateFilter(v); setCurrentPage(1); }}
           />
+        )}
+        {view === "analytics" && (
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              onClick={() => {
+                const csv = buildAnalyticsCsv(analyticsRecords);
+                triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "voizo_analytics_all.csv");
+              }}
+              disabled={analyticsRecords.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+            >
+              <Download size={13} /> Export all (CSV)
+            </button>
+            <button
+              onClick={() => {
+                const json = buildAnalyticsJson(analyticsRecords, new Date().toISOString(), portfolio);
+                triggerDownload(new Blob([json], { type: "application/json" }), "voizo_analytics_all.json");
+              }}
+              disabled={analyticsRecords.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+            >
+              <Download size={13} /> Export all (JSON)
+            </button>
+          </div>
         )}
       </div>
 
