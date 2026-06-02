@@ -14,12 +14,15 @@ import { supabase } from "@/lib/supabase";
 import Pagination from "@/components/Pagination";
 import {
   computeCampaignAnalytics,
+  computePortfolio,
   type CampaignAnalytics,
+  type PortfolioRollup,
   type CampaignRow as AnalyticsCampaignRow,
   type NumberRow,
   type CallRow,
   type SmsRow,
 } from "@/lib/campaignAnalytics";
+import PortfolioKpiStrip from "@/components/analytics/PortfolioKpiStrip";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -227,6 +230,13 @@ function CampaignsPageInner() {
     });
   }, [campaigns, searchQuery, statusFilter, typeFilter]);
 
+  // Analytics records (per-campaign) for the in-scope campaigns + portfolio rollup.
+  const analyticsRecords = useMemo(
+    () => filtered.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[],
+    [filtered, analytics],
+  );
+  const portfolio: PortfolioRollup = useMemo(() => computePortfolio(analyticsRecords), [analyticsRecords]);
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -337,13 +347,17 @@ function CampaignsPageInner() {
         </div>
       </div>
 
-      {/* Stats */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
-        <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
-        <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
-        <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
-        <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" />
-      </section>
+      {/* Stats / Portfolio KPIs */}
+      {view === "operational" ? (
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
+          <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
+          <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
+          <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
+          <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" />
+        </section>
+      ) : (
+        <PortfolioKpiStrip portfolio={portfolio} />
+      )}
 
       {/* Toolbar */}
       <div className="flex items-center gap-2.5 flex-wrap mb-4">
