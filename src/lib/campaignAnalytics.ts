@@ -77,6 +77,11 @@ export interface SparklinePoint {
   goals: number;
   connected: number;
 }
+export interface DurationBucket {
+  lowerSec: number;
+  upperSec: number | null; // null = open-ended top bucket; avoids Infinity-in-JSON
+  count: number;
+}
 export interface SmsCounts {
   delivered: number;
   failed: number; // failed + undelivered
@@ -114,6 +119,7 @@ export interface CampaignAnalytics {
   // duration / density
   durationMedian: number | null; // seconds, over completed non-null
   durationP95: number | null;
+  durationHistogram: DurationBucket[];
   talkSeconds: number; // Σ duration_seconds over connected non-null
   talkSecondsOnGoal: number;
   goalDensityPerMin: number | null;
@@ -165,6 +171,25 @@ export function percentile(values: number[], p: number): number | null {
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.ceil((p / 100) * sorted.length); // nearest-rank
   return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1];
+}
+
+export function bucketDurations(durations: number[], edges: readonly number[]): DurationBucket[] {
+  const buckets: DurationBucket[] = edges.map((lowerSec, i) => ({
+    lowerSec,
+    upperSec: i + 1 < edges.length ? edges[i + 1] : null,
+    count: 0,
+  }));
+  if (buckets.length === 0) return buckets;
+  for (const d of durations) {
+    let idx = 0;
+    for (let i = 0; i < edges.length; i++) {
+      if (d >= edges[i]) idx = i;
+      else break;
+    }
+    if (d < edges[0]) idx = 0; // guard stray negative
+    buckets[idx].count++;
+  }
+  return buckets;
 }
 
 const COUNTRY_TOKEN = /(?:^|[_\s])([A-Z]{2})(?=[_\s])/;
@@ -291,6 +316,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   }
   const durationMedian = median(connectedDurations);
   const durationP95 = percentile(connectedDurations, 95);
+  const durationHistogram = bucketDurations(connectedDurations, ANALYTICS_CONFIG.DURATION_BUCKETS_SEC);
   const goalDensityPerMin = safeDiv(goalCalls, talkSeconds / 60);
 
   // ── Retry payoff: attempt index = row_number() over created_at per number (spec §7.2/§11.8) ──
@@ -428,6 +454,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     nonConnectTotal,
     durationMedian,
     durationP95,
+    durationHistogram,
     talkSeconds,
     talkSecondsOnGoal,
     goalDensityPerMin,

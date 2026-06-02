@@ -239,3 +239,38 @@ function makeHighVolumePair(): AnalyticsInput {
   for (let i = 0; i < 40; i++) calls.push({ campaign_id: "B", campaign_number_id: `B${i}`, status: "completed", goal_reached: i < 10, duration_seconds: 60, created_at: "2026-05-30T10:00:00Z" });
   return { campaigns, numbers, calls, sms: [], now };
 }
+
+describe("computeCampaignAnalytics — durationHistogram + strict funnel (Phase 2)", () => {
+  const r = computeCampaignAnalytics(FIXTURE_INPUT);
+
+  it("buckets connected-call durations by DURATION_BUCKETS_SEC (big: [120,30,90,200])", () => {
+    const h = r["big"].durationHistogram;
+    expect(h).toHaveLength(6); // edges [0,15,30,60,120,300] -> 6 buckets, top open-ended
+    const count = (lo: number) => h.find((b) => b.lowerSec === lo)!.count;
+    expect(count(0)).toBe(0);
+    expect(count(15)).toBe(0);
+    expect(count(30)).toBe(1); // 30
+    expect(count(60)).toBe(1); // 90
+    expect(count(120)).toBe(2); // 120, 200
+    expect(count(300)).toBe(0);
+    expect(h[h.length - 1].upperSec).toBeNull(); // open-ended top
+    expect(h.reduce((s, b) => s + b.count, 0)).toBe(4); // = connected non-null durations
+  });
+
+  it("empty-duration campaign yields all-zero buckets (no NaN, no crash)", () => {
+    const empty = computeCampaignAnalytics({
+      campaigns: [{ id: "z", name: "Z", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "nz", campaign_id: "z", outcome: "pending" }],
+      calls: [], sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(empty["z"].durationHistogram.every((b) => b.count === 0)).toBe(true);
+  });
+
+  it("strict nested funnel holds for the waterfall (targeted >= dialed >= connected >= goal)", () => {
+    const a = r["big"];
+    expect(a.targeted).toBeGreaterThanOrEqual(a.dialedNumbers);
+    expect(a.dialedNumbers).toBeGreaterThanOrEqual(a.connectedNumbers);
+    expect(a.connectedNumbers).toBeGreaterThanOrEqual(a.goalNumbers);
+    expect([a.targeted, a.dialedNumbers, a.connectedNumbers, a.goalNumbers]).toEqual([4, 4, 3, 2]);
+  });
+});
