@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { safeDiv, median, percentile, parseCountryToken, daysBetween } from "./campaignAnalytics";
+import { safeDiv, median, percentile, parseCountryToken, daysBetween, computeCampaignAnalytics } from "./campaignAnalytics";
+import { FIXTURE_INPUT } from "./campaignAnalytics.fixtures";
 
 describe("safeDiv (G1: no NaN/Infinity)", () => {
   it("returns the ratio for a positive denominator", () => {
@@ -50,5 +51,48 @@ describe("daysBetween", () => {
   it("counts whole days, floored, never negative", () => {
     expect(daysBetween("2026-06-01T00:00:00Z", "2026-06-04T00:00:00Z")).toBe(3);
     expect(daysBetween("2026-06-04T00:00:00Z", "2026-06-01T00:00:00Z")).toBe(0);
+  });
+});
+
+describe("computeCampaignAnalytics — funnel core (G1/G2/G7)", () => {
+  const r = computeCampaignAnalytics(FIXTURE_INPUT);
+
+  it("computes targeted / totalCalls / connected (CONNECTED set, dead buckets ignored)", () => {
+    expect(r["big"].targeted).toBe(4);
+    expect(r["big"].totalCalls).toBe(6);
+    expect(r["big"].connected).toBe(4);
+  });
+  it("goalCalls counts goal_reached===true only (G2); goalNumbers is distinct", () => {
+    expect(r["big"].goalCalls).toBe(2);
+    expect(r["big"].goalNumbers).toBe(2);
+  });
+  it("Conversion = goalCalls/connected, Yield = goalNumbers/targeted", () => {
+    expect(r["big"].conversion).toBeCloseTo(0.5);
+    expect(r["big"].yield).toBeCloseTo(0.5);
+  });
+  it("ConnectRate excludes in-flight, divides by terminal set", () => {
+    expect(r["big"].connectRate).toBeCloseTo(4 / 6);
+  });
+  it("reachability = distinct connected numbers / distinct dialed numbers", () => {
+    expect(r["big"].dialedNumbers).toBe(4);
+    expect(r["big"].connectedNumbers).toBe(3);
+    expect(r["big"].reachability).toBeCloseTo(0.75);
+  });
+  it("country parsed from name token; scheduleType from campaign_type", () => {
+    expect(r["big"].country).toBe("AU");
+    expect(r["thin"].country).toBe("CA");
+    expect(r["big"].scheduleType).toBe("fixed");
+  });
+  it("G1: a campaign with 0 connected yields null rates, not NaN", () => {
+    const empty = computeCampaignAnalytics({
+      campaigns: [{ id: "z", name: "Z", is_test: false, created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "nz", campaign_id: "z", outcome: "pending" }],
+      calls: [],
+      sms: [],
+      now: FIXTURE_INPUT.now,
+    });
+    expect(empty["z"].conversion).toBeNull();
+    expect(empty["z"].connectRate).toBeNull();
+    expect(empty["z"].reachability).toBeNull();
   });
 });

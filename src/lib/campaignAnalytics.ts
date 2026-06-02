@@ -180,5 +180,114 @@ export function daysBetween(startIso: string, endIso: string): number {
   return Math.max(0, Math.floor((end - start) / 86_400_000));
 }
 
+// ── Aggregation ─────────────────────────────────────────────────────────────
+const CONNECTED_STATUSES = new Set(["completed", "answered"]); // canon (route.ts:34); 'answered' never written
+const TERMINAL_NONCONNECT = new Set(["no_answer", "busy", "failed", "canceled"]);
+
+interface Acc {
+  campaign: CampaignRow;
+  numbers: NumberRow[];
+  calls: CallRow[];
+  sms: SmsRow[];
+}
+
+export function computeCampaignAnalytics(input: AnalyticsInput): Record<string, CampaignAnalytics> {
+  // Bucket rows by campaign id (single pass each).
+  const byId = new Map<string, Acc>();
+  for (const c of input.campaigns) byId.set(c.id, { campaign: c, numbers: [], calls: [], sms: [] });
+  for (const n of input.numbers) byId.get(n.campaign_id)?.numbers.push(n);
+  for (const c of input.calls) byId.get(c.campaign_id)?.calls.push(c);
+  for (const m of input.sms) byId.get(m.campaign_id)?.sms.push(m);
+
+  const out: Record<string, CampaignAnalytics> = {};
+  for (const [id, acc] of byId) {
+    out[id] = computeOne(id, acc, input.now);
+  }
+  return out;
+}
+
+function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
+  const { campaign, numbers, calls } = acc;
+
+  const targeted = numbers.length;
+  const totalCalls = calls.length;
+
+  let connected = 0;
+  let goalCalls = 0;
+  const dialed = new Set<string>();
+  const connectedNums = new Set<string>();
+  const goalNums = new Set<string>();
+
+  for (const c of calls) {
+    const status = c.status ?? "";
+    const numId = c.campaign_number_id ?? "";
+    if (numId) dialed.add(numId);
+    const isConnected = CONNECTED_STATUSES.has(status);
+    if (isConnected) {
+      connected++;
+      if (numId) connectedNums.add(numId);
+      // goalNumbers is gated to connected calls so connectedNums ⊇ goalNums by construction
+      // (keeps the conversion-leak drop in Task 7 non-negative). goal on a non-connected
+      // row would be a data anomaly; goalCalls below still counts every goal_reached row.
+      if (c.goal_reached === true && numId) goalNums.add(numId);
+    }
+    if (c.goal_reached === true) {
+      goalCalls++; // G2: strict === true only. NULL/false excluded.
+    }
+  }
+
+  // ConnectRate denominator excludes in-flight (initiated/ringing/in_progress) and dead buckets.
+  let terminal = 0;
+  for (const c of calls) {
+    const s = c.status ?? "";
+    if (CONNECTED_STATUSES.has(s) || TERMINAL_NONCONNECT.has(s)) terminal++;
+  }
+
+  const startAt = (campaign.start_at ?? campaign.created_at) ?? null;
+
+  return {
+    id,
+    name: campaign.name,
+    country: parseCountryToken(campaign.name),
+    scheduleType: campaign.campaign_type === "recurring" ? "recurring" : "fixed",
+    isTest: campaign.is_test === true,
+    status: campaign.status ?? "draft",
+    startAt,
+    targeted,
+    dialedNumbers: dialed.size,
+    connectedNumbers: connectedNums.size,
+    totalCalls,
+    connected,
+    goalCalls,
+    goalNumbers: goalNums.size,
+    conversion: safeDiv(goalCalls, connected),
+    yield: safeDiv(goalNums.size, targeted),
+    connectRate: safeDiv(connected, terminal),
+    reachability: safeDiv(connectedNums.size, dialed.size),
+    // ── filled in by later tasks ──
+    neverDialedShare: null,
+    exhaustionRate: null,
+    activeDeclineRate: null,
+    preDialLeakage: { suppressed: 0, removed_from_segment: 0, recently_called_elsewhere: 0 },
+    failureMix: { no_answer: 0, busy: 0, failed: 0, canceled: 0 },
+    nonConnectTotal: 0,
+    durationMedian: null,
+    durationP95: null,
+    talkSeconds: 0,
+    talkSecondsOnGoal: 0,
+    goalDensityPerMin: null,
+    retryPayoff: [],
+    activeDays: 1,
+    goalVelocity: null,
+    sparkline: [],
+    sms: { delivered: 0, failed: 0, inFlight: 0, byProvider: {} },
+    goalTrustCoverage: null,
+    goalReachedNullCount: 0,
+    confidence: "thin",
+    biggestLeak: "none",
+    includedInPortfolio: false,
+  };
+}
+
 // Re-export so callers have one import site.
 export { ANALYTICS_CONFIG, CONFIG_RATE_PER_MIN };
