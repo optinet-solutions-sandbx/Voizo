@@ -358,6 +358,49 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     }
   }
 
+  // ── Goal-trust coverage (G5): among connected calls, share with goal_reached !== null ──
+  let goalReachedNullCount = 0;
+  let connectedWithTrust = 0;
+  for (const c of calls) {
+    if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
+    if (c.goal_reached === null || c.goal_reached === undefined) goalReachedNullCount++;
+    else connectedWithTrust++;
+  }
+  const goalTrustCoverage = safeDiv(connectedWithTrust, connected);
+
+  // ── Confidence (G4): n = connected ──
+  const confidence: Confidence =
+    connected < ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN
+      ? "thin"
+      : connected < ANALYTICS_CONFIG.SAMPLE_FLOOR_FULL
+        ? "half"
+        : "full";
+
+  // ── Portfolio inclusion (G3): non-test + meets BOTH volume floors ──
+  const includedInPortfolio =
+    campaign.is_test !== true &&
+    targeted >= ANALYTICS_CONFIG.VOLUME_FLOOR_TARGETED &&
+    dialed.size >= ANALYTICS_CONFIG.VOLUME_FLOOR_DIALED;
+
+  // ── Biggest leak (only on included, volume-floored data; else 'none') ──
+  let biggestLeak: LeakStage = "none";
+  if (includedInPortfolio) {
+    const preDialCount =
+      (outcomeCounts["suppressed"] ?? 0) +
+      (outcomeCounts["removed_from_segment"] ?? 0) +
+      (outcomeCounts["recently_called_elsewhere"] ?? 0);
+    // The four §7.2 candidate drop magnitudes (lead counts), each clamped ≥0. goalNums is
+    // connected-gated so connectedNums ⊇ goalNums; clamp is defensive. argmax = the leak.
+    const drops: Array<[LeakStage, number]> = [
+      ["never_dialed", Math.max(0, neverDialed)],
+      ["pre_dial_hygiene", Math.max(0, preDialCount)],
+      ["reachability", Math.max(0, dialed.size - connectedNums.size)],
+      ["conversion", Math.max(0, connectedNums.size - goalNums.size)],
+    ];
+    drops.sort((a, b) => b[1] - a[1]);
+    biggestLeak = drops[0][1] > 0 ? drops[0][0] : "none";
+  }
+
   return {
     id,
     name: campaign.name,
@@ -393,12 +436,66 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     goalVelocity,
     sparkline,
     sms,
-    // ── filled in by later tasks ──
-    goalTrustCoverage: null,
-    goalReachedNullCount: 0,
-    confidence: "thin",
-    biggestLeak: "none",
-    includedInPortfolio: false,
+    goalTrustCoverage,
+    goalReachedNullCount,
+    confidence,
+    biggestLeak,
+    includedInPortfolio,
+  };
+}
+
+export function computePortfolio(records: CampaignAnalytics[]): PortfolioRollup {
+  const included = records.filter((r) => r.includedInPortfolio);
+  const nonTest = records.filter((r) => !r.isTest);
+  const excludedTestCount = records.filter((r) => r.isTest).length;
+  const excludedLowVolumeCount = records.filter((r) => !r.isTest && !r.includedInPortfolio).length;
+
+  let goalCalls = 0,
+    connected = 0,
+    goalNumbers = 0,
+    targeted = 0;
+  let talkMinOnGoal = 0,
+    talkMinOther = 0;
+  for (const r of included) {
+    goalCalls += r.goalCalls;
+    connected += r.connected;
+    goalNumbers += r.goalNumbers;
+    targeted += r.targeted;
+    talkMinOnGoal += r.talkSecondsOnGoal / 60;
+    talkMinOther += (r.talkSeconds - r.talkSecondsOnGoal) / 60;
+  }
+
+  // G5: Goal-Trust is an app-wide webhook-health gate — computed over ALL non-test
+  // campaigns (NOT volume-floored), so a webhook outage that currently only shows on
+  // small/new campaigns still trips the badge (spec §6.6). connected-with-non-null is
+  // reconstructed as connected − goalReachedNullCount (computeOne partitions connected
+  // calls into exactly null vs non-null).
+  let connectedWithTrust = 0,
+    connectedTotalForTrust = 0;
+  for (const r of nonTest) {
+    connectedTotalForTrust += r.connected;
+    connectedWithTrust += r.connected - r.goalReachedNullCount;
+  }
+
+  const estSpend = (talkMinOnGoal + talkMinOther) * CONFIG_RATE_PER_MIN;
+
+  // G4: medians over included AND non-thin, non-null values only.
+  const convVals = included.filter((r) => r.confidence !== "thin" && r.conversion !== null).map((r) => r.conversion as number);
+  const yieldVals = included.filter((r) => r.confidence !== "thin" && r.yield !== null).map((r) => r.yield as number);
+
+  return {
+    portfolioYield: safeDiv(goalNumbers, targeted),
+    portfolioConversion: safeDiv(goalCalls, connected),
+    goalTrustCoverage: safeDiv(connectedWithTrust, connectedTotalForTrust),
+    estSpend,
+    costPerGoal: safeDiv(estSpend, goalCalls),
+    talkMinOnGoal,
+    talkMinOther,
+    medianConversion: median(convVals),
+    medianYield: median(yieldVals),
+    includedCount: included.length,
+    excludedTestCount,
+    excludedLowVolumeCount,
   };
 }
 

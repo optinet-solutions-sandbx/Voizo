@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { safeDiv, median, percentile, parseCountryToken, daysBetween, computeCampaignAnalytics } from "./campaignAnalytics";
+import { safeDiv, median, percentile, parseCountryToken, daysBetween, computeCampaignAnalytics, computePortfolio } from "./campaignAnalytics";
+import type { AnalyticsInput } from "./campaignAnalytics";
 import { FIXTURE_INPUT } from "./campaignAnalytics.fixtures";
 
 describe("safeDiv (G1: no NaN/Infinity)", () => {
@@ -180,3 +181,61 @@ describe("computeCampaignAnalytics — duration/density/retry/velocity/sparkline
     expect(r["big"].sms.byProvider["mobivate"]).toEqual({ delivered: 1, failed: 2, inFlight: 1 });
   });
 });
+
+describe("computeCampaignAnalytics — confidence/trust/leak/inclusion (G3/G4/G5)", () => {
+  const r = computeCampaignAnalytics(FIXTURE_INPUT);
+
+  it("confidence from n=connected (fixtures intentionally below SAMPLE_FLOOR_THIN => thin)", () => {
+    expect(r["big"].confidence).toBe("thin");
+    expect(r["thin"].confidence).toBe("thin");
+  });
+  it("goalTrustCoverage = connected calls with goal_reached !== null / connected", () => {
+    // big's 4 connected calls have goal_reached [true, false, true, null] => non-null 3, null 1 => 3/4
+    expect(r["big"].goalReachedNullCount).toBe(1);
+    expect(r["big"].goalTrustCoverage).toBeCloseTo(0.75);
+  });
+  it("includedInPortfolio false for is_test (G3) and for below-volume-floor", () => {
+    expect(r["test"].includedInPortfolio).toBe(false); // is_test
+    expect(r["big"].includedInPortfolio).toBe(false); // targeted 4 < VOLUME_FLOOR_TARGETED 50
+  });
+  it("biggestLeak is 'none' below volume floor (G3/G4 — no triage on thin data)", () => {
+    expect(r["big"].biggestLeak).toBe("none");
+  });
+});
+
+describe("computePortfolio (G3/G4)", () => {
+  it("excludes test + low-volume; medians over included non-thin", () => {
+    const r = computeCampaignAnalytics(FIXTURE_INPUT);
+    const p = computePortfolio(Object.values(r));
+    expect(p.includedCount).toBe(0); // all fixtures below floor
+    expect(p.excludedTestCount).toBe(1);
+    expect(p.medianConversion).toBeNull(); // nothing included
+    expect(p.portfolioConversion).toBeNull();
+  });
+  it("computes portfolio rates + median over a high-volume synthetic set", () => {
+    const synth = makeHighVolumePair();
+    const r = computeCampaignAnalytics(synth);
+    const p = computePortfolio(Object.values(r));
+    expect(p.includedCount).toBe(2);
+    expect(p.portfolioConversion).not.toBeNull();
+    expect(p.medianConversion).not.toBeNull();
+    expect(p.estSpend).toBeGreaterThan(0);
+  });
+});
+
+function makeHighVolumePair(): AnalyticsInput {
+  const now = Date.parse("2026-06-02T12:00:00Z");
+  const campaigns = [
+    { id: "A", name: "L7_AU_A", is_test: false, start_at: "2026-05-01T00:00:00Z", created_at: "2026-05-01T00:00:00Z", campaign_type: "fixed" },
+    { id: "B", name: "L7_AU_B", is_test: false, start_at: "2026-05-01T00:00:00Z", created_at: "2026-05-01T00:00:00Z", campaign_type: "fixed" },
+  ];
+  const numbers: AnalyticsInput["numbers"] = [];
+  const calls: AnalyticsInput["calls"] = [];
+  // A: 60 targeted, 40 connected, 20 goal (conv 0.5)
+  for (let i = 0; i < 60; i++) numbers.push({ id: `A${i}`, campaign_id: "A", outcome: "pending" });
+  for (let i = 0; i < 40; i++) calls.push({ campaign_id: "A", campaign_number_id: `A${i}`, status: "completed", goal_reached: i < 20, duration_seconds: 60, created_at: "2026-05-30T10:00:00Z" });
+  // B: 60 targeted, 40 connected, 10 goal (conv 0.25)
+  for (let i = 0; i < 60; i++) numbers.push({ id: `B${i}`, campaign_id: "B", outcome: "pending" });
+  for (let i = 0; i < 40; i++) calls.push({ campaign_id: "B", campaign_number_id: `B${i}`, status: "completed", goal_reached: i < 10, duration_seconds: 60, created_at: "2026-05-30T10:00:00Z" });
+  return { campaigns, numbers, calls, sms: [], now };
+}
