@@ -23,11 +23,13 @@ import {
   type SmsRow,
 } from "@/lib/campaignAnalytics";
 import PortfolioKpiStrip from "@/components/analytics/PortfolioKpiStrip";
+import AnalyticsTable from "@/components/analytics/AnalyticsTable";
 
 type CampaignRow = Record<string, unknown>;
 
 type StatusFilter = "all" | "running" | "paused" | "completed" | "draft";
 type TypeFilter = "all" | "fixed" | "recurring";
+type DateFilter = "all" | "30d" | "7d";
 
 const PAGE_SIZE = 10;
 
@@ -90,6 +92,7 @@ function CampaignsPageInner() {
   const [deleting, setDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
 
   // URL-driven view toggle (Operational | Analytics). ?view=analytics is shareable + survives refresh.
@@ -230,16 +233,24 @@ function CampaignsPageInner() {
     });
   }, [campaigns, searchQuery, statusFilter, typeFilter]);
 
-  // Analytics records (per-campaign) for the in-scope campaigns + portfolio rollup.
-  const analyticsRecords = useMemo(
-    () => filtered.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[],
-    [filtered, analytics],
-  );
+  // Analytics records (per-campaign), date-filtered. The date chip filters WHICH campaigns
+  // appear (by start_at); per-row metrics stay lifetime totals (spec §2). Portfolio rolls up
+  // over the in-scope set.
+  const analyticsRecords = useMemo(() => {
+    const list = filtered.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[];
+    if (dateFilter === "all") return list;
+    const days = dateFilter === "30d" ? 30 : 7;
+    const cutoff = Date.now() - days * 86_400_000;
+    return list.filter((a) => a.startAt != null && Date.parse(a.startAt) >= cutoff);
+  }, [filtered, analytics, dateFilter]);
   const portfolio: PortfolioRollup = useMemo(() => computePortfolio(analyticsRecords), [analyticsRecords]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // View-aware paging: operational pages over `filtered`, analytics over `analyticsRecords`.
+  const activeList = view === "analytics" ? analyticsRecords : filtered;
+  const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const analyticsPaginated = analyticsRecords.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   function handleSearch(q: string) { setSearchQuery(q); setCurrentPage(1); }
 
@@ -345,6 +356,17 @@ function CampaignsPageInner() {
             <BarChart3 size={13} /> Analytics
           </button>
         </div>
+        {view === "analytics" && (
+          <FilterGroup
+            options={[
+              { key: "all", label: "All time" },
+              { key: "30d", label: "30d" },
+              { key: "7d", label: "7d" },
+            ]}
+            value={dateFilter}
+            onChange={(v) => { setDateFilter(v); setCurrentPage(1); }}
+          />
+        )}
       </div>
 
       {/* Stats / Portfolio KPIs */}
@@ -414,7 +436,7 @@ function CampaignsPageInner() {
           <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
             No campaigns match the current filters.
           </div>
-        ) : (
+        ) : view === "operational" ? (
           <>
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-[var(--border)]">
@@ -582,14 +604,20 @@ function CampaignsPageInner() {
               </table>
             </div>
           </>
+        ) : analyticsRecords.length === 0 ? (
+          <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
+            No campaigns in this date window.
+          </div>
+        ) : (
+          <AnalyticsTable records={analyticsPaginated} portfolio={portfolio} />
         )}
 
-        {filtered.length > 0 && (
+        {activeList.length > 0 && (
           <div className="border-t border-[var(--border)] px-5 py-3">
             <Pagination
               currentPage={safePage}
               totalPages={totalPages}
-              totalItems={filtered.length}
+              totalItems={activeList.length}
               pageSize={PAGE_SIZE}
               onPageChange={setCurrentPage}
             />
