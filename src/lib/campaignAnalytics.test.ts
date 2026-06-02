@@ -136,3 +136,47 @@ describe("computeCampaignAnalytics — dispositions (G2/G7)", () => {
     expect(none["z"].activeDeclineRate).toBeNull();
   });
 });
+
+describe("computeCampaignAnalytics — duration/density/retry/velocity/sparkline/sms (G1/G2)", () => {
+  const r = computeCampaignAnalytics(FIXTURE_INPUT);
+
+  it("duration median/p95 over completed non-null only (big durations: 120,30,90,200)", () => {
+    // sorted: 30,90,120,200 => median (90+120)/2 = 105
+    expect(r["big"].durationMedian).toBe(105);
+    expect(r["big"].durationP95).toBe(200);
+    expect(r["big"].talkSeconds).toBe(440);
+    expect(r["big"].talkSecondsOnGoal).toBe(210); // 120 + 90
+  });
+  it("goalDensityPerMin = goalCalls / (talkSeconds/60) (big: 2 / (440/60))", () => {
+    expect(r["big"].goalDensityPerMin).toBeCloseTo(2 / (440 / 60));
+  });
+  it("retryPayoff: per-number attempt index by created_at, connect rate at attempt N", () => {
+    // attempt1: dialed {n1,n2,n3,n4}=4, connected {n1,n2}=2 => 0.5
+    // attempt2: dialed {n1,n3}=2, connected {n1,n3}=2 => 1.0
+    const p1 = r["big"].retryPayoff.find((p) => p.attempt === 1)!;
+    const p2 = r["big"].retryPayoff.find((p) => p.attempt === 2)!;
+    expect(p1.dialed).toBe(4);
+    expect(p1.connected).toBe(2);
+    expect(p1.connectRate).toBeCloseTo(0.5);
+    expect(p2.dialed).toBe(2);
+    expect(p2.connected).toBe(2);
+    expect(p2.connectRate).toBeCloseTo(1);
+  });
+  it("goalVelocity = goalCalls / activeDays (big start 05-19, now 06-02 12:00 => 14 days)", () => {
+    expect(r["big"].activeDays).toBe(14);
+    expect(r["big"].goalVelocity).toBeCloseTo(2 / 14);
+  });
+  it("sparkline has SPARKLINE_DAYS points, zero-filled, oldest->newest, goals bucketed by UTC date", () => {
+    expect(r["big"].sparkline).toHaveLength(14);
+    const last = r["big"].sparkline[r["big"].sparkline.length - 1];
+    expect(last.date).toBe("2026-06-02");
+    const may30 = r["big"].sparkline.find((p) => p.date === "2026-05-30")!;
+    expect(may30.goals).toBe(2); // n1 + n2 goal calls on 05-30
+  });
+  it("sms delivered/failed/inFlight + provider breakdown (big: delivered1, failed=failed+undelivered=2, inFlight=1)", () => {
+    expect(r["big"].sms.delivered).toBe(1);
+    expect(r["big"].sms.failed).toBe(2);
+    expect(r["big"].sms.inFlight).toBe(1);
+    expect(r["big"].sms.byProvider["mobivate"]).toEqual({ delivered: 1, failed: 2, inFlight: 1 });
+  });
+});

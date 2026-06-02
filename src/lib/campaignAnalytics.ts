@@ -276,6 +276,88 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     recently_called_elsewhere: safeDiv(outcomeCounts["recently_called_elsewhere"] ?? 0, targeted) ?? 0,
   };
 
+  // ── Duration / density (G2: numeric guard; only connected calls carry reliable seconds) ──
+  const connectedDurations: number[] = [];
+  let talkSeconds = 0;
+  let talkSecondsOnGoal = 0;
+  for (const c of calls) {
+    const s = c.status ?? "";
+    if (!CONNECTED_STATUSES.has(s)) continue;
+    if (typeof c.duration_seconds === "number" && Number.isFinite(c.duration_seconds)) {
+      connectedDurations.push(c.duration_seconds);
+      talkSeconds += c.duration_seconds;
+      if (c.goal_reached === true) talkSecondsOnGoal += c.duration_seconds;
+    }
+  }
+  const durationMedian = median(connectedDurations);
+  const durationP95 = percentile(connectedDurations, 95);
+  const goalDensityPerMin = safeDiv(goalCalls, talkSeconds / 60);
+
+  // ── Retry payoff: attempt index = row_number() over created_at per number (spec §7.2/§11.8) ──
+  const callsByNum = new Map<string, CallRow[]>();
+  for (const c of calls) {
+    const k = c.campaign_number_id ?? "";
+    if (!k) continue;
+    let arr = callsByNum.get(k);
+    if (!arr) {
+      arr = [];
+      callsByNum.set(k, arr);
+    }
+    arr.push(c);
+  }
+  const attemptAgg = new Map<number, { dialed: number; connected: number }>();
+  for (const list of callsByNum.values()) {
+    list.sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""));
+    list.forEach((c, i) => {
+      const attempt = i + 1;
+      const a = attemptAgg.get(attempt) ?? { dialed: 0, connected: 0 };
+      a.dialed++;
+      if (CONNECTED_STATUSES.has(c.status ?? "")) a.connected++;
+      attemptAgg.set(attempt, a);
+    });
+  }
+  const retryPayoff: RetryPayoffPoint[] = [...attemptAgg.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([attempt, a]) => ({ attempt, dialed: a.dialed, connected: a.connected, connectRate: safeDiv(a.connected, a.dialed) }));
+
+  // ── Velocity (active_days = max(1, days from startAt to min(now, end_at))) ──
+  const endMs = campaign.end_at ? Math.min(now, Date.parse(campaign.end_at)) : now;
+  const activeDays = Math.max(1, daysBetween(startAt ?? new Date(now).toISOString(), new Date(endMs).toISOString()));
+  const goalVelocity = safeDiv(goalCalls, activeDays);
+
+  // ── Sparkline: last SPARKLINE_DAYS UTC days, zero-filled, goals + connected per day ──
+  const dayKeys: string[] = [];
+  for (let i = ANALYTICS_CONFIG.SPARKLINE_DAYS - 1; i >= 0; i--) {
+    dayKeys.push(new Date(now - i * 86_400_000).toISOString().slice(0, 10));
+  }
+  const goalsByDay: Record<string, number> = {};
+  const connByDay: Record<string, number> = {};
+  for (const c of calls) {
+    if (!c.created_at) continue;
+    const d = new Date(c.created_at).toISOString().slice(0, 10);
+    if (c.goal_reached === true) goalsByDay[d] = (goalsByDay[d] ?? 0) + 1;
+    if (CONNECTED_STATUSES.has(c.status ?? "")) connByDay[d] = (connByDay[d] ?? 0) + 1;
+  }
+  const sparkline: SparklinePoint[] = dayKeys.map((d) => ({ date: d, goals: goalsByDay[d] ?? 0, connected: connByDay[d] ?? 0 }));
+
+  // ── SMS (delivered = 'delivered'; failed = failed+undelivered; inFlight = queued+sent) ──
+  const sms: SmsCounts = { delivered: 0, failed: 0, inFlight: 0, byProvider: {} };
+  for (const m of acc.sms) {
+    const provider = m.provider ?? "unknown";
+    const bucket = (sms.byProvider[provider] ??= { delivered: 0, failed: 0, inFlight: 0 });
+    const st = m.status ?? "";
+    if (st === "delivered") {
+      sms.delivered++;
+      bucket.delivered++;
+    } else if (st === "failed" || st === "undelivered") {
+      sms.failed++;
+      bucket.failed++;
+    } else if (st === "queued" || st === "sent") {
+      sms.inFlight++;
+      bucket.inFlight++;
+    }
+  }
+
   return {
     id,
     name: campaign.name,
@@ -301,17 +383,17 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     preDialLeakage,
     failureMix,
     nonConnectTotal,
+    durationMedian,
+    durationP95,
+    talkSeconds,
+    talkSecondsOnGoal,
+    goalDensityPerMin,
+    retryPayoff,
+    activeDays,
+    goalVelocity,
+    sparkline,
+    sms,
     // ── filled in by later tasks ──
-    durationMedian: null,
-    durationP95: null,
-    talkSeconds: 0,
-    talkSecondsOnGoal: 0,
-    goalDensityPerMin: null,
-    retryPayoff: [],
-    activeDays: 1,
-    goalVelocity: null,
-    sparkline: [],
-    sms: { delivered: 0, failed: 0, inFlight: 0, byProvider: {} },
     goalTrustCoverage: null,
     goalReachedNullCount: 0,
     confidence: "thin",
