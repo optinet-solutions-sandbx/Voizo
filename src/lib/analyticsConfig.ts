@@ -30,6 +30,10 @@ export const ANALYTICS_CONFIG = {
 
   // Real sparkline window.
   SPARKLINE_DAYS: 14,
+
+  // Histogram band edges (seconds) for the connected-call duration distribution.
+  // Buckets: [0,15) [15,30) [30,60) [60,120) [120,300) [300, ∞). Top bucket is open-ended.
+  DURATION_BUCKETS_SEC: [0, 15, 30, 60, 120, 300],
 } as const;
 
 /** Combined per-minute proxy rate (telephony + AI). Labeled "est." everywhere it surfaces. */

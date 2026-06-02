@@ -18,4 +18,10 @@ describe("analyticsConfig", () => {
       ANALYTICS_CONFIG.CONFIG_RATE_TELEPHONY_PER_MIN + ANALYTICS_CONFIG.CONFIG_RATE_AI_PER_MIN,
     );
   });
+  it("exposes ascending duration histogram band edges", () => {
+    const e = ANALYTICS_CONFIG.DURATION_BUCKETS_SEC;
+    expect(e[0]).toBe(0);
+    expect(e).toEqual([...e].sort((a, b) => a - b)); // strictly ascending
+    expect(e.length).toBeGreaterThanOrEqual(4);
+  });
 });
