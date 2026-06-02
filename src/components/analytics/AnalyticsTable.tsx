@@ -27,18 +27,21 @@ export default function AnalyticsTable({ records, portfolio }: AnalyticsTablePro
   const [expanded, setExpanded] = useState<string | null>(null);
   return (
     <div className="hidden md:block overflow-x-auto">
+      <p className="text-[10px] text-[var(--text-3)] px-3 pt-2">
+        Conversion = wins per connected call · Yield = wins per targeted lead · grey = thin sample (let it accumulate) · click a row to deep-dive + export.
+      </p>
       <table className="w-full min-w-[980px] text-sm">
         <thead>
           <tr>
             <Th>Campaign</Th>
             <Th>Date</Th>
-            <Th>Funnel</Th>
-            <Th alignRight>Conv.</Th>
-            <Th alignRight>Yield</Th>
-            <Th>Leak</Th>
-            <Th alignRight>Velocity</Th>
-            <Th>14-day goals</Th>
-            <Th alignRight>SMS</Th>
+            <Th><span title="Targeted → connected → goal, scaled to the list. Hover a bar for raw counts.">Funnel</span></Th>
+            <Th alignRight><span title="Conversion — wins (goals) per connected call.">Conv.</span></Th>
+            <Th alignRight><span title="Yield — wins (goals) per targeted lead.">Yield</span></Th>
+            <Th><span title="The biggest drop-off stage to fix first.">Leak</span></Th>
+            <Th alignRight><span title="Goals per active day.">Velocity</span></Th>
+            <Th><span title="Goals per day over the last 14 days.">14-day goals</span></Th>
+            <Th alignRight><span title="SMS delivered / failed (· in-flight sent count when no delivery receipts yet).">SMS</span></Th>
             <Th>Status</Th>
             <Th />
           </tr>
