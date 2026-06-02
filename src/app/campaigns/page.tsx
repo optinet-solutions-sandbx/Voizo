@@ -24,6 +24,7 @@ import {
 } from "@/lib/campaignAnalytics";
 import PortfolioKpiStrip from "@/components/analytics/PortfolioKpiStrip";
 import AnalyticsTable from "@/components/analytics/AnalyticsTable";
+import AnalyticsMobileCards from "@/components/analytics/AnalyticsMobileCards";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -609,7 +610,10 @@ function CampaignsPageInner() {
             No campaigns in this date window.
           </div>
         ) : (
-          <AnalyticsTable records={analyticsPaginated} portfolio={portfolio} />
+          <>
+            <AnalyticsMobileCards records={analyticsPaginated} portfolio={portfolio} />
+            <AnalyticsTable records={analyticsPaginated} portfolio={portfolio} />
+          </>
         )}
 
         {activeList.length > 0 && (

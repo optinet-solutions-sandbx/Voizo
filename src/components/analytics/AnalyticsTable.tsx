@@ -77,10 +77,16 @@ export default function AnalyticsTable({ records, portfolio }: AnalyticsTablePro
                     <span className="text-[10px] text-[var(--text-3)]">/d</span>
                   </td>
                   <td className="px-3 py-3"><GoalSparkline series={a.sparkline} /></td>
-                  <td className="px-3 py-3 text-right text-xs tabular-nums">
+                  <td
+                    className="px-3 py-3 text-right text-xs tabular-nums"
+                    title={`Delivered ${a.sms.delivered} · Failed ${a.sms.failed} · In-flight (sent/queued) ${a.sms.inFlight}\nDelivered/failed need the Mobivate delivery-receipt webhook; until it posts, sends sit in-flight.`}
+                  >
                     <span className="text-emerald-400">{a.sms.delivered}</span>
                     <span className="text-[var(--text-3)]">/</span>
                     <span className="text-red-400">{a.sms.failed}</span>
+                    {a.sms.inFlight > 0 && a.sms.delivered + a.sms.failed === 0 && (
+                      <span className="text-[var(--text-3)] ml-1">·{a.sms.inFlight} sent</span>
+                    )}
                   </td>
                   <td className="px-3 py-3 text-xs text-[var(--text-2)]">{a.status}</td>
                   <td className="px-2 py-3 text-[var(--text-3)]">{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
