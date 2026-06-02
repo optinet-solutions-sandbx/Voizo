@@ -1,7 +1,16 @@
+"use client";
+
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { Download } from "lucide-react";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
 import { ANALYTICS_CONFIG } from "@/lib/analyticsConfig";
+import FunnelWaterfall from "./FunnelWaterfall";
+import DurationHistogram from "./DurationHistogram";
+import FailureMixBar from "./FailureMixBar";
+import RetryPayoffBar from "./RetryPayoffBar";
+import { triggerDownload } from "@/lib/download";
+import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 
 interface AnalyticsRowExpandProps {
   a: CampaignAnalytics;
@@ -26,6 +35,38 @@ function Metric({ label, value, hint }: { label: string; value: ReactNode; hint?
 export default function AnalyticsRowExpand({ a }: AnalyticsRowExpandProps) {
   return (
     <div className="space-y-4">
+      {/* Deep-dive charts (2×2) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <FunnelWaterfall a={a} />
+        <DurationHistogram a={a} />
+        <FailureMixBar a={a} />
+        <RetryPayoffBar a={a} />
+      </div>
+
+      {/* Per-campaign export (aggregation-only; PII-safe) */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const csv = buildAnalyticsCsv([a]);
+            triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), `voizo_analytics_${a.id}.csv`);
+          }}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[var(--bg-elevated)] text-[var(--text-2)] hover:text-[var(--text-1)] transition"
+        >
+          <Download size={12} /> Export CSV
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const json = buildAnalyticsJson([a], new Date().toISOString());
+            triggerDownload(new Blob([json], { type: "application/json" }), `voizo_analytics_${a.id}.json`);
+          }}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[var(--bg-elevated)] text-[var(--text-2)] hover:text-[var(--text-1)] transition"
+        >
+          <Download size={12} /> Export JSON
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
         <Metric label="Connect Rate" value={pct(a.connectRate)} hint="connected ÷ terminal calls (excludes in-flight); no min-duration floor — 2s answer-drops count" />
         <Metric label="Reachability" value={pct(a.reachability)} hint="distinct connected numbers ÷ distinct dialed numbers" />
