@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
-  Pause, Play, Copy, Clock,
+  Pause, Play, Copy, Clock, BarChart3, List,
 } from "lucide-react";
 import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
@@ -76,7 +76,7 @@ function relativeStart(iso: string): string {
 // Page
 // ─────────────────────────────────────────────────────────────────────────
 
-export default function CampaignsPage() {
+function CampaignsPageInner() {
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
   const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics>>({});
@@ -88,6 +88,19 @@ export default function CampaignsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
+
+  // URL-driven view toggle (Operational | Analytics). ?view=analytics is shareable + survives refresh.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const view: "operational" | "analytics" = searchParams.get("view") === "analytics" ? "analytics" : "operational";
+  function setView(next: "operational" | "analytics") {
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    if (next === "analytics") params.set("view", "analytics");
+    else params.delete("view");
+    const qs = params.toString();
+    setCurrentPage(1); // reset pagination on mode switch (operational and analytics page over different sets)
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }
 
   // Initial fetch: campaigns + per-campaign aggregation from numbers + calls.
   useEffect(() => {
@@ -304,6 +317,24 @@ export default function CampaignsPage() {
           <HoverIcon icon={PlusIcon} size={14} />
           New Campaign
         </Link>
+      </div>
+
+      {/* View toggle */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl w-fit">
+          <button
+            onClick={() => setView("operational")}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "operational" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+          >
+            <List size={13} /> Operational
+          </button>
+          <button
+            onClick={() => setView("analytics")}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "analytics" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+          >
+            <BarChart3 size={13} /> Analytics
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -552,6 +583,22 @@ export default function CampaignsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function CampaignsPage() {
+  // useSearchParams() requires a Suspense boundary in Next 16 (workers/page.tsx pattern).
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-64 gap-2">
+          <Loader2 size={20} className="animate-spin text-blue-500" />
+          <span className="text-sm text-[var(--text-3)]">Loading campaigns...</span>
+        </div>
+      }
+    >
+      <CampaignsPageInner />
+    </Suspense>
   );
 }
 
