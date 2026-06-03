@@ -39,9 +39,9 @@ const navItems: {
 }[] = [
   { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, animatedIcon: LayoutGridIcon,  color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Live Activity", href: "/activity",        icon: Activity,        animatedIcon: ActivityIcon,    color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
-  { label: "Reviews",       href: "/reviews",         icon: ClipboardCheck,  animatedIcon: ClipboardCheckIcon, color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Workers",       href: "/workers",         icon: Globe2,          animatedIcon: EarthIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       animatedIcon: SendIcon,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Reviews",       href: "/reviews",         icon: ClipboardCheck,  animatedIcon: ClipboardCheckIcon, color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Audience",      href: "/audience",        icon: Users,           animatedIcon: UsersIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Do Not Call",   href: "/do-not-call",     icon: PhoneOff,        animatedIcon: PhoneMissedIcon, color: "text-red-400",         bg: "bg-red-500/10"           },
   { label: "Knowledge",     href: "/knowledge-bases", icon: BookOpen,        animatedIcon: BookTextIcon,    color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
