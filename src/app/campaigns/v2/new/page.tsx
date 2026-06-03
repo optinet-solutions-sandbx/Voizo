@@ -416,6 +416,19 @@ function WizardPage({
       const clone = (await cloneRes.json()) as CloneResult;
 
       const { campaign } = await createCampaignV2(buildCreateInput(state, clone));
+
+      // Best-effort prompt-version snapshot (slice 2 — eval-loop keystone).
+      // Fire-and-forget: a snapshot must NEVER block or fail the launch. The
+      // server route re-reads the clone from Vapi and writes via the service
+      // role — createCampaignV2 runs client-side (anon) and can't write the
+      // default-deny prompt_versions table. keepalive:true lets the request
+      // survive the router.push navigation below (a soft-nav can otherwise
+      // abort an in-flight fetch); the server warn-logs any skip.
+      void fetch(`/api/campaigns-v2/${campaign.id}/snapshot-prompt`, {
+        method: "POST",
+        keepalive: true,
+      }).catch(() => {});
+
       router.push(`/campaigns/v2/${campaign.id}`);
     } catch (err) {
       console.error("Failed to create Campaign V2 via wizard:", err);
