@@ -6,7 +6,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Bell, Search, Megaphone, PhoneOff, BookOpen, Phone, X,
   LayoutDashboard, BarChart2, Settings, AppWindow, Sun, Moon, Trash2, Globe2,
-  Activity, Users, Lock, LockOpen,
+  Activity, Users, Lock, LockOpen, ClipboardCheck,
 } from "lucide-react";
 
 const CampaignIcon = Megaphone;
@@ -23,6 +23,7 @@ import { SendIcon } from "@/components/icons/animated/send";
 import { UsersIcon } from "@/components/icons/animated/users";
 import { PhoneMissedIcon } from "@/components/icons/animated/phone-missed";
 import { BookTextIcon } from "@/components/icons/animated/book-text";
+import { ClipboardCheckIcon } from "@/components/icons/animated/clipboard-check";
 import type { AnimatedIcon, AnimatedIconHandle } from "@/components/icons/animated/types";
 
 // P2 Option C (2026-05-22): semantic-accents-only. All inactive nav chips
@@ -38,6 +39,7 @@ const navItems: {
 }[] = [
   { label: "Dashboard",     href: "/dashboard",       icon: LayoutDashboard, animatedIcon: LayoutGridIcon,  color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Live Activity", href: "/activity",        icon: Activity,        animatedIcon: ActivityIcon,    color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
+  { label: "Reviews",       href: "/reviews",         icon: ClipboardCheck,  animatedIcon: ClipboardCheckIcon, color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Workers",       href: "/workers",         icon: Globe2,          animatedIcon: EarthIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Campaigns",     href: "/campaigns",       icon: Megaphone,       animatedIcon: SendIcon,        color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
   { label: "Audience",      href: "/audience",        icon: Users,           animatedIcon: UsersIcon,       color: "text-[var(--text-2)]", bg: "bg-[var(--bg-elevated)]" },
@@ -50,6 +52,7 @@ const SIDEBAR_LOCK_KEY = "voizo-sidebar-locked";
 const allPages = [
   { label: "Workers",        href: "/workers",         icon: Globe2,         description: "Worker fleet and world-time view" },
   { label: "Live Activity",  href: "/activity",        icon: Activity,       description: "Live operations console — calls, SMS, outcomes" },
+  { label: "Reviews",        href: "/reviews",         icon: ClipboardCheck, description: "Label call quality — good/bad verdicts that calibrate the AI judge" },
   { label: "Campaigns",      href: "/campaigns",       icon: Megaphone,      description: "Manage your calling campaigns" },
   { label: "Audience",       href: "/audience",        icon: Users,          description: "Recycled local segments carved from past outcomes" },
   { label: "Do Not Call",    href: "/do-not-call",     icon: PhoneOff,       description: "DNC list management" },

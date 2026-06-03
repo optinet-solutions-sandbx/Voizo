@@ -8,6 +8,14 @@
 // slot with no child row. The guard below makes the scheduler DEFER a spawn to
 // the next tick when too little wall-clock remains to finish one safely — so a
 // spawn is never *started* unless it can complete.
+//
+// Note (slice 2 prompt-versioning): spawn also runs a best-effort prompt-version
+// snapshot (one Vapi GET + one upsert) as its FINAL step, AFTER the child row,
+// slot lease, linkSlot, and counters are durably committed. It is intentionally
+// NOT sized into this budget: a mid-snapshot timeout kill drops only the
+// snapshot (a missing version row is benign and back-fills on a later rebind),
+// never orphaning a clone/slot — so the orphan invariant this guard protects is
+// unaffected. The 5s safety cushion absorbs its ~1-3s tail in practice.
 
 /** Conservative worst-case wall-clock for one recurring spawn. Tune in staging. */
 export const RECURRING_SPAWN_BUDGET_MS = 30_000;

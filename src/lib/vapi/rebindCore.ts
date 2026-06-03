@@ -38,6 +38,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClone } from "@/lib/vapi/cloneAssistant";
 import { leaseSlot, linkSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
+import { snapshotCampaignPrompt } from "@/lib/promptVersionData";
 
 export interface RebindCoreCampaign {
   id: string;
@@ -170,6 +171,13 @@ export async function executeRebindCore(
         "The new clone and slot are live on Vapi. Eject the campaign and try again to reconcile.",
     };
   }
+
+  // ── 6. Best-effort prompt-version snapshot (slice 2 — eval-loop keystone) ──
+  // A re-clone can carry a changed prompt; capture the new effective prompt now
+  // that the row points at the new clone. Awaited (serverless may freeze after
+  // the response) but snapshotCampaignPrompt never throws, so it cannot turn a
+  // successful rebind into a failure.
+  await snapshotCampaignPrompt(campaign.id, clone.id);
 
   return {
     ok: true,

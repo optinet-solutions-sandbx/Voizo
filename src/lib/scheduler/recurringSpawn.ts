@@ -24,6 +24,7 @@ import { createClone } from "@/lib/vapi/cloneAssistant";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { leaseSlot, patchPhoneAssistant, linkSlot, releaseSlot } from "@/lib/vapi/sipPool";
 import { parsePhoneList } from "@/lib/campaignV2Data";
+import { snapshotCampaignPrompt } from "@/lib/promptVersionData";
 import type { DayOfWeek, RecurrencePattern } from "@/lib/types/recurrence";
 
 export interface RecurringParent {
@@ -422,6 +423,13 @@ export async function spawnChildIfDue(
   await updateParentSpawnCounters(supabase, parent, todayStr).catch((err) => {
     console.warn(`[recurringSpawn] ${parent.id}: counter update failed:`, err);
   });
+
+  // ── 14. Best-effort prompt-version snapshot (slice 2 — eval-loop keystone) ──
+  // Capture the spawned child's effective prompt. Awaited (serverless may freeze
+  // after return); snapshotCampaignPrompt never throws, so a snapshot failure
+  // cannot turn a successful spawn into a failure. Only the cloned path reaches
+  // here — the empty-segment skip branch (no clone) returned earlier.
+  await snapshotCampaignPrompt(childRow.id, clone.id);
 
   return {
     result: "spawned",

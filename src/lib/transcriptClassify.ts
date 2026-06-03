@@ -1,0 +1,86 @@
+// Shared transcript classification for the Reviews queue.
+//
+// Speaker parsing + voicemail patterns are ported from the end-of-call webhook
+// (src/app/api/webhooks/vapi/end-of-call/route.ts). Kept as a SEPARATE copy on
+// purpose: that webhook is call-path code we don't disturb for a slice-1 feature.
+// TODO (separate, reviewed change): DRY the webhook to import from here.
+
+export type TranscriptSpeaker = "ai" | "user" | "unknown";
+export interface TranscriptTurn {
+  speaker: TranscriptSpeaker;
+  text: string;
+}
+
+const TRANSCRIPT_CAP = 32_000;
+
+/**
+ * Parse Vapi's flat, speaker-labelled transcript into ordered turns. Handles
+ * both observed formats — "User\n[text]" and "User: [text]" — and skips stray
+ * timestamp lines like "4:48:40 PM(+00:00.61)".
+ */
+export function parseTranscriptTurns(transcript: string): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = [];
+  const lines = transcript.split(/\r?\n/);
+  let currentSpeaker: TranscriptSpeaker = "unknown";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const text = buffer.join(" ").trim();
+    if (text) turns.push({ speaker: currentSpeaker, text });
+    buffer = [];
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?(\s*\(\+?[\d:.]+\))?$/i.test(line)) continue;
+
+    if (/^(?:AI|Assistant|Bot)$/i.test(line)) { flush(); currentSpeaker = "ai"; continue; }
+    if (/^(?:User|Customer|Caller|Human)$/i.test(line)) { flush(); currentSpeaker = "user"; continue; }
+
+    const aiInline = line.match(/^(?:AI|Assistant|Bot):\s*(.*)$/i);
+    if (aiInline) { flush(); currentSpeaker = "ai"; if (aiInline[1]) buffer.push(aiInline[1]); continue; }
+    const userInline = line.match(/^(?:User|Customer|Caller|Human):\s*(.*)$/i);
+    if (userInline) { flush(); currentSpeaker = "user"; if (userInline[1]) buffer.push(userInline[1]); continue; }
+
+    buffer.push(line);
+  }
+  flush();
+  return turns;
+}
+
+// Voicemail / answering-machine greeting patterns. 2+ distinct matches = voicemail
+// (a real customer rarely emits two of these; a greeting emits 3-5).
+const VOICEMAIL_GREETING_PATTERNS = [
+  /\bvoice\s*mail\b/i,
+  /\bvoicemail\b/i,
+  /can'?t take your call/i,
+  /\bleave (?:a |your )?message\b/i,
+  /after the (?:tone|beep)/i,
+  /\bpress (?:1|hash|pound|star)/i,
+  /\byou'?ve reached\b/i,
+  /at the sound of the (?:tone|beep)/i,
+  /please record (?:your )?message/i,
+  /\bnot available\b/i,
+];
+
+export function isVoicemail(transcript: string): boolean {
+  if (!transcript) return false;
+  const safe = transcript.slice(0, TRANSCRIPT_CAP);
+  return VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2;
+}
+
+/**
+ * The Reviews-queue inclusion rule (confirmed with Jasiel 2026-06-02):
+ * keep a call iff there was a REAL conversation with the customer —
+ *   • at least one substantive customer (user) turn,
+ *   • NOT a voicemail greeting,
+ *   • NOT just the AI's opening line (which yields zero user turns).
+ * Goal-reached is irrelevant here; an unconverted-but-real conversation stays.
+ */
+export function hasRealConversation(transcript: string | null | undefined): boolean {
+  if (!transcript || !transcript.trim()) return false;
+  if (isVoicemail(transcript)) return false;
+  const turns = parseTranscriptTurns(transcript);
+  return turns.some((t) => t.speaker === "user" && t.text.trim().length >= 2);
+}
