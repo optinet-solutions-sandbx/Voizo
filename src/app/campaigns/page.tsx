@@ -1,29 +1,38 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
-  Pause, Play, Copy, Clock,
+  Pause, Play, Copy, Clock, BarChart3, List, Download,
 } from "lucide-react";
+import { triggerDownload } from "@/lib/download";
+import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
 import { supabase } from "@/lib/supabase";
 import Pagination from "@/components/Pagination";
+import {
+  computeCampaignAnalytics,
+  computePortfolio,
+  type CampaignAnalytics,
+  type PortfolioRollup,
+  type CampaignRow as AnalyticsCampaignRow,
+  type NumberRow,
+  type CallRow,
+  type SmsRow,
+} from "@/lib/campaignAnalytics";
+import PortfolioKpiStrip from "@/components/analytics/PortfolioKpiStrip";
+import AnalyticsTable from "@/components/analytics/AnalyticsTable";
+import AnalyticsMobileCards from "@/components/analytics/AnalyticsMobileCards";
 
 type CampaignRow = Record<string, unknown>;
 
-interface CampaignStats {
-  totalContacts: number;
-  totalCalls: number;
-  connectCount: number;
-  successCount: number;
-}
-
 type StatusFilter = "all" | "running" | "paused" | "completed" | "draft";
 type TypeFilter = "all" | "fixed" | "recurring";
+type DateFilter = "all" | "30d" | "7d";
 
 const PAGE_SIZE = 10;
 
@@ -75,10 +84,10 @@ function relativeStart(iso: string): string {
 // Page
 // ─────────────────────────────────────────────────────────────────────────
 
-export default function CampaignsPage() {
+function CampaignsPageInner() {
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
-  const [campaignStats, setCampaignStats] = useState<Record<string, CampaignStats>>({});
+  const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics>>({});
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -86,7 +95,21 @@ export default function CampaignsPage() {
   const [deleting, setDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
+
+  // URL-driven view toggle (Operational | Analytics). ?view=analytics is shareable + survives refresh.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const view: "operational" | "analytics" = searchParams.get("view") === "analytics" ? "analytics" : "operational";
+  function setView(next: "operational" | "analytics") {
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    if (next === "analytics") params.set("view", "analytics");
+    else params.delete("view");
+    const qs = params.toString();
+    setCurrentPage(1); // reset pagination on mode switch (operational and analytics page over different sets)
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }
 
   // Initial fetch: campaigns + per-campaign aggregation from numbers + calls.
   useEffect(() => {
@@ -98,33 +121,35 @@ export default function CampaignsPage() {
         const ids = rows.map((r: CampaignRow) => r.id as string);
         if (ids.length === 0) { setLoading(false); return; }
 
-        const [{ data: numbers }, { data: calls }] = await Promise.all([
+        // PII-minimization (G6): select ONLY aggregation columns — never phone_e164,
+        // transcript, body, to_phone_e164, error_message, or provider_message_id.
+        const [numbersRes, callsRes, smsRes] = await Promise.all([
           supabase
             .from("campaign_numbers_v2")
-            .select("id, campaign_id, outcome")
+            .select("id, campaign_id, outcome, created_at")
             .in("campaign_id", ids),
           supabase
             .from("calls_v2")
-            .select("campaign_id, status")
+            .select("campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at")
+            .in("campaign_id", ids),
+          supabase
+            .from("sms_messages_v2")
+            .select("campaign_id, status, provider")
             .in("campaign_id", ids),
         ]);
+        // Loud over silent: a per-table read error degrades a metric to 0 — surface it, never hide it.
+        if (numbersRes.error) console.error("[analytics] campaign_numbers_v2 read failed:", numbersRes.error);
+        if (callsRes.error) console.error("[analytics] calls_v2 read failed:", callsRes.error);
+        if (smsRes.error) console.error("[analytics] sms_messages_v2 read failed (SMS metrics read 0):", smsRes.error);
 
-        const s: Record<string, CampaignStats> = {};
-        for (const id of ids) s[id] = { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
-        for (const n of numbers ?? []) {
-          const cid = n.campaign_id as string;
-          if (s[cid]) {
-            s[cid].totalContacts++;
-            if (n.outcome === "sent_sms") s[cid].successCount++;
-          }
-        }
-        for (const c of calls ?? []) {
-          const cid = c.campaign_id as string;
-          if (!s[cid]) continue;
-          s[cid].totalCalls++;
-          if (c.status === "completed" || c.status === "answered") s[cid].connectCount++;
-        }
-        setCampaignStats(s);
+        const analyticsById = computeCampaignAnalytics({
+          campaigns: rows as AnalyticsCampaignRow[],
+          numbers: (numbersRes.data ?? []) as NumberRow[],
+          calls: (callsRes.data ?? []) as CallRow[],
+          sms: (smsRes.data ?? []) as SmsRow[],
+          now: Date.now(),
+        });
+        setAnalytics(analyticsById);
       } catch (err) {
         console.error("Failed to fetch campaigns:", err);
       } finally {
@@ -175,17 +200,18 @@ export default function CampaignsPage() {
     return () => clearInterval(interval);
   }, [hasActiveCampaign]);
 
-  // Aggregate totals for the stat strip
+  // Aggregate totals for the stat strip (sourced from the analytics record).
   const totals = useMemo(() => {
-    const vals = Object.values(campaignStats);
-    const totalContacts = vals.reduce((s, v) => s + v.totalContacts, 0);
+    const vals = Object.values(analytics);
+    const totalContacts = vals.reduce((s, v) => s + v.targeted, 0);
     const totalCalls = vals.reduce((s, v) => s + v.totalCalls, 0);
-    const connectCount = vals.reduce((s, v) => s + v.connectCount, 0);
-    const successCount = vals.reduce((s, v) => s + v.successCount, 0);
+    const connectCount = vals.reduce((s, v) => s + v.connected, 0);
+    const goalCount = vals.reduce((s, v) => s + v.goalCalls, 0);
     const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
-    const successRate = connectCount > 0 ? ((successCount / connectCount) * 100).toFixed(1) : "0.0";
-    return { totalContacts, totalCalls, connectCount, successCount, connectRate, successRate };
-  }, [campaignStats]);
+    // Operational Success is now goal-based Conversion (goal ÷ connected) — app-wide canon.
+    const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
+    return { totalContacts, totalCalls, connectCount, goalCount, connectRate, successRate };
+  }, [analytics]);
 
   // Counts for filter pills
   const counts = useMemo(() => ({
@@ -210,9 +236,24 @@ export default function CampaignsPage() {
     });
   }, [campaigns, searchQuery, statusFilter, typeFilter]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Analytics records (per-campaign), date-filtered. The date chip filters WHICH campaigns
+  // appear (by start_at); per-row metrics stay lifetime totals (spec §2). Portfolio rolls up
+  // over the in-scope set.
+  const analyticsRecords = useMemo(() => {
+    const list = filtered.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[];
+    if (dateFilter === "all") return list;
+    const days = dateFilter === "30d" ? 30 : 7;
+    const cutoff = Date.now() - days * 86_400_000;
+    return list.filter((a) => a.startAt != null && Date.parse(a.startAt) >= cutoff);
+  }, [filtered, analytics, dateFilter]);
+  const portfolio: PortfolioRollup = useMemo(() => computePortfolio(analyticsRecords), [analyticsRecords]);
+
+  // View-aware paging: operational pages over `filtered`, analytics over `analyticsRecords`.
+  const activeList = view === "analytics" ? analyticsRecords : filtered;
+  const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const analyticsPaginated = analyticsRecords.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   function handleSearch(q: string) { setSearchQuery(q); setCurrentPage(1); }
 
@@ -302,13 +343,70 @@ export default function CampaignsPage() {
         </Link>
       </div>
 
-      {/* Stats */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
-        <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} sparkColor="#8b5cf6" />
-        <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400"    sparkColor="#4f8df8" />
-        <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" sparkColor="#10b981" />
-        <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400"   sparkColor="#f59e0b" />
-      </section>
+      {/* View toggle */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl w-fit">
+          <button
+            onClick={() => setView("operational")}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "operational" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+          >
+            <List size={13} /> Operational
+          </button>
+          <button
+            onClick={() => setView("analytics")}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "analytics" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+          >
+            <BarChart3 size={13} /> Analytics
+          </button>
+        </div>
+        {view === "analytics" && (
+          <FilterGroup
+            options={[
+              { key: "all", label: "All time" },
+              { key: "30d", label: "30d" },
+              { key: "7d", label: "7d" },
+            ]}
+            value={dateFilter}
+            onChange={(v) => { setDateFilter(v); setCurrentPage(1); }}
+          />
+        )}
+        {view === "analytics" && (
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              onClick={() => {
+                const csv = buildAnalyticsCsv(analyticsRecords);
+                triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "voizo_analytics_all.csv");
+              }}
+              disabled={analyticsRecords.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+            >
+              <Download size={13} /> Export all (CSV)
+            </button>
+            <button
+              onClick={() => {
+                const json = buildAnalyticsJson(analyticsRecords, new Date().toISOString(), portfolio);
+                triggerDownload(new Blob([json], { type: "application/json" }), "voizo_analytics_all.json");
+              }}
+              disabled={analyticsRecords.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+            >
+              <Download size={13} /> Export all (JSON)
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Stats / Portfolio KPIs */}
+      {view === "operational" ? (
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
+          <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
+          <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
+          <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
+          <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" />
+        </section>
+      ) : (
+        <PortfolioKpiStrip portfolio={portfolio} />
+      )}
 
       {/* Toolbar */}
       <div className="flex items-center gap-2.5 flex-wrap mb-4">
@@ -365,15 +463,18 @@ export default function CampaignsPage() {
           <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
             No campaigns match the current filters.
           </div>
-        ) : (
+        ) : view === "operational" ? (
           <>
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-[var(--border)]">
               {paginated.map((c) => {
                 const id = c.id as string;
-                const s = campaignStats[id] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
-                const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) + "%" : "0%";
-                const hasActivity = s.totalCalls > 0;
+                const a = analytics[id];
+                const totalContacts = a?.targeted ?? 0;
+                const totalCalls = a?.totalCalls ?? 0;
+                const connectCount = a?.connected ?? 0;
+                const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) + "%" : "0%";
+                const hasActivity = totalCalls > 0;
                 const when = formatWhen(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
                 return (
@@ -401,11 +502,11 @@ export default function CampaignsPage() {
                     <div className="grid grid-cols-3 gap-3 ml-10">
                       <div>
                         <p className="text-[10px] text-[var(--text-3)] mb-0.5">Contacts</p>
-                        <p className="text-xs font-semibold text-[var(--text-2)]">{s.totalContacts.toLocaleString()}</p>
+                        <p className="text-xs font-semibold text-[var(--text-2)]">{totalContacts.toLocaleString()}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-[var(--text-3)] mb-0.5">Calls</p>
-                        <p className="text-xs font-semibold text-[var(--text-2)]">{s.totalCalls.toLocaleString()}</p>
+                        <p className="text-xs font-semibold text-[var(--text-2)]">{totalCalls.toLocaleString()}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-[var(--text-3)] mb-0.5">Connect</p>
@@ -436,10 +537,15 @@ export default function CampaignsPage() {
                   {paginated.map((c) => {
                     const id = c.id as string;
                     const name = c.name as string;
-                    const s = campaignStats[id] ?? { totalContacts: 0, totalCalls: 0, connectCount: 0, successCount: 0 };
-                    const connectRate = s.totalCalls > 0 ? ((s.connectCount / s.totalCalls) * 100).toFixed(1) : "0";
-                    const successRate = s.connectCount > 0 ? ((s.successCount / s.connectCount) * 100).toFixed(1) : "0";
-                    const hasActivity = s.totalCalls > 0;
+                    const a = analytics[id];
+                    const totalContacts = a?.targeted ?? 0;
+                    const totalCalls = a?.totalCalls ?? 0;
+                    const connectCount = a?.connected ?? 0;
+                    const goalCount = a?.goalCalls ?? 0;
+                    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0";
+                    // Success = goal-based Conversion (a.conversion); null (0 connected) => "0".
+                    const successRate = a?.conversion != null ? (a.conversion * 100).toFixed(1) : "0";
+                    const hasActivity = totalCalls > 0;
                     const when = formatWhen(c);
                     const status = (c.status as string) || "draft";
                     const isRecurring = (c.campaign_type as string) === "recurring";
@@ -472,17 +578,17 @@ export default function CampaignsPage() {
                           </span>
                           {when.sub && <p className="text-[10px] text-[var(--text-3)] ml-3 mt-0.5">{when.sub}</p>}
                         </td>
-                        <td className="px-4 py-4 text-right text-[var(--text-2)] font-mono tabular-nums">{s.totalContacts.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-right text-[var(--text-2)] font-mono tabular-nums">{totalContacts.toLocaleString()}</td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
-                          <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{s.totalCalls.toLocaleString()}</span>
+                          <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{totalCalls.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
                           <span className={Number(connectRate) > 0 ? "text-emerald-400" : "text-[var(--text-3)]"}>{connectRate}%</span>
-                          <span className="text-[var(--text-3)] text-[11px] ml-1">({s.connectCount})</span>
+                          <span className="text-[var(--text-3)] text-[11px] ml-1">({connectCount})</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
                           <span className={Number(successRate) > 0 ? "text-amber-400" : "text-[var(--text-3)]"}>{successRate}%</span>
-                          <span className="text-[var(--text-3)] text-[11px] ml-1">({s.successCount})</span>
+                          <span className="text-[var(--text-3)] text-[11px] ml-1">({goalCount})</span>
                         </td>
                         <td className="px-4 py-4"><StatusBadge status={status} /></td>
                         <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
@@ -525,14 +631,23 @@ export default function CampaignsPage() {
               </table>
             </div>
           </>
+        ) : analyticsRecords.length === 0 ? (
+          <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
+            No campaigns in this date window.
+          </div>
+        ) : (
+          <>
+            <AnalyticsMobileCards records={analyticsPaginated} portfolio={portfolio} />
+            <AnalyticsTable records={analyticsPaginated} portfolio={portfolio} />
+          </>
         )}
 
-        {filtered.length > 0 && (
+        {activeList.length > 0 && (
           <div className="border-t border-[var(--border)] px-5 py-3">
             <Pagination
               currentPage={safePage}
               totalPages={totalPages}
-              totalItems={filtered.length}
+              totalItems={activeList.length}
               pageSize={PAGE_SIZE}
               onPageChange={setCurrentPage}
             />
@@ -543,20 +658,35 @@ export default function CampaignsPage() {
   );
 }
 
+export default function CampaignsPage() {
+  // useSearchParams() requires a Suspense boundary in Next 16 (workers/page.tsx pattern).
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-64 gap-2">
+          <Loader2 size={20} className="animate-spin text-blue-500" />
+          <span className="text-sm text-[var(--text-3)]">Loading campaigns...</span>
+        </div>
+      }
+    >
+      <CampaignsPageInner />
+    </Suspense>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Sub-components
 // ─────────────────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, accent, sparkColor }: {
-  label: string; value: string; accent?: string; sparkColor: string;
+function StatCard({ label, value, accent, hint }: {
+  label: string; value: string; accent?: string; hint?: string;
 }) {
+  // No sparkline: the previous hardcoded static polyline was identical on every card
+  // and not data-driven — it "quietly lied" (spec §6.7 / G8). Removed in both modes.
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/20">
+    <div title={hint} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/20">
       <div className="text-[11px] uppercase tracking-wider font-medium text-[var(--text-3)]">{label}</div>
       <div className={`text-[26px] font-bold tabular-nums leading-tight mt-1 ${accent ?? "text-[var(--text-1)]"}`}>{value}</div>
-      <svg width="100%" height="38" viewBox="0 0 200 38" preserveAspectRatio="none" className="mt-1.5 opacity-80">
-        <polyline points="0,28 28,22 56,26 84,16 112,18 140,12 168,14 200,8" fill="none" stroke={sparkColor} strokeWidth="1.8" />
-      </svg>
     </div>
   );
 }

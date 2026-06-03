@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import JSZip from "jszip";
+import { triggerDownload, csvCell, CSV_BOM } from "./download";
 
 /**
  * useCampaignExport
@@ -84,12 +85,7 @@ const AUDIO_BUNDLE_MAX = 500;
 // quote disarms the formula without changing the visible value beyond the
 // leading apostrophe. csvPhoneCell intentionally remains a formula and is
 // exempt — it's our own controlled `="+44..."` literal.
-function csvCell(value: string | number | null | undefined): string {
-  if (value === null || value === undefined) return "";
-  let s = String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-  return `"${s.replace(/"/g, '""')}"`;
-}
+// csvCell now lives in ./download (imported above) — shared with analytics export.
 
 // Excel formula-escape trick: ="+44..." preserves the leading + that Excel
 // would otherwise strip when auto-detecting "looks like a number".
@@ -101,7 +97,6 @@ function buildCsv(leads: ExportLead[], includeSmsCols: boolean): string {
   // UTF-8 BOM (U+FEFF). Written as the explicit escape — a literal U+FEFF
   // is invisible in source, and a formatter or invisible-Unicode lint rule
   // could silently strip it, breaking Excel's encoding detection.
-  const BOM = "\uFEFF";
   const headers = [
     "Phone",
     "Outcome",
@@ -177,19 +172,10 @@ function buildCsv(leads: ExportLead[], includeSmsCols: boolean): string {
     }
   }
 
-  return BOM + rows.join("\r\n") + "\r\n";
+  return CSV_BOM + rows.join("\r\n") + "\r\n";
 }
 
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+// triggerDownload now lives in ./download (imported above).
 
 function sanitizePhoneForFolder(phone: string): string {
   return phone.replace(/[^\d+]/g, "");
