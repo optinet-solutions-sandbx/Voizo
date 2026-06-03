@@ -15,6 +15,7 @@ import TimePickerField from "@/components/TimePickerField";
 import DateTimePickerField from "@/components/DateTimePickerField";
 import StyledSelect from "@/components/StyledSelect";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
+import { clockHHMMInTimezone, isWithinCallWindowAt } from "@/lib/scheduleWindow";
 
 interface Props {
   state: WizardState;
@@ -233,12 +234,26 @@ export default function StepSchedule({ state, dispatch }: Props) {
                     size={13}
                     className={`shrink-0 mt-0.5 ${isWarn ? "text-amber-400" : "text-blue-400"}`}
                   />
-                  {state.startMode === "now" && (
-                    <p className="leading-snug">
-                      Saves as <span className="text-[var(--text-1)] font-semibold">draft</span> — click{" "}
-                      <span className="text-emerald-400 font-semibold">Start</span> on the campaign page to begin.
-                    </p>
-                  )}
+                  {state.startMode === "now" && (() => {
+                    const windows = enabledRows.map((r) => ({ day: r.day, start: r.start, end: r.end }));
+                    const openNow = isWithinCallWindowAt(windows, state.timezone, Date.now());
+                    return openNow ? (
+                      <p className="leading-snug">
+                        Starts dialing <span className="text-[var(--text-1)] font-semibold">now</span> — the call window is open.
+                      </p>
+                    ) : (
+                      <p className="leading-snug">
+                        Starts <span className="text-[var(--text-1)] font-semibold">when the call window opens</span>
+                        {enabledRows.length > 0 && (
+                          <span className="text-[var(--text-3)]">
+                            {" · "}
+                            {enabledRows.map((r) => r.day.toUpperCase()).join(", ")} {enabledRows[0].start}–{enabledRows[0].end} · {tzShort}
+                          </span>
+                        )}
+                        .
+                      </p>
+                    );
+                  })()}
                   {state.startMode === "delay" && (
                     <p className="leading-snug">
                       Auto-starts in{" "}
@@ -297,30 +312,55 @@ export default function StepSchedule({ state, dispatch }: Props) {
                 return null;
               }
               const enabledDayKeys = enabledRows.map((r) => r.day);
-              if (enabledDayKeys.includes(expectedDay as Day)) return null;
+              const dayEnabled = enabledDayKeys.includes(expectedDay as Day);
+              const startRow = enabledRows.find((r) => r.day === expectedDay);
+              // Option A live warning: day enabled but the start HOUR is outside that day's window.
+              const hourOutside =
+                dayEnabled &&
+                startRow != null &&
+                !isWithinCallWindowAt(
+                  [{ day: startRow.day, start: startRow.start, end: startRow.end }],
+                  state.timezone,
+                  effectiveStart.getTime(),
+                );
+              if (dayEnabled && !hourOutside) return null; // start lands cleanly inside the window
 
               const enabledDayLabels = enabledDayKeys.map((d) => d.toUpperCase()).join(", ");
               return (
                 <div className="px-3.5 py-2.5 rounded-xl flex items-start gap-2 text-xs bg-amber-500/[0.08] text-amber-200 border border-amber-500/25">
                   <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
-                  <p className="leading-snug">
-                    Start time falls on{" "}
-                    <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
-                    <span className="text-amber-300/70">({tzShort})</span>{" — "}
-                    {enabledDayKeys.length === 0
-                      ? "no days are enabled above."
-                      : (
-                          <>
-                            only{" "}
-                            <span className="font-semibold text-amber-100">{enabledDayLabels}</span>{" "}
-                            {enabledDayKeys.length === 1 ? "is" : "are"} enabled.
-                          </>
-                        )}
-                    {" "}
-                    Toggle{" "}
-                    <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
-                    on, or change the start time — otherwise calls won&apos;t fire.
-                  </p>
+                  {hourOutside && startRow ? (
+                    <p className="leading-snug">
+                      Start time{" "}
+                      <span className="font-semibold text-amber-100">
+                        {clockHHMMInTimezone(effectiveStart.getTime(), state.timezone)}
+                      </span>{" "}
+                      on <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
+                      <span className="text-amber-300/70">({tzShort})</span>{" "}
+                      is outside that day&apos;s window{" "}
+                      <span className="font-semibold text-amber-100">{startRow.start}–{startRow.end}</span>
+                      {" — move the start in, or widen the window, otherwise calls won't fire then."}
+                    </p>
+                  ) : (
+                    <p className="leading-snug">
+                      Start time falls on{" "}
+                      <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
+                      <span className="text-amber-300/70">({tzShort})</span>{" — "}
+                      {enabledDayKeys.length === 0
+                        ? "no days are enabled above."
+                        : (
+                            <>
+                              only{" "}
+                              <span className="font-semibold text-amber-100">{enabledDayLabels}</span>{" "}
+                              {enabledDayKeys.length === 1 ? "is" : "are"} enabled.
+                            </>
+                          )}
+                      {" "}
+                      Toggle{" "}
+                      <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
+                      on, or change the start time — otherwise calls won&apos;t fire.
+                    </p>
+                  )}
                 </div>
               );
             })()}

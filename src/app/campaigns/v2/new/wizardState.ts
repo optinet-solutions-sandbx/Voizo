@@ -14,8 +14,9 @@
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Data";
-import { allowedTimezonesForCountry, detectAudienceCountry } from "@/lib/audienceCountry";
+import { allowedTimezonesForCountry, audienceTzGuard, detectAudienceCountry } from "@/lib/audienceCountry";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
+import { clockHHMMInTimezone, isWithinCallWindowAt, resolveStartAt } from "@/lib/scheduleWindow";
 
 export type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -110,6 +111,9 @@ export interface WizardState {
   name: string;
   timezone: string;
   timezoneTouched: boolean;        // R6: prevents auto-tz from clobbering manual edits
+  // `${country}:${timezone}` the operator ticked the tz-mismatch override for.
+  // Keyed (not boolean) so it auto-invalidates when tz or detected country changes.
+  tzMismatchAckFor: string | null;
   numbersText: string;             // Derived: mirrors the active source's phone cache. Operator-facing single source of truth for downstream consumers (buildCreateInput etc.).
   audienceSource: AudienceSource;  // 2026-05-22 — replaces manualPasteMode
   cioPhones: string;               // CIO source cache (newline-joined)
@@ -161,7 +165,7 @@ export interface WizardState {
  * `timezoneTouched = true` so the auto-detect won't clobber it later (R6).
  */
 export type AudiencePayload = Partial<
-  Pick<WizardState, "name" | "timezone" | "numbersText" | "audienceSource" | "segmentId" | "segmentName" | "voizoSegmentId" | "voizoSegmentName" | "cioPhones" | "voizoPhones" | "manualPhones" | "isTest">
+  Pick<WizardState, "name" | "timezone" | "numbersText" | "audienceSource" | "segmentId" | "segmentName" | "voizoSegmentId" | "voizoSegmentName" | "cioPhones" | "voizoPhones" | "manualPhones" | "isTest" | "tzMismatchAckFor">
 >;
 
 /** Atomic segment-import update — phones + segmentId + segmentName arrive together. */
@@ -300,6 +304,7 @@ export function createInitialState(): WizardState {
     name: "",
     timezone: detectedTz,
     timezoneTouched: false,
+    tzMismatchAckFor: null,
     numbersText: "",
     audienceSource: "cio",
     cioPhones: "",
@@ -584,12 +589,8 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     end: r.end,
   }));
 
-  const startAt =
-    state.startMode === "delay"
-      ? new Date(Date.now() + state.delayMinutes * 60_000).toISOString()
-      : state.startMode === "scheduled" && state.scheduledDate
-        ? new Date(state.scheduledDate).toISOString()
-        : null;
+  // "Immediately" (now) → start_at = now so the cron auto-fires it (window-gated).
+  const startAt = resolveStartAt(state.startMode, state.delayMinutes, state.scheduledDate, Date.now());
 
   return {
     name: state.name.trim(),
@@ -636,6 +637,12 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   const parsedNumbers = parsePhoneList(state.numbersText);
   if (parsedNumbers.length === 0) return "Add at least one valid E.164 phone number.";
 
+  // Audience-country vs timezone — the repeat AU-on-Paris incident (Fixed path).
+  // Blocks unless the operator ticked the keyed override in Step 1. Applies to
+  // every Fixed campaign regardless of startMode — unlike the day-of-week block.
+  const tzError = audienceTzGuard(parsedNumbers, state.timezone, state.tzMismatchAckFor);
+  if (tzError) return tzError;
+
   const enabledRows = state.scheduleRows.filter((r) => r.enabled);
   if (enabledRows.length === 0) return "Enable at least one day in the schedule.";
 
@@ -672,6 +679,26 @@ export function validateBeforeSubmit(state: WizardState): string | null {
     const enabledDays = new Set<string>(enabledRows.map((r) => r.day));
     if (!enabledDays.has(expectedDay)) {
       return `Start time falls on ${expectedDay.toUpperCase()} (in ${state.timezone}) but no call window is enabled for ${expectedDay.toUpperCase()}. Toggle ${expectedDay.toUpperCase()} on above, or change the start time.`;
+    }
+    // Option A: the start DAY is enabled — is the start HOUR inside that day's
+    // window? If not, the cron skips it ('outside_call_window') until the window
+    // opens, which reads as "scheduled outside office hours → not deployed".
+    // ("now" is exempt: it's intentionally window-deferred with its own notice.)
+    // Deliberate asymmetry vs the tz-mismatch guard (which has a keyed override):
+    // an out-of-window start is a functional dead-end (the cron literally won't
+    // dial then), so there's no legitimate "do it anyway" — widening the window
+    // is the only real fix. Hence a hard block here, no override.
+    const startRow = enabledRows.find((r) => r.day === expectedDay);
+    if (
+      startRow &&
+      !isWithinCallWindowAt(
+        [{ day: startRow.day, start: startRow.start, end: startRow.end }],
+        state.timezone,
+        effectiveStart.getTime(),
+      )
+    ) {
+      const at = clockHHMMInTimezone(effectiveStart.getTime(), state.timezone);
+      return `Start time is ${at} on ${expectedDay.toUpperCase()} (in ${state.timezone}), but ${expectedDay.toUpperCase()}'s call window is ${startRow.start}–${startRow.end}. The campaign won't dial until the window opens — move the start into the window, or widen the window.`;
     }
   }
 
