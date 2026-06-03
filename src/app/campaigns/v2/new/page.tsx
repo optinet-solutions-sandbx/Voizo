@@ -19,13 +19,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 import { createCampaignV2, parsePhoneList } from "@/lib/campaignV2Data";
-import {
-  analyzeAudienceCountry,
-  countryLabel,
-  defaultTimezoneForCountry,
-  detectAudienceCountry,
-  isTimezoneValidForCountry,
-} from "@/lib/audienceCountry";
+import { analyzeAudienceCountry, countryLabel } from "@/lib/audienceCountry";
 import { consumeDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { parseJsonBody } from "@/lib/jsonBody";
 
@@ -435,41 +429,26 @@ function WizardPage({
     }
   }, [state, router]);
 
-  // Step 1 country-vs-timezone advisory (autonomy-first — the dropdown shows
-  // all timezones; this mismatch flag drives the inline banner copy AND the
-  // Next-click confirm gate below. Operators always retain final say.
-  const step1Phones = state.step === 1 ? parsePhoneList(state.numbersText) : [];
-  const step1Country = state.step === 1 ? detectAudienceCountry(step1Phones).country : null;
   // M2: when no single country dominates but the audience clearly spans
   // multiple, surface the breakdown so the operator picks tz with full info.
+  // (The country/tz mismatch is now a hard submit-time block + keyed override
+  // checkbox in StepAudience — no Next-click confirm here.)
+  const step1Phones = state.step === 1 ? parsePhoneList(state.numbersText) : [];
   const step1MixedAnalysis = state.step === 1 ? analyzeAudienceCountry(step1Phones) : null;
   const step1IsMixed = !!step1MixedAnalysis?.isMixed;
-  const step1TzMismatch =
-    step1Country != null && !isTimezoneValidForCountry(step1Country, state.timezone);
 
   // Continue/Launch button disable: only true blockers (mid-submit or final-
-  // step validation). TZ mismatch routes through handleNext's confirm instead
-  // of disabling Next — per feedback_operator_autonomy_with_guardrails.
+  // step validation). The country/tz mismatch is a hard block inside
+  // validateBeforeSubmit (with a keyed override checkbox in Step 1).
   const nextDisabled =
     state.saving ||
     (state.step === 5 && validateBeforeSubmit(state) !== null);
 
-  // Next-click interceptor for the Step 1 TZ mismatch advisory. Fires a one-
-  // shot window.confirm when the operator's pick disagrees with the detected
-  // audience country — same pattern as StepFollowup's compliance gates.
+  // TZ-mismatch is now a hard submit-time block (validateBeforeSubmit) with a
+  // keyed override checkbox in Step 1 — no Next-click confirm needed.
   const handleNext = useCallback(() => {
-    if (state.step === 1 && step1TzMismatch && step1Country != null) {
-      const recommended = defaultTimezoneForCountry(step1Country);
-      const msg =
-        `Timezone mismatch detected.\n\n` +
-        `Audience appears to be ${countryLabel(step1Country)}, but you selected ${state.timezone}.\n` +
-        `Call windows in ${state.timezone} may fall during unusual hours for your audience.\n\n` +
-        (recommended ? `Recommended: ${recommended}\n\n` : "") +
-        `Proceed with ${state.timezone} anyway?`;
-      if (!window.confirm(msg)) return;
-    }
     dispatch({ type: "NEXT" });
-  }, [state.step, step1TzMismatch, step1Country, state.timezone, dispatch]);
+  }, [dispatch]);
 
   return (
     <div className="h-full grid grid-cols-[240px_1fr_340px] max-[1280px]:grid-cols-[200px_1fr_300px] overflow-hidden">

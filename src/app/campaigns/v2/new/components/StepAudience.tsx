@@ -46,12 +46,12 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
   const hasContent = state.numbersText.trim().length > 0;
   const hasInvalidContent = hasContent && parsedNumbers.length === 0;
 
-  // Country-aware TZ guardrail (advisory, not lockdown — see
-  // feedback_operator_autonomy_with_guardrails). Detection returns null when
-  // sample is too small (<5) or no prefix is ≥80% dominant. The dropdown
-  // always shows all TIMEZONE_OPTIONS; the banner below surfaces the
-  // recommendation and any mismatch. Final intercept fires on Next-click
-  // via page.tsx's handleNext (one-shot window.confirm).
+  // Country-aware TZ guardrail. Detection returns null when the sample is too
+  // small (<5) or no prefix is ≥80% dominant. The dropdown always shows all
+  // TIMEZONE_OPTIONS; the banner below surfaces the recommendation and any
+  // mismatch. A mismatch is enforced as a HARD block at submit (audienceTzGuard
+  // in validateBeforeSubmit); the operator clears it via the keyed override
+  // checkbox rendered below — see feedback_operator_autonomy_with_guardrails.
   const detection = useMemo(() => detectAudienceCountry(parsedNumbers), [parsedNumbers]);
   const recommendedTz = allowedTimezonesForCountry(detection.country);
   const tzMismatch =
@@ -294,12 +294,37 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   <>
                     {" · your pick "}
                     <span className="text-[var(--text-1)] font-mono">{state.timezone}</span>
-                    <span className="text-amber-300"> may not match — you&apos;ll be asked to confirm on Next</span>
+                    <span className="text-amber-300"> isn&apos;t a {countryLabel(detection.country)} calling zone — tick below to override, or change the timezone</span>
                   </>
                 )}
               </span>
             </div>
           )}
+
+          {tzMismatch && detection.country && (() => {
+            // Key format must stay in sync with audienceTzGuard's compare (audienceCountry.ts).
+            const ackKey = `${detection.country}:${state.timezone}`;
+            const acked = state.tzMismatchAckFor === ackKey;
+            return (
+              <label className="flex items-start gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500/[0.06] border border-amber-500/25 text-[12px] text-amber-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={acked}
+                  onChange={(e) =>
+                    dispatch({
+                      type: "SET_AUDIENCE_FIELDS",
+                      payload: { tzMismatchAckFor: e.target.checked ? ackKey : null },
+                    })
+                  }
+                  className="mt-0.5 shrink-0"
+                />
+                <span>
+                  I understand — dial <span className="font-semibold">{countryLabel(detection.country)}</span> numbers on{" "}
+                  <span className="font-mono">{state.timezone}</span> anyway.
+                </span>
+              </label>
+            );
+          })()}
 
           <div className="px-3.5 py-3 rounded-xl bg-blue-500/[0.06] border border-blue-500/25 text-[12px] text-[var(--text-2)] leading-relaxed flex items-start gap-2">
             <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />

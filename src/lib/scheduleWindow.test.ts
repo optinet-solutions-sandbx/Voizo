@@ -1,0 +1,44 @@
+import { describe, it, expect } from "vitest";
+import { clockHHMMInTimezone, isWithinCallWindowAt, resolveStartAt } from "./scheduleWindow";
+
+describe("isWithinCallWindowAt", () => {
+  const tz = "America/Toronto"; // June = EDT (UTC-4)
+  const tue = [{ day: "tue", start: "18:00", end: "21:00" }];
+  it("true inside the day's window", () => {
+    expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-02T22:30:00Z"))).toBe(true); // Tue 18:30
+  });
+  it("false before the window opens", () => {
+    expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-02T20:00:00Z"))).toBe(false); // Tue 16:00
+  });
+  it("false when no window for today's weekday", () => {
+    expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-03T22:30:00Z"))).toBe(false); // Wed
+  });
+  it("true when windows empty (always open)", () => {
+    expect(isWithinCallWindowAt([], tz, Date.parse("2026-06-02T03:00:00Z"))).toBe(true);
+  });
+  // Boundary locks — Option A's no-false-block on aligned campaigns rides on the
+  // OPEN edge being inclusive and the CLOSE edge exclusive (matches dialer's < end).
+  it("true at the OPEN edge (start == window.start) — aligned campaigns never false-block", () =>
+    expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-02T22:00:00Z"))).toBe(true)); // Tue 18:00
+  it("false at the CLOSE edge (start == window.end) — matches the cron's `< end`", () =>
+    expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-03T01:00:00Z"))).toBe(false)); // Tue 21:00
+});
+
+describe("resolveStartAt", () => {
+  const now = Date.parse("2026-06-03T07:00:00Z");
+  it("now → nowMs ISO", () => expect(resolveStartAt("now", 60, "", now)).toBe(new Date(now).toISOString()));
+  it("delay → now + minutes", () =>
+    expect(resolveStartAt("delay", 30, "", now)).toBe(new Date(now + 30 * 60_000).toISOString()));
+  it("scheduled w/ date", () =>
+    expect(resolveStartAt("scheduled", 60, "2026-06-04T18:00", now)).toBe(new Date("2026-06-04T18:00").toISOString()));
+  it("scheduled w/o date → null", () => expect(resolveStartAt("scheduled", 60, "", now)).toBeNull());
+});
+
+describe("clockHHMMInTimezone", () => {
+  it("renders HH:MM in the given tz", () =>
+    expect(clockHHMMInTimezone(Date.parse("2026-06-02T22:30:00Z"), "America/Toronto")).toBe("18:30")); // EDT -4
+  it("renders a different tz from the same instant", () =>
+    expect(clockHHMMInTimezone(Date.parse("2026-06-02T22:30:00Z"), "Australia/Sydney")).toBe("08:30")); // AEST +10
+  it("normalizes the midnight '24' edge to 00:00", () =>
+    expect(clockHHMMInTimezone(Date.parse("2026-06-02T04:00:00Z"), "America/Toronto")).toBe("00:00")); // 00:00 Toronto
+});

@@ -204,3 +204,30 @@ export function countryLabel(country: string | null): string {
   if (!country) return "";
   return COUNTRY_LABELS[country] ?? country;
 }
+
+/**
+ * Wizard creation guard: a blocking error string when the detected audience
+ * country has a constrained tz set that excludes `timezone`, UNLESS the operator
+ * acknowledged THIS exact mismatch. Null (allow) when country is unknown/mixed/
+ * small, the tz is valid, or the ack matches. Pure — no imports beyond this file.
+ *
+ * `ackFor` is the `${country}:${timezone}` key the operator ticked the override
+ * for; storing the key (not a bare boolean) auto-invalidates the ack when the
+ * timezone OR the detected country changes — no reducer reset needed.
+ */
+export function audienceTzGuard(
+  parsedNumbers: string[],
+  timezone: string,
+  ackFor: string | null,
+): string | null {
+  const { country } = detectAudienceCountry(parsedNumbers);
+  if (!country) return null;
+  if (isTimezoneValidForCountry(country, timezone)) return null;
+  if (ackFor === `${country}:${timezone}`) return null;
+  const allowed = allowedTimezonesForCountry(country) ?? [];
+  const label = countryLabel(country);
+  return (
+    `Audience looks like ${label} numbers, but the timezone is ${timezone}, which isn't a ${label} calling zone. ` +
+    `Pick ${allowed.join(" / ")} — or tick the override below to dial ${label} on ${timezone} anyway.`
+  );
+}
