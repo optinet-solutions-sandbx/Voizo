@@ -49,24 +49,38 @@ export function parseTranscriptTurns(transcript: string): TranscriptTurn[] {
   return turns;
 }
 
-// Voicemail / answering-machine greeting patterns. 2+ distinct matches = voicemail
-// (a real customer rarely emits two of these; a greeting emits 3-5).
-const VOICEMAIL_GREETING_PATTERNS = [
+// Voicemail / answering-machine detection — TWO tiers. Short AU "message bank"
+// greetings (e.g. "This message bank is full.") emit only 0-1 generic matches and
+// slipped the >=2 threshold below, surfacing as FAKE "real conversations" in
+// /reviews (campaign 9df71cd3, 2026-06-03). The strong tier fixes that.
+//
+// STRONG — unambiguous machine phrases a live customer would never utter on a
+// sales call; a SINGLE match is conclusive.
+const VOICEMAIL_STRONG_PATTERNS = [
   /\bvoice\s*mail\b/i,
   /\bvoicemail\b/i,
+  /\bmessage bank\b/i, // AU/UK term for voicemail — the 2026-06-03 miss
+  /(?:finished|done) recording/i, // "when you have finished recording, you may hang up"
+  /leave (?:a |your )?(?:detailed |brief |short )?message (?:after|at)\b/i, // "leave a detailed message after the tone"
   /can'?t take your call/i,
+  /please record (?:your )?message/i,
+];
+
+// WEAK — generic greeting fragments that can appear incidentally in a real call.
+// 2+ distinct matches = voicemail (a real customer rarely emits two; a greeting emits 3-5).
+const VOICEMAIL_GREETING_PATTERNS = [
   /\bleave (?:a |your )?message\b/i,
   /after the (?:tone|beep)/i,
+  /at the sound of the (?:tone|beep)/i,
   /\bpress (?:1|hash|pound|star)/i,
   /\byou'?ve reached\b/i,
-  /at the sound of the (?:tone|beep)/i,
-  /please record (?:your )?message/i,
   /\bnot available\b/i,
 ];
 
 export function isVoicemail(transcript: string): boolean {
   if (!transcript) return false;
   const safe = transcript.slice(0, TRANSCRIPT_CAP);
+  if (VOICEMAIL_STRONG_PATTERNS.some((p) => p.test(safe))) return true;
   return VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2;
 }
 
