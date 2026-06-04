@@ -1,10 +1,11 @@
 // src/app/campaigns/v2/new/page.tsx
 //
-// Wizard-port route shell — Slice 7 flipped the default.
+// Wizard-port route shell.
 //
-//   - Default `/campaigns/v2/new`            → 5-step wizard
-//   - `/campaigns/v2/new?classic=1`          → original 1100-line form (1-week escape hatch)
-//   - Slice 8 (deferred, post-demo + 1-week observation) deletes classic
+//   - `/campaigns/v2/new`  → 5-step wizard (the only creation path)
+//   - `?classic=1` retired 2026-06-04 (page-classic.tsx deleted) — it bypassed
+//     the wizard's creation guards and mapped "Immediately" → start_at=null;
+//     the param now falls through to the guarded wizard.
 //
 // All form state lives in the typed reducer at `./wizardState.ts`. Step
 // components receive `state` + `dispatch` via props — no Context.
@@ -23,7 +24,6 @@ import { analyzeAudienceCountry, countryLabel } from "@/lib/audienceCountry";
 import { consumeDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { parseJsonBody } from "@/lib/jsonBody";
 
-import { ClassicNewCampaignPage } from "./page-classic";
 import {
   buildCloneRequest, buildCreateInput, createInitialState, decomposeSmsTemplate,
   deriveScheduleRows, validateBeforeSubmit, wizardReducer,
@@ -55,12 +55,6 @@ export default function NewCampaignPage() {
 
 function NewCampaignRoute() {
   const search = useSearchParams();
-  // Slice 7: wizard is the default. `?classic=1` reverses to the original
-  // 1100-line form as a 1-week observation escape hatch. Slice 8 deletes
-  // the classic copy.
-  if (search?.get("classic") === "1") {
-    return <ClassicNewCampaignPage />;
-  }
   // Audience-tab prefill (Slice 4): ?source=local_segment&id=<uuid> hands a
   // recycled audience to the wizard. WizardPage fetches the segment server-
   // side on mount and prefills numbersText + audienceSource + name.
