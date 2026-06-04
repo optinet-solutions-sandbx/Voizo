@@ -8,7 +8,8 @@ import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareTe
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { DownloadIcon } from "@/components/icons/animated/download";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { fetchCampaignV2, fetchCampaignNumbersV2, fetchCallsV2, fetchSmsMessagesV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
+import { fetchCampaignV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
+import { fetchCampaignDetailBundle } from "@/lib/campaignV2Client";
 import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
 import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
@@ -396,17 +397,18 @@ export default function CampaignV2DetailPage() {
   const refreshData = useCallback(async () => {
     if (!id) return;
     try {
-      const [c, n, cl, sms] = await Promise.all([
+      // RLS Phase A slice: numbers/calls/SMS now load via the auth-gated server
+      // route (service role) instead of the anon client. fetchCampaignV2 (campaign
+      // config) stays on the anon path for now — the full Phase A migrates it.
+      const [c, bundle] = await Promise.all([
         fetchCampaignV2(id),
-        fetchCampaignNumbersV2(id),
-        fetchCallsV2(id).catch(() => []),
-        fetchSmsMessagesV2(id).catch(() => []),
+        fetchCampaignDetailBundle(id),
       ]);
       setCampaign(c);
-      setNumbers(n);
-      setCalls(cl);
+      setNumbers(bundle.numbers);
+      setCalls(bundle.calls);
       const map = new Map<string, Row>();
-      for (const row of sms) {
+      for (const row of bundle.sms) {
         const phone = row.to_phone_e164 as string | undefined;
         if (phone && !map.has(phone)) map.set(phone, row);
       }
