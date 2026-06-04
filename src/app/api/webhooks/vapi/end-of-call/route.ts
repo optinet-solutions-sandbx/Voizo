@@ -1,170 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { isVoicemail, hasGenuineCustomerConsent } from "@/lib/transcriptClassify";
 import crypto from "crypto";
 
 // SMS dispatch + multiple Supabase queries run inline before returning 200.
 // Default Vercel timeout is too tight if Mobivate API is slow.
 export const maxDuration = 30;
-
-// Defensive cap on transcript length before regex evaluation. V8's regex
-// engine doesn't catastrophically backtrack on the patterns below (all
-// quantifiers bounded), but a >50KB transcript with many '?' chars still
-// pays measurable CPU on the SMS-dispatch path. 32k is generous for a
-// 3-minute call (Vapi's documented call cap is 5 min, ~7-10KB transcript).
-const TRANSCRIPT_CAP = 32_000;
-
-// ── Speaker-aware transcript parsing ───────────────────────────────────────
-// Vapi's transcript field is a flat multi-line string with speaker labels.
-// Two formats observed in the wild:
-//   1. "User\n[content]\nAssistant\n[content]"  (Vapi UI export-style — labels on own lines)
-//   2. "User: [content]\nAI: [content]"          (inline-prefix style)
-// The parser below handles both, plus stray timestamp lines like
-// "4:48:40 PM(+00:00.61)" which Vapi sometimes interleaves.
-
-type TranscriptSpeaker = "ai" | "user" | "unknown";
-type TranscriptTurn = { speaker: TranscriptSpeaker; text: string };
-
-function parseTranscriptTurns(transcript: string): TranscriptTurn[] {
-  const turns: TranscriptTurn[] = [];
-  const lines = transcript.split(/\r?\n/);
-  let currentSpeaker: TranscriptSpeaker = "unknown";
-  let buffer: string[] = [];
-
-  const flush = () => {
-    const text = buffer.join(" ").trim();
-    if (text) turns.push({ speaker: currentSpeaker, text });
-    buffer = [];
-  };
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    // Skip pure timestamp lines (e.g. "4:48:40 PM(+00:00.61)")
-    if (/^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?(\s*\(\+?[\d:.]+\))?$/i.test(line)) continue;
-
-    // Speaker on own line (Vapi UI format)
-    if (/^(?:AI|Assistant|Bot)$/i.test(line)) {
-      flush();
-      currentSpeaker = "ai";
-      continue;
-    }
-    if (/^(?:User|Customer|Caller|Human)$/i.test(line)) {
-      flush();
-      currentSpeaker = "user";
-      continue;
-    }
-
-    // Inline prefix (alternate format)
-    const aiInline = line.match(/^(?:AI|Assistant|Bot):\s*(.*)$/i);
-    if (aiInline) {
-      flush();
-      currentSpeaker = "ai";
-      if (aiInline[1]) buffer.push(aiInline[1]);
-      continue;
-    }
-    const userInline = line.match(/^(?:User|Customer|Caller|Human):\s*(.*)$/i);
-    if (userInline) {
-      flush();
-      currentSpeaker = "user";
-      if (userInline[1]) buffer.push(userInline[1]);
-      continue;
-    }
-
-    // Content line, attribute to current speaker
-    buffer.push(line);
-  }
-
-  flush();
-  return turns;
-}
-
-// ── Pattern 4 detector: AI offered SMS/text, user agreed shortly after ─────
-// Speaker-aware to prevent false positives that pure regex on the flat
-// transcript can't avoid:
-//   - "Don't send me an SMS, OK?"        → negation around agreement word
-//   - "Definitely not, sorry"            → agreement word with negation suffix
-//   - AI's own affirmation post-question → agreement word from wrong speaker
-// Returns true only if:
-//   1. An AI-attributed turn contains an SMS-related question
-//   2. A user-attributed turn within 3 turns contains an agreement word
-//   3. No negation word within ±30 chars of that agreement
-//
-// If parser detects no AI-attributed turns at all (transcript without
-// speaker labels), returns false — fail-safe: prefer false-negative
-// over false-positive on compliance-sensitive SMS dispatch.
-const AI_OFFER_A = /\bsend\b[^?]{0,80}\b(?:sms|text)\b[^?]{0,30}\?/i;
-const AI_OFFER_B = /\btext(?:ing)?\s+you\b[^?]{0,80}\?/i;
-const AGREEMENT_WORD = /\b(?:y(?:eah|es|up|ep)|sure|of course|ok(?:ay)?|please|definitely|absolutely)\b/i;
-const NEGATION_NEAR = /\b(?:not|no|nope|never|don'?t|dont)\b/i;
-
-function detectOfferThenAgree(transcript: string): boolean {
-  const turns = parseTranscriptTurns(transcript);
-  if (!turns.some((t) => t.speaker === "ai")) return false;
-
-  let lastAiOfferIdx = -1;
-  for (let i = 0; i < turns.length; i++) {
-    const t = turns[i];
-
-    if (t.speaker === "ai" && (AI_OFFER_A.test(t.text) || AI_OFFER_B.test(t.text))) {
-      lastAiOfferIdx = i;
-      continue;
-    }
-
-    if (lastAiOfferIdx < 0) continue;
-    if (i - lastAiOfferIdx > 3) {
-      lastAiOfferIdx = -1; // out of window — discard offer reference
-      continue;
-    }
-    if (t.speaker !== "user") continue;
-
-    const m = AGREEMENT_WORD.exec(t.text);
-    if (!m) continue;
-
-    // Negation guard — within ±30 chars of the agreement word
-    const start = Math.max(0, m.index - 30);
-    const end = m.index + m[0].length + 30;
-    const window = t.text.slice(start, end);
-    if (NEGATION_NEAR.test(window)) continue;
-
-    return true;
-  }
-  return false;
-}
-
-// ── Voicemail greeting detector ───────────────────────────────────────────
-// Recognizes voicemail/answering-machine recordings in the call transcript.
-// Used by the outcome routing logic below: when the call hit voicemail and
-// no positive/negative customer signal fired, we skip the outcome update so
-// the scheduler cron's stale-in_progress sweeper resolves the number to
-// pending_retry — keeping the customer in the retry cycle instead of
-// terminating them as 'not_interested'.
-//
-// High-confidence threshold (2+ distinct patterns must match) keeps false
-// positives low. A real customer rarely emits two of these phrases in the
-// same call; a voicemail greeting typically emits 3-5 of them.
-//
-// If a false positive does fire, the cost is bounded: the number stays
-// in_progress → sweeper retries it once more → if it's still a real customer
-// they'll either engage or opt out, and we route correctly the second time.
-const VOICEMAIL_GREETING_PATTERNS = [
-  /\bvoice\s*mail\b/i,
-  /\bvoicemail\b/i,
-  /can'?t take your call/i,
-  /\bleave (?:a |your )?message\b/i,
-  /after the (?:tone|beep)/i,
-  /\bpress (?:1|hash|pound|star)/i,
-  /\byou'?ve reached\b/i,
-  /at the sound of the (?:tone|beep)/i,
-  /please record (?:your )?message/i,
-  /\bnot available\b/i,
-];
-
-function detectVoicemailInTranscript(transcript: string): boolean {
-  const safe = transcript.slice(0, TRANSCRIPT_CAP);
-  const hits = VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length;
-  return hits >= 2;
-}
 
 /**
  * POST /api/webhooks/vapi/end-of-call
@@ -270,130 +111,34 @@ export async function POST(request: NextRequest) {
     }),
   );
 
-  // ── Detect voicemail in transcript (used by both goalReached fallback + outcome routing) ──
-  // Computed once here so it's available to:
-  //   1. The transcript-fallback goalReached block below — suppresses false
-  //      positives when the agent's own pitch phrases ("you'll receive an SMS")
-  //      are recorded into voicemail. Without this guard, the existing
-  //      Patterns 1-3 fire on the agent's transcript regardless of whether a
-  //      real customer agreed, causing SMS dispatch to non-consented voicemail
-  //      numbers (compliance + cost issue at scale).
-  //   2. The outcome routing block much further below — when voicemail and no
-  //      positive/negative signal, skip the outcome update so the scheduler
-  //      cron's stale-in_progress sweeper resolves to pending_retry.
-  // NOTE: opt-out fallback (lines below) deliberately runs WITHOUT this guard.
-  // Per the existing comment "missing an opt-out is worse than a false
-  // positive" — a voicemail greeting containing "don't call" still routes to
-  // declined_offer + DNC suppression (Maria-approved compliance policy).
-  const isVoicemail = transcript ? detectVoicemailInTranscript(transcript) : false;
+  // ── Voicemail + success evaluation ──
+  // `voicemailDetected` (the strengthened, shared `isVoicemail`) is used both by
+  // the goal_reached veto below and by the outcome-routing block further down.
+  const voicemailDetected = transcript ? isVoicemail(transcript) : false;
 
-  // Determine goal_reached from Vapi's analysis.
-  // Vapi's successEvaluation can be string | boolean | number | null depending
-  // on API version (June 2025 breaking change). Handle all variants defensively.
+  // Vapi's successEvaluation can be string | boolean | number | null (June 2025
+  // breaking change). Handle all variants defensively.
   const successEval = analysis?.successEvaluation;
-  let goalReached = successEval === true || successEval === "true";
+  const nativeSuccess = successEval === true || successEval === "true";
+  let goalReached = nativeSuccess;
 
-  // ── Fallback: transcript-based success evaluation ──
-  // As of 2026-05-04, Vapi's post-call analysis never runs on our SIP inbound
-  // calls (51/51 returned analysis:{}). Until Vapi resolves this, we evaluate
-  // the transcript ourselves when their analysis is missing.
-  //
-  // Strategy: Tom's prompt only confirms SMS dispatch ("I'll send you an SMS")
-  // AFTER the customer agrees. That AI confirmation line is a reliable downstream
-  // signal of customer consent. We scan AI lines for it.
-  //
-  // Vapi's analysis takes priority when present — this fallback is a safety net.
-  if (successEval == null && transcript && !goalReached) {
-    // Match AI confirmation of SMS/text dispatch.
-    //
-    // Every missed detection = lost conversion. Cast a wide net on AI confirmation
-    // phrases while keeping false-positive risk low (we only match AI-side lines,
-    // and the AI only confirms after customer agrees).
-    //
-    // Pattern 1 (explicit): AI names the channel — covers future, present, past
-    //   tense and "let me" / "going to" phrasing.
-    //
-    // Pattern 2 (contextual): AI uses generic send phrasing ("I'll send that over")
-    //   but SMS/text was discussed earlier in the conversation. Both parts must hold.
-    //
-    // Pattern 3 (short form): AI says "I'll text you" without using "send".
-    //
-    // Pattern 4 (offer-then-agree): AI asks an SMS-related question, customer
-    //   agrees in next turn. Speaker-aware (see detectOfferThenAgree above).
-    //   Backstop for STT mangling of the AI's confirmation line (e.g. "an SMS"
-    //   → "a EVs" observed on call 019e019f-f296-7001-9a2f-573fe787d335).
-    //
-    // TC-039: Vapi STT splits "SMS" into "s. MS" / "S. M. S." — smsDiscussed
-    // accounts for these artifacts.
-    //
-    // Length cap: all patterns run against `safeTranscript` (≤32k chars) for
-    // CPU safety on pathologically long transcripts.
-    const safeTranscript = transcript.slice(0, TRANSCRIPT_CAP);
+  // (d) Source-agnostic voicemail veto (2026-06-04): a voicemail is never a
+  // success, even if a base assistant's native successEvaluation returned true.
+  if (goalReached && voicemailDetected) {
+    goalReached = false;
+    console.log(`[goal-eval] goal_reached dropped — voicemail detected (source-agnostic veto). vapiCallId=${vapiCallId}`);
+  }
 
-    const aiExplicit =
-      /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent|text)(?:ing|ed)? (?:you |the )?(?:an? )?(?:sms|text)/i.test(safeTranscript);
-    const aiShortForm =
-      /i(?:'ll| will|'m| am) text(?:ing)? you/i.test(safeTranscript);
-    const aiPassive =
-      /you(?:'ll| will) (?:receive|get) (?:an? )?(?:sms|text)/i.test(safeTranscript);
-    const smsDiscussed = /\bsms\b|s\.\s?ms\b|s\.\s?m\.\s?s\.?|text message/i.test(safeTranscript);
-    const aiConfirmedSend = /(?:i(?:'ll| will|'m| am|'ve| have| just)|let me) (?:going to )?(?:send|sent)(?:ing)? (?:that|it)\b/i.test(safeTranscript);
-    const offerThenAgree = detectOfferThenAgree(safeTranscript);
-
-    let aiConfirmedSms = aiExplicit || aiShortForm || aiPassive || (smsDiscussed && aiConfirmedSend) || offerThenAgree;
-
-    // Final user-rejection override (compliance safety net):
-    // Patterns 1-3 fire whenever the AI utters a confirmation phrase, with no
-    // awareness of whether the customer subsequently rejected. Real failure mode:
-    //   AI: "I'll send you an SMS, OK?"  → matches Pattern 1
-    //   User: "No."                        → currently ignored
-    // → SMS dispatched against customer's explicit no = compliance violation.
-    //
-    // Override: if any pattern fired AND the customer's LAST turn contains an
-    // explicit rejection without an offsetting agreement word, drop goalReached.
-    // Pattern 4 already has its own speaker-aware negation guard; this override
-    // is the safety net for Patterns 1-3.
-    if (aiConfirmedSms) {
-      const turns = parseTranscriptTurns(safeTranscript);
-      const lastUserTurn = [...turns].reverse().find((t) => t.speaker === "user");
-      if (lastUserTurn) {
-        const lastTurnRejects = /\b(?:no|nope|don'?t|dont|not\s+interested)\b/i.test(lastUserTurn.text);
-        const lastTurnAgrees = AGREEMENT_WORD.test(lastUserTurn.text);
-        if (lastTurnRejects && !lastTurnAgrees) {
-          aiConfirmedSms = false;
-          console.log(
-            `[fallback-eval] aiConfirmedSms overridden to false — ` +
-            `AI signaled dispatch but customer's last turn is unambiguous rejection. ` +
-            `vapiCallId=${vapiCallId}`,
-          );
-        }
-      }
-    }
-
-    // Voicemail override (compliance safety net, 2026-05-11):
-    // Patterns 1-3 fire on the agent's transcript phrases regardless of who's
-    // on the other end. When the call hit a voicemail and the agent gave its
-    // pitch (because the agent prompt rule #4 missed the greeting), the agent's
-    // own "you'll receive an SMS" phrasing would trigger aiPassive → goalReached
-    // → SMS dispatch to a number we never got real consent from. Catch this
-    // explicitly by dropping the transcript-derived goalReached when voicemail
-    // patterns are present. Vapi's authoritative successEvaluation (when set)
-    // still wins — it's set ABOVE this block and is not touched here.
-    if (aiConfirmedSms && isVoicemail) {
-      aiConfirmedSms = false;
-      console.log(
-        `[fallback-eval] aiConfirmedSms overridden to false — ` +
-        `voicemail patterns present in transcript; transcript-fallback ` +
-        `goalReached is unreliable. vapiCallId=${vapiCallId}`,
-      );
-    }
-
-    if (aiConfirmedSms) {
+  // (b) Transcript fallback (2026-06-04): Vapi's native analysis is empty on our
+  // SIP calls, so we evaluate the transcript — but require a GENUINE, machine-
+  // screened CUSTOMER consent (`hasGenuineCustomerConsent`), never the agent's
+  // own scripted line. This replaces the prior agent-phrase patterns, which
+  // fired on voicemails / STT fragments ("Message.") and produced false
+  // successes + unconsented SMS. Validated 2026-06-04 (n=982; 0 real-campaign loss).
+  if (successEval == null && transcript && !goalReached && !voicemailDetected) {
+    if (hasGenuineCustomerConsent(transcript)) {
       goalReached = true;
-      console.log(
-        `[fallback-eval] goal_reached=true via transcript pattern ` +
-        `(Vapi analysis missing, AI confirmed SMS dispatch). vapiCallId=${vapiCallId}`,
-      );
+      console.log(`[fallback-eval] goal_reached=true via genuine customer consent. vapiCallId=${vapiCallId}`);
     }
   }
 
@@ -676,9 +421,8 @@ export async function POST(request: NextRequest) {
   // suppresses fake goalReached from voicemail-contaminated transcripts)
   // still gets sent_sms and an SMS dispatched.
   //
-  // `isVoicemail` was computed earlier in this function (before transcript
-  // fallback) so it's already available here. Re-using rather than recomputing.
-  const skipOutcomeForVoicemail = isVoicemail && !goalReached && !optedOut;
+  // `voicemailDetected` was computed earlier in this function so it's reused here.
+  const skipOutcomeForVoicemail = voicemailDetected && !goalReached && !optedOut;
 
   if (skipOutcomeForVoicemail) {
     console.log(
@@ -715,7 +459,15 @@ export async function POST(request: NextRequest) {
   }
 
   // ── SMS dispatch (Manifesto §6: three conditions must ALL hold) ──
-  if (goalReached) {
+  // (c) Independent compliance gate on the irreversible action (2026-06-04):
+  // never dispatch SMS without consent evidence, regardless of how goal_reached
+  // was set (covers native-successEvaluation rows too).
+  const smsConsentOk =
+    !voicemailDetected && (nativeSuccess || (transcript ? hasGenuineCustomerConsent(transcript) : false));
+  if (goalReached && !smsConsentOk) {
+    console.warn(`[sms-gate] SMS suppressed despite goal_reached — no consent evidence. vapiCallId=${vapiCallId}`);
+  }
+  if (goalReached && smsConsentOk) {
     const { data: campaign } = await supabaseAdmin
       .from("campaigns_v2")
       .select("sms_enabled, sms_template, sms_on_goal_reached_only")

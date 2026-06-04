@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isVoicemail, hasRealConversation } from "./transcriptClassify";
+import { isVoicemail, hasRealConversation, hasGenuineCustomerConsent } from "./transcriptClassify";
 
 // Real AU "message bank" voicemails the filter MISSED (campaign 9df71cd3, 2026-06-03).
 // These were surfaced as fake "real conversations" in /reviews — the bug this test pins.
@@ -63,5 +63,58 @@ describe("hasRealConversation — AU voicemails are excluded, genuine stays", ()
   });
   it("keeps a real customer brush-off (they did talk)", () => {
     expect(hasRealConversation(REAL_BRUSHOFF)).toBe(true);
+  });
+});
+
+describe("isVoicemail — extended machine coverage (2026-06-04)", () => {
+  it("catches voice mailbox / messaging / answering system", () => {
+    expect(isVoicemail("Please leave a message for the voice mailbox of John.")).toBe(true);
+    expect(isVoicemail("You have reached the automated voice messaging system.")).toBe(true);
+    expect(isVoicemail("Your call has been forwarded to an automated answering service.")).toBe(true);
+  });
+  it("catches mailbox-full / unable-to-take-your-call", () => {
+    expect(isVoicemail("The mailbox is full. Goodbye.")).toBe(true);
+    expect(isVoicemail("We are not able to take your call right now.")).toBe(true);
+  });
+  it("catches IVR via two weak signals", () => {
+    expect(isVoicemail("Please hold. For sales press two, for support press three.")).toBe(true);
+  });
+  it("no false positive on a genuine human reply", () => {
+    expect(isVoicemail("Yeah sure, go ahead and send it.")).toBe(false);
+    expect(isVoicemail("No thanks, not interested.")).toBe(false);
+  });
+});
+
+describe("hasGenuineCustomerConsent (2026-06-04)", () => {
+  const offer = "AI: Can I send you the details via SMS?";
+  it("true on a real post-offer assent (incl. STT-truncated 'Y.')", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Yes, please.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Go ahead.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Sounds good.`)).toBe(true);
+    expect(hasGenuineCustomerConsent("AI: I'll send the details to this number.\nUser: Okay.")).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Y.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(GENUINE)).toBe(true);
+  });
+  it("FALSE on the live-bug voicemail fragments", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Message.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: A message.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Seven four five four.`)).toBe(false);
+  });
+  it("FALSE on machine text that LOOKS substantive (the probe leak)", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Please leave a detailed message after the tone.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Your call has been forwarded to an automated voice messaging system.`)).toBe(false);
+  });
+  it("FALSE on agent-only line with no customer assent (the live bug)", () => {
+    expect(hasGenuineCustomerConsent("AI: I'll send you an SMS now.\nUser: Message.")).toBe(false);
+  });
+  it("FALSE on label-less transcript (conservative)", () => {
+    expect(hasGenuineCustomerConsent("yeah sure send it")).toBe(false);
+  });
+  it("FALSE on the AU machine-bank voicemails", () => {
+    for (const t of Object.values(AU_VOICEMAILS)) expect(hasGenuineCustomerConsent(t)).toBe(false);
+  });
+  it("respects negation in the assent turn", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: No, don't.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Nah, leave it.`)).toBe(false);
   });
 });
