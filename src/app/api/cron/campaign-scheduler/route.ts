@@ -429,6 +429,30 @@ export async function GET(request: NextRequest) {
     const timezone = campaign.timezone as string;
     if (callWindows && callWindows.length > 0 && !isWithinCallWindow(callWindows, timezone)) {
       console.log(`[campaign-scheduler] ${campaignName}: inside start_at window but outside call window — skipping`);
+      // Surface the silent defer to operators. This branch fires on EVERY ~60s
+      // tick for a campaign stuck outside its window (e.g. a day/window mismatch
+      // or a classic-created campaign that bypassed the creation guards), so it
+      // is the real backstop for a "scheduled but never dials" campaign. Dedup
+      // via scheduler_alert_state (mirrors the recurring spawn_failed dedup) so
+      // a stuck campaign posts at most once per ~6h, not ~1,440x/day.
+      const winCompact = callWindows.map((w) => `${w.day} ${w.start}-${w.end}`).join("|");
+      const reason =
+        `due (start_at has passed) but the current time is outside the call window — deferring. ` +
+        `tz=${timezone}, windows=[${winCompact}]. Will not dial until the window opens; ` +
+        `if it never does, check for a day-of-window mismatch.`;
+      const { data: alertRow } = await supabaseAdmin
+        .from("scheduler_alert_state")
+        .select("last_alerted_at")
+        .eq("campaign_id", campaignId)
+        .maybeSingle();
+      // shouldAlertSpawnFail is the generic time-window dedup predicate (default 6h).
+      if (shouldAlertSpawnFail((alertRow?.last_alerted_at as string | null) ?? null, Date.now())) {
+        await postSlackAlert("WARN", "Campaign outside call window", [`${campaignName}: ${reason}`]);
+        await supabaseAdmin.from("scheduler_alert_state").upsert(
+          { campaign_id: campaignId, reason, last_alerted_at: new Date().toISOString() },
+          { onConflict: "campaign_id" },
+        );
+      }
       results.push({ id: campaignId, name: campaignName, result: "outside_call_window" });
       continue;
     }
@@ -446,6 +470,12 @@ export async function GET(request: NextRequest) {
       results.push({ id: campaignId, name: campaignName, result: "already_started" });
       continue;
     }
+
+    // Campaign just transitioned draft → running, so clear any outside-window
+    // alert state — a future re-defer (e.g. after a schedule edit) should be
+    // allowed to alert again. No-op when no row exists. Mirrors the recurring
+    // recovery-clear (recurring_alert_state delete on a successful spawn).
+    await supabaseAdmin.from("scheduler_alert_state").delete().eq("campaign_id", campaignId);
 
     // ── Recurring parent campaign guard ──
     // If it's a recurring parent campaign, it doesn't dial directly. Just leave it running
