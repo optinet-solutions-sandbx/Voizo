@@ -246,18 +246,18 @@ function AgreementBar({ stats, loading }: { stats: Stats; loading: boolean }) {
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <Target size={14} className="text-amber-400" />
-        <span className="text-[13px] font-semibold">Premise check — your verdict vs the system&apos;s success flag</span>
+        <span className="text-[13px] font-semibold">Your ratings vs the system</span>
       </div>
       {loading ? (
         <div className="h-5 w-2/3 rounded bg-[var(--bg-elevated)] animate-pulse" />
       ) : (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <Stat label="Labeled" value={`${stats.labeled} / ${stats.total}`} tone="text-[var(--text-1)]" />
-          <Stat label="Agree with system" value={stats.agree} tone="text-emerald-400" />
-          <Stat label="Disagree (ruler signal)" value={stats.disagree} tone="text-red-400" />
+          <Stat label="Agree" value={stats.agree} tone="text-emerald-400" />
+          <Stat label="Disagree" value={stats.disagree} tone="text-red-400" />
           <Stat label="Unsure" value={stats.unsure} tone="text-[var(--text-3)]" />
           <p className="text-[11px] text-[var(--text-3)] basis-full">
-            Disagreements = calls where your good/bad differs from the system&apos;s <span className="font-mono">goal_reached</span> — the fuzzy-ruler evidence.
+            Where your good/bad differs from the system&apos;s automatic success flag.
           </p>
         </div>
       )}

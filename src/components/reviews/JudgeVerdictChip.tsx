@@ -1,5 +1,5 @@
 "use client";
-import { Sparkles } from "lucide-react";
+import { Scale } from "lucide-react";
 import { judgeChipStyle, formatConfidence } from "./judgeChip";
 
 export interface JudgeScore {
@@ -26,9 +26,9 @@ export function JudgeVerdictChip({
     return (
       <span
         className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${style.classes}`}
-        title={score.rationale || "AI judge verdict"}
+        title={score.rationale || "Auto-review verdict"}
       >
-        <Sparkles size={9} /> AI: {style.label}
+        Auto: {style.label}
         {conf ? ` ${conf}` : ""}
       </span>
     );
@@ -40,12 +40,12 @@ export function JudgeVerdictChip({
       disabled={!judgeEnabled || grading}
       title={
         judgeEnabled
-          ? "Score this call with the AI judge"
-          : "AI judge is OFF — set QA_JUDGE_ENABLED + ANTHROPIC_API_KEY to enable"
+          ? "Score this call with the auto-review"
+          : "Auto-review is OFF — set QA_JUDGE_ENABLED + your provider API key to enable"
       }
       className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      <Sparkles size={9} /> {grading ? "grading…" : judgeEnabled ? "Grade with AI" : "AI: not graded"}
+      <Scale size={9} /> {grading ? "scoring…" : judgeEnabled ? "Score this call" : "not scored"}
     </button>
   );
 }
