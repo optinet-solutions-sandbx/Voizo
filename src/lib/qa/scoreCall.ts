@@ -1,10 +1,9 @@
 // src/lib/qa/scoreCall.ts
 // Best-effort, NEVER-throws single-transcript scorer. Guards BEFORE the API call
 // (cheap skips), truncates, calls Claude, parses. Off the call/dial path entirely.
-import Anthropic from "@anthropic-ai/sdk";
 import { isVoicemail, hasRealConversation } from "../transcriptClassify";
+import { getJudgeClient } from "./judgeClients";
 import {
-  ANTHROPIC_API_KEY,
   QA_JUDGE_MODEL,
   QA_MAX_OUTPUT_TOKENS,
   QA_TRANSCRIPT_CHAR_CAP,
@@ -39,14 +38,6 @@ export interface JudgeClient {
   messages: { create(args: unknown): Promise<{ content: Array<{ type: string; text?: string }> }> };
 }
 
-let _client: JudgeClient | null = null;
-/** Lazily build the real Anthropic client. Returns null when no key (flag-OFF safe). */
-export function getAnthropicClient(): JudgeClient | null {
-  if (!ANTHROPIC_API_KEY) return null;
-  if (!_client) _client = new Anthropic({ apiKey: ANTHROPIC_API_KEY }) as unknown as JudgeClient;
-  return _client;
-}
-
 interface ScoreOpts {
   client?: JudgeClient | null;
   model?: string;
@@ -65,7 +56,7 @@ export async function scoreTranscript(input: ScoreInput, opts: ScoreOpts = {}): 
   if (typeof input.durationSeconds === "number" && input.durationSeconds < minDur)
     return { ok: false, skipped: "too-short" };
 
-  const client = opts.client ?? getAnthropicClient();
+  const client = opts.client ?? getJudgeClient();
   if (!client) return { ok: false, skipped: "not-ready" };
 
   const transcript = t.slice(0, QA_TRANSCRIPT_CHAR_CAP);

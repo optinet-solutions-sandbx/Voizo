@@ -146,13 +146,48 @@ export async function upsertQaScore(input: UpsertScoreInput): Promise<{ ok: bool
   }
 }
 
-/** Read the calibration confusion data for a judge_version (empty-but-valid when none). */
-export async function readCalibration(judgeVersion?: string): Promise<Array<Record<string, unknown>>> {
+/** Read the calibration confusion data for a judge_version (+ optional campaign). Empty-but-valid when none. */
+export async function readCalibration(
+  judgeVersion?: string,
+  campaignId?: string,
+): Promise<Array<Record<string, unknown>>> {
   try {
     let q = supabaseAdmin.from("qa_calibration").select("*");
     if (judgeVersion) q = q.eq("judge_version", judgeVersion);
+    if (campaignId) q = q.eq("campaign_id", campaignId);
     const { data } = await q;
     return (data ?? []) as Array<Record<string, unknown>>;
+  } catch {
+    return [];
+  }
+}
+
+export interface CampaignScore {
+  callId: string;
+  verdict: string | null;
+  confidence: number | null;
+  path: string | null;
+  rationale: string | null;
+  judgeVersion: string;
+}
+
+/** This campaign's qa_scores for a judge_version, shaped for the Reviews UI. Never throws → []. */
+export async function selectCampaignScores(campaignId: string, judgeVersion: string): Promise<CampaignScore[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("qa_scores")
+      .select("call_id, success_verdict, success_confidence, success_path, rationale, judge_version")
+      .eq("campaign_id", campaignId)
+      .eq("judge_version", judgeVersion);
+    if (error || !data) return [];
+    return (data as Array<Record<string, unknown>>).map((r) => ({
+      callId: r.call_id as string,
+      verdict: (r.success_verdict as string | null) ?? null,
+      confidence: (r.success_confidence as number | null) ?? null,
+      path: (r.success_path as string | null) ?? null,
+      rationale: (r.rationale as string | null) ?? null,
+      judgeVersion: r.judge_version as string,
+    }));
   } catch {
     return [];
   }

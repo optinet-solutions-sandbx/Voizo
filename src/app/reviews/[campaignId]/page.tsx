@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ArrowLeft, HelpCircle, Target, ThumbsDown, ThumbsUp, VolumeX,
 } from "lucide-react";
+import { JudgeScorecard, type JudgeCalibration } from "@/components/reviews/JudgeScorecard";
+import { JudgeVerdictChip, type JudgeScore } from "@/components/reviews/JudgeVerdictChip";
 
 type Verdict = "good" | "bad" | "unsure";
 
@@ -23,6 +25,7 @@ interface QueueItem {
   goalReached: boolean | null; transcript: string; audioUrl: string | null; yourLabel: CallLabel | null;
 }
 interface QueueResponse { items: QueueItem[]; total: number; reviewer: string; }
+interface JudgeData { judgeEnabled: boolean; calibration: JudgeCalibration; scores: Record<string, JudgeScore>; }
 
 export default function CampaignReviewPage() {
   const params = useParams<{ campaignId: string }>();
@@ -31,6 +34,21 @@ export default function CampaignReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [judge, setJudge] = useState<JudgeData | null>(null);
+  const [gradingId, setGradingId] = useState<string | null>(null);
+  const [gradingAll, setGradingAll] = useState(false);
+  const [gradeMsg, setGradeMsg] = useState<string | null>(null);
+
+  // Judge data is best-effort — the labeling UI must still load if it fails. Re-run
+  // after grading so the scorecard's agreement/κ updates without a manual refresh.
+  const loadJudge = useCallback(async () => {
+    try {
+      const jr = await fetch(`/api/qa/campaign/${encodeURIComponent(campaignId)}`, { cache: "no-store" });
+      if (jr.ok) setJudge((await jr.json()) as JudgeData);
+    } catch {
+      /* swallow — judge panel just shows its loading/empty state */
+    }
+  }, [campaignId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,12 +57,13 @@ export default function CampaignReviewPage() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as QueueResponse);
       setError(null);
+      await loadJudge();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load conversations");
     } finally {
       setLoading(false);
     }
-  }, [campaignId]);
+  }, [campaignId, loadJudge]);
 
   useEffect(() => { if (campaignId) load(); }, [campaignId, load]);
 
@@ -71,6 +90,49 @@ export default function CampaignReviewPage() {
       setSavingId(null);
     }
   }, []);
+
+  const gradeCall = useCallback(async (callId: string) => {
+    setGradingId(callId);
+    setError(null);
+    try {
+      const r = await fetch(`/api/qa/score/${encodeURIComponent(callId)}`, { method: "POST" });
+      if (!r.ok) {
+        const b = (await r.json().catch(() => ({}))) as { error?: string; skipped?: string };
+        throw new Error(b.error || b.skipped || `HTTP ${r.status}`);
+      }
+      const body = (await r.json()) as { verdict?: unknown; skipped?: string };
+      if (body.skipped && !body.verdict) setError(`AI judge skipped this call: ${body.skipped}`);
+      await loadJudge(); // refresh the chip + the scorecard's agreement/κ
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to grade call");
+    } finally {
+      setGradingId(null);
+    }
+  }, [loadJudge]);
+
+  const gradeAll = useCallback(async () => {
+    setGradingAll(true);
+    setGradeMsg(null);
+    setError(null);
+    try {
+      const r = await fetch(`/api/qa/campaign/${encodeURIComponent(campaignId)}/grade`, { method: "POST" });
+      if (!r.ok) {
+        const b = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(b.error || `HTTP ${r.status}`);
+      }
+      const body = (await r.json()) as { scored: number; skipped: number; candidates: number };
+      setGradeMsg(
+        body.candidates === 0
+          ? "All real conversations here are already graded."
+          : `Graded ${body.scored} · skipped ${body.skipped} (voicemail / short / etc.)`,
+      );
+      await loadJudge();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to grade campaign");
+    } finally {
+      setGradingAll(false);
+    }
+  }, [campaignId, loadJudge]);
 
   const stats = useMemo(() => agreementStats(data?.items ?? []), [data]);
   const campaignName = data?.items[0]?.campaignName ?? "Campaign";
@@ -115,6 +177,16 @@ export default function CampaignReviewPage() {
 
       <AgreementBar stats={stats} loading={loading} />
 
+      <JudgeScorecard
+        judgeEnabled={judge?.judgeEnabled ?? false}
+        calibration={judge?.calibration ?? null}
+        scoredCount={judge ? Object.keys(judge.scores).length : 0}
+        loading={loading}
+        onGradeAll={gradeAll}
+        gradingAll={gradingAll}
+        gradeMsg={gradeMsg}
+      />
+
       {!loading && data && data.items.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[11px] text-[var(--text-3)] uppercase tracking-wider mr-1">Show</span>
@@ -134,7 +206,16 @@ export default function CampaignReviewPage() {
       ) : (
         <div className="grid gap-4">
           {visibleItems.map((it) => (
-            <ReviewCard key={it.callId} item={it} saving={savingId === it.callId} onLabel={submitLabel} />
+            <ReviewCard
+              key={it.callId}
+              item={it}
+              saving={savingId === it.callId}
+              onLabel={submitLabel}
+              judgeScore={judge?.scores[it.callId] ?? null}
+              judgeEnabled={judge?.judgeEnabled ?? false}
+              grading={gradingId === it.callId}
+              onGrade={() => gradeCall(it.callId)}
+            />
           ))}
         </div>
       )}
@@ -194,8 +275,11 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
 }
 
 function ReviewCard({
-  item, saving, onLabel,
-}: { item: QueueItem; saving: boolean; onLabel: (callId: string, verdict: Verdict, reason: string | null) => void }) {
+  item, saving, onLabel, judgeScore, judgeEnabled, grading, onGrade,
+}: {
+  item: QueueItem; saving: boolean; onLabel: (callId: string, verdict: Verdict, reason: string | null) => void;
+  judgeScore: JudgeScore | null; judgeEnabled: boolean; grading: boolean; onGrade: () => void;
+}) {
   const [reason, setReason] = useState(item.yourLabel?.reason ?? "");
   const current = item.yourLabel?.verdict ?? null;
 
@@ -207,16 +291,19 @@ function ReviewCard({
           <span>·</span>
           <span>{item.status.replace(/_/g, " ")}</span>
         </div>
-        <span
-          className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
-            item.goalReached
-              ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-              : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
-          }`}
-          title="The system's success flag (goal_reached)"
-        >
-          <Target size={9} /> goal {item.goalReached ? "true" : "false"}
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span
+            className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
+              item.goalReached
+                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
+            }`}
+            title="The system's success flag (goal_reached)"
+          >
+            <Target size={9} /> goal {item.goalReached ? "true" : "false"}
+          </span>
+          <JudgeVerdictChip score={judgeScore} judgeEnabled={judgeEnabled} grading={grading} onGrade={onGrade} />
+        </div>
       </div>
 
       {item.audioUrl ? (

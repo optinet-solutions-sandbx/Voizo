@@ -4,8 +4,14 @@
 // scored before Maria's PII sign-off). Pure module — no I/O, importable anywhere.
 
 export const QA_JUDGE_ENABLED = process.env.QA_JUDGE_ENABLED === "true";
+// Provider: "openai" (available now) or "anthropic" (preferred for independence —
+// wired so the later swap is just QA_JUDGE_PROVIDER=anthropic + the key).
+export const QA_JUDGE_PROVIDER = (process.env.QA_JUDGE_PROVIDER || "openai").toLowerCase();
 export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-export const QA_JUDGE_MODEL = process.env.QA_JUDGE_MODEL || "claude-sonnet-4-6";
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+// ⚠ Confirm the exact API model id your key accepts; override via QA_JUDGE_MODEL.
+export const QA_JUDGE_MODEL =
+  process.env.QA_JUDGE_MODEL || (QA_JUDGE_PROVIDER === "anthropic" ? "claude-sonnet-4-6" : "gpt-5.5");
 
 // Throughput / cost guardrails (SPEC "Cost & guardrails"). Parsed defensively:
 // `Number(env ?? default)` would yield NaN/0 on a malformed env var (e.g.
@@ -28,7 +34,8 @@ export const QA_MIN_DURATION_SECONDS = numEnv(process.env.QA_MIN_DURATION_SECOND
 export const QA_MAX_OUTPUT_TOKENS = 512; // verdict JSON is ~150-250 tok; ceiling only
 export const QA_TRANSCRIPT_CHAR_CAP = 6000; // bound a pathological long call before send
 
-/** True only when the judge can actually run (flag ON + key present). */
+/** True only when the judge can actually run (flag ON + the active provider's key present). */
 export function qaJudgeReady(): boolean {
-  return QA_JUDGE_ENABLED && ANTHROPIC_API_KEY.length > 0;
+  if (!QA_JUDGE_ENABLED) return false;
+  return QA_JUDGE_PROVIDER === "anthropic" ? ANTHROPIC_API_KEY.length > 0 : OPENAI_API_KEY.length > 0;
 }
