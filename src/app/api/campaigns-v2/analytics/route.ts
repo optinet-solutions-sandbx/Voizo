@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 
 /**
  * GET /api/campaigns-v2/analytics
@@ -18,30 +19,21 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
  * their ids, so "all rows" == "rows for the fetched ids". computeCampaignAnalytics
  * groups by campaign_id and ignores rows for any campaign not on the page.
  *
- * Best-effort per table: a per-table error degrades that bucket to [] (loud-
- * logged) rather than failing the whole bundle — mirrors the page's original
- * loud-over-silent handling (a metric reads 0, never hidden).
+ * Paginated reads (fetchAllRows): PostgREST caps an unpaginated .select() at
+ * 1000 rows, which silently dropped the newest campaigns' numbers/calls (>1000
+ * rows total) so the list showed 0 contacts/calls for them. fetchAllRows pages
+ * past the cap, ordered by the stable `id` key, so every campaign is counted.
+ *
+ * Best-effort per table: fetchAllRows logs a page error and returns the rows
+ * gathered so far (loud-over-silent), so one table failing degrades that bucket
+ * rather than failing the whole bundle.
  */
 export async function GET() {
-  const [numbersRes, callsRes, smsRes] = await Promise.all([
-    supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("id, campaign_id, outcome, created_at"),
-    supabaseAdmin
-      .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at"),
-    supabaseAdmin
-      .from("sms_messages_v2")
-      .select("campaign_id, status, provider"),
+  const [numbers, calls, sms] = await Promise.all([
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id, outcome, created_at"),
+    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at"),
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, provider"),
   ]);
 
-  if (numbersRes.error) console.error("[campaigns-v2/analytics] campaign_numbers_v2 read failed:", numbersRes.error);
-  if (callsRes.error) console.error("[campaigns-v2/analytics] calls_v2 read failed:", callsRes.error);
-  if (smsRes.error) console.error("[campaigns-v2/analytics] sms_messages_v2 read failed (SMS metrics read 0):", smsRes.error);
-
-  return NextResponse.json({
-    numbers: numbersRes.data ?? [],
-    calls: callsRes.data ?? [],
-    sms: smsRes.data ?? [],
-  });
+  return NextResponse.json({ numbers, calls, sms });
 }
