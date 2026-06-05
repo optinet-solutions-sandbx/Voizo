@@ -33,6 +33,7 @@ export const CRON_NAMES = {
   recordingBackfill: "recording-backfill",
   stuckSlotWatchdog: "stuck-slot-watchdog",
   alertsHourly: "alerts-hourly",
+  scoreBackfill: "score-backfill",
 } as const;
 
 export type CronName = (typeof CRON_NAMES)[keyof typeof CRON_NAMES];
@@ -49,6 +50,7 @@ export const CRON_STALENESS_THRESHOLD_SECONDS: Record<CronName, number> = {
   "campaign-heartbeat": 5400, // every 30min x 3 margin
   "stuck-slot-watchdog": 93600, // daily (86400s) x ~1.08 -> 26h
   "alerts-hourly": 4500, // every 60min x 1.25 (self-monitor)
+  "score-backfill": 5400, // every 30min x 3 margin (same as campaign-heartbeat)
 };
 
 const POST_TIMEOUT_MS = 3000;
