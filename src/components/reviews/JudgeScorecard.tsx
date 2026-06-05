@@ -33,6 +33,7 @@ export function JudgeScorecard({
         <div className="ml-auto flex items-center gap-2">
           {judgeEnabled && onGradeAll && (
             <button
+              type="button"
               onClick={onGradeAll}
               disabled={gradingAll}
               title="Score every ungraded real conversation in this campaign (voicemails + short calls are skipped)"

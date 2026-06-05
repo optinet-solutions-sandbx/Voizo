@@ -35,6 +35,7 @@ export function JudgeVerdictChip({
   }
   return (
     <button
+      type="button"
       onClick={onGrade}
       disabled={!judgeEnabled || grading}
       title={
