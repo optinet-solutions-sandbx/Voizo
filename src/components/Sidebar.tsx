@@ -12,7 +12,7 @@ import {
 const CampaignIcon = Megaphone;
 import { useNotifications } from "@/lib/notificationsContext";
 import { useTheme } from "@/lib/themeContext";
-import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Client";
 // Animated sidebar nav icons (lucide-animated.com, motion-powered). These run
 // only on the desktop nav; mobile + search keep the static lucide-react icons.
 import { useReducedMotion } from "motion/react";

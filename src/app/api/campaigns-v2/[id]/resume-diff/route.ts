@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
-import { parsePhoneList } from "@/lib/campaignV2Data";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 
 // Up to: paginated customer.io segment fetch (for the out-of-segment bucket

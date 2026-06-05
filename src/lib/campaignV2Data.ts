@@ -1,65 +1,24 @@
-import { supabase } from "./supabase";
-import type { RecurrencePattern } from "./types/recurrence";
+// Server-only data access for Campaign V2. Uses the service-role admin client
+// (supabaseAdmin) which bypasses RLS.
+//
+// ⚠️ NEVER import this from a client component. supabaseServer.ts reads
+// SUPABASE_SERVICE_ROLE_KEY (a non-NEXT_PUBLIC env var) and throws at module
+// load — so a client import both leaks server intent and breaks the browser
+// bundle. Client components must use:
+//   - campaignV2Client.ts  (fetch -> /api/campaigns-v2 -> here, service role)
+//   - campaignV2Shared.ts  (types + pure helpers, no supabase)
+//
+// RLS Phase A (docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md): this module used
+// to use the PUBLIC anon client and was imported directly by the browser, which
+// is exactly what made the v2 tables readable/writable by anyone holding the
+// anon key. Routing every browser read/write through /api routes that call this
+// (service role) is the prerequisite for Phase B (dropping the permissive
+// `for all using(true)` policies). Types + pure helpers moved to
+// campaignV2Shared.ts so client code can keep using them without dragging the
+// admin client into the bundle.
 
-export type CallWindow = {
-  day: "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
-  start: string;
-  end: string;
-};
-
-export interface CampaignV2CreateInput {
-  name: string;
-  systemPrompt: string;
-  vapiAssistantId?: string; // Optional: recurring parents are created without a clone (no worker leased). Required for Fixed campaigns.
-  vapiAssistantName?: string;
-  vapiSipUri?: string;
-  vapiPoolSlotId?: string; // SIP pool slot id when USE_SIP_POOL=true; null/undefined for legacy per-campaign flow
-  baseAssistantId?: string; // Source agent the clone was made from; persisted for re-bind after eject
-  voiceId?: string; // ElevenLabs voice ID chosen at create time; persisted for re-bind so operator intent survives eject. NULL = use base agent's default voice.
-  segmentId?: number; // customer.io segment ID (single-segment imports only); persisted for Step 5 Duplicate, Step 6 Manual refresh, Step 7 Resume-diff. NULL for multi-segment imports.
-  timezone: string;
-  startAt?: string | null;
-  endAt?: string | null;
-  callWindows: CallWindow[];
-  smsEnabled: boolean;
-  smsTemplate?: string | null;
-  smsOnGoalReachedOnly?: boolean;
-  numbers: string[];
-  createdBy?: string | null;
-  campaignType?: "fixed" | "recurring"; // Defaults to "fixed". Recurring parents save as status='running' with no clone; children are spawned by the scheduler.
-  recurrencePattern?: RecurrencePattern | null; // Populated for campaignType='recurring'; null otherwise.
-  isTest?: boolean; // Marks the campaign as a test run. Excluded from /api/audience/suggestions; operator-controllable in the wizard + detail page header.
-}
-
-export function defaultCallWindows(): CallWindow[] {
-  return [
-    { day: "sun", start: "12:00", end: "20:00" },
-    { day: "mon", start: "12:00", end: "20:00" },
-    { day: "tue", start: "12:00", end: "17:00" },
-    { day: "wed", start: "12:00", end: "17:00" },
-    { day: "thu", start: "12:00", end: "17:00" },
-    { day: "fri", start: "18:00", end: "20:00" },
-    { day: "sat", start: "12:00", end: "20:00" },
-  ];
-}
-
-export function formatDefaultCallWindowsJson(): string {
-  return JSON.stringify(defaultCallWindows(), null, 2);
-}
-
-export function parsePhoneList(input: string): string[] {
-  const items = input
-    .split(/[\n,]+/g)
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  const normalized = items
-    .map((value) => value.replace(/[^\d+]/g, ""))
-    .map((value) => (value.startsWith("+") ? value : `+${value.replace(/[^\d]/g, "")}`))
-    .filter((value) => /^\+\d{8,15}$/.test(value));
-
-  return Array.from(new Set(normalized));
-}
+import { supabaseAdmin } from "./supabaseServer";
+import type { CampaignV2CreateInput } from "./campaignV2Shared";
 
 export async function createCampaignV2(input: CampaignV2CreateInput) {
   // Recurring parents save directly as 'running' (active schedule definition);
@@ -68,7 +27,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   const campaignType = input.campaignType ?? "fixed";
   const status = campaignType === "recurring" ? "running" : "draft";
 
-  const { data: campaign, error: campaignError } = await supabase
+  const { data: campaign, error: campaignError } = await supabaseAdmin
     .from("campaigns_v2")
     .insert({
       name: input.name,
@@ -107,7 +66,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   // with neither — the && narrows the type and keeps the branch dead for them.
   if (input.vapiPoolSlotId && input.vapiAssistantId) {
     const { linkSlot } = await import("./vapi/sipPool");
-    const linked = await linkSlot(supabase, {
+    const linked = await linkSlot(supabaseAdmin, {
       slotId: input.vapiPoolSlotId,
       campaignId: campaign.id,
       expectedAssistantId: input.vapiAssistantId,
@@ -129,7 +88,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   }));
 
   if (campaignRows.length > 0) {
-    const { error: numbersError } = await supabase.from("campaign_numbers_v2").insert(campaignRows);
+    const { error: numbersError } = await supabaseAdmin.from("campaign_numbers_v2").insert(campaignRows);
     if (numbersError) throw numbersError;
   }
 
@@ -142,7 +101,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
 // --------------- Fetch helpers ---------------
 
 export async function fetchCampaignsV2() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("campaigns_v2")
     .select("*")
     .order("created_at", { ascending: false });
@@ -151,7 +110,7 @@ export async function fetchCampaignsV2() {
 }
 
 export async function fetchCampaignV2(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("campaigns_v2")
     .select("*")
     .eq("id", id)
@@ -160,38 +119,8 @@ export async function fetchCampaignV2(id: string) {
   return data;
 }
 
-export async function fetchCampaignNumbersV2(campaignId: string) {
-  const { data, error } = await supabase
-    .from("campaign_numbers_v2")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .order("created_at", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
-}
-
-export async function fetchCallsV2(campaignId: string) {
-  const { data, error } = await supabase
-    .from("calls_v2")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
-}
-
-export async function fetchSmsMessagesV2(campaignId: string) {
-  const { data, error } = await supabase
-    .from("sms_messages_v2")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
-}
-
 export async function updateCampaignV2Status(id: string, status: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("campaigns_v2")
     .update({ status })
     .eq("id", id)
@@ -199,14 +128,4 @@ export async function updateCampaignV2Status(id: string, status: string) {
     .single();
   if (error) throw error;
   return data;
-}
-
-export async function checkSuppression(phones: string[]): Promise<string[]> {
-  if (phones.length === 0) return [];
-  const { data, error } = await supabase
-    .from("suppression_list")
-    .select("phone_e164")
-    .in("phone_e164", phones);
-  if (error) throw error;
-  return (data ?? []).map((r: { phone_e164: string }) => r.phone_e164);
 }

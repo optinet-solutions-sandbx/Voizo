@@ -23,7 +23,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClone } from "@/lib/vapi/cloneAssistant";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { leaseSlot, patchPhoneAssistant, linkSlot, releaseSlot } from "@/lib/vapi/sipPool";
-import { parsePhoneList } from "@/lib/campaignV2Data";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { snapshotCampaignPrompt } from "@/lib/promptVersionData";
 import type { DayOfWeek, RecurrencePattern } from "@/lib/types/recurrence";
 
