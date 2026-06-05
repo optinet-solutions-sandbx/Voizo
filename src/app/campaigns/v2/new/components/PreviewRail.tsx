@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Repeat, Play, Users } from "lucide-react";
 
-import { parsePhoneList } from "@/lib/campaignV2Data";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { TIMEZONE_OPTIONS, type WizardState } from "../wizardState";
 
 interface Props {

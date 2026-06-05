@@ -17,7 +17,7 @@ import {
   AlertTriangle, Check, ChevronDown, Layers, Loader2, Megaphone, Phone,
   ShieldCheck, X,
 } from "lucide-react";
-import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Client";
 import { parseJsonBody } from "@/lib/jsonBody";
 
 export interface SegmentRow {

@@ -8,8 +8,7 @@ import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareTe
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { DownloadIcon } from "@/components/icons/animated/download";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { fetchCampaignV2, updateCampaignV2Status } from "@/lib/campaignV2Data";
-import { fetchCampaignDetailBundle } from "@/lib/campaignV2Client";
+import { fetchCampaignV2, updateCampaignV2Status, fetchCampaignDetailBundle } from "@/lib/campaignV2Client";
 import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
 import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
@@ -397,9 +396,10 @@ export default function CampaignV2DetailPage() {
   const refreshData = useCallback(async () => {
     if (!id) return;
     try {
-      // RLS Phase A slice: numbers/calls/SMS now load via the auth-gated server
-      // route (service role) instead of the anon client. fetchCampaignV2 (campaign
-      // config) stays on the anon path for now — the full Phase A migrates it.
+      // RLS Phase A: both reads go through auth-gated server routes (service
+      // role) — fetchCampaignV2 via GET /api/campaigns-v2/[id], the child bundle
+      // (numbers/calls/SMS) via GET /api/campaigns-v2/[id]/detail. Neither uses
+      // the anon client anymore.
       const [c, bundle] = await Promise.all([
         fetchCampaignV2(id),
         fetchCampaignDetailBundle(id),

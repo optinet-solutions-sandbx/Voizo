@@ -13,7 +13,7 @@
 
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
-import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Data";
+import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
 import { allowedTimezonesForCountry, audienceTzGuard, detectAudienceCountry } from "@/lib/audienceCountry";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
 import { clockHHMMInTimezone, isWithinCallWindowAt, resolveStartAt } from "@/lib/scheduleWindow";

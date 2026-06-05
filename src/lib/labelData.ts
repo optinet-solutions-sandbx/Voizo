@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "./supabaseServer";
 import { hasRealConversation } from "./transcriptClassify";
+import { fetchAllRows } from "./supabaseFetchAll";
 
 /**
  * Reviewer Labeling data layer (Agent training tab — slice 1).
@@ -37,7 +38,9 @@ export interface ReviewCampaign {
   campaignId: string;
   campaignName: string;
   isTest: boolean;
+  createdAt: string; // campaigns_v2.created_at — for the "Newest" sort
   conversationCount: number; // real conversations (post-filter)
+  totalCallCount: number; // ALL calls (incl. no-transcript) — for the "Most calls" sort
   goalReachedCount: number; // among those, goal_reached === true
   labeledCount: number; // among those, labeled by this reviewer
 }
@@ -75,15 +78,16 @@ interface RawCallRow {
   transcript: unknown;
   recording_url: unknown;
   campaigns_v2:
-    | { name: string | null; is_test: boolean | null }
-    | { name: string | null; is_test: boolean | null }[]
+    | { name: string | null; is_test: boolean | null; created_at: string | null }
+    | { name: string | null; is_test: boolean | null; created_at: string | null }[]
     | null;
 }
 
-function campaignBrief(row: RawCallRow): { name: string; isTest: boolean } {
+function campaignBrief(row: RawCallRow): { name: string; isTest: boolean; createdAt: string } {
   const c = row.campaigns_v2;
   const obj = Array.isArray(c) ? c[0] : c;
-  return { name: obj?.name ?? "—", isTest: Boolean(obj?.is_test) };
+  // Fall back to the call's created_at if the campaign embed lacks one (defensive).
+  return { name: obj?.name ?? "—", isTest: Boolean(obj?.is_test), createdAt: obj?.created_at ?? row.created_at };
 }
 
 const SUPABASE_PAGE = 1000; // PostgREST default max-rows
@@ -99,7 +103,7 @@ async function fetchLabelableCalls(campaignIds: string[] | null): Promise<RawCal
     let q = supabaseAdmin
       .from("calls_v2")
       .select(
-        "id, campaign_id, created_at, duration_seconds, status, goal_reached, transcript, recording_url, campaigns_v2!campaign_id(name, is_test)",
+        "id, campaign_id, created_at, duration_seconds, status, goal_reached, transcript, recording_url, campaigns_v2!campaign_id(name, is_test, created_at)",
       )
       .not("transcript", "is", null);
     if (campaignIds) q = q.in("campaign_id", campaignIds);
@@ -170,7 +174,9 @@ export async function listReviewCampaigns(opts: {
         campaignId: c.campaign_id,
         campaignName: brief.name,
         isTest: brief.isTest,
+        createdAt: brief.createdAt,
         conversationCount: 0,
+        totalCallCount: 0,
         goalReachedCount: 0,
         labeledCount: 0,
       };
@@ -192,6 +198,21 @@ export async function listReviewCampaigns(opts: {
     if (!campId) continue;
     const agg = byCampaign.get(campId);
     if (agg) agg.labeledCount += 1;
+  }
+
+  // Total call count per campaign (ALL calls — incl. no-transcript / voicemail /
+  // no-answer) for the "Most calls" sort. Paged past the 1000-row cap via the
+  // shared fetchAllRows; only campaign_id is selected so the payload stays tiny.
+  const allCallCampaignRows = await fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id");
+  const totalByCampaign = new Map<string, number>();
+  for (const r of allCallCampaignRows) {
+    const cid = r.campaign_id as string;
+    if (cid) totalByCampaign.set(cid, (totalByCampaign.get(cid) ?? 0) + 1);
+  }
+  for (const agg of byCampaign.values()) {
+    // totalCalls is always >= conversationCount; fall back to conversationCount
+    // if somehow absent (a campaign in byCampaign always has >=1 call).
+    agg.totalCallCount = totalByCampaign.get(agg.campaignId) ?? agg.conversationCount;
   }
 
   return Array.from(byCampaign.values()).sort((a, b) => b.conversationCount - a.conversationCount);

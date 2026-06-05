@@ -5,7 +5,7 @@ import {
   AlertTriangle, Bot, CalendarDays, MessageSquareText, Play, Repeat, Users,
 } from "lucide-react";
 
-import { parsePhoneList } from "@/lib/campaignV2Data";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 
 import {
   DAYS, getCallingHours, SHORTENED_URL_LENGTH, smsSegmentCount, TIMEZONE_OPTIONS,

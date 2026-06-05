@@ -19,7 +19,8 @@ import { Suspense, useCallback, useEffect, useReducer, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
-import { createCampaignV2, parsePhoneList } from "@/lib/campaignV2Data";
+import { createCampaignV2 } from "@/lib/campaignV2Client";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { analyzeAudienceCountry, countryLabel } from "@/lib/audienceCountry";
 import { consumeDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { parseJsonBody } from "@/lib/jsonBody";
@@ -412,12 +413,12 @@ function WizardPage({
       const { campaign } = await createCampaignV2(buildCreateInput(state, clone));
 
       // Best-effort prompt-version snapshot (slice 2 — eval-loop keystone).
-      // Fire-and-forget: a snapshot must NEVER block or fail the launch. The
-      // server route re-reads the clone from Vapi and writes via the service
-      // role — createCampaignV2 runs client-side (anon) and can't write the
-      // default-deny prompt_versions table. keepalive:true lets the request
-      // survive the router.push navigation below (a soft-nav can otherwise
-      // abort an in-flight fetch); the server warn-logs any skip.
+      // Fire-and-forget: a snapshot must NEVER block or fail the launch. It stays
+      // a separate route because it re-reads the clone from Vapi and writes the
+      // default-deny prompt_versions table via the service role — a distinct
+      // concern from campaign creation. keepalive:true lets the request survive
+      // the router.push navigation below (a soft-nav can otherwise abort an
+      // in-flight fetch); the server warn-logs any skip.
       void fetch(`/api/campaigns-v2/${campaign.id}/snapshot-prompt`, {
         method: "POST",
         keepalive: true,

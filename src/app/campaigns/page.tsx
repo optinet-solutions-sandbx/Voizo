@@ -11,8 +11,7 @@ import { triggerDownload } from "@/lib/download";
 import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { fetchCampaignsV2 } from "@/lib/campaignV2Data";
-import { supabase } from "@/lib/supabase";
+import { fetchCampaignsV2, fetchCampaignAnalytics } from "@/lib/campaignV2Client";
 import Pagination from "@/components/Pagination";
 import {
   computeCampaignAnalytics,
@@ -121,32 +120,23 @@ function CampaignsPageInner() {
         const ids = rows.map((r: CampaignRow) => r.id as string);
         if (ids.length === 0) { setLoading(false); return; }
 
-        // PII-minimization (G6): select ONLY aggregation columns — never phone_e164,
-        // transcript, body, to_phone_e164, error_message, or provider_message_id.
-        const [numbersRes, callsRes, smsRes] = await Promise.all([
-          supabase
-            .from("campaign_numbers_v2")
-            .select("id, campaign_id, outcome, created_at")
-            .in("campaign_id", ids),
-          supabase
-            .from("calls_v2")
-            .select("campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at")
-            .in("campaign_id", ids),
-          supabase
-            .from("sms_messages_v2")
-            .select("campaign_id, status, provider")
-            .in("campaign_id", ids),
-        ]);
-        // Loud over silent: a per-table read error degrades a metric to 0 — surface it, never hide it.
-        if (numbersRes.error) console.error("[analytics] campaign_numbers_v2 read failed:", numbersRes.error);
-        if (callsRes.error) console.error("[analytics] calls_v2 read failed:", callsRes.error);
-        if (smsRes.error) console.error("[analytics] sms_messages_v2 read failed (SMS metrics read 0):", smsRes.error);
+        // PII-minimization (G6) is now enforced SERVER-SIDE: the analytics route
+        // selects ONLY aggregation columns (never phone_e164/transcript/body/
+        // to_phone_e164/error_message/provider_message_id) and reads via the
+        // service role, so the anon key never touches these tables. Per-table
+        // read errors are loud-logged server-side and degrade that bucket to []
+        // (RLS Phase A — docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md).
+        const { numbers, calls, sms } = await fetchCampaignAnalytics();
 
+        // Double-cast through unknown: the server returns Record<string,unknown>
+        // rows (the old anon client returned `any`, which cast implicitly). The
+        // runtime shapes match the analytics row types — the route selects exactly
+        // those columns.
         const analyticsById = computeCampaignAnalytics({
-          campaigns: rows as AnalyticsCampaignRow[],
-          numbers: (numbersRes.data ?? []) as NumberRow[],
-          calls: (callsRes.data ?? []) as CallRow[],
-          sms: (smsRes.data ?? []) as SmsRow[],
+          campaigns: rows as unknown as AnalyticsCampaignRow[],
+          numbers: numbers as unknown as NumberRow[],
+          calls: calls as unknown as CallRow[],
+          sms: sms as unknown as SmsRow[],
           now: Date.now(),
         });
         setAnalytics(analyticsById);
@@ -179,19 +169,21 @@ function CampaignsPageInner() {
       if (listPollInFlightRef.current) return;
       listPollInFlightRef.current = true;
       try {
-        const { data } = await supabase
-          .from("campaigns_v2")
-          .select("id, status, start_at")
-          .order("created_at", { ascending: false });
-        if (!data) return;
-        const freshIds = new Set(data.map((d) => d.id));
+        // RLS Phase A: status poll reads via the auth-gated server route (full
+        // rows; we only use id/status/start_at). fetchCampaignsV2 THROWS on a
+        // non-2xx, so the catch keeps a transient poll failure non-fatal (and
+        // loud, not silent) — matching the old anon path that no-op'd on error.
+        const data = await fetchCampaignsV2();
+        const freshIds = new Set(data.map((d) => d.id as string));
         setCampaigns((prev) => {
           const surviving = prev.filter((c) => freshIds.has(c.id as string));
           return surviving.map((c) => {
-            const fresh = data.find((d) => d.id === (c.id as string));
+            const fresh = data.find((d) => (d.id as string) === (c.id as string));
             return fresh ? { ...c, status: fresh.status, start_at: fresh.start_at } : c;
           });
         });
+      } catch (err) {
+        console.error("[campaigns] status poll failed:", err);
       } finally {
         listPollInFlightRef.current = false;
       }

@@ -3,7 +3,7 @@
 import { useMemo, type Dispatch } from "react";
 import { Clock, Globe2, Info, Users } from "lucide-react";
 
-import { parsePhoneList } from "@/lib/campaignV2Data";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 import {
   allowedTimezonesForCountry,
   countryLabel,

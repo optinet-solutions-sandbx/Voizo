@@ -1,6 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
+import { fetchCampaignV2 } from "@/lib/campaignV2Data";
+
+/**
+ * GET /api/campaigns-v2/[id]
+ *
+ * RLS Phase A (docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md). Returns a single
+ * campaign's config row, read SERVER-SIDE via the service role, replacing the
+ * detail page's anon fetchCampaignV2(id). Auth-gated (behind Basic Auth). No
+ * strict origin check on the GET (browsers omit Origin on same-origin GETs —
+ * memory csrf-origin-check-get-lenient).
+ *
+ * fetchCampaignV2 uses `.single()`, which throws when the id matches no row;
+ * we surface that (and any read error) as 404, matching how the detail page
+ * handled the old anon throw ("Campaign not found").
+ */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  if (!id || typeof id !== "string" || id.length > 40) {
+    return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
+  }
+  try {
+    const campaign = await fetchCampaignV2(id);
+    return NextResponse.json(campaign);
+  } catch {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+}
 
 // `inactive` is deletable too: by definition, an inactive campaign has
 // already had its Vapi cleanup done (via eject), so DELETE is the safest
