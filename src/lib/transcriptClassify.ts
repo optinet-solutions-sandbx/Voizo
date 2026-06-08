@@ -67,6 +67,12 @@ const VOICEMAIL_STRONG_PATTERNS = [
   /leave (?:a |your )?(?:detailed |brief |short )?message (?:after|at)\b/i, // "leave a detailed message after the tone"
   /(?:can'?t|cannot|can not|are not able to|unable to) take your call/i,
   /please record (?:your )?message/i,
+  // #4 (2026-06-08): carrier voicemail-to-text divert + conversion notices — verbatim machine
+  // boilerplate a live customer never utters, so a single match is conclusive.
+  /hang up before the tone/i,
+  /will be sent in a text message to the person you called/i,
+  /your (?:voice )?message is being converted to text/i,
+  /standard call charges apply if you proceed/i,
 ];
 
 // WEAK — generic greeting fragments that can appear incidentally in a real call.
@@ -83,11 +89,41 @@ const VOICEMAIL_GREETING_PATTERNS = [
   /\byour call is important\b/i,
 ];
 
+// #4 (2026-06-08): IVR / answering greeting that asks the caller to leave a callback number.
+// Combined (BOTH phrases) so a lone polite line never fires.
+function isIvrCallback(s: string): boolean {
+  return /we'?ll get (?:straight )?back to you/i.test(s) && /(?:your|the) (?:phone )?number/i.test(s);
+}
+
+// Bare machine fragments STT renders as a WHOLE "user" turn: "Message.", "Your message.",
+// "The message is a text.", or a spelled-out-digit-only run (>=2 number words — e.g. a callback
+// number read back by a machine). Whole-turn match only — never a substring.
+const NUMBER_WORD = "(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)";
+const DIGIT_RUN = new RegExp(`^${NUMBER_WORD}(?:\\s+${NUMBER_WORD}){1,}$`, "i");
+function isBareMachineFragment(text: string): boolean {
+  const t = text.trim().replace(/[.?!]+$/, "").trim();
+  if (!t) return false;
+  return /^(?:your |a )?message$/i.test(t) || /^the message is a text$/i.test(t) || DIGIT_RUN.test(t);
+}
+
+// True only when EVERY substantive user turn is a bare machine fragment. A real human always
+// emits >=1 non-fragment turn, so this cannot fire on a genuine conversation. With no speaker-
+// labelled user turns, treats the whole string as the sole candidate (so single-turn callers —
+// e.g. isGenuineAssentTurn screening one assent — still classify correctly).
+function allUserTurnsAreMachineFragments(transcript: string): boolean {
+  const turns = parseTranscriptTurns(transcript);
+  const userTurns = turns.filter((t) => t.speaker === "user").map((t) => t.text);
+  const candidates = userTurns.length ? userTurns : [transcript.trim()];
+  return candidates.length > 0 && candidates.every(isBareMachineFragment);
+}
+
 export function isVoicemail(transcript: string): boolean {
   if (!transcript) return false;
   const safe = transcript.slice(0, TRANSCRIPT_CAP);
   if (VOICEMAIL_STRONG_PATTERNS.some((p) => p.test(safe))) return true;
-  return VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2;
+  if (isIvrCallback(safe)) return true;
+  if (VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2) return true;
+  return allUserTurnsAreMachineFragments(safe);
 }
 
 // ── Genuine customer consent ────────────────────────────────────────────────

@@ -118,3 +118,70 @@ describe("hasGenuineCustomerConsent (2026-06-04)", () => {
     expect(hasGenuineCustomerConsent(`${offer}\nUser: Nah, leave it.`)).toBe(false);
   });
 });
+
+// ── #4 (2026-06-08): machines isVoicemail MISSED — caused /reviews contamination + (pre-patch)
+// false goal_reached. Verified machine answers from the labeled L7_AU_VOIZO set (28/05–05/06).
+const MISSED_MACHINES = {
+  carrierDivert:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Point number eight zero one to send a text, hang up before the tone, and you won't be charged. Standard call charges apply if you proceed. Your number four four two zero will be sent in a text message to the person you called. If you wish to leave an alternative number, please press the hash key.\nAI: Goodbye.",
+  voicemailToText:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: phone and will send the message as a text.\nAI: Perfect. I'll send you an SMS now.\nUser: Your voice message is being converted to text and will be sent as an SMS. Goodbye.",
+  ivrCallback:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: We'll get straight back to you. Please let us know your phone number.\nAI: Goodbye.",
+  bareMessage:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Message.\nAI: Sure. I'll send the details to this number now.",
+  yourMessage:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Your message.\nAI: Yes. I'm calling regarding your recent sign up.",
+  messageIsText:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: The message is a text.\nAI: Goodbye.",
+  spelledDigits:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Seven four five four.\nAI: Hi. It's Tom from Lucky seven Casino.",
+  spelledDigitsTwo:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: One zero.\nAI: Sorry. I didn't quite catch that.",
+};
+
+// Genuine humans from the SAME labeled set (wrong-number / decline). MUST stay visible.
+const REAL_HUMANS = {
+  wrongNumber:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: No. That's not actually. sure we got the right number?\nAI: Thanks for letting me know.",
+  deleteAccount:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: No. Can you, like, delete my account? That's not me.\nAI: I'm really sorry about that.\nUser: Thank you.",
+};
+
+describe("isVoicemail — fragment/digit/divert machines (#4, 2026-06-08)", () => {
+  it("flags carrier voicemail-to-text divert announcements", () => {
+    expect(isVoicemail(MISSED_MACHINES.carrierDivert)).toBe(true);
+    expect(isVoicemail(MISSED_MACHINES.voicemailToText)).toBe(true);
+  });
+  it("flags the IVR callback greeting (we'll-get-back + number, combined)", () => {
+    expect(isVoicemail(MISSED_MACHINES.ivrCallback)).toBe(true);
+  });
+  it("flags bare voicemail-to-text fragments (whole user turn)", () => {
+    expect(isVoicemail(MISSED_MACHINES.bareMessage)).toBe(true);
+    expect(isVoicemail(MISSED_MACHINES.yourMessage)).toBe(true);
+    expect(isVoicemail(MISSED_MACHINES.messageIsText)).toBe(true);
+  });
+  it("flags spelled-out-digit-only user turns (>=2 tokens)", () => {
+    expect(isVoicemail(MISSED_MACHINES.spelledDigits)).toBe(true);
+    expect(isVoicemail(MISSED_MACHINES.spelledDigitsTwo)).toBe(true);
+  });
+});
+
+describe("isVoicemail — #4 must NOT silence real humans", () => {
+  it("keeps the verified wrong-number / decline humans visible", () => {
+    expect(isVoicemail(REAL_HUMANS.wrongNumber)).toBe(false);
+    expect(isVoicemail(REAL_HUMANS.deleteAccount)).toBe(false);
+  });
+  it("does not flag a lone interjection or single number-word", () => {
+    expect(isVoicemail("AI: Hi.\nUser: Oh.")).toBe(false);
+    expect(isVoicemail("AI: Hi.\nUser: One.")).toBe(false);
+  });
+  it("does not flag a human who also says a number mid-conversation", () => {
+    expect(isVoicemail("AI: Can I send the SMS?\nUser: Yeah, my number ends four five five six.\nUser: Go ahead.")).toBe(false);
+  });
+  it("excludes the #4 machines from /reviews but keeps real humans", () => {
+    for (const t of Object.values(MISSED_MACHINES)) expect(hasRealConversation(t)).toBe(false);
+    expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
+    expect(hasRealConversation(REAL_HUMANS.deleteAccount)).toBe(true);
+  });
+});
