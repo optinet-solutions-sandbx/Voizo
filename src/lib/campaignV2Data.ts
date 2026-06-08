@@ -51,6 +51,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       recurrence_pattern: input.recurrencePattern ?? null,
       is_test: input.isTest ?? false,
       created_by: input.createdBy || null,
+      source: input.source ?? "production",
     })
     .select()
     .single();

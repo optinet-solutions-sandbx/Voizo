@@ -38,6 +38,7 @@ export interface CampaignV2CreateInput {
   campaignType?: "fixed" | "recurring"; // Defaults to "fixed". Recurring parents save as status='running' with no clone; children are spawned by the scheduler.
   recurrencePattern?: RecurrencePattern | null; // Populated for campaignType='recurring'; null otherwise.
   isTest?: boolean; // Marks the campaign as a test run. Excluded from /api/audience/suggestions; operator-controllable in the wizard + detail page header.
+  source?: string; // 'production' (default) | 'ghost_portal'. Segregates internal GhostPortal runs from client analytics/list.
 }
 
 export function defaultCallWindows(): CallWindow[] {
