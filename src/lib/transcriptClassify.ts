@@ -178,17 +178,48 @@ export function hasGenuineCustomerConsent(transcript: string | null | undefined)
   return false;
 }
 
+// ── #5 (2026-06-08): machine "hold / leave-a-message / IVR" greetings ───────────
+// Phrases a live customer never utters on a cold sales call, which slipped the voicemail
+// tiers above and surfaced as fake "real conversations" in /reviews (campaign
+// L7_CA_..._05/06) + leaked into golden set v1 (the judge abstained on them). Used ONLY by
+// hasRealConversation (the eval surfaces: /reviews, QA candidate, golden freeze) — deliberately
+// NOT by isVoicemail, so the call-path goal_reached veto + the SMS consent gate stay untouched
+// (the webhook already resolves these to goal_reached=false via hasGenuineCustomerConsent, so it
+// needs no change). "try again later" is EXCLUDED — a real brush-off ("call me later") says it.
+const MACHINE_GREETING_PATTERNS = [
+  /stay on the line/i,
+  /record (?:your |a )?messages?\b/i,
+  /\bno more room\b/i,
+  /you (?:can|may) hang up\b/i,
+  /for more options\b/i,
+  /\bpress (?:pound|hash|star|one|two|three|four|five|six|seven|eight|nine|the \w+ key)\b/i,
+];
+function isMachineGreetingTurn(text: string): boolean {
+  return MACHINE_GREETING_PATTERNS.some((p) => p.test(text));
+}
+// True only when EVERY substantive user turn is a machine greeting — FP-safe + turn-aware
+// (mirrors allUserTurnsAreMachineFragments). A real human always emits >=1 genuine turn, so this
+// cannot fire on a real conversation that merely contains a hold phrase. No labelled user turns
+// => treat the whole string as the sole candidate.
+function allUserTurnsAreMachineGreetings(transcript: string): boolean {
+  const turns = parseTranscriptTurns(transcript);
+  const userTurns = turns.filter((t) => t.speaker === "user").map((t) => t.text);
+  const candidates = userTurns.length ? userTurns : [transcript.trim()];
+  return candidates.length > 0 && candidates.every(isMachineGreetingTurn);
+}
+
 /**
  * The Reviews-queue inclusion rule (confirmed with Jasiel 2026-06-02):
  * keep a call iff there was a REAL conversation with the customer —
  *   • at least one substantive customer (user) turn,
- *   • NOT a voicemail greeting,
+ *   • NOT a voicemail greeting (isVoicemail) or a machine hold/IVR greeting (#5),
  *   • NOT just the AI's opening line (which yields zero user turns).
  * Goal-reached is irrelevant here; an unconverted-but-real conversation stays.
  */
 export function hasRealConversation(transcript: string | null | undefined): boolean {
   if (!transcript || !transcript.trim()) return false;
   if (isVoicemail(transcript)) return false;
+  if (allUserTurnsAreMachineGreetings(transcript)) return false; // #5 — eval surfaces only
   const turns = parseTranscriptTurns(transcript);
   return turns.some((t) => t.speaker === "user" && t.text.trim().length >= 2);
 }

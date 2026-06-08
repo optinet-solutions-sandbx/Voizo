@@ -185,3 +185,39 @@ describe("isVoicemail — #4 must NOT silence real humans", () => {
     expect(hasRealConversation(REAL_HUMANS.deleteAccount)).toBe(true);
   });
 });
+
+// ── #5 (2026-06-08): machine "hold / leave-a-message / IVR" greetings hasRealConversation
+// MISSED — surfaced in /reviews (campaign L7_CA_..._05/06) + slipped into golden set v1
+// (the judge abstained on them). Fixed in hasRealConversation ONLY; the call-path isVoicemail
+// (webhook goal veto + consent gate) is left byte-for-byte unchanged.
+const MISSED_MACHINES_5 = {
+  stayOnLine:
+    "AI: Hi. It's Tom from Lucky seven Casino. I saw you register an account with us recently. Does this sound familiar?\nUser: Thanks. Please stay on the line.\nAI: Goodbye. Goodbye.",
+  recordYourMessage:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Record your message.\nAI: Goodbye.",
+  noMoreRoom:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: Sorry, but there's no more room to record messages. Please hang up and try again later. Bye.",
+  hangUpPressPound:
+    "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?\nUser: You can hang up or press pound for more options.\nAI: Goodbye.",
+};
+
+// A REAL engaged customer who uses a hold phrase but ALSO says real things — turn-aware FP guard.
+const REAL_WITH_HOLD =
+  "AI: Can I send you the details via SMS?\nUser: Yes, but please stay on the line while I grab a pen.\nUser: Okay, go ahead and send it.";
+
+describe("hasRealConversation — #5 machine greetings (stay-on-line / record-message / IVR)", () => {
+  it("excludes the new machine greetings from /reviews + freeze", () => {
+    for (const t of Object.values(MISSED_MACHINES_5)) expect(hasRealConversation(t)).toBe(false);
+  });
+  it("keeps a real customer who uses a hold phrase but also engages (turn-aware FP guard)", () => {
+    expect(hasRealConversation(REAL_WITH_HOLD)).toBe(true);
+  });
+  it("leaves the call-path isVoicemail unchanged (these stay isVoicemail=false; webhook untouched)", () => {
+    for (const t of Object.values(MISSED_MACHINES_5)) expect(isVoicemail(t)).toBe(false);
+  });
+  it("still keeps the verified real humans + genuine conversation + brush-off visible", () => {
+    expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
+    expect(hasRealConversation(GENUINE)).toBe(true);
+    expect(hasRealConversation(REAL_BRUSHOFF)).toBe(true);
+  });
+});
