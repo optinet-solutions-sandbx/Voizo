@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { rejectIfCrossOrigin, rejectIfCrossOriginStrict } from "@/lib/csrf";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 import { MAX_CANDIDATES } from "@/lib/audienceLimits";
+import { dncSuppressedSet } from "@/lib/dncScrub";
 
 /**
  * /api/audience/segments
@@ -83,25 +84,9 @@ async function runFilter(input: FilterInput): Promise<FilterResult | { error: st
 
   const phones = rows.map((r) => r.phone_e164 as string);
 
-  // ── 2. DNC scrub (suppression_list V2 + do_not_call V1, both checked) ──
-  let scrubbedDnc = 0;
-  const dncSet = new Set<string>();
-  if (input.dncScrubbed) {
-    const [supRes, dncRes] = await Promise.all([
-      supabaseAdmin
-        .from("suppression_list")
-        .select("phone_e164")
-        .in("phone_e164", phones),
-      supabaseAdmin
-        .from("do_not_call")
-        .select("phone_number")
-        .eq("archived", false)
-        .in("phone_number", phones),
-    ]);
-    for (const r of supRes.data ?? []) dncSet.add(r.phone_e164 as string);
-    for (const r of dncRes.data ?? []) dncSet.add(r.phone_number as string);
-    scrubbedDnc = dncSet.size;
-  }
+  // ── 2. DNC scrub (shared helper — single source of truth) ──
+  const dncSet = input.dncScrubbed ? await dncSuppressedSet(supabaseAdmin, phones) : new Set<string>();
+  const scrubbedDnc = dncSet.size;
 
   // ── 3. N-day recency scrub (other campaigns' recent contact attempts) ──
   let scrubbedRecent = 0;
