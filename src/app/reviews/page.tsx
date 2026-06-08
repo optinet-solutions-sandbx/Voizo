@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, FlaskConical } from "lucide-react";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
 import { campaignRegion } from "@/lib/campaignRegion";
+import GoldenSetPanel from "./GoldenSetPanel";
 
 interface ReviewCampaign {
   campaignId: string;
@@ -131,6 +132,8 @@ export default function ReviewsPage() {
           )}
         </>
       )}
+
+      <GoldenSetPanel />
     </div>
   );
 }
