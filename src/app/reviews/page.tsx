@@ -9,11 +9,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, FlaskConical } from "lucide-react";
+import { AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, FlaskConical, Gauge } from "lucide-react";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
 import { campaignRegion } from "@/lib/campaignRegion";
 import GoldenSetPanel from "./GoldenSetPanel";
 import NorthStarPanel from "./NorthStarPanel";
+import AgentPerformancePanel from "./AgentPerformancePanel";
+import Pagination from "@/components/Pagination";
 
 interface ReviewCampaign {
   campaignId: string;
@@ -26,6 +28,7 @@ interface ReviewCampaign {
   labeledCount: number;
 }
 
+const PAGE_SIZE = 10;
 const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
   { key: "conversations", label: "Most conversations" },
   { key: "newest", label: "Newest" },
@@ -39,14 +42,17 @@ export default function ReviewsPage() {
   const [data, setData] = useState<CampaignsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [testOnly, setTestOnly] = useState(false);
+  const [kind, setKind] = useState<"real" | "test">("real");
   const [sort, setSort] = useState<ReviewSortKey>("conversations");
   const [region, setRegion] = useState<string>("all");
+  const [tab, setTab] = useState<"label" | "analytics">("label");
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/reviews/campaigns?testOnly=${testOnly}`, { cache: "no-store" });
+      // Fetch ALL campaigns (real + test); we split them client-side by the isTest flag.
+      const r = await fetch(`/api/reviews/campaigns?testOnly=false`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as CampaignsResponse);
       setError(null);
@@ -55,26 +61,57 @@ export default function ReviewsPage() {
     } finally {
       setLoading(false);
     }
-  }, [testOnly]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const totals = useMemo(() => {
-    const cs = data?.campaigns ?? [];
-    return {
-      campaigns: cs.length,
-      conversations: cs.reduce((s, c) => s + c.conversationCount, 0),
-      goalReached: cs.reduce((s, c) => s + c.goalReachedCount, 0),
-      labeled: cs.reduce((s, c) => s + c.labeledCount, 0),
-    };
-  }, [data]);
-
-  // Region chips (derived from campaign names) + the filtered+sorted view.
-  const regions = useMemo(() => regionsOf(data?.campaigns ?? []), [data]);
-  const visible = useMemo(
-    () => sortReviewCampaigns(filterByRegion(data?.campaigns ?? [], region), sort),
-    [data, region, sort],
+  // Split real vs test client-side — the API returns both, each with an isTest flag.
+  const allCampaigns = useMemo(() => data?.campaigns ?? [], [data]);
+  const realCount = useMemo(() => allCampaigns.filter((c) => !c.isTest).length, [allCampaigns]);
+  const testCount = useMemo(() => allCampaigns.filter((c) => c.isTest).length, [allCampaigns]);
+  const byKind = useMemo(
+    () => allCampaigns.filter((c) => (kind === "test" ? c.isTest : !c.isTest)),
+    [allCampaigns, kind],
   );
+
+  const totals = useMemo(
+    () => ({
+      campaigns: byKind.length,
+      conversations: byKind.reduce((s, c) => s + c.conversationCount, 0),
+      goalReached: byKind.reduce((s, c) => s + c.goalReachedCount, 0),
+      labeled: byKind.reduce((s, c) => s + c.labeledCount, 0),
+    }),
+    [byKind],
+  );
+
+  // Region chips (derived from the current kind) + the filtered+sorted view.
+  const regions = useMemo(() => regionsOf(byKind), [byKind]);
+  const visible = useMemo(
+    () => sortReviewCampaigns(filterByRegion(byKind, region), sort),
+    [byKind, region, sort],
+  );
+
+  // Numbered pagination (mirrors campaigns/page.tsx convention).
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginated = useMemo(
+    () => visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [visible, safePage],
+  );
+
+  // Reset to page 1 whenever the active filter set changes.
+  useEffect(() => {
+    setPage(1);
+  }, [kind, region, sort]);
+
+  const tabClass = (t: "label" | "analytics") =>
+    `px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
+      tab === t ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+    }`;
+  const kindBtn = (k: "real" | "test") =>
+    `px-2.5 py-1 rounded-md text-xs font-medium transition whitespace-nowrap ${
+      kind === k ? "bg-blue-500 text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
+    }`;
 
   return (
     <div className="p-6 max-w-[1100px] mx-auto w-full grid gap-5">
@@ -94,48 +131,82 @@ export default function ReviewsPage() {
               <AlertCircle size={11} /> {error}
             </span>
           )}
-          <label className="inline-flex items-center gap-2 text-xs text-[var(--text-2)] cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--border-2)] transition">
-            <input type="checkbox" checked={testOnly} onChange={(e) => setTestOnly(e.target.checked)} className="accent-blue-500" />
-            <FlaskConical size={12} /> Test campaigns only
-          </label>
+          {tab === "label" && (
+            <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]" title="Real and test campaigns are listed separately">
+              <button onClick={() => { setKind("real"); setRegion("all"); }} className={kindBtn("real")}>
+                Real{realCount > 0 ? ` (${realCount})` : ""}
+              </button>
+              <button onClick={() => { setKind("test"); setRegion("all"); }} className={kindBtn("test")}>
+                <FlaskConical size={11} className="inline -mt-0.5 mr-1" />Test{testCount > 0 ? ` (${testCount})` : ""}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* totals strip */}
-      <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center gap-x-8 gap-y-2">
-        <Total label="Campaigns" value={loading ? "—" : totals.campaigns} />
-        <Total label="Conversations" value={loading ? "—" : totals.conversations} />
-        <Total label="Goal reached" value={loading ? "—" : totals.goalReached} tone="text-emerald-400" />
-        <Total label="Labeled by you" value={loading ? "—" : totals.labeled} tone="text-blue-400" />
-        <p className="text-[11px] text-[var(--text-3)] basis-full">
-          Voicemails, no-answers, and AI-only calls are filtered out — only genuine customer conversations appear.
-        </p>
-      </section>
+      {/* tabs — Label calls (the labeling workflow) vs Analytics (the eval panels) */}
+      <div className="flex gap-1">
+        <button className={tabClass("label")} onClick={() => setTab("label")}>
+          <ClipboardList size={14} className="inline mr-1.5 -mt-0.5" />Label calls
+        </button>
+        <button className={tabClass("analytics")} onClick={() => setTab("analytics")}>
+          <Gauge size={14} className="inline mr-1.5 -mt-0.5" />Analytics
+        </button>
+      </div>
 
-      {loading ? (
-        <SkeletonRows count={6} />
-      ) : !data || data.campaigns.length === 0 ? (
-        <EmptyState testOnly={testOnly} />
-      ) : (
+      {tab === "label" && (
         <>
-          {/* sort + region controls */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <SortControl sort={sort} onChange={setSort} />
-            {regions.length > 0 && <RegionChips regions={regions} value={region} onChange={setRegion} />}
-          </div>
+          {/* totals strip */}
+          <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center gap-x-8 gap-y-2">
+            <Total label="Campaigns" value={loading ? "—" : totals.campaigns} />
+            <Total label="Conversations" value={loading ? "—" : totals.conversations} />
+            <Total label="Goal reached" value={loading ? "—" : totals.goalReached} tone="text-emerald-400" />
+            <Total label="Labeled by you" value={loading ? "—" : totals.labeled} tone="text-blue-400" />
+            <p className="text-[11px] text-[var(--text-3)] basis-full">
+              Voicemails, no-answers, and AI-only calls are filtered out — only genuine customer conversations appear.
+            </p>
+          </section>
 
-          {visible.length === 0 ? (
-            <div className="text-sm text-[var(--text-3)] py-10 text-center">No campaigns in this region.</div>
+          {loading ? (
+            <SkeletonRows count={6} />
+          ) : byKind.length === 0 ? (
+            <EmptyState testOnly={kind === "test"} />
           ) : (
-            <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden divide-y divide-[var(--border)]">
-              {visible.map((c) => <CampaignRow key={c.campaignId} c={c} />)}
-            </div>
+            <>
+              {/* sort + region controls */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <SortControl sort={sort} onChange={setSort} />
+                {regions.length > 0 && <RegionChips regions={regions} value={region} onChange={setRegion} />}
+              </div>
+
+              {visible.length === 0 ? (
+                <div className="text-sm text-[var(--text-3)] py-10 text-center">No campaigns in this region.</div>
+              ) : (
+                <>
+                  <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden divide-y divide-[var(--border)]">
+                    {paginated.map((c) => <CampaignRow key={c.campaignId} c={c} />)}
+                  </div>
+                  <Pagination
+                    currentPage={safePage}
+                    totalPages={totalPages}
+                    totalItems={visible.length}
+                    pageSize={PAGE_SIZE}
+                    onPageChange={setPage}
+                  />
+                </>
+              )}
+            </>
           )}
         </>
       )}
 
-      <NorthStarPanel />
-      <GoldenSetPanel />
+      {tab === "analytics" && (
+        <>
+          <AgentPerformancePanel />
+          <NorthStarPanel />
+          <GoldenSetPanel />
+        </>
+      )}
     </div>
   );
 }
