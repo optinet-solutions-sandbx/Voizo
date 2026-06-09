@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
+import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 import { CRON_NAMES, recordHeartbeat, postSlackNote, postSlackAlert, shouldAlertSpawnFail } from "@/lib/alerts/slack";
@@ -401,26 +402,32 @@ export async function GET(request: NextRequest) {
   // ── Find campaigns ready to auto-start ──
   const now = new Date().toISOString();
 
-  const { data: campaigns, error } = await supabaseAdmin
+  const { data: readyDrafts, error } = await supabaseAdmin
     .from("campaigns_v2")
     .select("*")
     .eq("status", "draft")
     .not("start_at", "is", null)
     .lte("start_at", now)
-    .order("start_at", { ascending: true }) // FIFO when multiple are ready
-    .limit(1); // one new start per minute — gentle ramp to the concurrency limit
+    .order("start_at", { ascending: true }) // FIFO baseline
+    .limit(10); // fetch a few ready drafts; the prod-priority pick below still starts ONE
 
   if (error) {
     console.error("[campaign-scheduler] query error:", error);
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }
 
+  // Production drafts auto-start before internal GhostPortal drafts: a ghost run
+  // can never jump the queue for this tick's single start slot. Ghost's primary
+  // headroom guard is still leaseSlotForGhost's reserve floor at launch time.
+  // Still exactly one new start per minute — gentle ramp to the concurrency limit.
+  const campaigns = orderDraftsProdFirst(readyDrafts ?? []).slice(0, 1);
+
   // No early return on empty drafts: the recurring-spawn branch added below
   // needs to execute on every tick regardless of draft state. The for-loop
-  // below is a no-op when campaigns is empty/null.
+  // below is a no-op when campaigns is empty.
   const results: Array<{ id: string; name: string; result: string }> = [];
 
-  for (const campaign of campaigns ?? []) {
+  for (const campaign of campaigns) {
     const campaignId = campaign.id as string;
     const campaignName = campaign.name as string;
 
