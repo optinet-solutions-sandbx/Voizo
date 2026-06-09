@@ -163,7 +163,7 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
             <>
               <Field label="Run name">
                 <input type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={120}
-                  placeholder="e.g. VIP failed-deposit recall · AU"
+                  placeholder="e.g. Manual list · AU batch"
                   className="w-full px-3 py-2 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-violet-500 focus:border-violet-500" />
               </Field>
 
