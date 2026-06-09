@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { selectScoresForPromptStats } from "@/lib/qa/goldenSetData";
+import { selectScoresForPromptStats, selectPromptVersionDates } from "@/lib/qa/goldenSetData";
 import { computePromptVersionStats } from "@/lib/qa/goldenSetMath";
 import { qaJudgeReady } from "@/lib/qa/qaConfig";
 
@@ -30,8 +30,11 @@ export async function GET(request: NextRequest) {
   try {
     const rows = await selectScoresForPromptStats(campaignId);
     const stats = computePromptVersionStats(rows);
+    // Attach each version's date for a readable UI label (keeps the pure stats fn untouched).
+    const dates = await selectPromptVersionDates(stats.map((s) => s.promptVersionId));
+    const enriched = stats.map((s) => ({ ...s, createdAt: dates[s.promptVersionId] ?? null }));
     // judgeEnabled lets the UI tell "no scores yet / judge off" apart from a real empty result.
-    return NextResponse.json({ campaignId: campaignId ?? null, judgeEnabled: qaJudgeReady(), stats });
+    return NextResponse.json({ campaignId: campaignId ?? null, judgeEnabled: qaJudgeReady(), stats: enriched });
   } catch (err) {
     console.error(`[golden/prompt-stats] ${err instanceof Error ? err.message : String(err)}`);
     return NextResponse.json({ error: "Failed to load prompt stats" }, { status: 500 });

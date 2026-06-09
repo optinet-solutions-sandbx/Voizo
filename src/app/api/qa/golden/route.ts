@@ -23,8 +23,17 @@ export async function GET(request: NextRequest) {
   const sets = await listGoldenSets();
   const withRuns = await Promise.all(
     sets.map(async (s) => {
-      const runs = await listRuns(s.id);
-      return { ...s, latestRun: runs[0] ?? null, runCount: runs.length };
+      const runs = await listRuns(s.id); // newest-first
+      return {
+        ...s,
+        latestRun: runs[0] ?? null,
+        runCount: runs.length,
+        // capped, oldest->newest, kappa-only — for the panel sparkline (runCount stays exact)
+        runs: runs
+          .slice(0, 30)
+          .reverse()
+          .map((r) => ({ cohensKappa: r.cohensKappa, n: r.n, createdAt: r.createdAt })),
+      };
     }),
   );
   return NextResponse.json({ sets: withRuns });

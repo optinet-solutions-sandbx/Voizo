@@ -330,3 +330,25 @@ export async function selectScoresForPromptStats(campaignId?: string): Promise<P
   }
   return out;
 }
+
+/** created_at per prompt_version id — the readable label for the "how each script
+ *  version scored" UI (prompt_versions has no human name, so the date is the label).
+ *  Best-effort → {} on error; chunked .in() like the call fetch above. */
+export async function selectPromptVersionDates(ids: string[]): Promise<Record<string, string>> {
+  if (!ids.length) return {};
+  const out: Record<string, string> = {};
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await supabaseAdmin
+      .from("prompt_versions")
+      .select("id, created_at")
+      .in("id", ids.slice(i, i + 500));
+    if (error) {
+      console.warn(`[golden] selectPromptVersionDates failed: ${error.message}`);
+      return out;
+    }
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      out[r.id as string] = r.created_at as string;
+    }
+  }
+  return out;
+}
