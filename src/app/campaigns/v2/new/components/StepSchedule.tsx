@@ -15,7 +15,7 @@ import TimePickerField from "@/components/TimePickerField";
 import DateTimePickerField from "@/components/DateTimePickerField";
 import StyledSelect from "@/components/StyledSelect";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
-import { clockHHMMInTimezone, isWithinCallWindowAt } from "@/lib/scheduleWindow";
+import { clockHHMMInTimezone, isWithinCallWindowAt, minWindowMinutes, retryFitsShortestWindow } from "@/lib/scheduleWindow";
 
 interface Props {
   state: WizardState;
@@ -30,6 +30,10 @@ const DELAY_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
   { label: "8 hours", value: 480 },
   { label: "24 hours", value: 1440 },
 ];
+
+// Effective retry gap for V2-created campaigns: campaigns_v2.retry_interval_minutes
+// is not exposed in this wizard and defaults to 90 (mirrors the dialer/scheduler "?? 90").
+const DEFAULT_RETRY_INTERVAL_MIN = 90;
 
 function formatLocalTime(date: Date, timeZone: string): string {
   try {
@@ -77,6 +81,10 @@ export default function StepSchedule({ state, dispatch }: Props) {
   const enabledRows = useMemo(
     () => state.scheduleRows.filter((r) => r.enabled),
     [state.scheduleRows],
+  );
+  const callWindows = useMemo(
+    () => enabledRows.map((r) => ({ day: r.day, start: r.start, end: r.end })),
+    [enabledRows],
   );
 
   const tzShort = state.timezone.split("/").pop()?.replace(/_/g, " ") ?? state.timezone;
@@ -191,6 +199,23 @@ export default function StepSchedule({ state, dispatch }: Props) {
                     Each row&apos;s start time must be before its end time.
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Retry-vs-window guard: when the 90m retry gap (not set here) exceeds the
+                shortest window, a no-answer's retry is scheduled past the window close, so
+                it only fires when the window NEXT reopens (next day / next enabled window)
+                — effectively one attempt per window. Advisory only (operator may want short
+                windows). */}
+            {enabledRows.length > 0 && !retryFitsShortestWindow(callWindows, DEFAULT_RETRY_INTERVAL_MIN) && (
+              <div className="px-3.5 py-2.5 rounded-xl flex items-start gap-2 text-xs bg-amber-500/[0.08] text-amber-200 border border-amber-500/25">
+                <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
+                <p className="leading-snug">
+                  Your shortest call window{" "}
+                  <span className="font-semibold text-amber-100">({minWindowMinutes(callWindows)} min)</span>{" "}
+                  is shorter than the {DEFAULT_RETRY_INTERVAL_MIN}-min retry gap — a no-answer won&apos;t get a second
+                  attempt before the window closes. Widen the window, or expect just one attempt per window.
+                </p>
               </div>
             )}
 

@@ -65,3 +65,37 @@ export function clockHHMMInTimezone(atMs: number, timezone: string): string {
   const minute = parts.find((p) => p.type === "minute")?.value || "00";
   return `${hour}:${minute}`;
 }
+
+/** Minutes between two "HH:MM" 24h times on the same day (end - start). Defensive
+ *  parse (NaN -> 0), matching the formatters above. */
+function windowLengthMinutes(start: string, end: string): number {
+  const toMin = (hhmm: string): number => {
+    const [h, m] = hhmm.split(":");
+    return (Number(h) || 0) * 60 + (Number(m) || 0);
+  };
+  return toMin(end) - toMin(start);
+}
+
+/** Shortest enabled call-window length in minutes, or null when there are NO
+ *  windows (no windows = always open, so "shortest" is undefined). Malformed or
+ *  non-positive windows are ignored. */
+export function minWindowMinutes(windows: CallWindowLite[]): number | null {
+  if (!windows || windows.length === 0) return null;
+  let min = Infinity;
+  for (const w of windows) {
+    const len = windowLengthMinutes(w.start, w.end);
+    if (Number.isFinite(len) && len > 0 && len < min) min = len;
+  }
+  return min === Infinity ? null : min;
+}
+
+/** True if a retry scheduled `retryMinutes` after a first attempt can still land
+ *  INSIDE the shortest window — i.e. the shortest window is strictly longer than
+ *  the retry gap. No windows = always open = fits. When false, a no-answer's retry
+ *  is scheduled after the window closes and never dials that day; the create-time
+ *  guard warns the operator. */
+export function retryFitsShortestWindow(windows: CallWindowLite[], retryMinutes: number): boolean {
+  const min = minWindowMinutes(windows);
+  if (min == null) return true;
+  return min > retryMinutes;
+}
