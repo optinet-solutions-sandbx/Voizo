@@ -13,6 +13,7 @@ import { AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, FlaskCon
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
 import { campaignRegion } from "@/lib/campaignRegion";
 import GoldenSetPanel from "./GoldenSetPanel";
+import NorthStarPanel from "./NorthStarPanel";
 
 interface ReviewCampaign {
   campaignId: string;
@@ -133,6 +134,7 @@ export default function ReviewsPage() {
         </>
       )}
 
+      <NorthStarPanel />
       <GoldenSetPanel />
     </div>
   );
