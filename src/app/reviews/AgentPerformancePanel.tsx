@@ -124,6 +124,7 @@ export default function AgentPerformancePanel() {
                 {failures.map((t) => (
                   <div key={t.theme} className="grid gap-1">
                     <button
+                      type="button"
                       onClick={() => setOpenTheme(openTheme === t.theme ? null : t.theme)}
                       className="flex items-center gap-3 text-left group"
                     >
@@ -143,8 +144,8 @@ export default function AgentPerformancePanel() {
                     </button>
                     {openTheme === t.theme && t.examples.length > 0 && (
                       <ul className="ml-2 pl-3 border-l border-[var(--border)] grid gap-1">
-                        {t.examples.map((ex, i) => (
-                          <li key={i} className="text-[11px] text-[var(--text-3)] italic">
+                        {t.examples.map((ex) => (
+                          <li key={ex} className="text-[11px] text-[var(--text-3)] italic">
                             &ldquo;{ex}&rdquo;
                           </li>
                         ))}

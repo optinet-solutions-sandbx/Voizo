@@ -99,7 +99,10 @@ export function topFailureThemes(rationales: string[]): FailureThemeCount[] {
       buckets.set(theme, b);
     }
     b.count++;
-    if (b.examples.length < 3 && r && r.trim()) b.examples.push(r.trim());
+    // Keep up to 3 DISTINCT example rationales (dedupe → stable, unique React keys
+    // downstream; templated rationales can repeat verbatim).
+    const ex = r && r.trim();
+    if (ex && b.examples.length < 3 && !b.examples.includes(ex)) b.examples.push(ex);
   }
   const total = rationales.length;
   return [...buckets.entries()]

@@ -91,18 +91,15 @@ export default function ReviewsPage() {
     [byKind, region, sort],
   );
 
-  // Numbered pagination (mirrors campaigns/page.tsx convention).
+  // Numbered pagination (mirrors campaigns/page.tsx convention). safePage clamps every
+  // render, so a filter change that shrinks the list can't strand the view on a now-empty
+  // page; the filter handlers also reset page to 1 (no chained setState-in-effect).
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const paginated = useMemo(
     () => visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
     [visible, safePage],
   );
-
-  // Reset to page 1 whenever the active filter set changes.
-  useEffect(() => {
-    setPage(1);
-  }, [kind, region, sort]);
 
   const tabClass = (t: "label" | "analytics") =>
     `px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
@@ -133,10 +130,10 @@ export default function ReviewsPage() {
           )}
           {tab === "label" && (
             <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]" title="Real and test campaigns are listed separately">
-              <button onClick={() => { setKind("real"); setRegion("all"); }} className={kindBtn("real")}>
+              <button type="button" onClick={() => { setKind("real"); setRegion("all"); setPage(1); }} className={kindBtn("real")}>
                 Real{realCount > 0 ? ` (${realCount})` : ""}
               </button>
-              <button onClick={() => { setKind("test"); setRegion("all"); }} className={kindBtn("test")}>
+              <button type="button" onClick={() => { setKind("test"); setRegion("all"); setPage(1); }} className={kindBtn("test")}>
                 <FlaskConical size={11} className="inline -mt-0.5 mr-1" />Test{testCount > 0 ? ` (${testCount})` : ""}
               </button>
             </div>
@@ -146,10 +143,10 @@ export default function ReviewsPage() {
 
       {/* tabs — Label calls (the labeling workflow) vs Analytics (the eval panels) */}
       <div className="flex gap-1">
-        <button className={tabClass("label")} onClick={() => setTab("label")}>
+        <button type="button" className={tabClass("label")} onClick={() => setTab("label")}>
           <ClipboardList size={14} className="inline mr-1.5 -mt-0.5" />Label calls
         </button>
-        <button className={tabClass("analytics")} onClick={() => setTab("analytics")}>
+        <button type="button" className={tabClass("analytics")} onClick={() => setTab("analytics")}>
           <Gauge size={14} className="inline mr-1.5 -mt-0.5" />Analytics
         </button>
       </div>
@@ -175,8 +172,8 @@ export default function ReviewsPage() {
             <>
               {/* sort + region controls */}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <SortControl sort={sort} onChange={setSort} />
-                {regions.length > 0 && <RegionChips regions={regions} value={region} onChange={setRegion} />}
+                <SortControl sort={sort} onChange={(s) => { setSort(s); setPage(1); }} />
+                {regions.length > 0 && <RegionChips regions={regions} value={region} onChange={(r) => { setRegion(r); setPage(1); }} />}
               </div>
 
               {visible.length === 0 ? (
