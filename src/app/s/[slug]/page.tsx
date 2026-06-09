@@ -6,6 +6,12 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { getGhostRunBySlug } from "@/lib/ghost/ghostRunData";
 import { StatusBadge, TierBadge } from "../../ghost/badges";
 import RefreshButton from "./RefreshButton";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "GhostPortal run · Voizo",
+  description: "Read-only view of a GhostPortal run and its campaign progress.",
+};
 
 // Read-only GhostPortal run view at a gated URL (/s/<slug>). Behind Basic Auth +
 // GHOST_PORTAL_ENABLED. Ghost runs are excluded from /campaigns, so this is the

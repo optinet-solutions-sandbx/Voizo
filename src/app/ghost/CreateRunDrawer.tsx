@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle, ChevronDown, Ghost, Loader2, Rocket, ShieldCheck, Upload, X,
 } from "lucide-react";
@@ -51,18 +51,11 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const reset = useCallback(() => {
-    setName(""); setTier("live"); setBaseAssistantId(""); setFormat("paste"); setRaw("");
-    setTimezone("Asia/Manila"); setUseStandardWindows(true);
-    setPhase("form"); setRunId(null); setTargets([]); setRejected([]); setWarning(null);
-    setScrub(null); setBusy(false); setError(null);
-  }, []);
+  // State resets per open via a `key` on the parent (fresh mount) — no
+  // reset-on-prop-change effect (avoids the extra render with stale UI).
+  // The useState initial values above ARE the reset defaults.
 
-  useEffect(() => {
-    if (open) reset();
-  }, [open, reset]);
-
-  // Load base assistants once per open.
+  // Load base assistants on mount.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -183,7 +176,7 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
 
               <Field label="Base assistant" hint="The run clones this agent (inherits its prompt + cost guardrails)">
                 <div className="relative">
-                  <select value={baseAssistantId} onChange={(e) => setBaseAssistantId(e.target.value)} disabled={!assistants}
+                  <select aria-label="Base assistant" value={baseAssistantId} onChange={(e) => setBaseAssistantId(e.target.value)} disabled={!assistants}
                     className="w-full appearance-none pl-3 pr-9 py-2 text-sm bg-[var(--bg-app)] border border-[var(--border)] rounded-lg text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-violet-500 disabled:opacity-60">
                     <option value="">{assistants === null ? "Loading assistants…" : assistants.length === 0 ? "No base assistants found" : "Pick a base assistant…"}</option>
                     {assistants?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -196,7 +189,7 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
               {tier === "live" && (
                 <Field label="Schedule (live)" hint="A live run requires a call window">
                   <div className="flex items-center gap-2">
-                    <input type="text" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Manila"
+                    <input aria-label="Timezone" type="text" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Manila"
                       className="flex-1 px-3 py-2 text-sm font-mono bg-[var(--bg-app)] border border-[var(--border)] rounded-lg text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-violet-500" />
                   </div>
                   <label className="mt-2 flex items-center gap-2 text-xs text-[var(--text-2)] cursor-pointer">
@@ -222,7 +215,7 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
                     </button>
                   ))}
                 </div>
-                <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={7} placeholder={PLACEHOLDERS[format]}
+                <textarea aria-label="Upload list" value={raw} onChange={(e) => setRaw(e.target.value)} rows={7} placeholder={PLACEHOLDERS[format]}
                   className="w-full px-3 py-2 text-xs font-mono bg-[var(--bg-app)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-violet-500 resize-y" />
               </Field>
             </>

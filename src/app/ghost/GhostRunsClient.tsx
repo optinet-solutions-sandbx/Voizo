@@ -138,6 +138,7 @@ export default function GhostRunsClient() {
       </div>
 
       <CreateRunDrawer
+        key={drawerOpen ? "open" : "closed"}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         onDone={() => {
