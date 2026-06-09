@@ -16,6 +16,7 @@ export interface CampaignRow {
   name: string;
   status?: string | null;
   is_test?: boolean | null;
+  source?: string | null; // 'production' | 'ghost_portal' — ghost runs are segregated from client analytics
   start_at?: string | null;
   created_at?: string | null;
   end_at?: string | null;
@@ -135,7 +136,8 @@ export interface CampaignAnalytics {
   goalReachedNullCount: number; // connected calls with goal_reached === null
   confidence: Confidence;
   biggestLeak: LeakStage;
-  includedInPortfolio: boolean; // !isTest && targeted>=floor && dialed>=floor
+  isGhost: boolean; // source==='ghost_portal' — internal run, excluded from client portfolio
+  includedInPortfolio: boolean; // !isGhost && !isTest && targeted>=floor && dialed>=floor
 }
 
 export interface PortfolioRollup {
@@ -402,8 +404,10 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
         ? "half"
         : "full";
 
-  // ── Portfolio inclusion (G3): non-test + meets BOTH volume floors ──
+  // ── Portfolio inclusion (G3): non-ghost + non-test + meets BOTH volume floors ──
+  const isGhost = campaign.source === "ghost_portal";
   const includedInPortfolio =
+    !isGhost &&
     campaign.is_test !== true &&
     targeted >= ANALYTICS_CONFIG.VOLUME_FLOOR_TARGETED &&
     dialed.size >= ANALYTICS_CONFIG.VOLUME_FLOOR_DIALED;
@@ -433,6 +437,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     country: parseCountryToken(campaign.name),
     scheduleType: campaign.campaign_type === "recurring" ? "recurring" : "fixed",
     isTest: campaign.is_test === true,
+    isGhost,
     status: campaign.status ?? "draft",
     startAt,
     targeted,
@@ -472,10 +477,13 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
 }
 
 export function computePortfolio(records: CampaignAnalytics[]): PortfolioRollup {
+  // Ghost (source='ghost_portal') runs are segregated from EVERY client-facing
+  // rollup — including the goal-trust gate (nonTest), where a LIVE ghost run
+  // (is_test=false) would otherwise leak. includedInPortfolio already excludes them.
   const included = records.filter((r) => r.includedInPortfolio);
-  const nonTest = records.filter((r) => !r.isTest);
+  const nonTest = records.filter((r) => !r.isTest && !r.isGhost);
   const excludedTestCount = records.filter((r) => r.isTest).length;
-  const excludedLowVolumeCount = records.filter((r) => !r.isTest && !r.includedInPortfolio).length;
+  const excludedLowVolumeCount = records.filter((r) => !r.isTest && !r.isGhost && !r.includedInPortfolio).length;
 
   let goalCalls = 0,
     connected = 0,

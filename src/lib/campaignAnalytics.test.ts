@@ -221,6 +221,20 @@ describe("computePortfolio (G3/G4)", () => {
     expect(p.medianConversion).not.toBeNull();
     expect(p.estSpend).toBeGreaterThan(0);
   });
+
+  // Task 8 — GhostPortal segregation. A LIVE ghost run (is_test=false) must NOT
+  // leak into portfolio totals OR the goal-trust (nonTest) gate, even at volume.
+  it("excludes a high-volume LIVE source=ghost_portal campaign from included + goal-trust", () => {
+    const synth = makeHighVolumePair();
+    synth.campaigns.push({ id: "G", name: "Ghost", is_test: false, source: "ghost_portal", start_at: "2026-05-01T00:00:00Z", created_at: "2026-05-01T00:00:00Z", campaign_type: "fixed" });
+    for (let i = 0; i < 60; i++) synth.numbers.push({ id: `G${i}`, campaign_id: "G", outcome: "pending" });
+    for (let i = 0; i < 40; i++) synth.calls.push({ campaign_id: "G", campaign_number_id: `G${i}`, status: "completed", goal_reached: i < 20, duration_seconds: 60, created_at: "2026-05-30T10:00:00Z" });
+    const r = computeCampaignAnalytics(synth);
+    const p = computePortfolio(Object.values(r));
+    expect(r["G"].isGhost).toBe(true);
+    expect(r["G"].includedInPortfolio).toBe(false); // excluded despite non-test + volume
+    expect(p.includedCount).toBe(2); // only A + B
+  });
 });
 
 function makeHighVolumePair(): AnalyticsInput {
