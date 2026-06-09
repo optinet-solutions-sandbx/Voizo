@@ -49,8 +49,16 @@ export async function launchGhostRun(input: GhostLaunchInput): Promise<GhostLaun
   if (!cloneResult.ok) return { ok: false, status: cloneResult.status, error: cloneResult.error };
   const clone = cloneResult.clone;
 
-  // 2. Production-priority lease.
-  const slot = await leaseSlotForGhost(supabase, clone.id, reserve);
+  // 2. Production-priority lease. leaseSlotForGhost THROWS on a free-count or
+  // leaseSlot RPC error — if it does, the clone above is already billable, so
+  // delete it before propagating (never orphan a billable Vapi clone).
+  let slot: Awaited<ReturnType<typeof leaseSlotForGhost>>;
+  try {
+    slot = await leaseSlotForGhost(supabase, clone.id, reserve);
+  } catch (e) {
+    await deleteClone(vapiPrivateKey, clone.id);
+    return { ok: false, status: 500, error: `SIP lease failed: ${(e as Error).message}` };
+  }
   if (slot === "reserved") {
     await deleteClone(vapiPrivateKey, clone.id);
     return {

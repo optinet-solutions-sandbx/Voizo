@@ -20,6 +20,21 @@ import type { CallWindow } from "../../../../../../lib/campaignV2Shared";
  * COST: real calls + SMS. The clone inherits Voizo's guardrails via createClone;
  * GHOST_SLOT_RESERVE keeps prod SIP headroom.
  */
+// Structural guard for client-supplied call windows: a LIVE run's windows reach
+// the dialer (createCampaignV2 -> isWithinCallWindow), so a malformed window
+// could mean wrong-hours dialing. Reject anything that isn't day(sun–sat)+HH:MM.
+const VALID_DAYS = new Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+function callWindowsAreValid(windows: CallWindow[]): boolean {
+  return windows.every(
+    (w) =>
+      !!w &&
+      VALID_DAYS.has(w.day) &&
+      typeof w.start === "string" && HHMM.test(w.start) &&
+      typeof w.end === "string" && HHMM.test(w.end),
+  );
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -55,6 +70,12 @@ export async function POST(
   if (run.tier === "live" && callWindows.length === 0) {
     return NextResponse.json(
       { error: "A live run requires at least one call window." },
+      { status: 400 },
+    );
+  }
+  if (run.tier === "live" && !callWindowsAreValid(callWindows)) {
+    return NextResponse.json(
+      { error: "Call windows are malformed — each needs day (sun–sat) + HH:MM start/end." },
       { status: 400 },
     );
   }

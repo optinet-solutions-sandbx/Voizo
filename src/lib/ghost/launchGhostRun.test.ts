@@ -93,4 +93,18 @@ describe("launchGhostRun", () => {
     expect(patchPhoneAssistant).toHaveBeenLastCalledWith("k", "p1", null); // detach rollback
     expect(releaseSlot).toHaveBeenCalledWith(expect.anything(), "s1");
   });
+
+  it("deletes the clone + returns 500 when leaseSlotForGhost THROWS (no orphaned billable clone)", async () => {
+    // leaseSlotForGhost throws when the free-slot count query fails (sipPool.ts).
+    // The clone is already created/billable — it MUST be deleted, not orphaned.
+    (createClone as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, clone: { id: "c1", name: "c" } });
+    (leaseSlotForGhost as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("free-count failed"));
+    const r = await launchGhostRun(input());
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/assistant/c1"),
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(createCampaignV2).not.toHaveBeenCalled();
+  });
 });

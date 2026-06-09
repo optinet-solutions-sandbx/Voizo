@@ -68,6 +68,13 @@ describe("POST /api/ghost/runs/[id]/launch", () => {
     expect(launchGhostRun).not.toHaveBeenCalled();
   });
 
+  it("400s a live run whose call windows are structurally malformed (wrong-hours dialing guard)", async () => {
+    (getGhostRun as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "r1", name: "L", tier: "live", base_assistant_id: "b", operator: "o", status: "ready" });
+    const res = await POST(req({ phones: ["+15551110000"], callWindows: [{ day: "funday", start: "9", end: "25:99" }] }), ctx());
+    expect(res.status).toBe(400);
+    expect(launchGhostRun).not.toHaveBeenCalled();
+  });
+
   it("422s when every number is suppressed (nothing left to dial) — launch NOT called", async () => {
     (scrubGhostPhones as ReturnType<typeof vi.fn>).mockResolvedValue({ uploaded: 2, suppressed: 2, net: [], suppressedDnc: 2, suppressedRecent: 0 });
     const res = await POST(req({ phones: ["+15551110000", "+15552220000"] }), ctx());
