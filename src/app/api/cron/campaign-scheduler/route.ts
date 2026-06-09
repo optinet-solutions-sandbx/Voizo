@@ -13,6 +13,14 @@ import crypto from "crypto";
 // picked up on the next tick (1 minute later).
 export const maxDuration = 60;
 
+// Resume-sweep wall-clock budget. The fairness fix serves ALL idle running
+// campaigns each tick (not just the oldest), so we cap the expensive dials: stop
+// firing resumes once fewer than (BUDGET + SAFETY) ms of the maxDuration tick
+// remain, leaving room for the draft-start fire + recurring branch below. Each
+// fireCall is 8-22s (FS originate); over-budget campaigns resume on the next tick.
+const RESUME_FIRE_BUDGET_MS = 25_000;
+const RESUME_SAFETY_MS = 5_000;
+
 /**
  * GET /api/cron/campaign-scheduler
  *
@@ -195,9 +203,12 @@ export async function GET(request: NextRequest) {
   //   - max_attempts (default 3) — each number caps at 3 dial attempts
   //   - 1 fire per cron tick per campaign = 60/hr ceiling
   //   - in-flight check — never overlaps an active call
-  //   - .limit(1) — defense-in-depth: if the queue gate is ever bypassed
-  //     (manual DB edit, race), the resume sweep still won't burn the 60s
-  //     function budget on multiple fireCall blocks of 8-22s each.
+  //   - FAIRNESS: serves ALL idle running campaigns each tick. Was limit(1)
+  //     ordered oldest-updated_at, which let an older parked campaign monopolize
+  //     the single backstop slot and STARVE newer ones (their pending numbers never
+  //     dialed when chain-next had broken). Now bounded by a wall-clock budget guard
+  //     (RESUME_FIRE_BUDGET_MS) so a busy tick still can't burn the 60s function
+  //     budget on multiple 8-22s fireCalls; over-budget campaigns resume next tick.
   const { data: idleRunning, error: idleRunningErr } = await supabaseAdmin
     .from("campaigns_v2")
     .select("*")
@@ -206,8 +217,16 @@ export async function GET(request: NextRequest) {
                                        // design — they're schedule definitions, not dial lists.
                                        // Without this filter the self-heal at line 240 would
                                        // flip them to 'completed' on the next tick.
-    .order("updated_at", { ascending: true }) // oldest first → no starvation
-    .limit(1);
+    .order("updated_at", { ascending: true }) // oldest-served-first
+    .limit(20); // FAIRNESS FIX: serve ALL idle running campaigns each tick (was
+                // limit(1), which starved newer campaigns when an older one hogged
+                // the single backstop slot). 20 >> the pool concurrency limit; the
+                // wall-clock guard before each fire bounds total dial cost.
+                // NOTE: no rotation (fireCall doesn't bump updated_at), so under budget
+                // pressure the oldest-by-updated_at are served first. Harmless at the
+                // default CAMPAIGN_CONCURRENCY_LIMIT=3 (~2-3 fires/tick fit >= 3 campaigns);
+                // add a last_resumed_at rotation BEFORE raising the limit to 5, else
+                // campaigns ranked 4th+ can starve under sustained budget pressure.
 
   if (idleRunningErr) {
     console.error("[scheduler.resume] idleRunning query failed:", idleRunningErr);
@@ -323,6 +342,15 @@ export async function GET(request: NextRequest) {
         resumeResults.push({ id: campaignId, name: campaignName, result: resultLabel });
       }
       continue;
+    }
+
+    // Budget guard (pairs with the serve-all fairness fix above): stop firing
+    // resumes once too little wall-clock remains, so a tick that needs to advance
+    // several stalled campaigns can't blow maxDuration. Deferred campaigns are
+    // oldest-first next tick, so none starves.
+    if (Date.now() - tickStartedAt > maxDuration * 1000 - RESUME_FIRE_BUDGET_MS - RESUME_SAFETY_MS) {
+      resumeResults.push({ id: campaignId, name: campaignName, result: "deferred_low_budget" });
+      break;
     }
 
     try {
