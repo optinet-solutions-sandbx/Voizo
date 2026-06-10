@@ -78,9 +78,20 @@ interface RawCallRow {
   transcript: unknown;
   recording_url: unknown;
   campaigns_v2:
-    | { name: string | null; is_test: boolean | null; created_at: string | null }
-    | { name: string | null; is_test: boolean | null; created_at: string | null }[]
+    | { name: string | null; is_test: boolean | null; created_at: string | null; source: string | null }
+    | { name: string | null; is_test: boolean | null; created_at: string | null; source: string | null }[]
     | null;
+}
+
+/**
+ * A labelable row whose campaign is an internal GhostPortal run
+ * (source='ghost_portal'). These are EXCLUDED from the shared /reviews queue —
+ * ghost runs are reviewed only on /s/<slug> (GhostPortal v1.1). Handles the
+ * object- or array-form Supabase FK embed; production/null source ⇒ false.
+ */
+export function isGhostCallRow(row: RawCallRow): boolean {
+  const c = Array.isArray(row.campaigns_v2) ? row.campaigns_v2[0] : row.campaigns_v2;
+  return c?.source === "ghost_portal";
 }
 
 function campaignBrief(row: RawCallRow): { name: string; isTest: boolean; createdAt: string } {
@@ -103,7 +114,7 @@ async function fetchLabelableCalls(campaignIds: string[] | null): Promise<RawCal
     let q = supabaseAdmin
       .from("calls_v2")
       .select(
-        "id, campaign_id, created_at, duration_seconds, status, goal_reached, transcript, recording_url, campaigns_v2!campaign_id(name, is_test, created_at)",
+        "id, campaign_id, created_at, duration_seconds, status, goal_reached, transcript, recording_url, campaigns_v2!campaign_id(name, is_test, created_at, source)",
       )
       .not("transcript", "is", null);
     if (campaignIds) q = q.in("campaign_id", campaignIds);
@@ -112,8 +123,10 @@ async function fetchLabelableCalls(campaignIds: string[] | null): Promise<RawCal
       .range(from, from + SUPABASE_PAGE - 1);
     if (error) throw error;
     const rows = (data ?? []) as unknown as RawCallRow[];
-    out.push(...rows);
-    if (rows.length < SUPABASE_PAGE) break;
+    // Ghost runs are reviewed only on /s/<slug> — keep them out of the shared
+    // /reviews queue (both listReviewCampaigns + listReviewQueue read through here).
+    out.push(...rows.filter((r) => !isGhostCallRow(r)));
+    if (rows.length < SUPABASE_PAGE) break; // page on RAW length so paging is unaffected
   }
   return out;
 }
