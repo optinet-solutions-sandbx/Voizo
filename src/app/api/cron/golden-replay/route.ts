@@ -8,7 +8,12 @@ import { listGoldenSets, listRuns } from "@/lib/qa/goldenSetData";
 import { replayJudgeOnGoldenSet } from "@/lib/qa/goldenReplay";
 import { shouldAlertDrift, selectPriorRun } from "@/lib/qa/driftAlert";
 
-export const maxDuration = 60; // seed-scale set; sequential replay is bounded (Golden spec §4.3)
+// 14 sequential judge calls ≈ 100-200s — at 60 the function 504'd EVERY cron tick,
+// dying mid-replay BEFORE the heartbeat/run writes (zero DB evidence; diagnosed
+// 2026-06-10 via manual trigger → FUNCTION_INVOCATION_TIMEOUT). 300 = Pro ceiling,
+// covers ~30 golden items at current judge latency; batch/parallelize the replay
+// before sets grow past that (deferred per the golden review).
+export const maxDuration = 300;
 
 const DRIFT_KAPPA_THRESHOLD = 0.6; // Landis-Koch "substantial"
 const DRIFT_MIN_N = 10;
