@@ -59,9 +59,13 @@ export async function GET(request: NextRequest) {
   // Pull retry_interval_minutes too — used to size the imminent-retry window
   // per campaign so heartbeat doesn't false-flag during the early portion of
   // a 90-min wait (or longer if operator configured a different interval).
+  // last_swept_at: the resume sweep's rotation stamp. Since the sweep stamps
+  // (and the updated_at trigger fires) on every fire attempt, updated_at alone
+  // can read "fresh" on a campaign that has been stuck for days — show the
+  // stamp separately so the operator sees both the stall and the retry activity.
   const { data: running, error: runningErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, updated_at, retry_interval_minutes")
+    .select("id, name, updated_at, last_swept_at, retry_interval_minutes")
     .eq("status", "running");
 
   if (runningErr) {
@@ -82,6 +86,7 @@ export async function GET(request: NextRequest) {
     id: string;
     name: string;
     lastUpdated: string;
+    lastFireAttempt: string | null;
     pendingNumbers: number;
   }> = [];
 
@@ -160,6 +165,7 @@ export async function GET(request: NextRequest) {
       id: campaignId,
       name: campaignName,
       lastUpdated: c.updated_at as string,
+      lastFireAttempt: (c.last_swept_at as string | null) ?? null,
       pendingNumbers: pendingCount,
     });
 
@@ -381,7 +387,9 @@ export async function GET(request: NextRequest) {
   // Stuck running campaigns: WARN (operator action — pause/investigate).
   if (stuck.length > 0) {
     const stuckDetails = stuck.map(
-      (s) => `${s.name} (${s.id}) — ${s.pendingNumbers} pending, last updated ${s.lastUpdated}`,
+      (s) =>
+        `${s.name} (${s.id}) — ${s.pendingNumbers} pending, last updated ${s.lastUpdated}` +
+        (s.lastFireAttempt ? `, last fire attempt ${s.lastFireAttempt}` : ""),
     );
     await postSlackAlert(
       "WARN",

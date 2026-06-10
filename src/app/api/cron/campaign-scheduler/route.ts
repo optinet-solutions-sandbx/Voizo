@@ -217,16 +217,25 @@ export async function GET(request: NextRequest) {
                                        // design — they're schedule definitions, not dial lists.
                                        // Without this filter the self-heal at line 240 would
                                        // flip them to 'completed' on the next tick.
-    .order("updated_at", { ascending: true }) // oldest-served-first
+    // ROTATION (fairness under budget pressure): least-recently-SWEPT first.
+    // last_swept_at is a write-before-fire rotation STAMP (see the stamp below):
+    // success, fire_failed, and even a mid-fire maxDuration kill all rotate the
+    // campaign to the back. It is NOT a lock/lease — no mutual exclusion; tick-
+    // overlap dedupe rests solely on the in-flight check below. NULLS FIRST puts
+    // never-swept campaigns at the front; updated_at asc is the stable tiebreak
+    // (the pre-rotation ordering). Deliberately NOT last_resumed_at — that column
+    // is the OPERATOR resume/rebind record (rebindCore.ts, pairs with
+    // last_paused_at for pause telemetry); a per-minute sweep stamp would
+    // overwrite it. This rotation is the prerequisite for raising
+    // CAMPAIGN_CONCURRENCY_LIMIT 3 → 5: without it, campaigns ranked 4th+ starved
+    // under sustained budget pressure, and a campaign whose fireCall always
+    // failed pinned the front of the queue every tick.
+    .order("last_swept_at", { ascending: true, nullsFirst: true })
+    .order("updated_at", { ascending: true })
     .limit(20); // FAIRNESS FIX: serve ALL idle running campaigns each tick (was
                 // limit(1), which starved newer campaigns when an older one hogged
                 // the single backstop slot). 20 >> the pool concurrency limit; the
                 // wall-clock guard before each fire bounds total dial cost.
-                // NOTE: no rotation (fireCall doesn't bump updated_at), so under budget
-                // pressure the oldest-by-updated_at are served first. Harmless at the
-                // default CAMPAIGN_CONCURRENCY_LIMIT=3 (~2-3 fires/tick fit >= 3 campaigns);
-                // add a last_resumed_at rotation BEFORE raising the limit to 5, else
-                // campaigns ranked 4th+ can starve under sustained budget pressure.
 
   if (idleRunningErr) {
     console.error("[scheduler.resume] idleRunning query failed:", idleRunningErr);
@@ -346,11 +355,38 @@ export async function GET(request: NextRequest) {
 
     // Budget guard (pairs with the serve-all fairness fix above): stop firing
     // resumes once too little wall-clock remains, so a tick that needs to advance
-    // several stalled campaigns can't blow maxDuration. Deferred campaigns are
-    // oldest-first next tick, so none starves.
+    // several stalled campaigns can't blow maxDuration. Deferral happens BEFORE
+    // the rotation stamp, so deferred campaigns keep their front (least-recently-
+    // swept) rank next tick — none starves.
     if (Date.now() - tickStartedAt > maxDuration * 1000 - RESUME_FIRE_BUDGET_MS - RESUME_SAFETY_MS) {
       resumeResults.push({ id: campaignId, name: campaignName, result: "deferred_low_budget" });
       break;
+    }
+
+    // Rotation stamp, written BEFORE firing: this campaign is about to consume
+    // dial budget, so send it to the back of the rotation regardless of how the
+    // fire ends — success, throw, or a mid-fire maxDuration kill. Stamping after
+    // would let a reliably-hanging/failing fireCall pin the front slot every tick.
+    // NOT a lock/lease: an overlapping tick is only deduped by the in-flight
+    // check above. The status='running' guard keeps the set_updated_at trigger
+    // off concurrently-terminal rows (it would defer heartbeat Rule-2's slot
+    // release) — and a 0-row match means the campaign left `running` since the
+    // tick-start select, so we must NOT dial for it (freshness re-check).
+    // A transient stamp ERROR is logged but never blocks a due dial (matches the
+    // pre-rotation code, which had no stamp at all). Cheap skips above
+    // (in-flight / window-pause / auto-complete / nothing-due) do NOT rotate —
+    // they consume no dial budget.
+    const { data: stamped, error: rotateErr } = await supabaseAdmin
+      .from("campaigns_v2")
+      .update({ last_swept_at: new Date().toISOString() })
+      .eq("id", campaignId)
+      .eq("status", "running")
+      .select("id");
+    if (rotateErr) {
+      console.warn(`[scheduler.resume] ${campaignName}: last_swept_at stamp failed (continuing):`, rotateErr.message);
+    } else if (!stamped || stamped.length === 0) {
+      resumeResults.push({ id: campaignId, name: campaignName, result: "skipped_no_longer_running" });
+      continue;
     }
 
     try {
