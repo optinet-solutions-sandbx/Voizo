@@ -5,7 +5,9 @@ import {
   computeVerdictMix,
   rollupByBaseAgent,
   THEME_LABEL,
+  MAX_CALLS_PER_THEME,
   type CampaignMeta,
+  type FailureCallInput,
 } from "./agentPerfMath";
 
 // Boilerplate tail the judge appends to ~every failure rationale (the failure
@@ -51,20 +53,70 @@ describe("bucketFailureTheme", () => {
 });
 
 describe("topFailureThemes", () => {
-  it("counts, sorts desc, keeps ≤3 examples, and percentages over total", () => {
-    const rationales = [
-      `The customer said the account was not theirs ${TAIL}`, // not_recognized
-      `The customer said the registration did not sound familiar ${TAIL}`, // not_recognized
-      `The only customer response was "Thanks" ${TAIL}`, // minimal_reply
+  // Builder for the drill-down input rows (callId-distinct unless overridden).
+  const fc = (rationale: string, over: Partial<FailureCallInput> = {}): FailureCallInput => ({
+    callId: "call-default",
+    campaignId: "camp-1",
+    campaignName: "L7_AU_Camp",
+    calledAt: "2026-06-01T10:00:00+00:00",
+    rationale,
+    ...over,
+  });
+
+  it("counts, sorts themes desc, percentages over total, and carries call refs", () => {
+    const calls = [
+      fc(`The customer said the account was not theirs ${TAIL}`, { callId: "a1" }), // not_recognized
+      fc(`The customer said the registration did not sound familiar ${TAIL}`, { callId: "a2" }), // not_recognized
+      fc(`The only customer response was "Thanks" ${TAIL}`, { callId: "b1", campaignId: null, campaignName: null }), // minimal_reply
     ];
-    const out = topFailureThemes(rationales);
+    const out = topFailureThemes(calls);
     expect(out[0].theme).toBe("not_recognized");
     expect(out[0].count).toBe(2);
     expect(out[0].pct).toBe(0.6667);
     expect(out[0].label).toBe(THEME_LABEL.not_recognized);
-    expect(out[0].examples.length).toBe(2);
+    expect(out[0].calls.map((c) => c.callId).sort()).toEqual(["a1", "a2"]);
+    expect(out[0].callsTruncated).toBe(false);
+    // refs flow through untouched, incl. a null campaign (renders unlinked, never dropped)
+    const minimal = out.find((t) => t.theme === "minimal_reply")!;
+    expect(minimal.calls[0]).toMatchObject({ callId: "b1", campaignId: null, campaignName: null });
     expect(out.reduce((s, t) => s + t.count, 0)).toBe(3);
   });
+
+  it("keeps duplicate rationale texts as separate calls (refs are per-call, keyed by callId)", () => {
+    const r = `The only customer response was "Thanks" ${TAIL}`;
+    const out = topFailureThemes([fc(r, { callId: "d1" }), fc(r, { callId: "d2" })]);
+    expect(out[0].calls.map((c) => c.callId).sort()).toEqual(["d1", "d2"]);
+    expect(out[0].count).toBe(2);
+  });
+
+  it("orders calls newest-first, unknown dates last, callId as the tiebreak", () => {
+    const r = `The customer declined the offer by saying "No, thanks" ${TAIL}`;
+    const calls = [
+      fc(r, { callId: "older", calledAt: "2026-05-01T00:00:00+00:00" }),
+      fc(r, { callId: "newest", calledAt: "2026-06-09T00:00:00+00:00" }),
+      fc(r, { callId: "undated", calledAt: null }),
+      fc(r, { callId: "tie-b", calledAt: "2026-05-01T00:00:00+00:00" }),
+    ];
+    expect(topFailureThemes(calls)[0].calls.map((c) => c.callId)).toEqual(["newest", "older", "tie-b", "undated"]);
+  });
+
+  it("caps refs at MAX_CALLS_PER_THEME with the newest slice; count stays exact; truncation flagged", () => {
+    const r = `The only customer response was "Hello?" ${TAIL}`;
+    const calls = Array.from({ length: MAX_CALLS_PER_THEME + 10 }, (_, i) =>
+      fc(r, {
+        callId: `c-${String(i).padStart(3, "0")}`,
+        calledAt: `2026-0${(i % 5) + 1}-${String((i % 28) + 1).padStart(2, "0")}T00:00:00+00:00`,
+      }),
+    );
+    const out = topFailureThemes(calls);
+    expect(out[0].count).toBe(MAX_CALLS_PER_THEME + 10);
+    expect(out[0].calls.length).toBe(MAX_CALLS_PER_THEME);
+    expect(out[0].callsTruncated).toBe(true);
+    // the kept slice is newest-first throughout
+    const kept = out[0].calls.map((c) => Date.parse(c.calledAt!));
+    for (let i = 1; i < kept.length; i++) expect(kept[i - 1]).toBeGreaterThanOrEqual(kept[i]);
+  });
+
   it("is total on empty input", () => {
     expect(topFailureThemes([])).toEqual([]);
   });

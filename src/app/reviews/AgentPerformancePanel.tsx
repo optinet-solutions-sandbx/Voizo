@@ -5,15 +5,24 @@
 // compares. Operator-plain copy. Data: GET /api/qa/agent-performance.
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Gauge, AlertCircle } from "lucide-react";
+import { Gauge, AlertCircle, ChevronRight } from "lucide-react";
 
+interface FailureCallRef {
+  callId: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  calledAt: string | null;
+  rationale: string;
+}
 interface FailureThemeCount {
   theme: string;
   label: string;
   count: number;
   pct: number;
-  examples: string[];
+  calls: FailureCallRef[];
+  callsTruncated: boolean;
 }
 interface VerdictMix {
   success: number;
@@ -48,6 +57,9 @@ interface ApResult {
 }
 
 const pct = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+// Dates render client-side only (data arrives via fetch after hydration) — no SSR-locale mismatch.
+const fmtDay = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
 
 export default function AgentPerformancePanel() {
   const [data, setData] = useState<ApResult | null>(null);
@@ -142,19 +154,48 @@ export default function AgentPerformancePanel() {
                         {pct(t.pct)} ({t.count})
                       </span>
                     </button>
-                    {openTheme === t.theme && t.examples.length > 0 && (
-                      <ul className="ml-2 pl-3 border-l border-[var(--border)] grid gap-1">
-                        {t.examples.map((ex) => (
-                          <li key={ex} className="text-[11px] text-[var(--text-3)] italic">
-                            &ldquo;{ex}&rdquo;
-                          </li>
+                    {openTheme === t.theme && t.calls.length > 0 && (
+                      <div className="ml-2 pl-3 border-l border-[var(--border)] grid gap-0.5 max-h-72 overflow-y-auto">
+                        {t.callsTruncated && (
+                          <p className="text-[10px] text-[var(--text-3)]">
+                            Showing the newest {t.calls.length} of {t.count} calls.
+                          </p>
+                        )}
+                        {t.calls.map((c) => (
+                          // Two lines per call: meta row + the grader's reason as WRAPPING text
+                          // (line-clamp-2, not truncate) — a title= tooltip alone is unreadable
+                          // on touch, and fixed columns crushed the reason to 0px on phones.
+                          <div key={c.callId} className="py-1 text-[11px] min-w-0 grid gap-0.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono text-[var(--text-3)] flex-shrink-0" title={c.calledAt ?? "call date unknown"}>
+                                {fmtDay(c.calledAt)}
+                              </span>
+                              <span className="text-[var(--text-2)] flex-1 min-w-0 truncate" title={c.campaignName ?? undefined}>
+                                {c.campaignName ?? "unknown campaign"}
+                              </span>
+                              {c.campaignId && (
+                                <Link
+                                  href={`/reviews/${c.campaignId}?call=${c.callId}`}
+                                  className="flex-shrink-0 inline-flex items-center gap-0.5 text-blue-400 hover:text-blue-300 transition"
+                                  title="Open this call on the labeling page — transcript, audio, and your label"
+                                >
+                                  Open call <ChevronRight size={11} />
+                                </Link>
+                              )}
+                            </div>
+                            <p className="italic text-[var(--text-3)] line-clamp-2" title={c.rationale}>
+                              &ldquo;{c.rationale}&rdquo;
+                            </p>
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                     )}
                   </div>
                 ))}
               </div>
-              <p className="text-[10px] text-[var(--text-3)]">Click a row to see example call notes. Themes are grouped from the grader&apos;s written reasons.</p>
+              <p className="text-[10px] text-[var(--text-3)]">
+                Click a reason to see the calls behind it — open a call to read the transcript and label it. Themes are grouped from the grader&apos;s written reasons.
+              </p>
             </div>
           )}
 

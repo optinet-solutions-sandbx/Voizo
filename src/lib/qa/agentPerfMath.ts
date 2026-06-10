@@ -81,38 +81,62 @@ export function bucketFailureTheme(rationale: string): FailureTheme {
   return "other";
 }
 
+// One failure call for the drill-down: the panel lists these under each theme and
+// links into the labeling card at /reviews/{campaignId}?call={callId}.
+export interface FailureCallInput {
+  callId: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  calledAt: string | null; // the CALL's timestamp (calls_v2), null if the call row is gone
+  rationale: string;
+}
+export type FailureCallRef = FailureCallInput;
+
+// Refs per theme are capped (newest first) so a future 10× failure corpus can't bloat
+// the payload; `count` stays exact (golden-route capped-series precedent).
+export const MAX_CALLS_PER_THEME = 50;
+
 export interface FailureThemeCount {
   theme: FailureTheme;
   label: string;
   count: number;
   pct: number; // share of failures, 0..1 (4dp)
-  examples: string[]; // ≤3 raw rationales
+  calls: FailureCallRef[]; // newest-first by calledAt (unknown dates last), ≤ MAX_CALLS_PER_THEME
+  callsTruncated: boolean;
 }
 
-export function topFailureThemes(rationales: string[]): FailureThemeCount[] {
-  const buckets = new Map<FailureTheme, { count: number; examples: string[] }>();
-  for (const r of rationales) {
-    const theme = bucketFailureTheme(r);
-    let b = buckets.get(theme);
-    if (!b) {
-      b = { count: 0, examples: [] };
-      buckets.set(theme, b);
-    }
-    b.count++;
-    // Keep up to 3 DISTINCT example rationales (dedupe → stable, unique React keys
-    // downstream; templated rationales can repeat verbatim).
-    const ex = r && r.trim();
-    if (ex && b.examples.length < 3 && !b.examples.includes(ex)) b.examples.push(ex);
+// Date.parse on a provided ISO string is deterministic; unknown/invalid dates sort last.
+function calledAtMs(s: string | null): number {
+  const n = s ? Date.parse(s) : NaN;
+  return Number.isNaN(n) ? -Infinity : n;
+}
+
+export function topFailureThemes(calls: FailureCallInput[]): FailureThemeCount[] {
+  const buckets = new Map<FailureTheme, FailureCallRef[]>();
+  for (const c of calls) {
+    const theme = bucketFailureTheme(c.rationale);
+    const list = buckets.get(theme);
+    if (list) list.push(c);
+    else buckets.set(theme, [c]);
   }
-  const total = rationales.length;
+  const total = calls.length;
   return [...buckets.entries()]
-    .map(([theme, b]) => ({
-      theme,
-      label: THEME_LABEL[theme],
-      count: b.count,
-      pct: total > 0 ? Number((b.count / total).toFixed(4)) : 0,
-      examples: b.examples,
-    }))
+    .map(([theme, list]) => {
+      const sorted = [...list].sort((a, b) => {
+        const d = calledAtMs(b.calledAt) - calledAtMs(a.calledAt);
+        if (d > 0) return 1; // NaN (both undated) falls through to the callId tiebreak
+        if (d < 0) return -1;
+        return a.callId < b.callId ? -1 : a.callId > b.callId ? 1 : 0;
+      });
+      return {
+        theme,
+        label: THEME_LABEL[theme],
+        count: list.length,
+        pct: total > 0 ? Number((list.length / total).toFixed(4)) : 0,
+        calls: sorted.slice(0, MAX_CALLS_PER_THEME),
+        callsTruncated: sorted.length > MAX_CALLS_PER_THEME,
+      };
+    })
     .sort((a, b) => b.count - a.count);
 }
 

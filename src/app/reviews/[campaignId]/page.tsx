@@ -8,8 +8,8 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle, ArrowLeft, HelpCircle, Target, ThumbsDown, ThumbsUp, VolumeX,
 } from "lucide-react";
@@ -27,9 +27,23 @@ interface QueueItem {
 interface QueueResponse { items: QueueItem[]; total: number; reviewer: string; }
 interface JudgeData { judgeEnabled: boolean; calibration: JudgeCalibration; scores: Record<string, JudgeScore>; }
 
+// Suspense wrapper required by Next.js when a page uses useSearchParams in a
+// statically-prerenderable client component (workers/page.tsx pattern). The inner
+// page reads ?call=<id> — the Agent Performance drill-down's deep link to one card.
 export default function CampaignReviewPage() {
+  return (
+    <Suspense fallback={<div className="p-6 max-w-[1100px] mx-auto w-full"><SkeletonCards count={3} /></div>}>
+      <CampaignReviewPageInner />
+    </Suspense>
+  );
+}
+
+function CampaignReviewPageInner() {
   const params = useParams<{ campaignId: string }>();
   const campaignId = String(params?.campaignId ?? "");
+  // Deep link from the Agent Performance failure drill-down: scroll to + highlight one call.
+  const searchParams = useSearchParams();
+  const focusCallId = searchParams?.get("call") ?? null;
   const [data, setData] = useState<QueueResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,6 +80,17 @@ export default function CampaignReviewPage() {
   }, [campaignId, loadJudge]);
 
   useEffect(() => { if (campaignId) load(); }, [campaignId, load]);
+
+  // Scroll the deep-linked card into view once per ?call= value, after the queue loads.
+  // DOM-interaction effect (no state writes); the ref guard stops re-scrolls on refetches.
+  const scrolledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !focusCallId || !data) return;
+    if (scrolledFor.current === focusCallId) return;
+    scrolledFor.current = focusCallId; // one attempt per value — missing cards get the notice instead
+    document.getElementById(`call-${focusCallId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [loading, focusCallId, data]);
+  const focusMissing = !loading && !!focusCallId && !!data && !data.items.some((i) => i.callId === focusCallId);
 
   const submitLabel = useCallback(async (callId: string, verdict: Verdict, reason: string | null) => {
     setSavingId(callId);
@@ -175,6 +200,13 @@ export default function CampaignReviewPage() {
         </div>
       </div>
 
+      {focusMissing && (
+        <p className="text-[11px] text-amber-400 inline-flex items-center gap-1.5">
+          <AlertCircle size={11} className="flex-shrink-0" />
+          The call you followed isn&apos;t in this list — it may have been filtered out as a non-conversation or removed.
+        </p>
+      )}
+
       <AgreementBar stats={stats} loading={loading} />
 
       <JudgeScorecard
@@ -215,6 +247,7 @@ export default function CampaignReviewPage() {
               judgeEnabled={judge?.judgeEnabled ?? false}
               grading={gradingId === it.callId}
               onGrade={() => gradeCall(it.callId)}
+              focused={it.callId === focusCallId}
             />
           ))}
         </div>
@@ -275,16 +308,23 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
 }
 
 function ReviewCard({
-  item, saving, onLabel, judgeScore, judgeEnabled, grading, onGrade,
+  item, saving, onLabel, judgeScore, judgeEnabled, grading, onGrade, focused = false,
 }: {
   item: QueueItem; saving: boolean; onLabel: (callId: string, verdict: Verdict, reason: string | null) => void;
-  judgeScore: JudgeScore | null; judgeEnabled: boolean; grading: boolean; onGrade: () => void;
+  judgeScore: JudgeScore | null; judgeEnabled: boolean; grading: boolean; onGrade: () => void; focused?: boolean;
 }) {
   const [reason, setReason] = useState(item.yourLabel?.reason ?? "");
   const current = item.yourLabel?.verdict ?? null;
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5">
+    <section
+      id={`call-${item.callId}`}
+      // scroll-mt must clear the ~56px fixed mobile top bar (layout pt-14), else the
+      // deep-linked card's header lands hidden under it; desktop's header is in-flow.
+      className={`bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 scroll-mt-[4.5rem] md:scroll-mt-4 ${
+        focused ? "ring-2 ring-blue-500/60" : ""
+      }`}
+    >
       <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
         <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--text-3)]">
           <span>{item.durationSeconds != null ? `${item.durationSeconds}s` : "—"}</span>
