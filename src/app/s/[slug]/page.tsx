@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { getGhostRunBySlug } from "@/lib/ghost/ghostRunData";
 import { StatusBadge, TierBadge } from "../../ghost/badges";
 import RefreshButton from "./RefreshButton";
+import GhostRunReviews from "./GhostRunReviews";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -97,6 +98,7 @@ export default async function GhostRunDetailPage({ params }: { params: Promise<{
 
         {/* Live campaign progress */}
         {run.campaign_id ? (
+          <>
           <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)]">Progress (snapshot)</h2>
@@ -121,6 +123,8 @@ export default async function GhostRunDetailPage({ params }: { params: Promise<{
               Dials run on the unchanged production pipeline. Refresh for the latest snapshot.
             </p>
           </section>
+          <GhostRunReviews runId={run.id} />
+          </>
         ) : (
           <section className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-card)] p-8 text-center">
             <p className="text-sm text-[var(--text-2)]">Not launched yet</p>
