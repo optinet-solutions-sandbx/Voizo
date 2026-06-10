@@ -54,7 +54,7 @@ export async function selectUnscoredCalls(
   for (let from = 0; from < MAX_PAGES * PAGE; from += PAGE) {
     let q = supabaseAdmin
       .from("calls_v2")
-      .select("id, campaign_id, created_at, duration_seconds, goal_reached, transcript")
+      .select("id, campaign_id, created_at, duration_seconds, goal_reached, transcript, campaigns_v2!campaign_id(source)")
       .not("transcript", "is", null);
     if (campaignId) q = q.eq("campaign_id", campaignId);
     const { data, error } = await q
@@ -64,6 +64,12 @@ export async function selectUnscoredCalls(
     for (const r of data as Array<Record<string, unknown>>) {
       const transcript = txt(r.transcript);
       if (!hasRealConversation(transcript)) continue;
+      // C1 (GhostPortal v1.1): internal ghost runs must NEVER reach the AI judge.
+      // This is the judge's own read path (separate from the manual-review
+      // fetchLabelableCalls), so the source exclusion has to live here too.
+      const campEmbed = r.campaigns_v2;
+      const campSource = (Array.isArray(campEmbed) ? campEmbed[0] : campEmbed) as { source?: string } | null | undefined;
+      if (campSource?.source === "ghost_portal") continue;
       candidates.push({
         id: r.id as string,
         campaignId: r.campaign_id as string,
