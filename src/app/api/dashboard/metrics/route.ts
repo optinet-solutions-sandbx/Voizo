@@ -46,6 +46,7 @@ interface CampaignRow {
   status: string;
   timezone: string;
   vapi_assistant_name: string | null;
+  source: string | null;
 }
 
 function utcDayString(d: Date): string {
@@ -84,7 +85,7 @@ export async function GET(request: NextRequest) {
       .gte("created_at", longCutoffIso),
     supabaseAdmin
       .from("campaigns_v2")
-      .select("id, name, status, timezone, vapi_assistant_name"),
+      .select("id, name, status, timezone, vapi_assistant_name, source"),
   ]);
 
   if (callsRes.error) {
@@ -98,6 +99,14 @@ export async function GET(request: NextRequest) {
 
   const calls = (callsRes.data ?? []) as unknown as CallRow[];
   const campaignsList = (campaignsRes.data ?? []) as unknown as CampaignRow[];
+
+  // Segregation: internal GhostPortal runs (source='ghost_portal', either tier)
+  // must never appear in client-facing dashboard KPIs or the recent list. Filter
+  // them from BOTH the calls aggregation and the campaign list. (Only ghost is
+  // excluded — non-ghost test campaigns are unchanged; that's a separate concern.)
+  const ghostCampaignIds = new Set(
+    campaignsList.filter((c) => c.source === "ghost_portal").map((c) => c.id),
+  );
 
   // Window boundaries.
   const todayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -115,6 +124,7 @@ export async function GET(request: NextRequest) {
   const perCampaign = new Map<string, { calls: number; connected: number; goals: number; lastAtMs: number }>();
 
   for (const c of calls) {
+    if (ghostCampaignIds.has(c.campaign_id)) continue; // segregate ghost from all KPIs
     const tMs = new Date(c.created_at).getTime();
     const dayKey = utcDayString(new Date(c.created_at));
     const isConnected = CONNECTED_STATUSES.has(c.status);
@@ -161,6 +171,7 @@ export async function GET(request: NextRequest) {
 
   // Recent campaigns — sort by last call activity (campaigns with no calls land last).
   const recent = campaignsList
+    .filter((c) => c.source !== "ghost_portal") // ghost runs never surface in the client recent list
     .map((c) => {
       const agg = perCampaign.get(c.id);
       return {

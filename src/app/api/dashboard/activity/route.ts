@@ -53,6 +53,7 @@ interface SmsRow {
 interface CampaignBrief {
   id: string;
   name: string;
+  source: string | null;
 }
 
 interface NumberBrief {
@@ -103,7 +104,7 @@ export async function GET(request: NextRequest) {
       .select("id, created_at, status, to_phone_e164, body, error_message, campaign_id")
       .order("created_at", { ascending: false })
       .limit(SMS_LIMIT),
-    supabaseAdmin.from("campaigns_v2").select("id, name"),
+    supabaseAdmin.from("campaigns_v2").select("id, name, source"),
   ]);
 
   if (callsRes.error) {
@@ -119,9 +120,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to read campaigns" }, { status: 500 });
   }
 
-  const calls = (callsRes.data ?? []) as unknown as CallRow[];
-  const sms = (smsRes.data ?? []) as unknown as SmsRow[];
   const camps = (campsRes.data ?? []) as unknown as CampaignBrief[];
+  // Segregation: internal GhostPortal runs (source='ghost_portal', either tier)
+  // must not surface in the client-facing dashboard activity feed (call/SMS rows,
+  // outcome distribution, per-number list). Filter their rows out up front.
+  const ghostIds = new Set(camps.filter((c) => c.source === "ghost_portal").map((c) => c.id));
+  const calls = ((callsRes.data ?? []) as unknown as CallRow[]).filter((c) => !ghostIds.has(c.campaign_id));
+  const sms = ((smsRes.data ?? []) as unknown as SmsRow[]).filter((s) => !ghostIds.has(s.campaign_id));
   const campByID = new Map<string, string>(camps.map((c) => [c.id, c.name]));
 
   // ── Recent calls (top N) ─────────────────────────────────────────────

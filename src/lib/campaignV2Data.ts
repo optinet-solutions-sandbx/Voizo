@@ -51,6 +51,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       recurrence_pattern: input.recurrencePattern ?? null,
       is_test: input.isTest ?? false,
       created_by: input.createdBy || null,
+      source: input.source ?? "production",
     })
     .select()
     .single();
@@ -101,9 +102,14 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
 // --------------- Fetch helpers ---------------
 
 export async function fetchCampaignsV2() {
+  // Segregation: internal GhostPortal runs (source='ghost_portal') never appear in
+  // the client campaign list or the analytics they feed (campaigns/page.tsx builds
+  // both from this). The /s/[slug] ghost view loads its campaign by id via
+  // fetchCampaignV2 (singular), so the detail path is unaffected.
   const { data, error } = await supabaseAdmin
     .from("campaigns_v2")
     .select("*")
+    .neq("source", "ghost_portal")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { disguiseIfGhost } from "@/lib/ghost/workerDisguise";
 
 /**
  * GET /api/workers/state
@@ -57,6 +58,7 @@ interface CampaignRow {
   status: string;
   timezone: string;
   vapi_assistant_name: string | null;
+  source: string | null;
 }
 
 interface CallRow {
@@ -117,7 +119,7 @@ export async function GET(request: NextRequest) {
     const [campaignsRes, callsRes] = await Promise.all([
       supabaseAdmin
         .from("campaigns_v2")
-        .select("id, name, status, timezone, vapi_assistant_name")
+        .select("id, name, status, timezone, vapi_assistant_name, source")
         .in("id", leasedCampaignIds),
       supabaseAdmin
         .from("calls_v2")
@@ -204,17 +206,27 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return {
-      slotIndex: s.slot_index,
-      slotLabel,
-      status: s.status,
-      sipUri: s.sip_uri,
-      leasedAt: s.leased_at,
-      leasedDurationMs,
-      campaign,
-      inFlightCall,
-      notes: s.notes,
-    };
+    // Segregation: a slot leased to a GhostPortal campaign is disguised as
+    // "maintenance" (no ghost name/assistant/call/timing). DB status is untouched.
+    const leasedSource =
+      s.status === "leased" && s.current_campaign_id
+        ? campaignsById.get(s.current_campaign_id)?.source ?? null
+        : null;
+
+    return disguiseIfGhost(
+      {
+        slotIndex: s.slot_index,
+        slotLabel,
+        status: s.status,
+        sipUri: s.sip_uri,
+        leasedAt: s.leased_at,
+        leasedDurationMs,
+        campaign,
+        inFlightCall,
+        notes: s.notes,
+      },
+      leasedSource,
+    );
   });
 
   return NextResponse.json({

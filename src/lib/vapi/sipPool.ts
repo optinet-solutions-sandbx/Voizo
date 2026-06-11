@@ -127,3 +127,29 @@ export async function patchPhoneAssistant(
   const body = await res.text();
   return { ok: res.ok, status: res.status, body };
 }
+
+/**
+ * Ghost (production-priority) lease: only lease a slot when the number of FREE
+ * slots EXCEEDS `reserve`, so internal GhostPortal runs never consume the
+ * headroom client campaigns need. Returns 'reserved' (a yield — caller surfaces
+ * "no capacity, retry") instead of a slot when the pool is at/below the floor.
+ *
+ * The small count→lease TOCTOU is acceptable for a yield: the scheduler starts
+ * production drafts before ghost drafts, and the heartbeat reconciles. Does NOT
+ * modify leaseSlot (a HIGH-blast-radius shared path) — it composes on top of it.
+ */
+export async function leaseSlotForGhost(
+  supabase: SupabaseClient,
+  assistantId: string,
+  reserve: number,
+): Promise<SipPoolSlot | null | "reserved"> {
+  const { count, error } = await supabase
+    .from("vapi_sip_pool")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "free");
+  if (error) {
+    throw new Error(`leaseSlotForGhost free-count failed: ${error.message}`);
+  }
+  if ((count ?? 0) <= reserve) return "reserved";
+  return leaseSlot(supabase, assistantId);
+}
