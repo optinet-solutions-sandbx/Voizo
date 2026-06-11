@@ -18,6 +18,7 @@ export interface NsCampaignRow {
   id: string;
   name: string;
   is_test?: boolean | null;
+  source?: string | null;
 }
 
 export type SmsOutcome = "delivered" | "failed" | "inFlight" | "noSms";
@@ -71,6 +72,30 @@ export function classifySms(statuses: Array<string | null | undefined>): SmsOutc
   if (statuses.some((s) => s === "failed" || s === "undelivered")) return "failed";
   if (statuses.some((s) => s === "queued" || s === "sent")) return "inFlight";
   return "noSms";
+}
+
+/** PURE segregation pre-filter: internal GhostPortal runs (source='ghost_portal')
+ *  never reach client-facing metrics. Drops ghost campaigns, their calls, and the
+ *  SMS rows keyed to those calls. The is_test exclusion inside computeNorthStar
+ *  does NOT cover this — a live-tier ghost run is is_test=false, and perCampaign
+ *  surfaces campaign NAMES on the /reviews panel. */
+export function excludeGhostRows(input: {
+  calls: NsCallRow[];
+  sms: NsSmsRow[];
+  campaigns: NsCampaignRow[];
+}): { calls: NsCallRow[]; sms: NsSmsRow[]; campaigns: NsCampaignRow[] } {
+  const ghostCampaigns = new Set(
+    input.campaigns.filter((c) => c.source === "ghost_portal").map((c) => c.id),
+  );
+  if (ghostCampaigns.size === 0) return input;
+  const ghostCalls = new Set(
+    input.calls.filter((c) => ghostCampaigns.has(c.campaign_id)).map((c) => c.id),
+  );
+  return {
+    calls: input.calls.filter((c) => !ghostCampaigns.has(c.campaign_id)),
+    sms: input.sms.filter((m) => !(m.call_id && ghostCalls.has(m.call_id))),
+    campaigns: input.campaigns.filter((c) => !ghostCampaigns.has(c.id)),
+  };
 }
 
 export function computeNorthStar(input: {

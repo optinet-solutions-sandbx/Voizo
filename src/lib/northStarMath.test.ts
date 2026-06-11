@@ -1,6 +1,45 @@
 // src/lib/northStarMath.test.ts
 import { describe, it, expect } from "vitest";
-import { classifySms, computeNorthStar } from "./northStarMath";
+import { classifySms, computeNorthStar, excludeGhostRows } from "./northStarMath";
+
+describe("excludeGhostRows", () => {
+  const campaigns = [
+    { id: "c1", name: "US Camp", is_test: false, source: "production" },
+    { id: "g1", name: "ghost run", is_test: false, source: "ghost_portal" }, // live tier ⇒ is_test=false
+    { id: "c2", name: "legacy", is_test: false }, // pre-source row (null/undefined) ⇒ kept
+  ];
+  const calls = [
+    { id: "a", campaign_id: "c1", goal_reached: true },
+    { id: "x", campaign_id: "g1", goal_reached: true }, // ghost call
+    { id: "b", campaign_id: "c2", goal_reached: true },
+  ];
+  const sms = [
+    { call_id: "a", status: "delivered" },
+    { call_id: "x", status: "delivered" }, // sms tied to the ghost call
+    { call_id: null, status: "queued" }, // unlinked — kept (computeNorthStar already skips it)
+  ];
+
+  it("drops ghost campaigns, their calls, and the sms keyed to those calls", () => {
+    const out = excludeGhostRows({ calls, sms, campaigns });
+    expect(out.campaigns.map((c) => c.id)).toEqual(["c1", "c2"]);
+    expect(out.calls.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(out.sms.map((m) => m.call_id)).toEqual(["a", null]);
+  });
+
+  it("a live-tier ghost campaign never reaches perCampaign (name leak guard)", () => {
+    const result = computeNorthStar(excludeGhostRows({ calls, sms, campaigns }));
+    expect(result.perCampaign.find((c) => c.id === "g1")).toBeUndefined();
+    expect(result.perCampaign.find((c) => c.name === "ghost run")).toBeUndefined();
+  });
+
+  it("no-op when nothing is ghost", () => {
+    const clean = { calls: calls.slice(0, 1), sms: sms.slice(0, 1), campaigns: campaigns.slice(0, 1) };
+    const out = excludeGhostRows(clean);
+    expect(out.calls).toHaveLength(1);
+    expect(out.sms).toHaveLength(1);
+    expect(out.campaigns).toHaveLength(1);
+  });
+});
 
 describe("classifySms", () => {
   it("noSms when empty", () => expect(classifySms([])).toBe("noSms"));

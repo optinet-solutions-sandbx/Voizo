@@ -7,6 +7,7 @@ import { supabaseAdmin } from "./supabaseServer";
 import { fetchAllRows } from "./supabaseFetchAll";
 import {
   computeNorthStar,
+  excludeGhostRows,
   type NorthStarResult,
   type NsCallRow,
   type NsSmsRow,
@@ -17,11 +18,15 @@ export async function readNorthStar(): Promise<NorthStarResult> {
   const [calls, sms, campaigns] = await Promise.all([
     fetchAllRows(supabaseAdmin, "calls_v2", "id, campaign_id, goal_reached"),
     fetchAllRows(supabaseAdmin, "sms_messages_v2", "call_id, status"),
-    fetchAllRows(supabaseAdmin, "campaigns_v2", "id, name, is_test"),
+    fetchAllRows(supabaseAdmin, "campaigns_v2", "id, name, is_test, source"),
   ]);
-  return computeNorthStar({
-    calls: calls as unknown as NsCallRow[],
-    sms: sms as unknown as NsSmsRow[],
-    campaigns: campaigns as unknown as NsCampaignRow[],
-  });
+  // Segregation: GhostPortal runs never reach this client-facing metric — and
+  // is_test alone can't catch a live-tier ghost run (is_test=false there).
+  return computeNorthStar(
+    excludeGhostRows({
+      calls: calls as unknown as NsCallRow[],
+      sms: sms as unknown as NsSmsRow[],
+      campaigns: campaigns as unknown as NsCampaignRow[],
+    }),
+  );
 }
