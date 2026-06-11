@@ -261,6 +261,12 @@ export default function StepReview({ state, dispatch }: Props) {
                 }
               />
               <ReviewRow
+                label="Send timing"
+                value={state.smsConsentMode === "registered_optin"
+                  ? "To everyone reached (list opted in at signup)"
+                  : "Only after the customer says yes on the call"}
+              />
+              <ReviewRow
                 label="Message"
                 value={<span className="text-[12px] text-[var(--text-2)] leading-relaxed line-clamp-2">{state.smsMessage}</span>}
               />

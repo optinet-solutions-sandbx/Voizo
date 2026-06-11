@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { isVoicemail, hasGenuineCustomerConsent } from "@/lib/transcriptClassify";
+import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms } from "@/lib/transcriptClassify";
+import { decideSmsDispatch, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 import crypto from "crypto";
 
 // SMS dispatch + multiple Supabase queries run inline before returning 200.
@@ -15,7 +16,10 @@ export const maxDuration = 30;
  * Manifesto compliance:
  * - Vapi webhook authenticated via x-vapi-secret token (§6 — per Vapi's documented method)
  * - Idempotent: checks if goal_reached already set on this call (§6)
- * - SMS fires only when goal_reached=true AND sms_enabled=true AND sms_on_goal_reached_only=true (§6: 3 conditions)
+ * - SMS dispatch is mode-aware (campaigns_v2.sms_consent_mode, 2026-06-11): 'verbal_yes' keeps §6
+ *   (goal_reached + consent evidence + sms_enabled + sms_on_goal_reached_only); 'registered_optin'
+ *   (client-attested registration opt-in, Val 2026-06-11) sends when the agent announced an SMS.
+ *   Voicemail / on-call decline / opt-out / suppression_list veto in BOTH modes.
  * - Call matching uses Vapi's phoneCallProviderId (Twilio SID) — no fragile fallback
  */
 export async function POST(request: NextRequest) {
@@ -158,7 +162,12 @@ export async function POST(request: NextRequest) {
   // So we detect on customer signals alone — no AI confirmation required.
   //
   // Vapi's structuredData takes priority when present.
-  if (successEval == null && transcript && !optedOut) {
+  // 2026-06-11 (review C1): the scan now runs whenever structuredData didn't
+  // already flag — previously gated on successEval == null, which let a missed
+  // LLM extraction ("stop calling me" present, analysis ran but optOut absent)
+  // reach the registered_optin SMS dispatch with optedOut=false. Missing an
+  // opt-out is worse than a false positive (see compliance note above).
+  if (transcript && !optedOut) {
     const stopCalls = /(?:don'?t|do not|stop|never) (?:call|contact|phone)/i.test(transcript);
     const removeMe = /(?:remove|take) (?:me|my (?:number|phone)) (?:off|from|out)/i.test(transcript);
 
@@ -398,6 +407,59 @@ export async function POST(request: NextRequest) {
     })
     .eq("id", callRow.id);
 
+  // ── Campaign SMS config + mode-aware dispatch decision (2026-06-11) ──
+  // Fetched BEFORE the outcome update because registered_optin's dispatch
+  // intent feeds the outcome label below. The select tolerates a not-yet-
+  // migrated DB: if sms_consent_mode is missing, fall back to the legacy
+  // column list and treat the campaign as verbal_yes (today's behavior).
+  type SmsCampaignConfig = {
+    sms_enabled: boolean | null;
+    sms_template: string | null;
+    sms_on_goal_reached_only: boolean | null;
+    sms_consent_mode?: string | null;
+  };
+  let campaign: SmsCampaignConfig | null = null;
+  {
+    const sel = await supabaseAdmin
+      .from("campaigns_v2")
+      .select("sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode")
+      .eq("id", callRow.campaign_id)
+      .single();
+    if (sel.error) {
+      console.warn(
+        `[sms-gate] mode-aware campaign select failed (${sel.error.message}) — retrying legacy columns, defaulting to verbal_yes`,
+      );
+      const legacy = await supabaseAdmin
+        .from("campaigns_v2")
+        .select("sms_enabled, sms_template, sms_on_goal_reached_only")
+        .eq("id", callRow.campaign_id)
+        .single();
+      campaign = (legacy.data as SmsCampaignConfig | null) ?? null;
+    } else {
+      campaign = sel.data as SmsCampaignConfig | null;
+    }
+  }
+  const smsMode: SmsConsentMode =
+    campaign?.sms_consent_mode === "registered_optin" ? "registered_optin" : "verbal_yes";
+  const decision = decideSmsDispatch({
+    mode: smsMode,
+    goalReached,
+    nativeSuccess,
+    voicemailDetected,
+    optedOut,
+    hasVerbalConsent: transcript ? hasGenuineCustomerConsent(transcript) : false,
+    agentAnnouncedSms: transcript ? agentMentionedSms(transcript) : false,
+    customerDeclinedSms: transcript ? customerDeclinedSms(transcript) : false,
+    humanConversation: transcript ? hasRealConversation(transcript) : false,
+  });
+  // registered_optin supersedes the legacy sms_on_goal_reached_only flag (the
+  // mode IS the policy); verbal_yes keeps the original §6 three-condition check.
+  const smsConfigured =
+    campaign?.sms_enabled === true &&
+    Boolean(campaign?.sms_template) &&
+    (smsMode === "registered_optin" || campaign?.sms_on_goal_reached_only === true);
+  const registeredDispatchIntent = smsMode === "registered_optin" && decision.attempt && smsConfigured;
+
   // ── Update campaign_numbers_v2 outcome ──
   // Adversarial review C2 (2026-05-08): guard against late Vapi end-of-call
   // stomping a sweeper-resolved state or a fresh retry's in_progress. Only
@@ -431,7 +493,12 @@ export async function POST(request: NextRequest) {
       `vapiCallId=${vapiCallId}`,
     );
   } else {
-    const outcome = optedOut ? "declined_offer" : goalReached ? "sent_sms" : "not_interested";
+    // Mode-aware label (2026-06-11): in registered_optin, an announced+configured
+    // SMS reads sent_sms — Val's complaint was announced texts landing in
+    // "not_interested", which the segment UI defines as "Explicit no overall".
+    // verbal_yes mapping unchanged.
+    const outcome =
+      optedOut ? "declined_offer" : goalReached || registeredDispatchIntent ? "sent_sms" : "not_interested";
     await supabaseAdmin
       .from("campaign_numbers_v2")
       .update({ outcome })
@@ -462,24 +529,14 @@ export async function POST(request: NextRequest) {
   // (c) Independent compliance gate on the irreversible action (2026-06-04):
   // never dispatch SMS without consent evidence, regardless of how goal_reached
   // was set (covers native-successEvaluation rows too).
-  const smsConsentOk =
-    !voicemailDetected && (nativeSuccess || (transcript ? hasGenuineCustomerConsent(transcript) : false));
-  if (goalReached && !smsConsentOk) {
-    console.warn(`[sms-gate] SMS suppressed despite goal_reached — no consent evidence. vapiCallId=${vapiCallId}`);
+  if (!decision.attempt && (goalReached || smsMode === "registered_optin")) {
+    console.log(`[sms-gate] mode=${smsMode} attempt=false reason=${decision.reason}. vapiCallId=${vapiCallId}`);
   }
-  if (goalReached && smsConsentOk) {
-    const { data: campaign } = await supabaseAdmin
-      .from("campaigns_v2")
-      .select("sms_enabled, sms_template, sms_on_goal_reached_only")
-      .eq("id", callRow.campaign_id)
-      .single();
+  if (decision.attempt && campaign) {
+    const smsTemplate = campaign.sms_template;
+    const shouldSendSms = smsConfigured && typeof smsTemplate === "string" && smsTemplate.length > 0;
 
-    const shouldSendSms =
-      campaign?.sms_enabled === true &&
-      campaign?.sms_on_goal_reached_only === true &&
-      Boolean(campaign?.sms_template);
-
-    if (shouldSendSms && campaign) {
+    if (shouldSendSms && typeof smsTemplate === "string") {
       const { data: numRow } = await supabaseAdmin
         .from("campaign_numbers_v2")
         .select("phone_e164")
@@ -512,7 +569,7 @@ export async function POST(request: NextRequest) {
                 call_id: callRow.id,
                 campaign_number_id: callRow.campaign_number_id,
                 to_phone_e164: numRow.phone_e164,
-                body: campaign.sms_template,
+                body: smsTemplate,
                 provider: "mobivate",
                 status: "queued",
               })
@@ -524,7 +581,7 @@ export async function POST(request: NextRequest) {
             if (!getMobivateConfigError()) {
               const result = await sendSMS({
                 to: numRow.phone_e164,
-                body: campaign.sms_template,
+                body: smsTemplate,
                 reference: smsRow?.id || undefined,
               });
 

@@ -80,7 +80,7 @@ export async function GET(
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
     .select(
-      "id, name, status, campaign_type, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only",
+      "id, name, status, campaign_type, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode",
     )
     .eq("id", id)
     .single();
@@ -220,6 +220,7 @@ export async function GET(
       sms_enabled: source.sms_enabled,
       sms_template: source.sms_template,
       sms_on_goal_reached_only: source.sms_on_goal_reached_only,
+      sms_consent_mode: source.sms_consent_mode ?? "verbal_yes",
       segment_id: source.segment_id,
     },
     prefill: {

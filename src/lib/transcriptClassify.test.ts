@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { isVoicemail, hasRealConversation, hasGenuineCustomerConsent } from "./transcriptClassify";
+import {
+  isVoicemail, hasRealConversation, hasGenuineCustomerConsent,
+  agentMentionedSms, customerDeclinedSms,
+} from "./transcriptClassify";
 
 // Real AU "message bank" voicemails the filter MISSED (campaign 9df71cd3, 2026-06-03).
 // These were surfaced as fake "real conversations" in /reviews — the bug this test pins.
@@ -219,5 +222,59 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
     expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
     expect(hasRealConversation(GENUINE)).toBe(true);
     expect(hasRealConversation(REAL_BRUSHOFF)).toBe(true);
+  });
+});
+
+// ── SMS dispatch signals (2026-06-11, registered_optin mode) ────────────────
+
+describe("agentMentionedSms (AI announce detector)", () => {
+  it("detects the agent's announce/confirm phrasings", () => {
+    expect(agentMentionedSms("AI: I'll send you an SMS now.\nUser: Okay.")).toBe(true);
+    expect(agentMentionedSms("AI: I'm sending all of it over SMS right now.\nUser: Bye.")).toBe(true);
+    expect(agentMentionedSms("AI: Would it be okay if I text you the details?\nUser: Hmm.")).toBe(true);
+  });
+  it("ignores customer turns — a customer asking for a text is not an agent announce", () => {
+    expect(agentMentionedSms("AI: Hi, it's Tom.\nUser: Just text me the details.")).toBe(false);
+  });
+  it("catches channel-certain paraphrases (review H2)", () => {
+    expect(agentMentionedSms("AI: I'll text you, is that okay?\nUser: Sure.")).toBe(true);
+    expect(agentMentionedSms("AI: I'll shoot you a text shortly.\nUser: Okay.")).toBe(true);
+    expect(agentMentionedSms("AI: I'll text it over to you.\nUser: Thanks.")).toBe(true);
+  });
+  it("does NOT arm on non-SMS sends (review H1)", () => {
+    expect(agentMentionedSms("AI: I'll send you an email with the details.\nUser: Okay.")).toBe(false);
+    expect(agentMentionedSms("AI: We'll send a confirmation email with your bonus details.\nUser: Fine.")).toBe(false);
+    expect(agentMentionedSms("AI: I'll send your details over to our team.\nUser: Alright.")).toBe(false);
+  });
+  it("is conservative on label-less transcripts and no-SMS calls", () => {
+    expect(agentMentionedSms("I'll send you an SMS now.")).toBe(false);
+    expect(agentMentionedSms("AI: Hi, do you have thirty seconds?\nUser: No.")).toBe(false);
+    expect(agentMentionedSms(null)).toBe(false);
+  });
+});
+
+describe("customerDeclinedSms (explicit text-directed refusal)", () => {
+  it("catches explicit refusals of the text", () => {
+    expect(customerDeclinedSms("AI: I'll send you an SMS now.\nUser: Please don't text me.")).toBe(true);
+    expect(customerDeclinedSms("AI: I'll text you the link.\nUser: No SMS, thanks.")).toBe(true);
+    expect(customerDeclinedSms("AI: I'll send the details.\nUser: No need to send anything.")).toBe(true);
+    expect(customerDeclinedSms("AI: Sending it over.\nUser: Stop sending me messages.")).toBe(true);
+    expect(customerDeclinedSms("AI: I'll text you.\nUser: No more texts please.")).toBe(true);
+    expect(customerDeclinedSms("AI: I'll text you.\nUser: I'd rather you didn't text me.")).toBe(true);
+  });
+  it("does NOT veto acceptance phrasings that contain a negation (review M3)", () => {
+    expect(customerDeclinedSms("AI: I'll send it by SMS.\nUser: Don't worry about sending it, text is fine.")).toBe(false);
+  });
+  it("NEVER fires on grant-idioms or a generic offer-decline", () => {
+    expect(customerDeclinedSms("AI: Would it be okay if I text you?\nUser: Yeah, no worries.")).toBe(false);
+    expect(customerDeclinedSms("AI: Would it be okay if I text you?\nUser: No problem at all.")).toBe(false);
+    expect(customerDeclinedSms("AI: Would it be okay if I text you?\nUser: I don't mind the text.")).toBe(false);
+    expect(customerDeclinedSms("AI: Do you have thirty seconds?\nUser: No.")).toBe(false);
+    expect(customerDeclinedSms("AI: Interested in the bonus?\nUser: Not interested, goodbye.")).toBe(false);
+  });
+  it("ignores AI turns and label-less transcripts", () => {
+    expect(customerDeclinedSms("AI: Don't worry, I won't text you twice.\nUser: Okay.")).toBe(false);
+    expect(customerDeclinedSms("don't text me")).toBe(false);
+    expect(customerDeclinedSms(null)).toBe(false);
   });
 });

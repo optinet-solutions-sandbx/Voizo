@@ -144,6 +144,8 @@ export interface WizardState {
 
   // Step 4 — Follow-up SMS
   smsEnabled: boolean;
+  /** Dispatch policy: verbal_yes = on-call yes required (default); registered_optin = client-attested signup opt-in (2026-06-11). */
+  smsConsentMode: "verbal_yes" | "registered_optin";
   smsMessage: string;
   smsLink: string;
   smsOptout: string;
@@ -203,7 +205,7 @@ export type SchedulePayload = Partial<
 export type SmsPayload = Partial<
   Pick<
     WizardState,
-    "smsEnabled" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing"
+    "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing"
   >
 >;
 
@@ -331,6 +333,7 @@ export function createInitialState(): WizardState {
     recurrenceErrors: [],
 
     smsEnabled: true,
+    smsConsentMode: "verbal_yes",
     smsMessage: DEFAULT_SMS_MESSAGE,
     smsLink: DEFAULT_SMS_LINK,
     smsOptout: SMS_OPTOUT_FOOTER,
@@ -570,6 +573,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       smsEnabled: state.smsEnabled,
       smsTemplate: composedSmsTemplate(state) || null,
       smsOnGoalReachedOnly: true,
+      smsConsentMode: state.smsConsentMode,
       numbers: [],
       campaignType: "recurring",
       recurrencePattern: state.recurrencePattern,
@@ -609,6 +613,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     smsEnabled: state.smsEnabled,
     smsTemplate: composedSmsTemplate(state) || null,
     smsOnGoalReachedOnly: true,
+    smsConsentMode: state.smsConsentMode,
     numbers: parsePhoneList(state.numbersText),
     isTest: state.isTest,
   };

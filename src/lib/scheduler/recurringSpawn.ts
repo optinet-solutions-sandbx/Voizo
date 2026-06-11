@@ -39,6 +39,7 @@ export interface RecurringParent {
   sms_enabled: boolean;
   sms_template: string | null;
   sms_on_goal_reached_only: boolean | null;
+  sms_consent_mode: string | null;
   // Inherited by spawned children so test-flagged parents don't spawn
   // production-visible children (audit 2026-05-22 HIGH H3). Without this,
   // every spawned child has DB DEFAULT false → pollutes Audience suggestions.
@@ -471,6 +472,7 @@ function buildChildPayload(args: {
     sms_enabled: parent.sms_enabled,
     sms_template: parent.sms_template,
     sms_on_goal_reached_only: parent.sms_on_goal_reached_only ?? true,
+    sms_consent_mode: parent.sms_consent_mode ?? "verbal_yes",
     status,
     campaign_type: "fixed" as const,
     parent_campaign_id: parent.id,

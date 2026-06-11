@@ -178,6 +178,49 @@ export function hasGenuineCustomerConsent(transcript: string | null | undefined)
   return false;
 }
 
+// ── SMS dispatch signals (2026-06-11, registered_optin mode) ────────────────
+// Used by the end-of-call webhook's mode-aware dispatch (smsDispatchDecision).
+// Same conservative stance as hasGenuineCustomerConsent: label-less transcripts
+// yield false (no speaker evidence → no dispatch evidence).
+
+// Announce trigger for registered_optin dispatch. STRICTER than AI_SMS_MENTION
+// (which feeds the consent window and may stay broad): an announce must be
+// channel-certain — either a texting VERB ("I'll text you / text it over") or a
+// send-verb paired with an sms/text/message NOUN. "I'll send you an email with
+// the details" must NOT arm an SMS (review H1); "I'll text you" / "shoot you a
+// text" must (review H2).
+const AGENT_SMS_ANNOUNCE =
+  /\b(?:text(?:ing)?\s+(?:you|it|this|that|them|everything|the)\b|(?:send|sending|sent|shoot|shooting)\b[^.?!]{0,60}\b(?:sms|texts?|messages?)\b)/i;
+
+/**
+ * Did the AGENT announce/offer a text? AI turns only — a customer asking
+ * "can you text me?" is consent territory, not an agent announce.
+ */
+export function agentMentionedSms(transcript: string | null | undefined): boolean {
+  if (!transcript) return false;
+  const turns = parseTranscriptTurns(transcript.slice(0, TRANSCRIPT_CAP));
+  return turns.some((t) => t.speaker === "ai" && AGENT_SMS_ANNOUNCE.test(t.text));
+}
+
+// Explicit, text-directed refusals ONLY. Deliberately narrow: a generic "no"
+// is an offer-decline (verbal_yes mode / outcome territory), not an SMS veto,
+// and AU grant-idioms ("yeah no worries", "no problem") must never match.
+const SMS_DECLINE_PATTERNS = [
+  // negation + a texting verb/noun in the same clause; (?! mind| worry) keeps
+  // grant-idioms ("I don't mind the text", "don't worry about sending it,
+  // text is fine") out of the veto (review M3).
+  /\b(?:don'?t|do not|didn'?t|wouldn'?t|stop|never)\b(?! mind\b| worry\b)[^.?!]{0,30}\b(?:text(?:s|ing)?|sms|messages?|send(?:ing)?)\b/i,
+  /\bno (?:more )?(?:texts?|sms|messages?)\b/i,
+  /\bno need to (?:text|sms|message|send)\b/i,
+];
+
+/** Did the CUSTOMER explicitly decline being texted? User turns only. */
+export function customerDeclinedSms(transcript: string | null | undefined): boolean {
+  if (!transcript) return false;
+  const turns = parseTranscriptTurns(transcript.slice(0, TRANSCRIPT_CAP));
+  return turns.some((t) => t.speaker === "user" && SMS_DECLINE_PATTERNS.some((p) => p.test(t.text)));
+}
+
 // ── #5 (2026-06-08): machine "hold / leave-a-message / IVR" greetings ───────────
 // Phrases a live customer never utters on a cold sales call, which slipped the voicemail
 // tiers above and surfaced as fake "real conversations" in /reviews (campaign

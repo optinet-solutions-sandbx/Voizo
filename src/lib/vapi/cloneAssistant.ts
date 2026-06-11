@@ -83,14 +83,18 @@ const VOIZO_RUNTIME_POLICY = {
  * agent prompt. Voizo platform requirements that don't belong on the per-base
  * agent prompt Ernie/Maria configure. Vapi only allows one system message so
  * we concatenate (Chris's architecture: system prompt + agent prompt = 1 prompt).
+ * Exported for the colocated unit tests; runtime consumers stay inside createClone.
  */
-const VOIZO_SYSTEM_PREFIX = [
+export const VOIZO_SYSTEM_PREFIX = [
   `[System Instructions — Voizo Platform]`,
   `Important call behavior rules that apply to every call:`,
   ``,
-  `1. SMS CONFIRMATION: When the customer agrees to receive SMS or text details,`,
-  `   you MUST verbally confirm by saying something like "I'll send you an SMS now"`,
-  `   before moving on. Do not skip this step — it is required for SMS delivery to work.`,
+  `1. SMS HANDLING: When your script calls for sending the customer an SMS,`,
+  `   verbally confirm by saying something like "I'll send you an SMS now" before`,
+  `   moving on. If the customer objects to being texted or asks not to be`,
+  `   contacted, do NOT promise or send an SMS — accept that answer the FIRST`,
+  `   time, acknowledge politely, and move on. Never pressure the customer about`,
+  `   the SMS. If the agent script below conflicts with this rule, follow THIS rule.`,
   ``,
   `2. CALL ENDING: Never end the call immediately after the customer agrees to receive`,
   `   SMS. Confirm the SMS dispatch first, then wrap up the call politely.`,

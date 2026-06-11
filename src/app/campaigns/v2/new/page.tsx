@@ -210,6 +210,7 @@ function WizardPage({
             call_windows: Array<{ day: string; start: string; end: string }> | null;
             sms_enabled: boolean | null;
             sms_template: string | null;
+            sms_consent_mode?: string | null;
             segment_id: number | null;
           };
           prefill: {
@@ -335,6 +336,7 @@ function WizardPage({
           type: "SET_SMS_FIELDS",
           payload: {
             smsEnabled: !!src.sms_enabled,
+            smsConsentMode: src.sms_consent_mode === "registered_optin" ? "registered_optin" : "verbal_yes",
             smsMessage: sms.message,
             smsLink: sms.link,
             smsOptout: sms.optout,

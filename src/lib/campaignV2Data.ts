@@ -46,6 +46,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       sms_enabled: input.smsEnabled,
       sms_template: input.smsTemplate || null,
       sms_on_goal_reached_only: input.smsOnGoalReachedOnly ?? true,
+      sms_consent_mode: input.smsConsentMode ?? "verbal_yes",
       status,
       campaign_type: campaignType,
       recurrence_pattern: input.recurrencePattern ?? null,

@@ -647,7 +647,7 @@ export async function GET(request: NextRequest) {
   const { data: recurringParents, error: recurringErr } = await supabaseAdmin
     .from("campaigns_v2")
     .select(
-      "id, name, timezone, recurrence_pattern, segment_id, base_assistant_id, voice_id, system_prompt, sms_enabled, sms_template, sms_on_goal_reached_only, is_test",
+      "id, name, timezone, recurrence_pattern, segment_id, base_assistant_id, voice_id, system_prompt, sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode, is_test",
     )
     .eq("campaign_type", "recurring")
     .eq("status", "running");

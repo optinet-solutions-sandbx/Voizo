@@ -28,7 +28,7 @@ export default function StepFollowup({ state, dispatch }: Props) {
   const isValidSmsLink = state.smsLink.trim() === "" || state.smsLink.trim().startsWith("https://");
   const isSmsBodyEmpty = state.smsEnabled && state.smsMessage.trim().length === 0;
 
-  function setSms<K extends keyof Pick<WizardState, "smsEnabled" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing">>(
+  function setSms<K extends keyof Pick<WizardState, "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing">>(
     key: K,
     value: WizardState[K],
   ) {
@@ -75,6 +75,50 @@ export default function StepFollowup({ state, dispatch }: Props) {
             onChange={(v) => setSms("smsEnabled", v)}
           />
         </div>
+
+        {/* Send-timing mode (2026-06-11): verbal_yes = on-call yes required;
+            registered_optin = client-attested signup opt-in (Val). The webhook
+            still vetoes voicemail / "don't text me" / opt-outs / suppression
+            in BOTH modes. */}
+        {state.smsEnabled && (
+          <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)]">
+            <div className="text-sm font-semibold text-[var(--text-1)]">When should the text go out?</div>
+            <div className="mt-3 flex flex-col gap-2.5">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="smsConsentMode"
+                  checked={state.smsConsentMode === "verbal_yes"}
+                  onChange={() => setSms("smsConsentMode", "verbal_yes")}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-[var(--text-1)]">Only after the customer says yes on the call</span>
+                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
+                    Default. The agent must hear a clear yes before the text goes out.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="smsConsentMode"
+                  checked={state.smsConsentMode === "registered_optin"}
+                  onChange={() => setSms("smsConsentMode", "registered_optin")}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-[var(--text-1)]">To everyone we reach — the list already opted in</span>
+                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
+                    Use only for lists where every player ticked &quot;Receive SMS Promos&quot; at signup.
+                    The text goes out once the agent mentions it on a live call. Anyone who says
+                    &quot;don&apos;t text me&quot; — or is on the Do-Not-Call list — is never messaged.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        )}
 
         {/* Body section */}
         {state.smsEnabled && (

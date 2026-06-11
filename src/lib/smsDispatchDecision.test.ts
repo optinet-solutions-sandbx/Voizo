@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+import { decideSmsDispatch, type SmsDispatchInput } from "./smsDispatchDecision";
+
+const base: SmsDispatchInput = {
+  mode: "verbal_yes",
+  goalReached: false,
+  nativeSuccess: false,
+  voicemailDetected: false,
+  optedOut: false,
+  hasVerbalConsent: false,
+  agentAnnouncedSms: false,
+  customerDeclinedSms: false,
+  humanConversation: false,
+};
+
+describe("decideSmsDispatch — verbal_yes (today's behavior preserved)", () => {
+  it("sends on goal + genuine verbal consent", () => {
+    expect(decideSmsDispatch({ ...base, goalReached: true, hasVerbalConsent: true }))
+      .toEqual({ attempt: true, reason: "verbal_consent" });
+  });
+  it("sends on goal + native success (no transcript consent needed)", () => {
+    expect(decideSmsDispatch({ ...base, goalReached: true, nativeSuccess: true }).attempt).toBe(true);
+  });
+  it("never sends without goal_reached, even with consent in the transcript", () => {
+    expect(decideSmsDispatch({ ...base, hasVerbalConsent: true }))
+      .toEqual({ attempt: false, reason: "goal_not_reached" });
+  });
+  it("never sends on goal without consent evidence (the 2026-06-04 gate)", () => {
+    expect(decideSmsDispatch({ ...base, goalReached: true }))
+      .toEqual({ attempt: false, reason: "no_consent_evidence" });
+  });
+  it("voicemail vetoes even native success", () => {
+    expect(decideSmsDispatch({ ...base, goalReached: true, nativeSuccess: true, voicemailDetected: true }))
+      .toEqual({ attempt: false, reason: "voicemail" });
+  });
+  it("on-call opt-out vetoes even goal + consent", () => {
+    expect(decideSmsDispatch({ ...base, goalReached: true, hasVerbalConsent: true, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+});
+
+describe("decideSmsDispatch — registered_optin (client opt-in basis, Val 2026-06-11)", () => {
+  const reg: SmsDispatchInput = { ...base, mode: "registered_optin", humanConversation: true };
+
+  it("sends when the agent announced a text — goal NOT required", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true }))
+      .toEqual({ attempt: true, reason: "registered_optin_announce" });
+  });
+  it("still sends when goal also reached", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, goalReached: true }).attempt).toBe(true);
+  });
+  it("never sends when the agent never announced a text (no promise, no send)", () => {
+    expect(decideSmsDispatch(reg)).toEqual({ attempt: false, reason: "no_agent_sms_announce" });
+  });
+  it("an explicit 'don't text me' always wins over the announce", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, customerDeclinedSms: true }))
+      .toEqual({ attempt: false, reason: "customer_declined_sms" });
+  });
+  it("voicemail vetoes the announce (pitch into a machine never texts)", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, voicemailDetected: true }))
+      .toEqual({ attempt: false, reason: "voicemail" });
+  });
+  it("no real human conversation vetoes the announce (review H3: agent monologue into an undetected machine)", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, humanConversation: false }))
+      .toEqual({ attempt: false, reason: "no_human_conversation" });
+  });
+  it("on-call opt-out vetoes the announce", () => {
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+});
