@@ -8,9 +8,12 @@
 --                       customer yes on the call).
 --   registered_optin  — client-owned consent basis (players ticked "Receive
 --                       SMS Promos" at registration): SMS sends when the
---                       agent announced a text on a live call. Voicemail,
---                       on-call decline ("don't text me"), opt-out, and the
---                       suppression list still veto in BOTH modes.
+--                       agent announced a text on a live call, AND as a
+--                       missed-call follow-up on voicemail pickups (client-
+--                       agreed 2026-06-11; one text per player per campaign).
+--                       On-call decline ("don't text me"), opt-out, and the
+--                       suppression list veto in BOTH modes; voicemail vetoes
+--                       verbal_yes only.
 --
 -- Existing campaigns keep verbal_yes (no behavior change without operator action).
 

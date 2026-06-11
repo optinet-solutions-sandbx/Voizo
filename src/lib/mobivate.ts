@@ -99,6 +99,11 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
         Authorization: `Bearer ${MOBIVATE_API_KEY}`,
       },
       body: JSON.stringify(requestBody),
+      // A Mobivate hang must not ride the serverless function into its
+      // maxDuration kill — that strands the sms row at 'queued' forever
+      // (2026-06-12 review H1). Abort -> catch below -> success:false ->
+      // caller marks 'failed' -> a later attempt may retry the send.
+      signal: AbortSignal.timeout(10_000),
     });
 
     const data = await response.json();

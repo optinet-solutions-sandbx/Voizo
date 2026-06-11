@@ -77,9 +77,10 @@ export default function StepFollowup({ state, dispatch }: Props) {
         </div>
 
         {/* Send-timing mode (2026-06-11): verbal_yes = on-call yes required;
-            registered_optin = client-attested signup opt-in (Val). The webhook
-            still vetoes voicemail / "don't text me" / opt-outs / suppression
-            in BOTH modes. */}
+            registered_optin = client-attested signup opt-in (Val), including the
+            voicemail missed-call follow-up. The webhook still vetoes "don't text
+            me" / opt-outs / suppression in BOTH modes; voicemail vetoes
+            verbal_yes only. */}
         {state.smsEnabled && (
           <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)]">
             <div className="text-sm font-semibold text-[var(--text-1)]">When should the text go out?</div>
@@ -111,8 +112,9 @@ export default function StepFollowup({ state, dispatch }: Props) {
                   <span className="block text-sm text-[var(--text-1)]">To everyone we reach — the list already opted in</span>
                   <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
                     Use only for lists where every player ticked &quot;Receive SMS Promos&quot; at signup.
-                    The text goes out once the agent mentions it on a live call. Anyone who says
-                    &quot;don&apos;t text me&quot; — or is on the Do-Not-Call list — is never messaged.
+                    The text goes out once the agent mentions it on a live call — and as a
+                    missed-call follow-up when we reach a voicemail (one text per player per campaign).
+                    Anyone who says &quot;don&apos;t text me&quot; — or is on the Do-Not-Call list — is never messaged.
                   </span>
                 </span>
               </label>

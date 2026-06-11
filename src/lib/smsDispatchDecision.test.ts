@@ -56,9 +56,17 @@ describe("decideSmsDispatch — registered_optin (client opt-in basis, Val 2026-
     expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, customerDeclinedSms: true }))
       .toEqual({ attempt: false, reason: "customer_declined_sms" });
   });
-  it("voicemail vetoes the announce (pitch into a machine never texts)", () => {
-    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, voicemailDetected: true }))
-      .toEqual({ attempt: false, reason: "voicemail" });
+  it("voicemail pickup TRIGGERS the missed-call follow-up (client-agreed 2026-06-11)", () => {
+    expect(decideSmsDispatch({ ...reg, voicemailDetected: true, humanConversation: false }))
+      .toEqual({ attempt: true, reason: "registered_optin_voicemail_followup" });
+    // announce present or not — voicemail path doesn't require it
+    expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, voicemailDetected: true }).attempt).toBe(true);
+  });
+  it("opt-out and explicit decline still beat the voicemail follow-up", () => {
+    expect(decideSmsDispatch({ ...reg, voicemailDetected: true, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+    expect(decideSmsDispatch({ ...reg, voicemailDetected: true, customerDeclinedSms: true }))
+      .toEqual({ attempt: false, reason: "customer_declined_sms" });
   });
   it("no real human conversation vetoes the announce (review H3: agent monologue into an undetected machine)", () => {
     expect(decideSmsDispatch({ ...reg, agentAnnouncedSms: true, humanConversation: false }))

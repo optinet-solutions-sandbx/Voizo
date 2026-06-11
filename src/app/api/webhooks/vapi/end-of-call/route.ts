@@ -19,7 +19,8 @@ export const maxDuration = 30;
  * - SMS dispatch is mode-aware (campaigns_v2.sms_consent_mode, 2026-06-11): 'verbal_yes' keeps §6
  *   (goal_reached + consent evidence + sms_enabled + sms_on_goal_reached_only); 'registered_optin'
  *   (client-attested registration opt-in, Val 2026-06-11) sends when the agent announced an SMS.
- *   Voicemail / on-call decline / opt-out / suppression_list veto in BOTH modes.
+ *   On-call decline / opt-out / suppression_list veto in BOTH modes; voicemail vetoes
+ *   verbal_yes and TRIGGERS the registered_optin missed-call follow-up (2026-06-11).
  * - Call matching uses Vapi's phoneCallProviderId (Twilio SID) — no fragile fallback
  */
 export async function POST(request: NextRequest) {
@@ -554,57 +555,98 @@ export async function POST(request: NextRequest) {
         if (suppressed && suppressed.length > 0) {
           console.log(`SMS skipped for ${numRow.phone_e164.slice(0, -4)}**** (on suppression list)`);
         } else {
-          // Idempotency: check if SMS already exists for this call
-          const { data: existingSms } = await supabaseAdmin
+          // Idempotency + per-player dedup (2026-06-11): ONE text per player per
+          // campaign. Keyed on campaign_number_id (not call_id) so webhook
+          // re-delivery AND retry attempts both dedupe — a 3-retry voicemail
+          // player gets exactly one missed-call follow-up, and a human answer
+          // after a voicemail follow-up never sends a second copy. Review fixes
+          // (2026-06-12): fail CLOSED on a dedup read error (an irreversible
+          // send must not ride on a failed check); 'failed' rows never block
+          // (a Mobivate error must not permanently burn the player's one text);
+          // 'queued' rows block only while FRESH — a crash/hang/unconfigured key
+          // strands queued rows forever, and those must not eat the text. Stale
+          // queued rows are repaired to 'failed' before the new dispatch.
+          // verbal_yes corner: a late Vapi webhook + sweeper re-dial + second
+          // consent used to double-text; it now dedupes (fewer duplicates).
+          const QUEUED_FRESH_MS = 15 * 60 * 1000;
+          const { data: priorSms, error: dedupErr } = await supabaseAdmin
             .from("sms_messages_v2")
-            .select("id")
-            .eq("call_id", callRow.id)
-            .limit(1);
+            .select("id, status, created_at")
+            .eq("campaign_number_id", callRow.campaign_number_id)
+            .neq("status", "failed")
+            .limit(5);
 
-          if (!existingSms || existingSms.length === 0) {
-            const { data: smsRow } = await supabaseAdmin
-              .from("sms_messages_v2")
-              .insert({
-                campaign_id: callRow.campaign_id,
-                call_id: callRow.id,
-                campaign_number_id: callRow.campaign_number_id,
-                to_phone_e164: numRow.phone_e164,
-                body: smsTemplate,
-                provider: "mobivate",
-                status: "queued",
-              })
-              .select("id")
-              .single();
+          if (dedupErr) {
+            console.error(
+              `[sms-gate] dedup check failed — skipping dispatch (fail-closed). vapiCallId=${vapiCallId}:`,
+              dedupErr,
+            );
+          } else {
+            const staleQueued = (priorSms ?? []).filter(
+              (s) =>
+                s.status === "queued" &&
+                Date.now() - Date.parse(s.created_at as string) >= QUEUED_FRESH_MS,
+            );
+            if (staleQueued.length > 0) {
+              await supabaseAdmin
+                .from("sms_messages_v2")
+                .update({ status: "failed", error_message: "stale queued — superseded by a new dispatch" })
+                .in("id", staleQueued.map((s) => s.id));
+            }
+            const blocking = (priorSms ?? []).filter((s) => !staleQueued.some((q) => q.id === s.id));
 
-            const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
+            if (blocking.length === 0) {
+              const { data: smsRow, error: smsInsertErr } = await supabaseAdmin
+                .from("sms_messages_v2")
+                .insert({
+                  campaign_id: callRow.campaign_id,
+                  call_id: callRow.id,
+                  campaign_number_id: callRow.campaign_number_id,
+                  to_phone_e164: numRow.phone_e164,
+                  body: smsTemplate,
+                  provider: "mobivate",
+                  status: "queued",
+                })
+                .select("id")
+                .single();
 
-            if (!getMobivateConfigError()) {
-              const result = await sendSMS({
-                to: numRow.phone_e164,
-                body: smsTemplate,
-                reference: smsRow?.id || undefined,
-              });
+              if (smsInsertErr || !smsRow) {
+                // With the partial unique index (sms-dedup migration), a raced
+                // duplicate insert lands here — never send an untracked SMS.
+                console.error(
+                  `[sms-gate] sms row insert failed — NOT sending. vapiCallId=${vapiCallId}:`,
+                  smsInsertErr,
+                );
+              } else {
+                const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
 
-              if (smsRow) {
-                await supabaseAdmin
-                  .from("sms_messages_v2")
-                  .update({
-                    status: result.success ? "sent" : "failed",
-                    provider_message_id: result.providerMessageId,
-                    error_message: result.error,
-                  })
-                  .eq("id", smsRow.id);
+                if (!getMobivateConfigError()) {
+                  const result = await sendSMS({
+                    to: numRow.phone_e164,
+                    body: smsTemplate,
+                    reference: smsRow.id,
+                  });
+
+                  await supabaseAdmin
+                    .from("sms_messages_v2")
+                    .update({
+                      status: result.success ? "sent" : "failed",
+                      provider_message_id: result.providerMessageId,
+                      error_message: result.error,
+                    })
+                    .eq("id", smsRow.id);
+
+                  console.log(
+                    `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
+                    `(reason=${decision.reason}, provider_id=${result.providerMessageId})`,
+                  );
+                } else {
+                  console.warn(
+                    `SMS queued for ${numRow.phone_e164.slice(0, -4)}**** (reason=${decision.reason}) but ` +
+                    `Mobivate not configured — row stays 'queued' until the API key is set.`,
+                  );
+                }
               }
-
-              console.log(
-                `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
-                `(goal reached, provider_id=${result.providerMessageId})`,
-              );
-            } else {
-              console.warn(
-                `SMS queued for ${numRow.phone_e164.slice(0, -4)}**** (goal reached) but Mobivate not configured — ` +
-                `row stays 'queued' until API key is set.`,
-              );
             }
           }
         }

@@ -265,6 +265,9 @@ describe("customerDeclinedSms (explicit text-directed refusal)", () => {
   it("does NOT veto acceptance phrasings that contain a negation (review M3)", () => {
     expect(customerDeclinedSms("AI: I'll send it by SMS.\nUser: Don't worry about sending it, text is fine.")).toBe(false);
   });
+  it("does NOT veto on voicemail-greeting phrasings (missed-call follow-up must survive)", () => {
+    expect(customerDeclinedSms("AI: Hi, it's Tom.\nUser: Don't forget to leave a message after the beep.")).toBe(false);
+  });
   it("NEVER fires on grant-idioms or a generic offer-decline", () => {
     expect(customerDeclinedSms("AI: Would it be okay if I text you?\nUser: Yeah, no worries.")).toBe(false);
     expect(customerDeclinedSms("AI: Would it be okay if I text you?\nUser: No problem at all.")).toBe(false);

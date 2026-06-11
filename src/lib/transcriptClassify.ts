@@ -206,10 +206,11 @@ export function agentMentionedSms(transcript: string | null | undefined): boolea
 // is an offer-decline (verbal_yes mode / outcome territory), not an SMS veto,
 // and AU grant-idioms ("yeah no worries", "no problem") must never match.
 const SMS_DECLINE_PATTERNS = [
-  // negation + a texting verb/noun in the same clause; (?! mind| worry) keeps
-  // grant-idioms ("I don't mind the text", "don't worry about sending it,
-  // text is fine") out of the veto (review M3).
-  /\b(?:don'?t|do not|didn'?t|wouldn'?t|stop|never)\b(?! mind\b| worry\b)[^.?!]{0,30}\b(?:text(?:s|ing)?|sms|messages?|send(?:ing)?)\b/i,
+  // negation + a texting verb/noun in the same clause; (?! mind| worry| forget)
+  // keeps grant-idioms ("I don't mind the text", "don't worry about sending it")
+  // AND voicemail greetings ("don't forget to leave a message after the beep" —
+  // greeting speech parses as user turns) out of the veto (reviews M3 + M2').
+  /\b(?:don'?t|do not|didn'?t|wouldn'?t|stop|never)\b(?! mind\b| worry\b| forget\b)[^.?!]{0,30}\b(?:text(?:s|ing)?|sms|messages?|send(?:ing)?)\b/i,
   /\bno (?:more )?(?:texts?|sms|messages?)\b/i,
   /\bno need to (?:text|sms|message|send)\b/i,
 ];

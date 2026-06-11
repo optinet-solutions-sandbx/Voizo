@@ -15,8 +15,10 @@
 //                      required; sms_on_goal_reached_only ignored by the
 //                      caller (the mode IS the policy).
 //
-// ABSOLUTE vetoes in BOTH modes: voicemail, on-call opt-out, and (registered
-// mode) an explicit customer "don't text me". A no must always win.
+// ABSOLUTE vetoes in BOTH modes: on-call opt-out and (registered mode) an
+// explicit customer "don't text me" — a no must always win. Voicemail vetoes
+// in verbal_yes only; in registered_optin a voicemail pickup TRIGGERS the
+// missed-call follow-up text instead (client-agreed 2026-06-11).
 
 export type SmsConsentMode = "verbal_yes" | "registered_optin";
 
@@ -49,21 +51,31 @@ export interface SmsDispatchDecision {
     | "no_human_conversation"
     | "no_agent_sms_announce"
     | "registered_optin_announce"
+    | "registered_optin_voicemail_followup"
     | "goal_not_reached"
     | "no_consent_evidence"
     | "verbal_consent";
 }
 
 export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
-  if (i.voicemailDetected) return { attempt: false, reason: "voicemail" };
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
 
   if (i.mode === "registered_optin") {
     if (i.customerDeclinedSms) return { attempt: false, reason: "customer_declined_sms" };
+    // Missed-call follow-up (2026-06-11 EOD, Jasiel: agreed with Val off-thread,
+    // announced in the GC): a voicemail pickup gets the text too — the player
+    // opted in at registration and the offer link IS the payload. The announce /
+    // human-conversation requirements only apply to the live-human path (no
+    // announce is possible on a voicemail — prefix rule #4 ends those calls).
+    // The per-player dedup in the webhook caps retried voicemails at ONE text.
+    if (i.voicemailDetected) return { attempt: true, reason: "registered_optin_voicemail_followup" };
     if (!i.humanConversation) return { attempt: false, reason: "no_human_conversation" };
     if (!i.agentAnnouncedSms) return { attempt: false, reason: "no_agent_sms_announce" };
     return { attempt: true, reason: "registered_optin_announce" };
   }
+
+  // verbal_yes: voicemail remains an absolute veto (a machine cannot consent).
+  if (i.voicemailDetected) return { attempt: false, reason: "voicemail" };
 
   // verbal_yes — preserves the pre-2026-06-11 dispatch outcomes, with ONE
   // deliberate strengthening (review L1): optedOut now vetoes explicitly here
