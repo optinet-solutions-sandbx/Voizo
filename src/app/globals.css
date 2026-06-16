@@ -86,7 +86,34 @@ nextjs-portal { display: none !important; }
   initial-value: 0deg;
   inherits: false;
 }
-.glow-card { position: relative; }
+.glow-card {
+  position: relative;
+  /* Subtle glassmorphism: a mostly-opaque tint (content stays readable) + a LIGHT backdrop blur.
+     Deliberately modest — heavy blur over the animated dot-field is the real GPU cost, and the
+     dot-field idle-stops so this composites cheaply most of the time. The translucent background
+     overrides the card's bg-[var(--bg-card)] utility (an unlayered rule beats Tailwind's layered
+     utilities), so it applies to every glow-card without touching modals / dropdowns / dense lists. */
+  background-color: color-mix(in srgb, var(--bg-card) 74%, transparent);
+  /* Surface sheen — a faint light from the top-left. THIS is what sells "glass": our dot-field bg is
+     flat-ish so the backdrop blur has little to frost; the glass read comes from the surface
+     treatment (sheen + bright top edge + depth shadow), layered over the blur. */
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 34%, transparent 64%);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 8px 28px -10px rgba(0, 0, 0, 0.55);
+}
+/* Honor the OS "reduce transparency" setting (accessibility / low-end GPUs): drop to solid. */
+@media (prefers-reduced-transparency: reduce) {
+  .glow-card {
+    background-color: var(--bg-card);
+    background-image: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
 .glow-card::before {
   content: "";
   position: absolute;
