@@ -171,9 +171,6 @@ export default function CampaignV2DetailPage() {
   const [numbers, setNumbers] = useState<Row[]>([]);
   const [calls, setCalls] = useState<Row[]>([]);
   const [smsByPhone, setSmsByPhone] = useState<Map<string, Row>>(new Map());
-  // Real texts dispatched (sms_messages_v2 rows that didn't fail) — distinct from the
-  // `sent_sms` outcome bucket, which only counts on-call announces.
-  const [smsSentCount, setSmsSentCount] = useState(0);
   // Wall-clock of the last successful data sync — passed to RunFlowStrip for retry-window math
   // so that component never has to call Date.now() during render.
   const [syncedAtMs, setSyncedAtMs] = useState(0);
@@ -420,12 +417,6 @@ export default function CampaignV2DetailPage() {
         if (phone && !map.has(phone)) map.set(phone, row);
       }
       setSmsByPhone(map);
-      setSmsSentCount(
-        bundle.sms.filter((r) => {
-          const s = r.status as string | undefined;
-          return s !== "failed" && s !== "undelivered";
-        }).length,
-      );
       setSyncedAtMs(Date.now());
     } catch (err) {
       console.error("Failed to load campaign:", err);
@@ -2034,9 +2025,6 @@ export default function CampaignV2DetailPage() {
           </div>
           <p className="text-sm text-[var(--text-2)]">
             {campaign.sms_enabled ? "Enabled" : "Disabled"}
-            {Boolean(campaign.sms_enabled) && smsSentCount > 0 && (
-              <span className="text-[var(--text-3)]"> · {smsSentCount.toLocaleString()} sent</span>
-            )}
           </p>
         </div>
       </div>

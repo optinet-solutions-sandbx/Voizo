@@ -34,6 +34,8 @@ const staticKnowledgeBases = [
   { id: 3, name: "Test" },
 ];
 
+const categoryOrder = ["Page", "Campaign", "Knowledge Base"] as const;
+
 interface SearchResult {
   id: string;
   label: string;
@@ -125,7 +127,6 @@ export default function GlobalSearch({ inputRef: externalInputRef }: GlobalSearc
     acc[r.category].push(r);
     return acc;
   }, {});
-  const categoryOrder = ["Page", "Campaign", "Knowledge Base"] as const;
 
   return (
     <div ref={containerRef} className="relative">

@@ -43,18 +43,21 @@ function fmtDay(iso: string): string {
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : iso;
 }
 
-function StatTriple({ rate }: { rate: RateRow }) {
-  const cell = (value: string, label: string, color: string) => (
+function statCell(value: string, label: string, color: string) {
+  return (
     <div>
       <div className={`text-lg font-bold font-mono ${color}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mt-0.5">{label}</div>
     </div>
   );
+}
+
+function StatTriple({ rate }: { rate: RateRow }) {
   return (
     <div className="grid grid-cols-3 gap-2 mt-3">
-      {cell(rate.calls.toLocaleString(), "Calls", "text-[var(--text-1)]")}
-      {cell(pct(rate.connectRate), "Connect", "text-emerald-400")}
-      {cell(pct(rate.successRate), "Success", "text-amber-400")}
+      {statCell(rate.calls.toLocaleString(), "Calls", "text-[var(--text-1)]")}
+      {statCell(pct(rate.connectRate), "Connect", "text-emerald-400")}
+      {statCell(pct(rate.successRate), "Success", "text-amber-400")}
     </div>
   );
 }
@@ -62,21 +65,14 @@ function StatTriple({ rate }: { rate: RateRow }) {
 function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => void }) {
   const fmt = formatCampaign(c.name);
   const baseAgentName = useBaseAgentNames();
-  const magnetRef = useMagnetic<HTMLDivElement>();
+  const magnetRef = useMagnetic<HTMLButtonElement>();
   return (
-    <div
+    <button
+      type="button"
       ref={magnetRef}
       onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      role="button"
-      tabIndex={0}
       title="View campaign details & prompt"
-      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+      className="glow-card w-full text-left bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -99,7 +95,7 @@ function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => 
         </span>
       </div>
       <StatTriple rate={c.today} />
-    </div>
+    </button>
   );
 }
 
