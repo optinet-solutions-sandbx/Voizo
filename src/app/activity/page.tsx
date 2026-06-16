@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface CallEvent {
   id: string;
@@ -185,8 +186,9 @@ export default function ActivityPage() {
 function Card({
   title, icon, sub, children,
 }: { title: string; icon: React.ReactNode; sub: string; children: React.ReactNode }) {
+  const magnetRef = useMagnetic<HTMLElement>();
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6">
+    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           {icon}

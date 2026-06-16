@@ -8,9 +8,10 @@ interface PaginationProps {
   totalItems: number;
   pageSize: number;
   onPageChange: (page: number) => void;
+  noun?: string; // pluralized item label in the "Showing X–Y of N <noun>" summary
 }
 
-export default function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChange }: PaginationProps) {
+export default function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChange, noun = "campaigns" }: PaginationProps) {
   if (totalItems === 0) return null;
 
   const start = (currentPage - 1) * pageSize + 1;
@@ -30,7 +31,7 @@ export default function Pagination({ currentPage, totalPages, totalItems, pageSi
     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-1 mt-4">
       <p className="text-xs text-[var(--text-3)]">
         Showing <span className="font-medium text-[var(--text-2)]">{start}–{end}</span> of{" "}
-        <span className="font-medium text-[var(--text-2)]">{totalItems}</span> campaigns
+        <span className="font-medium text-[var(--text-2)]">{totalItems}</span> {noun}
       </p>
       {totalPages > 1 && (
         <div className="flex items-center gap-1">

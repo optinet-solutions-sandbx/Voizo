@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import RunFlowStrip from "./RunFlowStrip";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Bot, ChevronDown, Clock, Copy, FlaskConical, MessageSquareText, Phone, Play, Pause, Plug, RefreshCw, Settings, Loader2, StopCircle, AlertTriangle, Unplug } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
@@ -113,7 +114,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   pending: "Pending",
   in_progress: "In progress",
   pending_retry: "Awaiting retry",
-  sent_sms: "SMS sent",
+  sent_sms: "Texted on call",
   not_interested: "Not interested",
   declined_offer: "Declined",
   wrong_number: "Wrong number",
@@ -170,6 +171,12 @@ export default function CampaignV2DetailPage() {
   const [numbers, setNumbers] = useState<Row[]>([]);
   const [calls, setCalls] = useState<Row[]>([]);
   const [smsByPhone, setSmsByPhone] = useState<Map<string, Row>>(new Map());
+  // Real texts dispatched (sms_messages_v2 rows that didn't fail) — distinct from the
+  // `sent_sms` outcome bucket, which only counts on-call announces.
+  const [smsSentCount, setSmsSentCount] = useState(0);
+  // Wall-clock of the last successful data sync — passed to RunFlowStrip for retry-window math
+  // so that component never has to call Date.now() during render.
+  const [syncedAtMs, setSyncedAtMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("numbers");
   const [acting, setActing] = useState(false);
@@ -413,6 +420,13 @@ export default function CampaignV2DetailPage() {
         if (phone && !map.has(phone)) map.set(phone, row);
       }
       setSmsByPhone(map);
+      setSmsSentCount(
+        bundle.sms.filter((r) => {
+          const s = r.status as string | undefined;
+          return s !== "failed" && s !== "undelivered";
+        }).length,
+      );
+      setSyncedAtMs(Date.now());
     } catch (err) {
       console.error("Failed to load campaign:", err);
     } finally {
@@ -2018,9 +2032,18 @@ export default function CampaignV2DetailPage() {
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
             <MessageSquareText size={12} /> SMS
           </div>
-          <p className="text-sm text-[var(--text-2)]">{campaign.sms_enabled ? "Enabled" : "Disabled"}</p>
+          <p className="text-sm text-[var(--text-2)]">
+            {campaign.sms_enabled ? "Enabled" : "Disabled"}
+            {Boolean(campaign.sms_enabled) && smsSentCount > 0 && (
+              <span className="text-[var(--text-3)]"> · {smsSentCount.toLocaleString()} sent</span>
+            )}
+          </p>
         </div>
       </div>
+
+      {(status === "running" || status === "paused") && (
+        <RunFlowStrip numbers={numbers} maxAttempts={Number(campaign.max_attempts ?? 3) || 3} status={status} nowMs={syncedAtMs} />
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4">

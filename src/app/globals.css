@@ -74,3 +74,47 @@ nextjs-portal { display: none !important; }
 ::-webkit-scrollbar-track { background: var(--bg-app); }
 ::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+
+/* ── Card glow-on-hover (React Bits "animated glow border" experiment) ─────────
+   On hover a soft accent arc sweeps the card's border. Pure CSS: a registered
+   @property drives a rotating conic-gradient masked to a thin ring (no JS, no
+   deps). Tint per card by setting --glow-color. Static (no rotation) under
+   prefers-reduced-motion. Older browsers (no @property) just keep the static
+   border — graceful. */
+@property --glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+.glow-card { position: relative; }
+.glow-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--glow-angle),
+    transparent 0deg,
+    var(--glow-color, #60a5fa) 50deg,
+    transparent 120deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+.glow-card:hover::before {
+  opacity: 1;
+  animation: glow-card-rotate 3s linear infinite;
+}
+@keyframes glow-card-rotate {
+  to { --glow-angle: 360deg; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow-card:hover::before { animation: none; }
+}

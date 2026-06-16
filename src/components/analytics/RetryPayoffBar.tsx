@@ -1,7 +1,8 @@
 "use client";
 
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
+import { ANALYTICS_CONFIG } from "@/lib/analyticsConfig";
 import ChartTooltip from "./ChartTooltip";
 
 interface RetryPayoffBarProps {
@@ -16,6 +17,10 @@ export default function RetryPayoffBar({ a }: RetryPayoffBarProps) {
       pct: Math.round((p.connectRate as number) * 1000) / 10,
       dialed: p.dialed,
       connected: p.connected,
+      // Per-bar small-sample weighting: a later attempt dialed to only a handful of numbers gives
+      // a noisy connect-rate that shouldn't read as authoritatively as a high-volume early attempt.
+      // Fade bars below SAMPLE_FLOOR_THIN (the same n=10 floor that marks a campaign "thin").
+      low: p.dialed < ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN,
     }));
   const thin = a.confidence === "thin";
   return (
@@ -36,17 +41,26 @@ export default function RetryPayoffBar({ a }: RetryPayoffBarProps) {
                       <p className="text-[var(--text-2)]">
                         {String(row.pct)}% connect ({String(row.connected)}/{String(row.dialed)})
                       </p>
+                      {Number(row.dialed) < ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN && (
+                        <p className="text-amber-400/80">{`Low sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}) — interpret with caution`}</p>
+                      )}
                     </>
                   )}
                 />
               }
             />
-            <Bar dataKey="pct" fill="#22c55e" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="pct" radius={[2, 2, 0, 0]} isAnimationActive={false}>
+              {data.map((d, i) => (
+                <Cell key={i} fill="#22c55e" fillOpacity={d.low ? 0.3 : 1} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
       <p className="text-[10px] text-[var(--text-3)] mt-1">
-        {data.length === 0 ? "No retry data." : "Later attempts are survivorship-biased — read N≥3 as conditional."}
+        {data.length === 0
+          ? "No retry data."
+          : `Faded bars are low-sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}); later attempts are survivorship-biased — read N≥3 as conditional.`}
       </p>
     </div>
   );

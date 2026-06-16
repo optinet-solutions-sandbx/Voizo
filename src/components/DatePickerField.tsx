@@ -9,7 +9,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Calendar, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 interface Props {
   /** "YYYY-MM-DD". Empty string = unset. */
@@ -154,23 +154,43 @@ export default function DatePickerField({
       {open && (
         <div className="absolute top-full left-0 mt-1.5 z-50 bg-[var(--bg-card)] border border-[var(--border-2)] rounded-2xl shadow-2xl p-4 w-[280px]">
           <div className="flex items-center justify-between mb-2.5">
-            <div className="text-sm font-semibold text-[var(--text-1)] px-2 py-1.5">
-              {MONTHS[view.getMonth()]} {view.getFullYear()}
-            </div>
             <div className="flex gap-0.5">
               <button
                 type="button"
+                title="Previous year"
+                onClick={() => setView(new Date(view.getFullYear() - 1, view.getMonth(), 1))}
+                className="w-7 h-7 rounded-md grid place-items-center text-[var(--text-3)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition"
+              >
+                <ChevronsLeft size={13} />
+              </button>
+              <button
+                type="button"
+                title="Previous month"
                 onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
                 className="w-7 h-7 rounded-md grid place-items-center text-[var(--text-3)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition"
               >
                 <ChevronLeft size={13} />
               </button>
+            </div>
+            <div className="text-sm font-semibold text-[var(--text-1)]">
+              {MONTHS[view.getMonth()]} {view.getFullYear()}
+            </div>
+            <div className="flex gap-0.5">
               <button
                 type="button"
+                title="Next month"
                 onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}
                 className="w-7 h-7 rounded-md grid place-items-center text-[var(--text-3)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition"
               >
                 <ChevronRight size={13} />
+              </button>
+              <button
+                type="button"
+                title="Next year"
+                onClick={() => setView(new Date(view.getFullYear() + 1, view.getMonth(), 1))}
+                className="w-7 h-7 rounded-md grid place-items-center text-[var(--text-3)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)] transition"
+              >
+                <ChevronsRight size={13} />
               </button>
             </div>
           </div>
@@ -228,13 +248,22 @@ export default function DatePickerField({
           )}
 
           <div className="flex justify-between gap-2 pt-3 mt-3 border-t border-[var(--border)]">
-            <button
-              type="button"
-              onClick={clear}
-              className="text-xs text-[var(--text-3)] hover:text-red-400 font-medium"
-            >
-              Clear
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={clear}
+                className="text-xs text-[var(--text-3)] hover:text-red-400 font-medium"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setView(new Date(today.getFullYear(), today.getMonth(), 1))}
+                className="text-xs text-[var(--text-3)] hover:text-blue-400 font-medium"
+              >
+                Today
+              </button>
+            </div>
             <div className="flex gap-2">
               <button
                 type="button"

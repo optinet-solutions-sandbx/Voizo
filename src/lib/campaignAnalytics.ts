@@ -208,8 +208,12 @@ export function daysBetween(startIso: string, endIso: string): number {
 }
 
 // ── Aggregation ─────────────────────────────────────────────────────────────
-const CONNECTED_STATUSES = new Set(["completed", "answered"]); // canon (route.ts:34); 'answered' never written
-const TERMINAL_NONCONNECT = new Set(["no_answer", "busy", "failed", "canceled"]);
+// canon (route.ts:34): a connected call is status 'completed' ('answered' is a documented
+// dead bucket, never written). NOTE: a voicemail pickup also lands here as 'completed', so
+// "connected" == ANSWER (incl. voicemail). Reach (human-only) needs a persisted voicemail
+// signal — deferred slice. Exported as the single source of truth for the dashboard layer.
+export const CONNECTED_STATUSES = new Set(["completed", "answered"]);
+export const TERMINAL_NONCONNECT = new Set(["no_answer", "busy", "failed", "canceled"]);
 
 interface Acc {
   campaign: CampaignRow;

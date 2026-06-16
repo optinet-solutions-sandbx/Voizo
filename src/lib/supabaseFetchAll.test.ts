@@ -8,10 +8,11 @@ import { fetchAllRows } from "./supabaseFetchAll";
 type Row = Record<string, unknown>;
 
 function makeClient(pageResults: Array<{ data: Row[] | null; error: unknown }>) {
-  const log: Array<{ table?: string; columns?: string; order?: [string, unknown]; range?: [number, number] }> = [];
-  let current: { table?: string; columns?: string; order?: [string, unknown]; range?: [number, number] } = {};
+  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
+  let current: { table?: string; columns?: string; eq?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
   const builder = {
     select(columns: string) { current.columns = columns; return builder; },
+    eq(col: string, val: unknown) { current.eq = [col, val]; return builder; },
     order(col: string, opts: unknown) { current.order = [col, opts]; return builder; },
     range(from: number, to: number) {
       current.range = [from, to];
@@ -83,5 +84,17 @@ describe("fetchAllRows", () => {
     const { client, log } = makeClient([{ data: rows(3), error: null }]);
     await fetchAllRows(client, "calls_v2", "campaign_id");
     expect(log[0].order).toEqual(["id", { ascending: true }]);
+  });
+
+  it("applies an optional eq filter to every page", async () => {
+    const { client, log } = makeClient([
+      { data: rows(1000), error: null },
+      { data: rows(40), error: null },
+    ]);
+    const out = await fetchAllRows(client, "calls_v2", "campaign_id", "id", { column: "campaign_id", value: "camp-1" });
+    expect(out).toHaveLength(1040);
+    expect(log).toHaveLength(2);
+    expect(log[0].eq).toEqual(["campaign_id", "camp-1"]);
+    expect(log[1].eq).toEqual(["campaign_id", "camp-1"]); // filter re-applied on each paged request
   });
 });

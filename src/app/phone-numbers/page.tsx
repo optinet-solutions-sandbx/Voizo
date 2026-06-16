@@ -1,4 +1,7 @@
+"use client";
+
 import { Phone, Shield, BarChart3, RefreshCw, Construction } from "lucide-react";
+import { useMagnetic } from "@/components/useMagnetic";
 
 const PLANNED_FEATURES = [
   {
@@ -38,6 +41,28 @@ const COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = 
   amber:   { bg: "bg-amber-500/10",   border: "border-amber-500/20",   text: "text-amber-400"   },
 };
 
+function FeatureCard({ feature }: { feature: (typeof PLANNED_FEATURES)[number] }) {
+  const c = COLOR_MAP[feature.color];
+  const Icon = feature.icon;
+  const magnetRef = useMagnetic<HTMLDivElement>();
+  return (
+    <div
+      ref={magnetRef}
+      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--border-2)] transition-colors"
+    >
+      <div className="flex items-center gap-2.5 mb-2">
+        <div
+          className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${c.bg} border ${c.border}`}
+        >
+          <Icon size={14} className={c.text} />
+        </div>
+        <h4 className="text-sm font-semibold text-[var(--text-1)]">{feature.title}</h4>
+      </div>
+      <p className="text-xs text-[var(--text-2)] leading-relaxed">{feature.description}</p>
+    </div>
+  );
+}
+
 export default function PhoneNumbersPage() {
   return (
     <div className="p-4 sm:p-6 w-full max-w-3xl">
@@ -53,7 +78,7 @@ export default function PhoneNumbersPage() {
       </p>
 
       {/* Coming soon banner */}
-      <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-5 sm:p-6 mb-8">
+      <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-5 sm:p-6 mb-8">
         <div className="flex items-start gap-3">
           <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
             <Construction size={17} className="text-amber-400" />
@@ -77,30 +102,9 @@ export default function PhoneNumbersPage() {
         Planned Features
       </h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {PLANNED_FEATURES.map((feature) => {
-          const c = COLOR_MAP[feature.color];
-          const Icon = feature.icon;
-          return (
-            <div
-              key={feature.title}
-              className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--border-2)] transition-colors"
-            >
-              <div className="flex items-center gap-2.5 mb-2">
-                <div
-                  className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${c.bg} border ${c.border}`}
-                >
-                  <Icon size={14} className={c.text} />
-                </div>
-                <h4 className="text-sm font-semibold text-[var(--text-1)]">
-                  {feature.title}
-                </h4>
-              </div>
-              <p className="text-xs text-[var(--text-2)] leading-relaxed">
-                {feature.description}
-              </p>
-            </div>
-          );
-        })}
+        {PLANNED_FEATURES.map((feature) => (
+          <FeatureCard key={feature.title} feature={feature} />
+        ))}
       </div>
     </div>
   );

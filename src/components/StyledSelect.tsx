@@ -22,9 +22,12 @@ interface Props {
   /** When true, the trigger is unclickable + visually muted. Used by the
    *  country-aware TZ guardrail when only one option is valid. */
   disabled?: boolean;
+  /** "sm" = compact (filter rows, matches DatePickerField); "md" (default) = form-field size. */
+  size?: "sm" | "md";
 }
 
-export default function StyledSelect({ icon, options, value, onChange, placeholder, disabled }: Props) {
+export default function StyledSelect({ icon, options, value, onChange, placeholder, disabled, size = "md" }: Props) {
+  const sm = size === "sm";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value);
@@ -50,7 +53,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
-        className={`w-full flex items-center gap-2.5 ${icon ? "pl-3.5" : "pl-4"} pr-10 py-3 rounded-xl bg-[var(--bg-app)] border text-sm text-left transition-all ${
+        className={`w-full flex items-center ${sm ? "gap-2 pr-8 py-2 rounded-lg text-sm" : "gap-2.5 pr-10 py-3 rounded-xl text-sm"} ${icon ? (sm ? "pl-3" : "pl-3.5") : (sm ? "pl-3" : "pl-4")} bg-[var(--bg-app)] border text-left transition-all ${
           disabled
             ? "border-[var(--border)] opacity-60 cursor-not-allowed"
             : open
@@ -63,8 +66,8 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
           {selected?.label || placeholder || "Select…"}
         </span>
       </button>
-      <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${open ? "rotate-180" : ""}`}>
+      <div className={`pointer-events-none absolute ${sm ? "right-2.5" : "right-3.5"} top-1/2 -translate-y-1/2 text-[var(--text-3)]`}>
+        <svg width={sm ? 12 : 14} height={sm ? 12 : 14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${open ? "rotate-180" : ""}`}>
           <path d="m6 9 6 6 6-6" />
         </svg>
       </div>
@@ -85,7 +88,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
                     onChange(o.value);
                     setOpen(false);
                   }}
-                  className={`w-full text-left px-3.5 py-2.5 text-sm transition-colors ${
+                  className={`w-full text-left ${sm ? "px-3 py-2 text-sm" : "px-3.5 py-2.5 text-sm"} transition-colors ${
                     o.value === value
                       ? "bg-blue-600/20 text-blue-400"
                       : "text-[var(--text-1)] hover:bg-[var(--bg-hover)]"

@@ -4,6 +4,7 @@ import { Bot, Loader2, Megaphone, Phone } from "lucide-react";
 import type { Dispatch } from "react";
 
 import type { WizardAction, WizardState } from "../wizardState";
+import { VOICE_OPTIONS } from "@/lib/voiceOptions";
 
 /** Shape of an entry in GET /api/vapi/assistants — same as classic page-classic.tsx:111-118. */
 export interface Assistant {
@@ -14,22 +15,6 @@ export interface Assistant {
   systemPrompt: string | null;
   firstMessage: string | null;
 }
-
-/**
- * Voice ID → display name. Ported verbatim from page-classic.tsx:120-129.
- * Used ONLY to display the locked voice's friendly name; never passed to
- * the clone-assistant endpoint (R3).
- */
-const VOICE_OPTIONS: ReadonlyArray<{ id: string; name: string }> = [
-  { id: "3jR9BuQAOPMWUjWpi0ll", name: "Stephen – Sales and Customer Service" },
-  { id: "UgBBYS2sOqTuMpoF3BR0", name: "Mark – Dynamic, Balanced and Emotional" },
-  { id: "6YQMyaUWlj0VX652cY1C", name: "Mark – Natural Conversations" },
-  { id: "2zGvynULFssveGrcP8hi", name: "Jackson – American Tech Sales Rep" },
-  { id: "YaarrMwvJxVUpjbZ2RpC", name: "George – Natural, Full and Confident" },
-  { id: "pHqSZYhjNK8nDCPRglTL", name: "Alex – Professional" },
-  { id: "1IthILLNX448pH19aMvC", name: "Matthew Logovik" },
-  { id: "pNInz6obpgDQGcFmaJgB", name: "Adam – Default" },
-];
 
 interface Props {
   state: WizardState;

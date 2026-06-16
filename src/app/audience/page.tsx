@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
+import { useMagnetic } from "@/components/useMagnetic";
 
 import CreateSegmentDrawer, { type CreateSegmentPrefill } from "./components/CreateSegmentDrawer";
 import SuggestedSegmentsPanel, { type Suggestion } from "./components/SuggestedSegmentsPanel";
@@ -479,8 +480,9 @@ export default function AudiencePage() {
 function StatCard({
   label, value, icon,
 }: { label: string; value: string | number; icon: React.ReactNode }) {
+  const magnetRef = useMagnetic<HTMLDivElement>();
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
+    <div ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">
         {icon} {label}
       </div>

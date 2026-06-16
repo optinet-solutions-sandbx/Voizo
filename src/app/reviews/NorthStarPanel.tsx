@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { Target, AlertCircle } from "lucide-react";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface NsCampaign {
   id: string;
@@ -39,6 +40,7 @@ interface NsResult {
 const pct = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 
 export default function NorthStarPanel() {
+  const magnetRef = useMagnetic<HTMLElement>();
   const [data, setData] = useState<NsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,7 +66,7 @@ export default function NorthStarPanel() {
   const allUnconfirmed = !!p && p.delivered + p.failed === 0 && p.inFlight > 0;
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
+    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Target size={16} className="text-[var(--text-2)]" />

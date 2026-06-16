@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Gauge, AlertCircle, ChevronRight } from "lucide-react";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface FailureCallRef {
   callId: string;
@@ -62,6 +63,7 @@ const fmtDay = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
 
 export default function AgentPerformancePanel() {
+  const magnetRef = useMagnetic<HTMLElement>();
   const [data, setData] = useState<ApResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openTheme, setOpenTheme] = useState<string | null>(null);
@@ -84,7 +86,7 @@ export default function AgentPerformancePanel() {
   const maxTheme = failures.reduce((m, t) => Math.max(m, t.count), 0);
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-4">
+    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Gauge size={16} className="text-[var(--text-2)]" />

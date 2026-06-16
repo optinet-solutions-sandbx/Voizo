@@ -2,10 +2,10 @@
 
 import React, { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
-  Pause, Play, Copy, Clock, BarChart3, List, Download,
+  Pause, Play, Copy, Clock, Download, ChevronRight,
 } from "lucide-react";
 import { triggerDownload } from "@/lib/download";
 import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
@@ -13,6 +13,7 @@ import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignsV2, fetchCampaignAnalytics } from "@/lib/campaignV2Client";
 import Pagination from "@/components/Pagination";
+import { useMagnetic } from "@/components/useMagnetic";
 import {
   computeCampaignAnalytics,
   computePortfolio,
@@ -23,9 +24,9 @@ import {
   type CallRow,
   type SmsRow,
 } from "@/lib/campaignAnalytics";
-import PortfolioKpiStrip from "@/components/analytics/PortfolioKpiStrip";
-import AnalyticsTable from "@/components/analytics/AnalyticsTable";
-import AnalyticsMobileCards from "@/components/analytics/AnalyticsMobileCards";
+import CampaignExpand from "@/components/analytics/CampaignExpand";
+import { useBaseAgentNames } from "@/app/analytics/useBaseAgentNames";
+import { voiceName } from "@/lib/voiceOptions";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -85,6 +86,9 @@ function relativeStart(iso: string): string {
 
 function CampaignsPageInner() {
   const router = useRouter();
+  // Resolve base_assistant_id → the BASE agent's real name (the clone name == the campaign
+  // title, so it's redundant). Module-cached, one /api/vapi/assistants fetch per page.
+  const baseAgentName = useBaseAgentNames();
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
   const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics>>({});
   const [loading, setLoading] = useState(true);
@@ -97,18 +101,16 @@ function CampaignsPageInner() {
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
 
-  // URL-driven view toggle (Operational | Analytics). ?view=analytics is shareable + survives refresh.
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const view: "operational" | "analytics" = searchParams.get("view") === "analytics" ? "analytics" : "operational";
-  function setView(next: "operational" | "analytics") {
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (next === "analytics") params.set("view", "analytics");
-    else params.delete("view");
-    const qs = params.toString();
-    setCurrentPage(1); // reset pagination on mode switch (operational and analytics page over different sets)
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }
+  // Rows expand in place (one unified list — no Operational/Analytics toggle). Multiple rows
+  // may be open at once.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // Initial fetch: campaigns + per-campaign aggregation from numbers + calls.
   useEffect(() => {
@@ -192,19 +194,6 @@ function CampaignsPageInner() {
     return () => clearInterval(interval);
   }, [hasActiveCampaign]);
 
-  // Aggregate totals for the stat strip (sourced from the analytics record).
-  const totals = useMemo(() => {
-    const vals = Object.values(analytics);
-    const totalContacts = vals.reduce((s, v) => s + v.targeted, 0);
-    const totalCalls = vals.reduce((s, v) => s + v.totalCalls, 0);
-    const connectCount = vals.reduce((s, v) => s + v.connected, 0);
-    const goalCount = vals.reduce((s, v) => s + v.goalCalls, 0);
-    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
-    // Operational Success is now goal-based Conversion (goal ÷ connected) — app-wide canon.
-    const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
-    return { totalContacts, totalCalls, connectCount, goalCount, connectRate, successRate };
-  }, [analytics]);
-
   // Counts for filter pills
   const counts = useMemo(() => ({
     all: campaigns.length,
@@ -228,24 +217,41 @@ function CampaignsPageInner() {
     });
   }, [campaigns, searchQuery, statusFilter, typeFilter]);
 
-  // Analytics records (per-campaign), date-filtered. The date chip filters WHICH campaigns
-  // appear (by start_at); per-row metrics stay lifetime totals (spec §2). Portfolio rolls up
-  // over the in-scope set.
-  const analyticsRecords = useMemo(() => {
-    const list = filtered.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[];
-    if (dateFilter === "all") return list;
+  // The date chip filters WHICH campaigns show (by start_at); per-row metrics stay lifetime
+  // totals (spec §2). One unified list now — it pages over this set; each row expands to its
+  // own analytics deep-dive.
+  const displayCampaigns = useMemo(() => {
+    if (dateFilter === "all") return filtered;
     const days = dateFilter === "30d" ? 30 : 7;
     const cutoff = Date.now() - days * 86_400_000;
-    return list.filter((a) => a.startAt != null && Date.parse(a.startAt) >= cutoff);
-  }, [filtered, analytics, dateFilter]);
+    return filtered.filter((c) => {
+      const s = c.start_at as string | null | undefined;
+      return s != null && Date.parse(s) >= cutoff;
+    });
+  }, [filtered, dateFilter]);
+
+  // Analytics records for the in-scope campaigns — drives the KPI strip, portfolio + export.
+  const analyticsRecords = useMemo(
+    () => displayCampaigns.map((c) => analytics[c.id as string]).filter(Boolean) as CampaignAnalytics[],
+    [displayCampaigns, analytics],
+  );
   const portfolio: PortfolioRollup = useMemo(() => computePortfolio(analyticsRecords), [analyticsRecords]);
 
-  // View-aware paging: operational pages over `filtered`, analytics over `analyticsRecords`.
-  const activeList = view === "analytics" ? analyticsRecords : filtered;
-  const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE));
+  // KPI strip reflects the in-scope (searched / filtered / date) set, not the whole portfolio.
+  const totals = useMemo(() => {
+    const totalContacts = analyticsRecords.reduce((s, v) => s + v.targeted, 0);
+    const totalCalls = analyticsRecords.reduce((s, v) => s + v.totalCalls, 0);
+    const connectCount = analyticsRecords.reduce((s, v) => s + v.connected, 0);
+    const goalCount = analyticsRecords.reduce((s, v) => s + v.goalCalls, 0);
+    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
+    // Success = goal-based Conversion (goal ÷ connected) — app-wide canon.
+    const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
+    return { totalContacts, totalCalls, connectCount, goalCount, connectRate, successRate };
+  }, [analyticsRecords]);
+
+  const totalPages = Math.max(1, Math.ceil(displayCampaigns.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-  const analyticsPaginated = analyticsRecords.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const paginated = displayCampaigns.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   function handleSearch(q: string) { setSearchQuery(q); setCurrentPage(1); }
 
@@ -335,70 +341,13 @@ function CampaignsPageInner() {
         </Link>
       </div>
 
-      {/* View toggle */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="flex gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl w-fit">
-          <button
-            onClick={() => setView("operational")}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "operational" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
-          >
-            <List size={13} /> Operational
-          </button>
-          <button
-            onClick={() => setView("analytics")}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${view === "analytics" ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
-          >
-            <BarChart3 size={13} /> Analytics
-          </button>
-        </div>
-        {view === "analytics" && (
-          <FilterGroup
-            options={[
-              { key: "all", label: "All time" },
-              { key: "30d", label: "30d" },
-              { key: "7d", label: "7d" },
-            ]}
-            value={dateFilter}
-            onChange={(v) => { setDateFilter(v); setCurrentPage(1); }}
-          />
-        )}
-        {view === "analytics" && (
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              onClick={() => {
-                const csv = buildAnalyticsCsv(analyticsRecords);
-                triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "voizo_analytics_all.csv");
-              }}
-              disabled={analyticsRecords.length === 0}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
-            >
-              <Download size={13} /> Export all (CSV)
-            </button>
-            <button
-              onClick={() => {
-                const json = buildAnalyticsJson(analyticsRecords, new Date().toISOString(), portfolio);
-                triggerDownload(new Blob([json], { type: "application/json" }), "voizo_analytics_all.json");
-              }}
-              disabled={analyticsRecords.length === 0}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
-            >
-              <Download size={13} /> Export all (JSON)
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Stats / Portfolio KPIs */}
-      {view === "operational" ? (
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
-          <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
-          <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
-          <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
-          <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" />
-        </section>
-      ) : (
-        <PortfolioKpiStrip portfolio={portfolio} />
-      )}
+      {/* KPI strip — reflects the current search / filters / date window. */}
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
+        <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
+        <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
+        <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
+        <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" hint="goal ÷ connected — app-wide canon" />
+      </section>
 
       {/* Toolbar */}
       <div className="flex items-center gap-2.5 flex-wrap mb-4">
@@ -436,6 +385,37 @@ function CampaignsPageInner() {
           value={typeFilter}
           onChange={(v) => { setTypeFilter(v); setCurrentPage(1); }}
         />
+        <FilterGroup
+          options={[
+            { key: "all", label: "All time" },
+            { key: "30d", label: "30d" },
+            { key: "7d",  label: "7d" },
+          ]}
+          value={dateFilter}
+          onChange={(v) => { setDateFilter(v); setCurrentPage(1); }}
+        />
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={() => {
+              const csv = buildAnalyticsCsv(analyticsRecords);
+              triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "voizo_analytics_all.csv");
+            }}
+            disabled={analyticsRecords.length === 0}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+          >
+            <Download size={13} /> Export all (CSV)
+          </button>
+          <button
+            onClick={() => {
+              const json = buildAnalyticsJson(analyticsRecords, new Date().toISOString(), portfolio);
+              triggerDownload(new Blob([json], { type: "application/json" }), "voizo_analytics_all.json");
+            }}
+            disabled={analyticsRecords.length === 0}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] transition disabled:opacity-40"
+          >
+            <Download size={13} /> Export all (JSON)
+          </button>
+        </div>
       </div>
 
       {/* Table / cards */}
@@ -451,11 +431,11 @@ function CampaignsPageInner() {
               <HoverIcon icon={PlusIcon} size={14} /> New Campaign
             </Link>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : displayCampaigns.length === 0 ? (
           <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
             No campaigns match the current filters.
           </div>
-        ) : view === "operational" ? (
+        ) : (
           <>
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-[var(--border)]">
@@ -469,14 +449,16 @@ function CampaignsPageInner() {
                 const hasActivity = totalCalls > 0;
                 const when = formatWhen(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
+                const isOpen = expanded.has(id);
                 return (
+                  <React.Fragment key={id}>
                   <div
-                    key={id}
-                    onClick={() => router.push(`/campaigns/v2/${id}`)}
+                    onClick={() => toggleExpand(id)}
                     className={`px-4 py-3.5 cursor-pointer transition-colors hover:bg-[var(--bg-hover)] ${!hasActivity ? "opacity-60" : ""}`}
                   >
                     <div className="flex items-start justify-between gap-2 mb-1.5">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <ChevronRight size={14} className={`text-[var(--text-3)] shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
                         <div className="w-8 h-8 rounded-lg bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] flex-shrink-0">
                           {isRecurring ? <Repeat size={13} /> : <Megaphone size={13} />}
                         </div>
@@ -506,6 +488,12 @@ function CampaignsPageInner() {
                       </div>
                     </div>
                   </div>
+                  {isOpen && a && (
+                    <div className="px-4 pb-4 bg-[var(--bg-app)]">
+                      <CampaignExpand a={a} />
+                    </div>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </div>
@@ -529,6 +517,9 @@ function CampaignsPageInner() {
                   {paginated.map((c) => {
                     const id = c.id as string;
                     const name = c.name as string;
+                    const agentLabel =
+                      baseAgentName(c.base_assistant_id as string | null) ??
+                      voiceName(c.voice_id as string | null, { short: true });
                     const a = analytics[id];
                     const totalContacts = a?.targeted ?? 0;
                     const totalCalls = a?.totalCalls ?? 0;
@@ -543,20 +534,33 @@ function CampaignsPageInner() {
                     const isRecurring = (c.campaign_type as string) === "recurring";
                     const isInFlight = actionInFlightId === id;
                     return (
+                      <React.Fragment key={id}>
                       <tr
-                        key={id}
-                        onClick={() => router.push(`/campaigns/v2/${id}`)}
+                        onClick={() => toggleExpand(id)}
                         className={`group border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer ${!hasActivity ? "opacity-60 hover:opacity-90" : ""}`}
                       >
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-3">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleExpand(id); }}
+                              className="text-[var(--text-3)] hover:text-[var(--text-1)] transition shrink-0"
+                              aria-label={expanded.has(id) ? "Collapse analytics" : "Expand analytics"}
+                            >
+                              <ChevronRight size={15} className={`transition-transform ${expanded.has(id) ? "rotate-90" : ""}`} />
+                            </button>
                             <div className="w-9 h-9 rounded-xl bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] transition group-hover:scale-110 group-hover:-rotate-3 group-hover:bg-blue-500/15 group-hover:text-blue-400 flex-shrink-0">
                               {isRecurring ? <Repeat size={15} /> : <Megaphone size={15} />}
                             </div>
                             <div className="min-w-0">
-                              <p className="font-semibold text-[var(--text-1)] group-hover:text-blue-400 transition-colors truncate">{name}</p>
-                              {(c.vapi_assistant_name as string) && (
-                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate font-mono">{c.vapi_assistant_name as string}</p>
+                              <Link
+                                href={`/campaigns/v2/${id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="font-semibold text-[var(--text-1)] hover:text-blue-400 transition-colors truncate block"
+                              >
+                                {name}
+                              </Link>
+                              {agentLabel && (
+                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">{agentLabel}</p>
                               )}
                             </div>
                           </div>
@@ -617,29 +621,28 @@ function CampaignsPageInner() {
                           </div>
                         </td>
                       </tr>
+                      {expanded.has(id) && a && (
+                        <tr className="bg-[var(--bg-app)]">
+                          <td colSpan={8} className="px-4 py-4 border-b border-[var(--border)]">
+                            <CampaignExpand a={a} />
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
           </>
-        ) : analyticsRecords.length === 0 ? (
-          <div className="px-6 py-16 text-center text-sm text-[var(--text-3)]">
-            No campaigns in this date window.
-          </div>
-        ) : (
-          <>
-            <AnalyticsMobileCards records={analyticsPaginated} portfolio={portfolio} />
-            <AnalyticsTable records={analyticsPaginated} portfolio={portfolio} />
-          </>
         )}
 
-        {activeList.length > 0 && (
+        {displayCampaigns.length > 0 && (
           <div className="border-t border-[var(--border)] px-5 py-3">
             <Pagination
               currentPage={safePage}
               totalPages={totalPages}
-              totalItems={activeList.length}
+              totalItems={displayCampaigns.length}
               pageSize={PAGE_SIZE}
               onPageChange={setCurrentPage}
             />
@@ -675,8 +678,9 @@ function StatCard({ label, value, accent, hint }: {
 }) {
   // No sparkline: the previous hardcoded static polyline was identical on every card
   // and not data-driven — it "quietly lied" (spec §6.7 / G8). Removed in both modes.
+  const magnetRef = useMagnetic<HTMLDivElement>();
   return (
-    <div title={hint} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/20">
+    <div ref={magnetRef} title={hint} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4">
       <div className="text-[11px] uppercase tracking-wider font-medium text-[var(--text-3)]">{label}</div>
       <div className={`text-[26px] font-bold tabular-nums leading-tight mt-1 ${accent ?? "text-[var(--text-1)]"}`}>{value}</div>
     </div>

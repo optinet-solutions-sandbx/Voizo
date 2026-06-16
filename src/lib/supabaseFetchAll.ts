@@ -28,13 +28,14 @@ export async function fetchAllRows(
   table: string,
   columns: string,
   orderColumn = "id",
+  eq?: { column: string; value: string },
 ): Promise<Row[]> {
   const all: Row[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const from = page * PAGE_SIZE;
-    const { data, error } = await client
-      .from(table)
-      .select(columns)
+    let query = client.from(table).select(columns);
+    if (eq) query = query.eq(eq.column, eq.value);
+    const { data, error } = await query
       .order(orderColumn, { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 

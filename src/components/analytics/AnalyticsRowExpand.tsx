@@ -1,16 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import type { ReactNode } from "react";
-import { Download } from "lucide-react";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
-import { ANALYTICS_CONFIG } from "@/lib/analyticsConfig";
 import FunnelWaterfall from "./FunnelWaterfall";
 import DurationHistogram from "./DurationHistogram";
 import FailureMixBar from "./FailureMixBar";
 import RetryPayoffBar from "./RetryPayoffBar";
-import { triggerDownload } from "@/lib/download";
-import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 
 interface AnalyticsRowExpandProps {
   a: CampaignAnalytics;
@@ -41,30 +36,6 @@ export default function AnalyticsRowExpand({ a }: AnalyticsRowExpandProps) {
         <DurationHistogram a={a} />
         <FailureMixBar a={a} />
         <RetryPayoffBar a={a} />
-      </div>
-
-      {/* Per-campaign export (aggregation-only; PII-safe) */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            const csv = buildAnalyticsCsv([a]);
-            triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), `voizo_analytics_${a.id}.csv`);
-          }}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[var(--bg-elevated)] text-[var(--text-2)] hover:text-[var(--text-1)] transition"
-        >
-          <Download size={12} /> Export CSV
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            const json = buildAnalyticsJson([a], new Date().toISOString());
-            triggerDownload(new Blob([json], { type: "application/json" }), `voizo_analytics_${a.id}.json`);
-          }}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[var(--bg-elevated)] text-[var(--text-2)] hover:text-[var(--text-1)] transition"
-        >
-          <Download size={12} /> Export JSON
-        </button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -120,12 +91,6 @@ export default function AnalyticsRowExpand({ a }: AnalyticsRowExpandProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 text-xs">
-        <Link href={`/campaigns/v2/${a.id}`} className="text-blue-400 hover:text-blue-300" onClick={(e) => e.stopPropagation()}>
-          Open campaign · call recordings →
-        </Link>
-        <span className="text-[var(--text-3)]">SPARKLINE_DAYS={ANALYTICS_CONFIG.SPARKLINE_DAYS} · all $ est.</span>
-      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Scale, RefreshCw, Snowflake, AlertCircle } from "lucide-react";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface LatestRun {
   judgeVersion: string;
@@ -30,6 +31,7 @@ interface GoldenSet {
 }
 
 export default function GoldenSetPanel() {
+  const magnetRef = useMagnetic<HTMLElement>();
   const [sets, setSets] = useState<GoldenSet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // "freeze" | `replay:${version}`
@@ -94,7 +96,7 @@ export default function GoldenSetPanel() {
   );
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
+    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Scale size={16} className="text-[var(--text-2)]" />
