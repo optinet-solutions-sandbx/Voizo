@@ -495,6 +495,17 @@ export default function CampaignV2DetailPage() {
     return counts;
   }, [numbers]);
 
+  // Contacts we actually sent a text to, counted from the SMS log (sms_messages_v2) rather than the
+  // outcome bucket. The outcome chips alone undercount texts: a registered_optin voicemail follow-up
+  // IS texted but its number stays under 'Awaiting retry' (the webhook leaves voicemail outcomes for
+  // the retry sweeper), so it never shows as 'SMS sent'. This surfaces the true texted total
+  // (Ernie ticket 2026-06-16). Uses the same per-phone map that drives the per-row SMS column.
+  const textedCount = useMemo(() => {
+    let n = 0;
+    for (const row of smsByPhone.values()) if ((row.status as string) === "sent") n++;
+    return n;
+  }, [smsByPhone]);
+
   async function handleStart() {
     if (!id) return;
     setActing(true);
@@ -2038,6 +2049,15 @@ export default function CampaignV2DetailPage() {
                     <span>{OUTCOME_LABEL[o] ?? o}</span>
                   </span>
                 ))}
+                {textedCount > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/12 text-sky-400 border border-sky-500/30 ml-1"
+                    title="Contacts we actually sent a text to, counted from the SMS log. Includes voicemail follow-ups (which sit under 'Awaiting retry'), so this can exceed the 'SMS sent' bucket."
+                  >
+                    <span className="font-semibold">{textedCount}</span>
+                    <span>Texted</span>
+                  </span>
+                )}
               </div>
               <table className="w-full text-sm">
                 <thead>

@@ -73,20 +73,33 @@ const VOICEMAIL_STRONG_PATTERNS = [
   /will be sent in a text message to the person you called/i,
   /your (?:voice )?message is being converted to text/i,
   /standard call charges apply if you proceed/i,
+  // Ernie ticket (2026-06-16): AU/CA carrier + receptionist greetings isVoicemail missed, so they
+  // reached the live-human path and were dropped by the registered_optin announce gate. Each phrase
+  // is machine-exclusive on a cold OUTBOUND sales call (we dial them) — a single match is conclusive.
+  /sent as an? (?:audio|text|voice) message\b/i, // "...will be sent as an audio message" (dominant AU greeting)
+  /\brecord your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen)
+  /\bmailbox number\b/i, // "you have reached mailbox number ..."
+  /voice message system\b/i, // "forwarded to an automatic voice message system"
+  /cannot come to the (?:phone|telephone)\b/i, // "the person you called cannot come to the phone"
 ];
 
 // WEAK — generic greeting fragments that can appear incidentally in a real call.
 // 2+ distinct matches = voicemail (a real customer rarely emits two; a greeting emits 3-5).
 const VOICEMAIL_GREETING_PATTERNS = [
-  /\bleave (?:a |your )?message\b/i,
+  /\bleave (?:me |us )?(?:a |your )?(?:detailed |brief |short )?messages?\b/i, // incl. "leave me a (short) message"
   /after the (?:tone|beep)/i,
   /at the sound of the (?:tone|beep)/i,
   /\bpress (?:\d|one|two|three|four|five|six|seven|eight|nine|the \w+ key|hash|pound|star)\b/i,
-  /\byou'?ve reached\b/i,
+  /\byou(?:'?ve| have) reached\b/i, // incl. full-form "you have reached"
   /\bnot available\b/i,
   /\bplease hold\b/i,
   /\ball (?:our )?(?:representatives|agents|operators)\b/i,
   /\byour call is important\b/i,
+  // Ernie ticket (2026-06-16): more generic carrier/personal-greeting fragments — each pairs with
+  // another weak signal (>=2) so a lone occurrence in a real call never trips the filter.
+  /missed your call\b/i, // "sorry I missed your call"
+  /\bleave (?:your |me your |us your )?name(?: and (?:number|phone))?\b/i, // "leave your name and number"
+  /\b(?:i'?m|i am) (?:currently )?unavailable\b/i, // "I'm unavailable right now"
 ];
 
 // #4 (2026-06-08): IVR / answering greeting that asks the caller to leave a callback number.

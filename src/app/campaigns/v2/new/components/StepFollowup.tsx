@@ -112,7 +112,7 @@ export default function StepFollowup({ state, dispatch }: Props) {
                   <span className="block text-sm text-[var(--text-1)]">To everyone we reach — the list already opted in</span>
                   <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
                     Use only for lists where every player ticked &quot;Receive SMS Promos&quot; at signup.
-                    The text goes out once the agent mentions it on a live call — and as a
+                    The text goes out to everyone we reach — every live conversation, and as a
                     missed-call follow-up when we reach a voicemail (one text per player per campaign).
                     Anyone who says &quot;don&apos;t text me&quot; — or is on the Do-Not-Call list — is never messaged.
                   </span>

@@ -10,10 +10,15 @@
 //   verbal_yes       — today's behavior, verbatim: goal_reached AND consent
 //                      evidence (Vapi native success OR a genuine customer yes).
 //   registered_optin — client-owned consent basis (registration "Receive SMS
-//                      Promos" opt-in, Val 2026-06-11): send when the AGENT
-//                      announced a text on a live call. goal_reached NOT
-//                      required; sms_on_goal_reached_only ignored by the
-//                      caller (the mode IS the policy).
+//                      Promos" opt-in, Val 2026-06-11): send to EVERY reached
+//                      contact — any live human we actually spoke to, and a
+//                      missed-call follow-up on voicemail pickups. goal_reached
+//                      NOT required; sms_on_goal_reached_only ignored by the
+//                      caller (the mode IS the policy). The agent announcing a
+//                      text on the call is NO LONGER required (Ernie ticket,
+//                      Val approved 2026-06-16): consent is the signup opt-in,
+//                      not the call, and agents announced on only ~5% of live
+//                      calls — gating on it dropped texts to nearly everyone.
 //
 // ABSOLUTE vetoes in BOTH modes: on-call opt-out and (registered mode) an
 // explicit customer "don't text me" — a no must always win. Voicemail vetoes
@@ -32,7 +37,10 @@ export interface SmsDispatchInput {
   optedOut: boolean;
   /** hasGenuineCustomerConsent(transcript) — speaker-aware customer yes. */
   hasVerbalConsent: boolean;
-  /** agentMentionedSms(transcript) — the agent announced/offered a text. */
+  /** agentMentionedSms(transcript) — did the agent announce/offer a text on the call.
+   *  NOTE (2026-06-16): no longer gates registered_optin dispatch (Val approved removing the
+   *  announce requirement — see header). Kept on the input for reversibility and as an available
+   *  observability signal (the webhook still computes & passes it); the decision now ignores it. */
   agentAnnouncedSms: boolean;
   /** customerDeclinedSms(transcript) — explicit, text-directed refusal. */
   customerDeclinedSms: boolean;
@@ -49,8 +57,7 @@ export interface SmsDispatchDecision {
     | "opted_out_on_call"
     | "customer_declined_sms"
     | "no_human_conversation"
-    | "no_agent_sms_announce"
-    | "registered_optin_announce"
+    | "registered_optin_reached"
     | "registered_optin_voicemail_followup"
     | "goal_not_reached"
     | "no_consent_evidence"
@@ -70,8 +77,11 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
     // The per-player dedup in the webhook caps retried voicemails at ONE text.
     if (i.voicemailDetected) return { attempt: true, reason: "registered_optin_voicemail_followup" };
     if (!i.humanConversation) return { attempt: false, reason: "no_human_conversation" };
-    if (!i.agentAnnouncedSms) return { attempt: false, reason: "no_agent_sms_announce" };
-    return { attempt: true, reason: "registered_optin_announce" };
+    // 2026-06-16 (Ernie ticket, Val approved): the announce requirement is REMOVED — a reached
+    // human (not opted-out, no explicit "don't text me", not suppressed) is texted. Consent is the
+    // signup opt-in, not the call; agents announced on only ~5% of live calls, so the old gate
+    // dropped texts to nearly every reached human. agentAnnouncedSms stays only as observability.
+    return { attempt: true, reason: "registered_optin_reached" };
   }
 
   // verbal_yes: voicemail remains an absolute veto (a machine cannot consent).

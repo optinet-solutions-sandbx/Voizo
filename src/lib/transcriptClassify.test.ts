@@ -225,6 +225,82 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
   });
 });
 
+// ── Ernie ticket (2026-06-16): AU/CA carrier voicemail greetings isVoicemail MISSED, so they
+// fell through to the live-human path, hit the registered_optin announce gate, and got no SMS —
+// when they should have been missed-call follow-ups. Real transcripts from L7_AU/CA_STEVIC 15–16/06.
+const CARRIER_VOICEMAILS = {
+  audioMessage:
+    "AI: Hey. Victor here from Lucky seven dot com. Quick question. Have you had a chance to log in recently?\nUser: The person you are calling is not available. Please leave a short message, and it will be sent as an audio message.\nAI: Goodbye. Goodbye.",
+  audioMessageGarbled:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Both of you are calling is not available. Please leave a short message, and it will be sent as an audio message.\nAI: Goodbye.",
+  recordYourName:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: If you record your name and reason for calling, I'll see if this person is available.\nAI: Goodbye.",
+  voiceMessageSystem:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: has been forwarded to an automatic voice message system.\nAI: Goodbye. Goodbye.",
+  mailboxNumber:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: You have reached mailbox number zero four five two one three four zero three seven.\nAI: Goodbye.",
+  cannotComeToPhone:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Unfortunately, the person that you called cannot come to the phone at the moment. This is the butler speaking. If you'd like me to, I can pass on a message for you.\nAI: Goodbye.",
+  missedYourCall:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Sorry I missed your call. Please leave a message.\nAI: Goodbye.",
+  leaveNameAndNumber:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Hi. You've reached Tiffany. You know what to do. Leave your name and number so I can get back to you.\nAI: Goodbye.",
+  unavailableLeaveMessage:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Hi. I'm unavailable right now. Leave me a message, and I will call you back.\nAI: Goodbye.",
+};
+
+// Genuine human pickups from the SAME campaigns — MUST stay non-voicemail (the FP guard that makes
+// this a delicate fix, not a blunt one). Mostly minimal "Hello?" answers where the pitch was cut
+// off — a real person still answered.
+const CARRIER_REAL_HUMANS = {
+  bareHello:
+    "AI: Hey. Victor here from Lucky seven dot com. Quick question. Have you had a chance to log in to your account recently?\nUser: Hello?",
+  engagedHuman:
+    "AI: Hey, uh, Victor here from Lucky seven dot com. Quick question. Have you had a chance to log in to your account recently?\nUser: Hello? Hi. No. Why is that? No. I haven't. Sorry.\nAI: He...",
+  helloFromLondon:
+    "AI: Hey. Victor here from Lucky seven dot com.\nUser: Hello from London. Yo.\nUser: Hey, oh, gee. I'm good. Thanks, fellas.",
+};
+
+describe("isVoicemail — AU/CA carrier greetings (Ernie ticket, 2026-06-16)", () => {
+  it("flags the 'sent as an audio message' carrier greeting (the dominant AU miss)", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.audioMessage)).toBe(true);
+    expect(isVoicemail(CARRIER_VOICEMAILS.audioMessageGarbled)).toBe(true);
+  });
+  it("flags the 'record your name and reason for calling' receptionist greeting", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.recordYourName)).toBe(true);
+  });
+  it("flags 'automatic voice message system'", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.voiceMessageSystem)).toBe(true);
+  });
+  it("flags 'you have reached mailbox number' (full-form, not just the contraction)", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.mailboxNumber)).toBe(true);
+  });
+  it("flags 'cannot come to the phone' greetings", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.cannotComeToPhone)).toBe(true);
+  });
+  it("flags 'sorry I missed your call, please leave a message'", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.missedYourCall)).toBe(true);
+  });
+  it("flags 'leave your name and number' personal greetings", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.leaveNameAndNumber)).toBe(true);
+  });
+  it("flags 'I'm unavailable right now, leave me a message'", () => {
+    expect(isVoicemail(CARRIER_VOICEMAILS.unavailableLeaveMessage)).toBe(true);
+  });
+});
+
+describe("isVoicemail — carrier-greeting fix must NOT silence real humans", () => {
+  it("keeps minimal 'Hello?' pickups and engaged humans as non-voicemail", () => {
+    for (const t of Object.values(CARRIER_REAL_HUMANS)) expect(isVoicemail(t)).toBe(false);
+  });
+  it("keeps those real humans visible in /reviews", () => {
+    for (const t of Object.values(CARRIER_REAL_HUMANS)) expect(hasRealConversation(t)).toBe(true);
+  });
+  it("excludes the carrier voicemails from /reviews", () => {
+    for (const t of Object.values(CARRIER_VOICEMAILS)) expect(hasRealConversation(t)).toBe(false);
+  });
+});
+
 // ── SMS dispatch signals (2026-06-11, registered_optin mode) ────────────────
 
 describe("agentMentionedSms (AI announce detector)", () => {
