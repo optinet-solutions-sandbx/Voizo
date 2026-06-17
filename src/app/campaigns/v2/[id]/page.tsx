@@ -14,6 +14,7 @@ import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
 import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { useCampaignExport, type ExportType } from "@/lib/useCampaignExport";
+import { useMagnetic } from "@/components/useMagnetic";
 
 type Row = Record<string, unknown>;
 
@@ -164,6 +165,20 @@ function formatRelative(ts: number | null, opts?: { future?: boolean }): string 
 }
 
 type Tab = "numbers" | "calls" | "settings";
+
+// Top stat card — glass + magnetic (matches the dashboard stat cards). The 3 cards
+// aren't a loop, so each instance owns its own useMagnetic callback ref.
+function StatCard({ icon: Icon, label, children }: { icon: React.ElementType; label: string; children: React.ReactNode }) {
+  const ref = useMagnetic<HTMLDivElement>();
+  return (
+    <div ref={ref} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
+      <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
+        <Icon size={12} /> {label}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 export default function CampaignV2DetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -2000,16 +2015,10 @@ export default function CampaignV2DetailPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-3 mb-6">
-        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
-          <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
-            <Phone size={12} /> Numbers
-          </div>
+        <StatCard icon={Phone} label="Numbers">
           <p className="text-xl font-bold text-[var(--text-1)]">{numbers.length}</p>
-        </div>
-        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
-          <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
-            <Clock size={12} /> Schedule
-          </div>
+        </StatCard>
+        <StatCard icon={Clock} label="Schedule">
           {/* P5: same DynamicSchedule as the top chip; renders the relevant
               state (future / running / completed) in target tz + browser tz. */}
           <DynamicSchedule
@@ -2018,15 +2027,12 @@ export default function CampaignV2DetailPage() {
             status={status}
             timezone={(campaign.timezone as string | null) ?? "UTC"}
           />
-        </div>
-        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
-          <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
-            <MessageSquareText size={12} /> SMS
-          </div>
+        </StatCard>
+        <StatCard icon={MessageSquareText} label="SMS">
           <p className="text-sm text-[var(--text-2)]">
             {campaign.sms_enabled ? "Enabled" : "Disabled"}
           </p>
-        </div>
+        </StatCard>
       </div>
 
       {(status === "running" || status === "paused") && (
