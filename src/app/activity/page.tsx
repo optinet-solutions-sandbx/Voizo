@@ -20,7 +20,8 @@ import {
 } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { useMagnetic } from "@/components/useMagnetic";
+import Pagination from "@/components/Pagination";
+import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 
 interface CallEvent {
   id: string;
@@ -65,12 +66,33 @@ interface ActivityResponse {
 }
 
 const POLL_MS = 30_000;
+const PAGE_SIZE = 10;
+
+// Client-side pagination for the live feeds. Clamps the page on each 30s poll
+// (no jarring reset), resets to page 1 when the filter signature changes.
+function usePaged<T>(items: T[], resetKey: string) {
+  const [page, setPage] = useState(1);
+  // Reset to page 1 when the filter changes — React's store-previous-value
+  // pattern (adjust state during render), not an effect, so it doesn't trip
+  // react-hooks/set-state-in-effect and applies before paint (no flash).
+  const [prevKey, setPrevKey] = useState(resetKey);
+  if (prevKey !== resetKey) {
+    setPrevKey(resetKey);
+    setPage(1);
+  }
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  return { pageItems, page: safePage, setPage, totalPages, total: items.length };
+}
 
 export default function ActivityPage() {
   const [data, setData] = useState<ActivityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
 
   // 1s clock for "Xs ago" relative timestamps
   useEffect(() => {
@@ -102,6 +124,53 @@ export default function ActivityPage() {
     const id = window.setInterval(loadActivity, POLL_MS);
     return () => clearInterval(id);
   }, [loadActivity]);
+
+  // ── Filters: campaign across all feeds; call-status chips on the Call feed. ──
+  const campaignOptions = useMemo<DropdownOption[]>(() => {
+    const map = new Map<string, string>();
+    for (const c of data?.recentCalls ?? []) map.set(c.campaignId, c.campaignName);
+    for (const s of data?.recentSms ?? []) map.set(s.campaignId, s.campaignName);
+    for (const r of data?.perNumberRecent ?? []) map.set(r.campaignId, r.campaignName);
+    const opts = [...map.entries()].map(([value, label]) => ({ value, label }));
+    opts.sort((a, b) => a.label.localeCompare(b.label));
+    return [{ value: "all", label: "All campaigns" }, ...opts];
+  }, [data]);
+
+  const callStatuses = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of data?.recentCalls ?? []) set.add(c.status);
+    return Array.from(set).sort();
+  }, [data]);
+
+  const filteredCalls = useMemo(
+    () => (data?.recentCalls ?? []).filter(
+      (c) => (campaignFilter === "all" || c.campaignId === campaignFilter) &&
+        (statusFilter.size === 0 || statusFilter.has(c.status)),
+    ),
+    [data, campaignFilter, statusFilter],
+  );
+  const filteredSms = useMemo(
+    () => (data?.recentSms ?? []).filter((s) => campaignFilter === "all" || s.campaignId === campaignFilter),
+    [data, campaignFilter],
+  );
+  const filteredNumbers = useMemo(
+    () => (data?.perNumberRecent ?? []).filter((r) => campaignFilter === "all" || r.campaignId === campaignFilter),
+    [data, campaignFilter],
+  );
+
+  const filterKey = `${campaignFilter}|${Array.from(statusFilter).sort().join(",")}`;
+  const callsPaged = usePaged(filteredCalls, filterKey);
+  const smsPaged = usePaged(filteredSms, filterKey);
+  const numbersPaged = usePaged(filteredNumbers, filterKey);
+
+  const toggleStatus = (s: string) =>
+    setStatusFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  const filtersActive = campaignFilter !== "all" || statusFilter.size > 0;
 
   return (
     <div className="p-6 max-w-[1600px] mx-auto w-full grid gap-5">
@@ -138,22 +207,72 @@ export default function ActivityPage() {
         </div>
       </div>
 
+      {/* Filter bar — campaign (all feeds) + call-status chips (Call feed). */}
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="w-60">
+          <StyledSelect
+            size="sm"
+            options={campaignOptions}
+            value={campaignFilter}
+            onChange={setCampaignFilter}
+            placeholder="All campaigns"
+          />
+        </div>
+        {callStatuses.length > 0 && (
+          <>
+            <span className="w-px h-5 bg-[var(--border)] mx-0.5" />
+            <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">Call outcome</span>
+            {callStatuses.map((s) => {
+              const on = statusFilter.has(s);
+              const tone = callStatusTone(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => toggleStatus(s)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                    on ? `${tone.bg} ${tone.text} ${tone.border}` : "bg-transparent text-[var(--text-3)] border-[var(--border)] opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  {s.replace(/_/g, " ")}
+                </button>
+              );
+            })}
+          </>
+        )}
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={() => { setCampaignFilter("all"); setStatusFilter(new Set()); }}
+            className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
       {/* Row 1: Call feed (large) + SMS feed */}
       <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr] gap-5">
         <Card
           title="Call Activity"
           icon={<PhoneCall size={14} className="text-blue-400" />}
-          sub={data ? `${data.recentCalls.length} of last ${data.outcomes24h.total} calls (24h)` : "Loading…"}
+          sub={data ? `${filteredCalls.length} of ${data.outcomes24h.total} calls (24h)` : "Loading…"}
         >
-          <CallFeed calls={data?.recentCalls ?? []} now={now} loading={!data} />
+          <CallFeed calls={callsPaged.pageItems} now={now} loading={!data} />
+          {callsPaged.total > PAGE_SIZE && (
+            <Pagination currentPage={callsPaged.page} totalPages={callsPaged.totalPages} totalItems={callsPaged.total} pageSize={PAGE_SIZE} onPageChange={callsPaged.setPage} />
+          )}
         </Card>
 
         <Card
           title="SMS Activity"
           icon={<MessageSquare size={14} className="text-violet-400" />}
-          sub={data ? `${data.recentSms.length} most recent` : "Loading…"}
+          sub={data ? `${filteredSms.length} most recent` : "Loading…"}
         >
-          <SmsFeed sms={data?.recentSms ?? []} now={now} loading={!data} />
+          <SmsFeed sms={smsPaged.pageItems} now={now} loading={!data} />
+          {smsPaged.total > PAGE_SIZE && (
+            <Pagination currentPage={smsPaged.page} totalPages={smsPaged.totalPages} totalItems={smsPaged.total} pageSize={PAGE_SIZE} onPageChange={smsPaged.setPage} />
+          )}
         </Card>
       </div>
 
@@ -170,9 +289,12 @@ export default function ActivityPage() {
         <Card
           title="Recent Numbers"
           icon={<Hash size={14} className="text-cyan-400" />}
-          sub={data ? `${data.perNumberRecent.length} most recently attempted` : "Loading…"}
+          sub={data ? `${filteredNumbers.length} most recently attempted` : "Loading…"}
         >
-          <PerNumberTable rows={data?.perNumberRecent ?? []} now={now} loading={!data} />
+          <PerNumberTable rows={numbersPaged.pageItems} now={now} loading={!data} />
+          {numbersPaged.total > PAGE_SIZE && (
+            <Pagination currentPage={numbersPaged.page} totalPages={numbersPaged.totalPages} totalItems={numbersPaged.total} pageSize={PAGE_SIZE} onPageChange={numbersPaged.setPage} />
+          )}
         </Card>
       </div>
     </div>
@@ -186,9 +308,8 @@ export default function ActivityPage() {
 function Card({
   title, icon, sub, children,
 }: { title: string; icon: React.ReactNode; sub: string; children: React.ReactNode }) {
-  const magnetRef = useMagnetic<HTMLElement>();
   return (
-    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6">
+    <section className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           {icon}
@@ -207,7 +328,7 @@ function CallFeed({ calls, now, loading }: { calls: CallEvent[]; now: Date; load
   if (loading) return <SkeletonRows count={6} />;
   if (calls.length === 0) return <EmptyState icon={<PhoneOff size={18} />} message="No calls in the last 24 hours" />;
   return (
-    <div className="flex flex-col gap-1 max-h-[480px] overflow-y-auto pr-1">
+    <div className="flex flex-col gap-1">
       {calls.map((c) => <CallRow key={c.id} c={c} now={now} />)}
     </div>
   );
@@ -253,7 +374,7 @@ function SmsFeed({ sms, now, loading }: { sms: SmsEvent[]; now: Date; loading: b
   if (loading) return <SkeletonRows count={5} />;
   if (sms.length === 0) return <EmptyState icon={<MessageSquare size={18} />} message="No SMS sent in the last 24 hours" />;
   return (
-    <div className="flex flex-col gap-1 max-h-[480px] overflow-y-auto pr-1">
+    <div className="flex flex-col gap-1">
       {sms.map((s) => <SmsRow key={s.id} s={s} now={now} />)}
     </div>
   );
@@ -370,7 +491,7 @@ function PerNumberTable({ rows, now, loading }: { rows: PerNumberRow[]; now: Dat
   if (rows.length === 0) return <EmptyState icon={<Hash size={18} />} message="No number attempts in the last 24 hours" />;
 
   return (
-    <div className="overflow-x-auto -mx-2 max-h-[480px] overflow-y-auto">
+    <div className="overflow-x-auto -mx-2">
       <table className="w-full text-sm min-w-[640px]">
         <thead className="sticky top-0 bg-[var(--bg-card)] z-10">
           <tr>
