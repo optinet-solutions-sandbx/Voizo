@@ -46,7 +46,7 @@ export interface PromptRow {
   campaignCount: number;
 }
 
-export type SortKey = "calls" | "connect" | "success";
+export type SortKey = "calls" | "connect" | "success" | "newest";
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 function sortVal(r: { calls: number; connectRate: number | null; successRate: number | null }, key: SortKey): number {
@@ -80,14 +80,23 @@ function RankBadge({ rank, medal }: { rank: number; medal: boolean }) {
   );
 }
 
-export function SortControl({ sort, setSort }: { sort: SortKey; setSort: (s: SortKey) => void }) {
+export function SortControl({
+  sort,
+  setSort,
+  keys = ["calls", "connect", "success"],
+}: {
+  sort: SortKey;
+  setSort: (s: SortKey) => void;
+  keys?: SortKey[];
+}) {
   return (
     <div className="inline-flex items-center gap-2">
       <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">Sort</span>
       <div className="inline-flex rounded-lg border border-[var(--border)] overflow-hidden">
-        {(["calls", "connect", "success"] as SortKey[]).map((k) => (
+        {keys.map((k) => (
           <button
             key={k}
+            type="button"
             onClick={() => setSort(k)}
             className={`px-2.5 py-1 text-xs font-medium capitalize transition ${
               sort === k ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"

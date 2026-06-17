@@ -93,6 +93,12 @@ function StatusPill({ s }: { s: DisplayStatus }) {
 function sortValue(r: Row, key: SortKey): number {
   if (key === "calls") return r.calls;
   if (key === "connect") return r.connectRate ?? -1;
+  if (key === "newest") {
+    // Newest first (desc): run-window start as ms. No created_at in the payload,
+    // so startAt is the truest available recency proxy. Null/invalid → sort last.
+    const t = r.startAt ? Date.parse(r.startAt) : NaN;
+    return Number.isFinite(t) ? t : -1;
+  }
   return r.successRate ?? -1;
 }
 
@@ -103,7 +109,7 @@ export default function CampaignTable() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hidden, setHidden] = useState<Set<DisplayStatus>>(new Set());
-  const [sort, setSort] = useState<SortKey>("success");
+  const [sort, setSort] = useState<SortKey>("newest");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
   // Lazy per-campaign LIFETIME analytics for the rich expand (fetched on first expand).
@@ -194,7 +200,7 @@ export default function CampaignTable() {
           <h2 className="text-[20px] font-bold tracking-tight">Campaign Performance</h2>
           <p className="text-sm text-[var(--text-3)] mt-1">Status, run window &amp; full call records · its own date range.</p>
         </div>
-        <SortControl sort={sort} setSort={setSort} />
+        <SortControl sort={sort} setSort={setSort} keys={["newest", "calls", "connect", "success"]} />
       </div>
 
       {/* Table-level filters (independent of the global bar). */}
@@ -252,7 +258,7 @@ export default function CampaignTable() {
               ) : (
                 pageRows.map(({ row: r, span }) => (
                   <Fragment key={r.id}>
-                    <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)]/40 transition-colors">
+                    <tr className="group border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)]/40 transition-colors">
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
                           <button
@@ -264,10 +270,22 @@ export default function CampaignTable() {
                           </button>
                           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: campaignColor(r.id) }} />
                           <div className="min-w-0">
-                            <Link href={`/campaigns/v2/${r.id}`} className="font-medium text-[var(--text-1)] hover:text-blue-400 inline-flex items-center gap-1 group">
-                              <span className="truncate max-w-[260px]" title={r.name}>{formatCampaign(r.name).display}</span>
-                              <ArrowRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                            </Link>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(r.id)}
+                                title={r.name}
+                                className="font-medium text-[var(--text-1)] hover:text-blue-400 transition-colors text-left min-w-0"
+                              >
+                                <span className="block truncate max-w-[260px]">{formatCampaign(r.name).display}</span>
+                              </button>
+                              <Link
+                                href={`/campaigns/v2/${r.id}`}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-[var(--border)] text-[10px] font-medium text-[var(--text-2)] hover:text-blue-400 hover:border-blue-400/40 whitespace-nowrap shrink-0"
+                              >
+                                Open in campaign <ArrowRight size={10} />
+                              </Link>
+                            </div>
                             <div className="text-[11px] text-[var(--text-3)] mt-0.5">
                               {baseAgentName(r.baseAssistantId) ?? voiceName(r.voiceId, { short: true }) ?? "—"}
                               {r.scheduleType === "recurring" ? " · recurring" : ""}
