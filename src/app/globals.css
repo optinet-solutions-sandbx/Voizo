@@ -114,7 +114,14 @@ nextjs-portal { display: none !important; }
     -webkit-backdrop-filter: none;
   }
 }
-.glow-card::before {
+/* Glow-border WITHOUT glass — for framing dense data tables (rows stay solid + readable).
+   Shares the rotating conic ::before ring with .glow-card; no translucent bg / backdrop-blur. */
+.glow-frame {
+  position: relative;
+  box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.45);
+}
+.glow-card::before,
+.glow-frame::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -135,7 +142,8 @@ nextjs-portal { display: none !important; }
   transition: opacity 0.35s ease;
   pointer-events: none;
 }
-.glow-card:hover::before {
+.glow-card:hover::before,
+.glow-frame:hover::before {
   opacity: 1;
   animation: glow-card-rotate 3s linear infinite;
 }
@@ -143,5 +151,6 @@ nextjs-portal { display: none !important; }
   to { --glow-angle: 360deg; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .glow-card:hover::before { animation: none; }
+  .glow-card:hover::before,
+  .glow-frame:hover::before { animation: none; }
 }
