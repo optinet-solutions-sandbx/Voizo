@@ -15,7 +15,7 @@ export default function Stepper({ currentStep, onJump }: Props) {
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)] mb-5">
         Create campaign
       </p>
-      <div className="flex flex-col">
+      <div className="glow-card flex flex-col rounded-2xl p-4">
         {STEPS.map((s, i) => {
           const isDone = s.step < currentStep;
           const isActive = s.step === currentStep;

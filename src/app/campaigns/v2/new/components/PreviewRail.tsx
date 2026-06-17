@@ -5,6 +5,7 @@ import { Repeat, Play, Users } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { TIMEZONE_OPTIONS, type WizardState } from "../wizardState";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface Props {
   state: WizardState;
@@ -28,13 +29,16 @@ export default function PreviewRail({ state }: Props) {
       ? "Continue when this step's required fields are filled."
       : "Launch the campaign when you're ready.";
 
+  const card1Ref = useMagnetic<HTMLDivElement>();
+  const card2Ref = useMagnetic<HTMLDivElement>();
+
   return (
     <aside className="border-l border-[var(--border)] bg-[var(--bg-sidebar)] overflow-y-auto py-8 px-6 flex flex-col gap-3.5">
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-3)]">
         Live preview
       </p>
 
-      <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
+      <div ref={card1Ref} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
         <div className="text-base font-semibold leading-tight">
           {state.name || (
             <span className="italic text-[var(--text-3)] font-normal text-sm">Untitled campaign</span>
@@ -74,15 +78,15 @@ export default function PreviewRail({ state }: Props) {
             ? "Pick a segment or paste numbers to start."
             : "Fill in the remaining steps to refine the preview."}
         </div>
-      </section>
+      </div>
 
-      <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
+      <div ref={card2Ref} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
         <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">
           Next up
         </div>
         <div className="text-sm font-semibold mt-1">{nextStepLabel}</div>
         <div className="text-[12px] text-[var(--text-3)] mt-1 leading-snug">{nextStepDesc}</div>
-      </section>
+      </div>
     </aside>
   );
 }

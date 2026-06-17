@@ -2,6 +2,7 @@
 
 import { ChevronLeft, ChevronRight, Loader2, Rocket } from "lucide-react";
 import type { Step } from "../wizardState";
+import { useMagnetic } from "@/components/useMagnetic";
 
 interface Props {
   currentStep: Step;
@@ -17,6 +18,7 @@ export default function FooterNav({
   currentStep, onBack, onNext, onLaunch, nextDisabled, saving,
 }: Props) {
   const isLast = currentStep === 5;
+  const primaryRef = useMagnetic<HTMLButtonElement>();
   return (
     <div className="flex items-center justify-between gap-3 pt-5 mt-7 border-t border-[var(--border)]">
       {currentStep > 1 ? (
@@ -34,6 +36,7 @@ export default function FooterNav({
 
       {isLast ? (
         <button
+          ref={primaryRef}
           type="button"
           onClick={onLaunch}
           disabled={nextDisabled}
@@ -51,6 +54,7 @@ export default function FooterNav({
         </button>
       ) : (
         <button
+          ref={primaryRef}
           type="button"
           onClick={onNext}
           disabled={nextDisabled}
