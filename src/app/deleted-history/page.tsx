@@ -193,7 +193,7 @@ export default function DeletedHistoryPage() {
           </div>
 
           {/* Desktop table */}
-          <div className="hidden sm:block bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="hidden sm:block glow-frame bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
