@@ -80,6 +80,20 @@ function runWindow(r: Row): string {
   return `${start} → ${fmtShort(r.endAt ?? r.lastCallAt) ?? "ended"}`;
 }
 
+// Compact run duration ("1d 3h" / "6h" / "45m") from a span in ms. Reuses the
+// span the bar already computes (start → end / last-call / range-end), so
+// ongoing campaigns read as elapsed-so-far. Pure — no Date.now() in render.
+function formatRunDuration(ms: number): string {
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin < 1) return "<1m";
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
 function StatusPill({ s }: { s: DisplayStatus }) {
   const m = STATUS_META[s];
   return (
@@ -305,7 +319,10 @@ export default function CampaignTable() {
                       <td className="px-3 py-3 text-right font-mono text-amber-400">{pct(r.successRate)}</td>
                       <td className="px-3 py-3"><StatusPill s={r.displayStatus} /></td>
                       <td className="px-5 py-3">
-                        <div className="text-[11px] font-mono text-[var(--text-2)]">{runWindow(r)}</div>
+                        <div className="text-[11px] font-mono text-[var(--text-2)]">
+                          {runWindow(r)}
+                          {span > 0 && <span className="text-[var(--text-3)]"> · {formatRunDuration(span)}</span>}
+                        </div>
                         <div className="mt-1.5 h-1 rounded-full bg-[var(--bg-elevated)] w-full max-w-[160px] overflow-hidden">
                           <div className="h-full rounded-full" style={{ width: `${Math.max(4, (span / maxSpan) * 100)}%`, backgroundColor: campaignColor(r.id) }} />
                         </div>
