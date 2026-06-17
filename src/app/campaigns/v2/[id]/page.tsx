@@ -2000,13 +2000,13 @@ export default function CampaignV2DetailPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-3 mb-6">
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
+        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
             <Phone size={12} /> Numbers
           </div>
           <p className="text-xl font-bold text-[var(--text-1)]">{numbers.length}</p>
         </div>
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
+        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
             <Clock size={12} /> Schedule
           </div>
@@ -2019,7 +2019,7 @@ export default function CampaignV2DetailPage() {
             timezone={(campaign.timezone as string | null) ?? "UTC"}
           />
         </div>
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
+        <div className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
           <div className="flex items-center gap-2 text-xs text-[var(--text-3)] uppercase tracking-wide mb-1">
             <MessageSquareText size={12} /> SMS
           </div>
@@ -2043,7 +2043,7 @@ export default function CampaignV2DetailPage() {
       </div>
 
       {/* Tab content */}
-      <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-sm overflow-hidden">
+      <div className="glow-frame bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-sm overflow-hidden">
         {tab === "numbers" && (
           numbers.length === 0 ? (
             <div className="text-center py-12 text-sm text-[var(--text-3)]">No numbers in this campaign.</div>
