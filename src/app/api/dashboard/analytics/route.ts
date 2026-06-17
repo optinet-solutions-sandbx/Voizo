@@ -15,6 +15,7 @@ import {
   type DashCampaignRow,
 } from "@/lib/dashboardAnalytics";
 import { sha256Hex } from "@/lib/promptVersionExtract";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 
 /**
  * GET /api/dashboard/analytics
@@ -72,22 +73,29 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const [callsRes, campaignsRes] = await Promise.all([
-    supabaseAdmin
-      .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, created_at")
-      .gte("created_at", startIso),
-    supabaseAdmin
-      .from("campaigns_v2")
-      .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, system_prompt, start_at, created_at, end_at, timezone"),
+  // Page past PostgREST's 1000-row cap. calls_v2 exceeds it within the 30d window
+  // (1613 rows on 2026-06-17) — unbounded, it silently truncated the chart, KPIs,
+  // trend, and heatmap to the first 1000. campaigns_v2 is paged too (defensive: it
+  // feeds the index filterCalls joins against). fetchAllRows degrades-to-partial and
+  // logs loudly on a page error, so there's no all-or-nothing 500 here.
+  const [callRows, campaignRows] = await Promise.all([
+    fetchAllRows(
+      supabaseAdmin,
+      "calls_v2",
+      "campaign_id, campaign_number_id, status, goal_reached, created_at",
+      "id",
+      undefined,
+      { column: "created_at", value: startIso },
+    ),
+    fetchAllRows(
+      supabaseAdmin,
+      "campaigns_v2",
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, system_prompt, start_at, created_at, end_at, timezone",
+      "id",
+    ),
   ]);
 
-  if (callsRes.error || campaignsRes.error) {
-    console.error("[dashboard/analytics] query failed:", callsRes.error ?? campaignsRes.error);
-    return NextResponse.json({ error: "Failed to read analytics" }, { status: 500 });
-  }
-
-  const campaigns = (campaignsRes.data ?? []) as unknown as (DashCampaignRow & { system_prompt?: string | null })[];
+  const campaigns = campaignRows as unknown as (DashCampaignRow & { system_prompt?: string | null })[];
   const index = buildCampaignIndex(campaigns);
   const live = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
 
@@ -120,7 +128,7 @@ export async function GET(request: NextRequest) {
   }
 
   let filtered = filterCalls(
-    (callsRes.data ?? []) as unknown as DashCallRow[],
+    callRows as unknown as DashCallRow[],
     { startMs, endMs: now, campaignIds, voiceId: agent, numberIds },
     index,
   );

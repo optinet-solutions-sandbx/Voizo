@@ -29,12 +29,14 @@ export async function fetchAllRows(
   columns: string,
   orderColumn = "id",
   eq?: { column: string; value: string },
+  gte?: { column: string; value: string },
 ): Promise<Row[]> {
   const all: Row[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const from = page * PAGE_SIZE;
     let query = client.from(table).select(columns);
     if (eq) query = query.eq(eq.column, eq.value);
+    if (gte) query = query.gte(gte.column, gte.value);
     const { data, error } = await query
       .order(orderColumn, { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
