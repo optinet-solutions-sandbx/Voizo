@@ -6,6 +6,7 @@ import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
+import { useMagnetic } from "@/components/useMagnetic";
 import {
   KnowledgeBase,
   fetchKnowledgeBases,
@@ -26,6 +27,7 @@ export default function KnowledgeBasesPage() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [tab, setTab] = useState<"active" | "archived">("active");
   const [searchQuery, setSearchQuery] = useState("");
+  const createRef = useMagnetic<HTMLButtonElement>();
 
   useEffect(() => {
     fetchKnowledgeBases()
@@ -111,7 +113,7 @@ export default function KnowledgeBasesPage() {
             <p className="text-xs text-[var(--text-3)] mt-0.5">{activeItems.length} active · {archivedItems.length} archived</p>
           </div>
         </div>
-        <button onClick={() => setShowModal(true)}
+        <button ref={createRef} type="button" onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
           <HoverIcon icon={PlusIcon} size={15} />
           <span className="hidden sm:inline">Create New</span>
@@ -211,7 +213,7 @@ export default function KnowledgeBasesPage() {
                 {tab === "active" && <p className="text-xs text-[var(--text-3)]">Create one to get started</p>}
               </div>
             ) : (
-              <div className="bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
+              <div className="glow-frame bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
