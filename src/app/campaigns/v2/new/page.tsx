@@ -477,6 +477,7 @@ function WizardPage({
             <span>New</span>
           </nav>
 
+          <div className="glow-card flex-1 flex flex-col rounded-2xl p-6 sm:p-7">
           {state.step === 1 && step1IsMixed && step1MixedAnalysis && (
             // M2: mixed-country audience advisory. Surfaces when no single
             // country reaches the 80% confidence threshold AND ≥2 countries
@@ -523,6 +524,7 @@ function WizardPage({
           )}
           {state.step === 4 && <StepFollowup state={state} dispatch={dispatch} />}
           {state.step === 5 && <StepReview state={state} dispatch={dispatch} />}
+          </div>
 
           <FooterNav
             currentStep={state.step}
