@@ -8,6 +8,7 @@ import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchDncEntries, insertDncEntries, deleteDncEntry, DncEntry } from "@/lib/dncData";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
+import { useMagnetic } from "@/components/useMagnetic";
 
 function ReasonBadge({ reason }: { reason: string }) {
   const map: Record<string, string> = {
@@ -21,6 +22,21 @@ function ReasonBadge({ reason }: { reason: string }) {
   );
 }
 
+function StatTile({ icon: Icon, label, value, accent }: {
+  icon: React.ElementType; label: string; value: number; accent: string;
+}) {
+  const magnetRef = useMagnetic<HTMLDivElement>();
+  return (
+    <div ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-3">
+      <div className="flex items-center gap-2 mb-1">
+        <Icon size={13} className={accent} />
+        <span className="text-[11px] uppercase tracking-wide font-medium text-[var(--text-3)]">{label}</span>
+      </div>
+      <p className="text-xl font-bold tabular-nums text-[var(--text-1)]">{value}</p>
+    </div>
+  );
+}
+
 export default function DoNotCallPage() {
   const { showToast } = useToast();
   const { addNotification } = useNotifications();
@@ -31,6 +47,7 @@ export default function DoNotCallPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const addRef = useMagnetic<HTMLButtonElement>();
 
   useEffect(() => { load(); }, []);
 
@@ -87,6 +104,9 @@ export default function DoNotCallPage() {
     );
   }, [entries, searchQuery]);
 
+  const optedOutCount = useMemo(() => entries.filter((e) => e.reason === "opted out during call").length, [entries]);
+  const manualCount = useMemo(() => entries.filter((e) => e.reason === "manual").length, [entries]);
+
   return (
     <div className="p-4 sm:p-6 w-full">
       {/* Header */}
@@ -102,13 +122,22 @@ export default function DoNotCallPage() {
             </p>
           </div>
         </div>
-        <button onClick={() => setShowModal(true)}
+        <button ref={addRef} type="button" onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
           <HoverIcon icon={PlusIcon} size={15} />
           <span className="hidden sm:inline">Add Phone Numbers</span>
           <span className="sm:hidden">Add</span>
         </button>
       </div>
+
+      {/* Stat strip */}
+      {!loading && entries.length > 0 && (
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          <StatTile icon={PhoneOff} label="Suppressed" value={entries.length} accent="text-red-400" />
+          <StatTile icon={Phone} label="Opted out" value={optedOutCount} accent="text-amber-400" />
+          <StatTile icon={Trash2} label="Manual" value={manualCount} accent="text-[var(--text-3)]" />
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -156,7 +185,7 @@ export default function DoNotCallPage() {
               </p>
             </div>
           ) : (
-            <div className="rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--bg-app)]">
+            <div className="glow-frame rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--bg-app)]">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm min-w-[400px]">
                   <thead>
