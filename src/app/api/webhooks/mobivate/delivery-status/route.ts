@@ -9,74 +9,41 @@
  * never 500 back to Mobivate, since retries would pile up without fixing the
  * underlying mismatch.
  *
- * Payload shape (Mobivate Bulk SMS delivery receipts):
- *   {
- *     id: string,          // Mobivate's message id (maps to provider_message_id)
- *     reference: string,   // Our echo — the sms_messages_v2.id we set in sendSMS()
- *     status: string,      // DELIVERED | UNDELIVERED | FAILED | EXPIRED | REJECTED | ACCEPTED | UNKNOWN
- *     statusCode?: string,
- *     recipient?: string,
- *     timestamp?: string,
- *     reason?: string,
- *   }
- *
- * Note: Exact field names are best-guess from Mobivate's Bulk SMS wiki. The
- * handler logs the full raw payload on first receipt so we can confirm shape
- * from live traffic and tighten this comment.
+ * Payload shape (CONFIRMED from prod logs 2026-06-18): a form-encoded body with one `xml`
+ * field holding a URL-encoded <deliveryreceipt> document:
+ *   xml=<deliveryreceipt>
+ *         <deliveryMessageId>…</deliveryMessageId>   // provider id  -> provider_message_id
+ *         <clientReference>…</clientReference>        // our echo     -> sms_messages_v2.id (match key)
+ *         <status>DELIVERED|UNDELIVERED|…</status>
+ *         <statusCode>…</statusCode><part>…</part><parts>…</parts>
+ *       </deliveryreceipt>
+ * Parsing (incl. JSON + legacy-form fallbacks) lives in lib/mobivateDeliveryReceipt.ts (unit-tested
+ * against real captured payloads). Before this fix the handler only tried JSON/plain-form, so every
+ * receipt dropped as "unrecognized body format" and all SMS stuck at 'sent'.
  *
  * Spec: .agent/tasks/2026-04-16_TASK_SMS_Mobivate_CustomerIO.md (delivery receipts)
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-
-type SmsStatus = "queued" | "sent" | "delivered" | "failed" | "undelivered";
-
-/**
- * Normalize Mobivate's status string to our sms_messages_v2.status enum.
- * Anything we don't recognize is treated as 'failed' (safer than silently
- * leaving the row in 'sent' — stakeholders reviewing the table want to see
- * problems, not ambiguity).
- */
-function normalizeStatus(raw: unknown): SmsStatus {
-  if (typeof raw !== "string") return "failed";
-  const s = raw.trim().toUpperCase();
-  if (s === "DELIVERED" || s === "DELIVRD") return "delivered";
-  if (s === "UNDELIVERED" || s === "UNDELIVERABLE") return "undelivered";
-  if (s === "ACCEPTED" || s === "SENT" || s === "ENROUTE") return "sent";
-  return "failed";
-}
+import { parseDeliveryReceipt } from "@/lib/mobivateDeliveryReceipt";
 
 export async function POST(request: NextRequest) {
-  // Mobivate delivery receipts may arrive as JSON or form-encoded.
-  // Try JSON first, then form-encoded, then log raw body for debugging.
-  let payload: Record<string, unknown>;
+  // Parsing (JSON / Mobivate `xml=`-wrapped XML / legacy form) lives in the pure,
+  // unit-tested parseDeliveryReceipt. Returns null only for genuinely unrecognized
+  // bodies — 200 those (never 500) so Mobivate doesn't retry-storm.
   const rawBody = await request.text();
+  const parsed = parseDeliveryReceipt(rawBody);
 
-  try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    // Try URL-encoded form data (common for SMS delivery receipts)
-    try {
-      const params = new URLSearchParams(rawBody);
-      if (params.has("id") || params.has("reference") || params.has("status")) {
-        payload = Object.fromEntries(params.entries());
-      } else {
-        console.warn("[mobivate/delivery-status] unrecognized body format:", rawBody.slice(0, 500));
-        return NextResponse.json({ received: true, parsed: false }, { status: 200 });
-      }
-    } catch {
-      console.warn("[mobivate/delivery-status] unparseable body:", rawBody.slice(0, 500));
-      return NextResponse.json({ received: true, parsed: false }, { status: 200 });
-    }
+  if (!parsed) {
+    console.warn("[mobivate/delivery-status] unrecognized body format:", rawBody.slice(0, 500));
+    return NextResponse.json({ received: true, parsed: false }, { status: 200 });
   }
 
-  console.log("[mobivate/delivery-status] payload:", JSON.stringify(payload));
-
-  const reference = typeof payload.reference === "string" ? payload.reference : null;
-  const providerMessageId = typeof payload.id === "string" ? payload.id : null;
-  const status = normalizeStatus(payload.status);
-  const reason = typeof payload.reason === "string" ? payload.reason : null;
+  const { reference, providerMessageId, status, reason } = parsed;
+  console.log(
+    `[mobivate/delivery-status] parsed reference=${reference} id=${providerMessageId} status=${status}`,
+  );
 
   // Match on `reference` (our UUID) first — it's what we set at send time.
   // Fall back to provider_message_id in case Mobivate sometimes omits `reference`.
