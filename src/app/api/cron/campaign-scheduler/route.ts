@@ -4,6 +4,7 @@ import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
+import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 import { CRON_NAMES, recordHeartbeat, postSlackNote, postSlackAlert, shouldAlertSpawnFail } from "@/lib/alerts/slack";
@@ -76,8 +77,14 @@ export async function GET(request: NextRequest) {
   // Closes adversarial review items C3 (no-calls_v2 stuck), C4/S2 (lost Vapi
   // webhook), and the queue-gate-blocking effect of long-stuck campaigns.
   //
+  // Status-aware (P2 fix, 2026-06-17): the candidate scan covers ALL in_progress
+  // rows, but resolution depends on the owning campaign's status — see
+  // lib/scheduler/stuckSweep.ts. running/paused resolve normally (paused dials on
+  // resume, restoring Maria's retry); completed/inactive/etc. resolve to terminal
+  // `unreached`. Previously the gate skipped every non-running campaign, stranding
+  // their in_progress numbers forever.
+  //
   // Bounded:
-  //   - Only running campaigns (per-iter status check)
   //   - .limit(50) on the candidate query
   //   - .eq("outcome", "in_progress") guard on every UPDATE prevents stomping
   //     late-arriving Vapi outcomes (sent_sms / not_interested / declined_offer)
@@ -85,7 +92,6 @@ export async function GET(request: NextRequest) {
   //     when retry_interval_minutes is set to a small value for testing
   const STALE_GRACE_MS = 5 * 60 * 1000;
   const MIN_GRACE_SEC = 60; // floor on next_attempt_at offset (defense vs retry_interval=0 testing)
-  const TERMINAL_CALL_STATUSES = ["completed", "no_answer", "busy", "failed", "canceled"];
   const sweepCutoff = new Date(Date.now() - STALE_GRACE_MS).toISOString();
 
   const { data: stuckCandidates, error: stuckErr } = await supabaseAdmin
@@ -131,7 +137,7 @@ export async function GET(request: NextRequest) {
     const campaignId = n.campaign_id as string;
 
     const campaign = await getCampaign(campaignId);
-    if (!campaign || campaign.status !== "running") continue;
+    if (!campaign) continue; // can't classify without the campaign row
 
     // Latest call lookup
     const { data: latestCall, error: callErr } = await supabaseAdmin
@@ -147,10 +153,26 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
-    // Branch (b): no calls_v2 row at all. fireCall failed at INSERT step before
-    // any provider call. No actual dial happened — revert to pending so it can
-    // be cleanly re-attempted by the next cron tick or chain-next.
-    if (!latestCall) {
+    // Status-aware decision (pure — see lib/scheduler/stuckSweep.ts). Resumable
+    // campaigns (running/paused) resolve normally; terminal ones (completed/
+    // inactive/etc.) resolve to `unreached` instead of being skipped forever.
+    const action = decideStuckResolution({
+      campaignStatus: campaign.status,
+      latestCall: latestCall
+        ? { status: latestCall.status as string, ended_at: (latestCall.ended_at as string | null) ?? null }
+        : null,
+      attemptCount: (n.attempt_count as number) ?? 0,
+      maxAttempts: campaign.max_attempts,
+      sweepCutoffIso: sweepCutoff,
+    });
+
+    // skip: latest call still live, or ended within the grace window — wait for the
+    // chain-next / end-of-call webhook to set the real outcome (same in_progress guard).
+    if (action === "skip") continue;
+
+    if (action === "pending") {
+      // No calls_v2 row: fireCall failed pre-INSERT, no dial happened. Revert to
+      // pending (no attempt_count bump) so the next tick re-attempts cleanly.
       await supabaseAdmin
         .from("campaign_numbers_v2")
         .update({ outcome: "pending", next_attempt_at: null })
@@ -161,28 +183,11 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
-    // Branch (a): latest call is still in flight → chain-next will handle.
-    if (!TERMINAL_CALL_STATUSES.includes(latestCall.status as string)) continue;
-    // Branch (a): latest call ended within grace window → wait for Vapi end-of-call.
-    if (!latestCall.ended_at || (latestCall.ended_at as string) > sweepCutoff) continue;
-
-    // Branch (a) resolution: at max attempts → unreached; else → pending_retry.
-    const attempts = (n.attempt_count as number) ?? 0;
-    const maxAttempts = campaign.max_attempts;
-    const retryMin = campaign.retry_interval_minutes;
-
-    if (attempts >= maxAttempts) {
-      await supabaseAdmin
-        .from("campaign_numbers_v2")
-        .update({ outcome: "unreached" })
-        .eq("id", numberId)
-        .eq("outcome", "in_progress");
-      console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → unreached (max attempts)`);
-      sweeperResults.push({ id: numberId, result: "unreached_exhausted" });
-    } else {
+    if (action === "pending_retry") {
       // Floor next_attempt_at at now + MIN_GRACE_SEC so a same-tick resume sweep
       // can't fire a fresh retry that races a still-in-flight late Vapi webhook.
-      const retryMs = Math.max(retryMin * 60 * 1000, MIN_GRACE_SEC * 1000);
+      // On a paused campaign this just waits for resume (no dial while paused).
+      const retryMs = Math.max(campaign.retry_interval_minutes * 60 * 1000, MIN_GRACE_SEC * 1000);
       const retryAt = new Date(Date.now() + retryMs).toISOString();
       await supabaseAdmin
         .from("campaign_numbers_v2")
@@ -191,7 +196,23 @@ export async function GET(request: NextRequest) {
         .eq("outcome", "in_progress");
       console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → pending_retry @ ${retryAt}`);
       sweeperResults.push({ id: numberId, result: "pending_retry" });
+      continue;
     }
+
+    // unreached_max (resumable, at max attempts) | unreached_terminal (campaign will
+    // never dial again). Both write the terminal `unreached`; the stomp-guard still
+    // yields to a late real outcome that arrives before this UPDATE.
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({ outcome: "unreached" })
+      .eq("id", numberId)
+      .eq("outcome", "in_progress");
+    const why = action === "unreached_max" ? "max attempts" : `terminal campaign — status=${campaign.status}`;
+    console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → unreached (${why})`);
+    sweeperResults.push({
+      id: numberId,
+      result: action === "unreached_max" ? "unreached_exhausted" : "unreached_terminal_campaign",
+    });
   }
 
   // ── Resume idle running campaigns where retries are due (B2) ──
