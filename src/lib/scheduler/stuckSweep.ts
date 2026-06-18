@@ -32,27 +32,35 @@ export const TERMINAL_CALL_STATUSES: string[] = [
 const RESUMABLE_CAMPAIGN_STATUSES: ReadonlySet<string> = new Set(["running", "paused"]);
 
 export type StuckSweepAction =
-  | "skip" // latest call still live, or ended within the grace window — wait
+  | "skip" // latest call still live (and recent), or ended within the grace window — wait
   | "pending" // resumable campaign, no calls_v2 row (fireCall failed pre-INSERT) — re-queue
   | "pending_retry" // resumable campaign, terminal call, under max_attempts — retry per policy
   | "unreached_max" // resumable campaign, terminal call, at/over max_attempts — terminal
-  | "unreached_terminal"; // non-resumable campaign — terminal, will never dial these again
+  | "unreached_terminal" // non-resumable campaign — terminal, will never dial these again
+  | "reap_pending" // resumable, latest call FROZEN non-terminal past the stale floor — mark call dead + re-queue
+  | "reap_unreached"; // non-resumable, latest call frozen non-terminal past the stale floor — mark call dead + terminal
 
 export interface StuckSweepInput {
   /** campaigns_v2.status of the owning campaign. */
   campaignStatus: string;
   /** Most recent calls_v2 row for the number, or null if none exists. */
-  latestCall: { status: string; ended_at: string | null } | null;
+  latestCall: { status: string; ended_at: string | null; created_at: string | null } | null;
   /** campaign_numbers_v2.attempt_count. */
   attemptCount: number;
   /** campaigns_v2.max_attempts. */
   maxAttempts: number;
-  /** ISO string: a call that ended AFTER this is still within the grace window. */
+  /** ISO string: a terminal call that ended AFTER this is still within the grace window. */
   sweepCutoffIso: string;
+  /**
+   * ISO string: a NON-terminal call CREATED at or before this is frozen/dead and gets
+   * reaped (P2b). Set well above any real call's lifetime (Vapi hard-caps calls at 180s),
+   * so a genuinely-live call is never reaped.
+   */
+  staleCutoffIso: string;
 }
 
 export function decideStuckResolution(input: StuckSweepInput): StuckSweepAction {
-  const { campaignStatus, latestCall, attemptCount, maxAttempts, sweepCutoffIso } = input;
+  const { campaignStatus, latestCall, attemptCount, maxAttempts, sweepCutoffIso, staleCutoffIso } = input;
   const resumable = RESUMABLE_CAMPAIGN_STATUSES.has(campaignStatus);
 
   // No call row: fireCall failed before the INSERT step — no provider call was ever
@@ -61,8 +69,18 @@ export function decideStuckResolution(input: StuckSweepInput): StuckSweepAction 
     return resumable ? "pending" : "unreached_terminal";
   }
 
-  // Latest call still live → the chain-next / end-of-call webhook will resolve it.
-  if (!TERMINAL_CALL_STATUSES.includes(latestCall.status)) return "skip";
+  // Latest call still has a non-terminal status.
+  if (!TERMINAL_CALL_STATUSES.includes(latestCall.status)) {
+    // Frozen past the staleness floor (e.g. stuck at `initiated` for months because the
+    // status webhook was lost) → the call is dead; reap it (P2b). The number resolves and
+    // the dead row is marked terminal so the resume-sweep in-flight guard stops counting
+    // it. Unknown age (no created_at) → never reap.
+    if (latestCall.created_at && latestCall.created_at <= staleCutoffIso) {
+      return resumable ? "reap_pending" : "reap_unreached";
+    }
+    // Recent → may still be live; the chain-next / end-of-call webhook will resolve it.
+    return "skip";
+  }
 
   // Ended within the grace window → wait for a possibly-late Vapi end-of-call webhook
   // (applies to terminal campaigns too — never stomp a still-arriving real outcome).

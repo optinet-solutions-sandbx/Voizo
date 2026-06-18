@@ -90,9 +90,19 @@ export async function GET(request: NextRequest) {
   //     late-arriving Vapi outcomes (sent_sms / not_interested / declined_offer)
   //   - MIN_GRACE_SEC floor on next_attempt_at prevents tight-loop thrash
   //     when retry_interval_minutes is set to a small value for testing
+  //
+  // P2b (frozen-call reaper): a call stuck at a NON-terminal status (e.g. `initiated`
+  // because its status webhook was lost) is never terminal, so it has no ended_at to
+  // grace-check and would be skipped forever — also tripping the resume-sweep in-flight
+  // guard and stalling a running campaign. STALE_NONTERMINAL_MS bounds it: a non-terminal
+  // call older than this is dead (Vapi hard-caps real calls at 180s — cloneAssistant.ts),
+  // so we mark the row terminal and resolve the number. 30 min is ~10x the 180s ceiling,
+  // so a genuinely-live call is never reaped.
   const STALE_GRACE_MS = 5 * 60 * 1000;
+  const STALE_NONTERMINAL_MS = 30 * 60 * 1000; // P2b: a non-terminal call older than this is dead → reap
   const MIN_GRACE_SEC = 60; // floor on next_attempt_at offset (defense vs retry_interval=0 testing)
   const sweepCutoff = new Date(Date.now() - STALE_GRACE_MS).toISOString();
+  const staleCutoff = new Date(Date.now() - STALE_NONTERMINAL_MS).toISOString();
 
   const { data: stuckCandidates, error: stuckErr } = await supabaseAdmin
     .from("campaign_numbers_v2")
@@ -142,7 +152,7 @@ export async function GET(request: NextRequest) {
     // Latest call lookup
     const { data: latestCall, error: callErr } = await supabaseAdmin
       .from("calls_v2")
-      .select("status, ended_at")
+      .select("id, status, ended_at, created_at")
       .eq("campaign_number_id", numberId)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -154,16 +164,22 @@ export async function GET(request: NextRequest) {
     }
 
     // Status-aware decision (pure — see lib/scheduler/stuckSweep.ts). Resumable
-    // campaigns (running/paused) resolve normally; terminal ones (completed/
-    // inactive/etc.) resolve to `unreached` instead of being skipped forever.
+    // campaigns (running/paused) resolve normally; terminal ones (completed/inactive/
+    // etc.) resolve to `unreached`; a call frozen non-terminal past the stale floor is
+    // reaped (P2b) — instead of any of these being skipped forever.
     const action = decideStuckResolution({
       campaignStatus: campaign.status,
       latestCall: latestCall
-        ? { status: latestCall.status as string, ended_at: (latestCall.ended_at as string | null) ?? null }
+        ? {
+            status: latestCall.status as string,
+            ended_at: (latestCall.ended_at as string | null) ?? null,
+            created_at: (latestCall.created_at as string | null) ?? null,
+          }
         : null,
       attemptCount: (n.attempt_count as number) ?? 0,
       maxAttempts: campaign.max_attempts,
       sweepCutoffIso: sweepCutoff,
+      staleCutoffIso: staleCutoff,
     });
 
     // skip: latest call still live, or ended within the grace window — wait for the
@@ -196,6 +212,37 @@ export async function GET(request: NextRequest) {
         .eq("outcome", "in_progress");
       console.log(`[scheduler.sweep] ${campaign.name}: ${numberId} → pending_retry @ ${retryAt}`);
       sweeperResults.push({ id: numberId, result: "pending_retry" });
+      continue;
+    }
+
+    if (action === "reap_pending" || action === "reap_unreached") {
+      // P2b: the latest call is frozen non-terminal past the staleness floor — dead.
+      // Mark the dead row terminal (status=failed, ended_at=now) so the resume-sweep
+      // in-flight guard stops counting it (unblocks a stalled running campaign) and
+      // analytics no longer see a phantom live call. Guard on the observed status so a
+      // (theoretical, 30-min-old) late real webhook update isn't stomped. Then resolve
+      // the number: resumable → pending (clean re-attempt), terminal → unreached.
+      if (latestCall) {
+        await supabaseAdmin
+          .from("calls_v2")
+          .update({ status: "failed", ended_at: new Date().toISOString() })
+          .eq("id", latestCall.id as string)
+          .eq("status", latestCall.status as string);
+      }
+      const reapOutcome = action === "reap_pending" ? "pending" : "unreached";
+      await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update(action === "reap_pending" ? { outcome: reapOutcome, next_attempt_at: null } : { outcome: reapOutcome })
+        .eq("id", numberId)
+        .eq("outcome", "in_progress");
+      console.log(
+        `[scheduler.sweep] ${campaign.name}: ${numberId} → ${reapOutcome} ` +
+        `(reaped frozen ${latestCall?.status} call ${latestCall?.id})`,
+      );
+      sweeperResults.push({
+        id: numberId,
+        result: action === "reap_pending" ? "reaped_to_pending" : "reaped_to_unreached",
+      });
       continue;
     }
 
