@@ -97,18 +97,27 @@ export async function findNextNumber(campaignId: string) {
 
   const now = new Date().toISOString();
 
+  // Eligibility is filtered IN THE QUERY (not after .limit), and due-soonest is ordered
+  // first. This fixes a starvation stall: campaign_numbers are batch-loaded with a single
+  // shared created_at, so .order("created_at") was a meaningless tie and the arbitrary
+  // limit(20) window could be filled entirely by not-yet-due pending_retry rows — making
+  // findNextNumber return null even though many 'pending' numbers were due NOW (they sat
+  // beyond the window). With the eligibility filter the window holds only dialable rows;
+  // nullsFirst puts fresh 'pending' (null next_attempt_at) ahead of due retries.
   const { data: numbers, error: nErr } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("*")
     .eq("campaign_id", campaignId)
-    .in("outcome", ["pending", "pending_retry"])
     .lt("attempt_count", campaign.max_attempts)
+    .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${now})`)
+    .order("next_attempt_at", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true })
     .limit(20);
 
   if (nErr || !numbers || numbers.length === 0) return null;
 
-  // Filter: pending_retry must have next_attempt_at <= now
+  // Defensive backstop (redundant with the query filter above): never surface a
+  // not-yet-due pending_retry to dial, even if the filter were ever malformed.
   const eligible = numbers.find((n) => {
     if (n.outcome === "pending_retry") {
       return n.next_attempt_at && n.next_attempt_at <= now;
