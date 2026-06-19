@@ -397,7 +397,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ── Update calls_v2 with transcript, goal_reached, and recording_url ──
+  // ── Update calls_v2 with transcript, goal_reached, recording_url + observability signals ──
   await supabaseAdmin
     .from("calls_v2")
     .update({
@@ -405,6 +405,12 @@ export async function POST(request: NextRequest) {
       transcript: transcript ? { text: transcript } : null,
       goal_reached: goalReached,
       recording_url: recordingUrl,
+      // Observability (received earlier in this handler but previously discarded): Vapi's
+      // conversation-leg end reason, and our transcript-based voicemail flag. voicemailDetected
+      // (not vapiCall.endedReason) is the source of truth for voicemail — Vapi rarely sets
+      // endedReason='voicemail' on our SIP calls (see cloneAssistant.ts beepMaxAwaitSeconds note).
+      ended_reason: vapiCall?.endedReason ?? null,
+      voicemail: voicemailDetected,
     })
     .eq("id", callRow.id);
 

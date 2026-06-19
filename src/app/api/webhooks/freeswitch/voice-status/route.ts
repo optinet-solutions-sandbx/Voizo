@@ -100,6 +100,10 @@ export async function POST(request: NextRequest) {
     status,
     ended_at: new Date().toISOString(),
     duration_seconds: duration,
+    // Persist the RAW FreeSWITCH hangup cause (carrier/outbound-leg "why") alongside the coarse
+    // `status`. mapHangup() above still derives status from it; this keeps the granular cause for
+    // failure-mix observability (was discarded before). See call-observability migration.
+    hangup_cause: payload.hangup_cause,
   };
   if (payload.call_uuid) updatePayload.provider_call_id = payload.call_uuid;
 
