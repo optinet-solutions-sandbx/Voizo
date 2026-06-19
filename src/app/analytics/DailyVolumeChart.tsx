@@ -3,9 +3,11 @@
 // Slice 5b — Daily call volume: stacked bar, calls per day broken down by campaign
 // (top-10 + "Other"), campaign-colored. Driven by the global filters. Recharts.
 
+import { useState } from "react";
 import { BarChart3 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { formatCampaign, campaignShortLabel } from "@/lib/campaignDisplay";
+import { toggleKey } from "@/lib/toggleSet";
 import type { VolumeResult, VolumeSeries } from "@/lib/dashboardAnalytics";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -62,6 +64,9 @@ function VolumeTooltip({
 
 export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
   const { days, series } = data;
+  // Interactive legend: clicking a campaign hides/shows its bars (stack re-totals accordingly).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const visible = series.filter((s) => !hidden.has(s.key));
   return (
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5">
       <div className="flex items-center gap-2 mb-1">
@@ -79,18 +84,28 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
               <XAxis dataKey="day" tickFormatter={shortDay} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} minTickGap={24} />
               <YAxis stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
               <Tooltip content={<VolumeTooltip series={series} />} cursor={{ fill: "var(--bg-hover)", opacity: 0.4 }} />
-              {series.map((s) => (
+              {visible.map((s) => (
                 <Bar key={s.key} dataKey={s.key} stackId="v" fill={seriesColor(s.key)} maxBarSize={48} />
               ))}
             </BarChart>
           </ResponsiveContainer>
           <div className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3">
-            {series.map((s) => (
-              <span key={s.key} title={seriesFull(s)} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-3)]">
-                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: seriesColor(s.key) }} />
-                <span className="truncate max-w-[200px]">{seriesLabel(s)}</span>
-              </span>
-            ))}
+            {series.map((s) => {
+              const off = hidden.has(s.key);
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setHidden((h) => toggleKey(h, s.key))}
+                  title={`${seriesFull(s)} — click to ${off ? "show" : "hide"}`}
+                  aria-pressed={!off}
+                  className={`inline-flex items-center gap-1.5 text-[11px] transition ${off ? "text-[var(--text-3)] opacity-40 line-through" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+                >
+                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: seriesColor(s.key) }} />
+                  <span className="truncate max-w-[200px]">{seriesLabel(s)}</span>
+                </button>
+              );
+            })}
           </div>
         </>
       )}

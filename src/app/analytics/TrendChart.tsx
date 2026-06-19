@@ -4,8 +4,10 @@
 // on a dual Y-axis. Driven by the global filters (data comes pre-windowed from the endpoint).
 // Recharts (installed). Colors stay consistent with the rest of the dashboard.
 
+import { useState } from "react";
 import { Activity } from "lucide-react";
 import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { toggleKey } from "@/lib/toggleSet";
 import type { TrendPoint } from "@/lib/dashboardAnalytics";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -37,6 +39,8 @@ function TrendTooltip({
 }
 
 export default function TrendChart({ data }: { data: TrendPoint[] }) {
+  // Interactive legend: click a series to hide/show its area/line.
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
   return (
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 flex flex-col">
       <div className="flex items-center gap-2 mb-1">
@@ -54,14 +58,27 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
           <YAxis yAxisId="left" tickFormatter={fmtPct} stroke="#34d399" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} />
           <YAxis yAxisId="right" orientation="right" tickFormatter={fmtPct} stroke="#fbbf24" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} />
           <Tooltip content={<TrendTooltip />} />
-          <Area yAxisId="left" type="monotone" dataKey="connectRate" stroke="#34d399" fill="#34d399" fillOpacity={0.12} strokeWidth={2} connectNulls />
-          <Line yAxisId="right" type="monotone" dataKey="successRate" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />
+          {!hidden.has("connectRate") && <Area yAxisId="left" type="monotone" dataKey="connectRate" stroke="#34d399" fill="#34d399" fillOpacity={0.12} strokeWidth={2} connectNulls />}
+          {!hidden.has("successRate") && <Line yAxisId="right" type="monotone" dataKey="successRate" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />}
         </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="flex items-center gap-4 mt-2 text-[11px] text-[var(--text-3)]">
-        <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-400" /> Connect rate</span>
-        <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400" /> Success rate</span>
+      <div className="flex items-center gap-4 mt-2 text-[11px]">
+        {([["connectRate", "Connect rate", "bg-emerald-400"], ["successRate", "Success rate", "bg-amber-400"]] as const).map(([key, label, dot]) => {
+          const off = hidden.has(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setHidden((h) => toggleKey(h, key))}
+              title={`Click to ${off ? "show" : "hide"} ${label.toLowerCase()}`}
+              aria-pressed={!off}
+              className={`inline-flex items-center gap-1.5 transition ${off ? "text-[var(--text-3)] opacity-40 line-through" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+            >
+              <span className={`w-2.5 h-2.5 rounded-sm ${dot}`} /> {label}
+            </button>
+          );
+        })}
       </div>
     </section>
   );
