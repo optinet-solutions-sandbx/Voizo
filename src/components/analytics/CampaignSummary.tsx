@@ -65,7 +65,21 @@ export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
           value={pct(a.connectRate)}
           sub={`${a.connected.toLocaleString()} of ${a.totalCalls.toLocaleString()} calls`}
           color="text-emerald-400"
-          hint="Connected ÷ calls placed. Includes voicemail (no minimum-duration floor). Same as the Connect column."
+          hint="Connected ÷ calls placed. Includes voicemail (no minimum-duration floor) — see Reach for human-only. Same as the Connect column."
+        />
+        <Stat
+          label="Reach"
+          value={a.reach.toLocaleString()}
+          sub="humans (excl. voicemail)"
+          color="text-teal-400"
+          hint="Connected calls minus detected voicemails — roughly how many real humans we reached. Calls not yet evaluated for voicemail count as reach, so on older data this can equal Connected."
+        />
+        <Stat
+          label="Voicemail"
+          value={pct(a.voicemailRate)}
+          sub={a.voicemailRate === null ? "not tracked yet" : `${a.voicemailConnected.toLocaleString()} of ${a.voicemailEvaluated.toLocaleString()} evaluated`}
+          color="text-violet-400"
+          hint="Share of EVALUATED connected calls that reached voicemail. Voicemail tracking began recently, so this shows — until evaluated calls exist; historical connects read as reach, not voicemail."
         />
         <Stat
           label="Declined"
