@@ -56,7 +56,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const eq = { column: "campaign_id", value: id };
   const [numbers, calls, sms] = await Promise.all([
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id, outcome, created_at", "id", eq),
-    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at", "id", eq),
+    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail", "id", eq),
     fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, provider", "id", eq),
   ]);
 

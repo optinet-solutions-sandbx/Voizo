@@ -288,3 +288,52 @@ describe("computeCampaignAnalytics — durationHistogram + strict funnel (Phase 
     expect([a.targeted, a.dialedNumbers, a.connectedNumbers, a.goalNumbers]).toEqual([4, 4, 3, 2]);
   });
 });
+
+describe("computeCampaignAnalytics — voicemail / reach (call-observability slice)", () => {
+  const r = computeCampaignAnalytics(FIXTURE_INPUT);
+
+  it("historical rows (voicemail null) → rate null, reach == connected (tracking-from-deploy)", () => {
+    // The fixture's connected calls carry no voicemail flag (NULL) — i.e. not yet evaluated.
+    // The rate must be NULL (0 evaluated), NOT a misleading 0%; reach falls back to connected.
+    expect(r["big"].connected).toBe(4);
+    expect(r["big"].voicemailConnected).toBe(0);
+    expect(r["big"].voicemailEvaluated).toBe(0);
+    expect(r["big"].voicemailRate).toBeNull();
+    expect(r["big"].reach).toBe(4);
+  });
+
+  it("voicemailRate is over EVALUATED connects; reach = connected − known voicemails", () => {
+    const vm = computeCampaignAnalytics({
+      campaigns: [{ id: "vm", name: "VM", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "v1", campaign_id: "vm", outcome: "sent_sms" }],
+      calls: [
+        { campaign_id: "vm", campaign_number_id: "v1", status: "completed", voicemail: true },
+        { campaign_id: "vm", campaign_number_id: "v1", status: "completed", voicemail: true },
+        { campaign_id: "vm", campaign_number_id: "v1", status: "completed", voicemail: false },
+        { campaign_id: "vm", campaign_number_id: "v1", status: "completed", voicemail: null }, // unevaluated
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(vm["vm"].connected).toBe(4);
+    expect(vm["vm"].voicemailConnected).toBe(2);
+    expect(vm["vm"].voicemailEvaluated).toBe(3); // 2 true + 1 false (null excluded)
+    expect(vm["vm"].voicemailRate).toBeCloseTo(2 / 3);
+    expect(vm["vm"].reach).toBe(2); // 4 connected − 2 known voicemails
+  });
+
+  it("a voicemail flag on a NON-connected call is ignored (only connected calls can be voicemail)", () => {
+    const g = computeCampaignAnalytics({
+      campaigns: [{ id: "g", name: "G", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "g1", campaign_id: "g", outcome: "sent_sms" }],
+      calls: [
+        { campaign_id: "g", campaign_number_id: "g1", status: "completed", voicemail: true },
+        { campaign_id: "g", campaign_number_id: "g1", status: "no_answer", voicemail: true }, // ignored
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(g["g"].connected).toBe(1);
+    expect(g["g"].voicemailConnected).toBe(1);
+    expect(g["g"].voicemailEvaluated).toBe(1);
+    expect(g["g"].reach).toBe(0); // 1 connected − 1 voicemail
+  });
+});

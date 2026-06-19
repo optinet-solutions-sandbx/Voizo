@@ -36,6 +36,7 @@ export interface CallRow {
   goal_reached?: boolean | null;
   duration_seconds?: number | null;
   created_at?: string | null;
+  voicemail?: boolean | null; // calls_v2.voicemail (transcript-detected); NULL = not evaluated (historical / pre-deploy)
 }
 export interface SmsRow {
   campaign_id: string;
@@ -104,10 +105,15 @@ export interface CampaignAnalytics {
   connectedNumbers: number; // distinct campaign_number_id with a connected call
   totalCalls: number;
   connected: number;
+  // voicemail / reach (call-observability slice) — connected-gated, null-safe over evaluated calls
+  voicemailConnected: number; // connected calls flagged voicemail===true
+  voicemailEvaluated: number; // connected calls with a non-null voicemail flag (true|false)
+  reach: number; // human-only connects = connected − voicemailConnected (unevaluated count as reached)
   goalCalls: number;
   goalNumbers: number;
   // rates (null = uncomputable; never NaN — G1)
   conversion: number | null;
+  voicemailRate: number | null; // voicemailConnected / voicemailEvaluated (NULL until calls are evaluated)
   yield: number | null;
   connectRate: number | null;
   reachability: number | null;
@@ -245,6 +251,8 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
 
   let connected = 0;
   let goalCalls = 0;
+  let voicemailConnected = 0; // connected calls flagged voicemail===true
+  let voicemailEvaluated = 0; // connected calls with a non-null voicemail flag
   const dialed = new Set<string>();
   const connectedNums = new Set<string>();
   const goalNums = new Set<string>();
@@ -257,6 +265,10 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     if (isConnected) {
       connected++;
       if (numId) connectedNums.add(numId);
+      // Voicemail/reach (call-observability slice): only CONNECTED ('completed') calls can be a
+      // voicemail. NULL = not evaluated (historical/pre-deploy) → excluded from the rate denom.
+      if (c.voicemail === true) voicemailConnected++;
+      if (c.voicemail != null) voicemailEvaluated++;
       // goalNumbers is gated to connected calls so connectedNums ⊇ goalNums by construction
       // (keeps the conversion-leak drop in Task 7 non-negative). goal on a non-connected
       // row would be a data anomaly; goalCalls below still counts every goal_reached row.
@@ -449,9 +461,13 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     connectedNumbers: connectedNums.size,
     totalCalls,
     connected,
+    voicemailConnected,
+    voicemailEvaluated,
+    reach: connected - voicemailConnected,
     goalCalls,
     goalNumbers: goalNums.size,
     conversion: safeDiv(goalCalls, connected),
+    voicemailRate: safeDiv(voicemailConnected, voicemailEvaluated),
     yield: safeDiv(goalNums.size, targeted),
     connectRate: safeDiv(connected, terminal),
     reachability: safeDiv(connectedNums.size, dialed.size),
