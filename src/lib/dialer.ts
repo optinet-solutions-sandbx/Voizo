@@ -104,6 +104,9 @@ export async function findNextNumber(campaignId: string) {
   // findNextNumber return null even though many 'pending' numbers were due NOW (they sat
   // beyond the window). With the eligibility filter the window holds only dialable rows;
   // nullsFirst puts fresh 'pending' (null next_attempt_at) ahead of due retries.
+  // id ascending is the final STABLE tiebreak: created_at is batch-identical, so without it the
+  // limit(20) window + pick are non-deterministic. id (uuid PK) makes dial order reproducible and
+  // matches campaignRunFlow.deriveRunFlow, so the detail page's "Up next" == the number we dial.
   const { data: numbers, error: nErr } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("*")
@@ -112,6 +115,7 @@ export async function findNextNumber(campaignId: string) {
     .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${now})`)
     .order("next_attempt_at", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
     .limit(20);
 
   if (nErr || !numbers || numbers.length === 0) return null;

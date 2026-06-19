@@ -28,19 +28,21 @@ describe("deriveRunFlow", () => {
     expect(f.pending).toBe(2);
     expect(f.awaitingRetry).toBe(2);
     expect(f.inProgress).toBe(1);
-    expect(f.nowDialing).toEqual({ phone: "+100000002", position: 2 });
-    expect(f.upNext).toEqual({ phone: "+100000004", position: 4 }); // first eligible (pending)
+    expect(f.nowDialing).toEqual({ phone: "+100000002" });
+    expect(f.upNext).toEqual({ phone: "+100000004" }); // first eligible (a fresh pending)
     expect(f.nextRetryAt).toBe(iso(30)); // earliest future window
   });
 
-  it("an eligible pending_retry (window passed) outranks a later pending for up-next", () => {
+  it("a fresh pending outranks a DUE retry for up-next (findNextNumber orders next_attempt_at NULLS FIRST)", () => {
     seq = 0;
     const numbers: RunFlowNumber[] = [
-      num({ outcome: "pending_retry", next_attempt_at: iso(-5) }), // #1 window already passed → eligible now
-      num({ outcome: "pending" }),                                 // #2
+      num({ outcome: "pending_retry", next_attempt_at: iso(-5) }), // #1 due retry, EARLIER created_at
+      num({ outcome: "pending" }),                                 // #2 fresh pending, later created_at
     ];
     const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
-    expect(f.upNext).toEqual({ phone: "+100000001", position: 1 });
+    // The dialer dials the fresh pending (null next_attempt_at sorts first), NOT the due retry,
+    // even though the retry was created earlier. The preview must match.
+    expect(f.upNext).toEqual({ phone: "+100000002" });
     expect(f.nextRetryAt).toBeNull(); // the only retry is already due, not "future"
   });
 
@@ -51,7 +53,7 @@ describe("deriveRunFlow", () => {
       num({ outcome: "pending", attempt_count: 0 }), // #2 up next
     ];
     const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
-    expect(f.upNext).toEqual({ phone: "+100000002", position: 2 });
+    expect(f.upNext).toEqual({ phone: "+100000002" });
   });
 
   it("paused/between calls: no in-progress → nowDialing null, up-next still resolves", () => {
@@ -62,7 +64,7 @@ describe("deriveRunFlow", () => {
     ];
     const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
     expect(f.nowDialing).toBeNull();
-    expect(f.upNext).toEqual({ phone: "+100000002", position: 2 });
+    expect(f.upNext).toEqual({ phone: "+100000002" });
   });
 
   it("all terminal: done = total, no up-next, no future retry", () => {
@@ -80,14 +82,43 @@ describe("deriveRunFlow", () => {
     expect(f.nextRetryAt).toBeNull();
   });
 
-  it("sorts by created_at so positions reflect dial order regardless of input order", () => {
+  it("picks now-dialing and up-next in dial order regardless of input order", () => {
     const numbers: RunFlowNumber[] = [
       { created_at: iso(3), phone_e164: "+1C", outcome: "pending" },
       { created_at: iso(1), phone_e164: "+1A", outcome: "in_progress" },
       { created_at: iso(2), phone_e164: "+1B", outcome: "pending" },
     ];
     const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
-    expect(f.nowDialing).toEqual({ phone: "+1A", position: 1 }); // earliest created_at
-    expect(f.upNext).toEqual({ phone: "+1B", position: 2 });
+    expect(f.nowDialing).toEqual({ phone: "+1A" }); // earliest created_at
+    expect(f.upNext).toEqual({ phone: "+1B" });
+  });
+
+  // Tie-break (deterministic dial order). campaign_numbers loaded in one batch share an
+  // identical created_at (memory project_dialer_findnext_starvation_fixed), so created_at
+  // alone is a meaningless tie: the dial pick is input-order-dependent. The dialer query and
+  // THIS preview must break the tie by id so "Up next" matches what findNextNumber dials.
+  it("tie-break: equal created_at orders by id ascending (deterministic)", () => {
+    const sameTime = iso(0);
+    // Larger id FIRST in input — a created_at-only stable sort keeps it, wrongly making the
+    // larger-id number "up next". An id-ascending tiebreak must surface the smaller id.
+    const numbers: RunFlowNumber[] = [
+      { id: "bbbbbbbb-0000-0000-0000-000000000000", created_at: sameTime, phone_e164: "+1BIG", outcome: "pending", attempt_count: 0 },
+      { id: "aaaaaaaa-0000-0000-0000-000000000000", created_at: sameTime, phone_e164: "+1SMALL", outcome: "pending", attempt_count: 0 },
+    ];
+    const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
+    expect(f.upNext).toEqual({ phone: "+1SMALL" });
+  });
+
+  it("dueNow counts retries whose window has already passed (eligible to dial right now)", () => {
+    seq = 0;
+    const numbers: RunFlowNumber[] = [
+      num({ outcome: "pending_retry", next_attempt_at: iso(-5) }), // due now
+      num({ outcome: "pending_retry", next_attempt_at: iso(-1) }), // due now
+      num({ outcome: "pending_retry", next_attempt_at: iso(30) }), // future
+      num({ outcome: "pending" }),                                 // not a retry
+    ];
+    const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
+    expect(f.awaitingRetry).toBe(3);
+    expect(f.dueNow).toBe(2);
   });
 });

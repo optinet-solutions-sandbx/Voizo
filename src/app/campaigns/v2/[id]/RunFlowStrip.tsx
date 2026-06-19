@@ -57,7 +57,6 @@ export default function RunFlowStrip({
             <span className="inline-flex items-center gap-1.5 text-[var(--text-2)]">
               <PhoneCall size={12} className="text-emerald-400" />
               Now dialing <span className="font-mono text-[var(--text-1)]">{flow.nowDialing.phone}</span>
-              <span className="text-[var(--text-3)]">· #{flow.nowDialing.position} of {flow.total}</span>
             </span>
           ) : (
             <span className="text-[var(--text-3)]">{running ? "Between calls…" : "Not dialing"}</span>
@@ -66,12 +65,11 @@ export default function RunFlowStrip({
         {flow.upNext && (
           <span
             className="inline-flex items-center gap-1 text-xs text-[var(--text-2)]"
-            title="Next in dial order (upload order). The final pick also re-checks the do-not-call list at dial time."
+            title="The next number the dialer will call — same order the dialer uses (fresh pending first, then due retries by window time). It re-checks the do-not-call list at dial time."
           >
             <ChevronRight size={12} className="text-[var(--text-3)]" />
             {running ? "Up next" : "Resumes with"}{" "}
             <span className="font-mono text-[var(--text-1)]">{flow.upNext.phone}</span>
-            <span className="text-[var(--text-3)]">· #{flow.upNext.position}</span>
           </span>
         )}
       </div>
@@ -91,6 +89,9 @@ export default function RunFlowStrip({
         </span>
         <span>
           <span className="font-semibold text-amber-400">{flow.awaitingRetry.toLocaleString()}</span> awaiting retry
+          {flow.dueNow > 0 && (
+            <span className="text-[var(--text-2)]"> ({flow.dueNow.toLocaleString()} due now)</span>
+          )}
         </span>
         {running && flow.inProgress > 0 && (
           <span>
