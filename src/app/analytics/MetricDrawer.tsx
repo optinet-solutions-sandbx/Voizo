@@ -1,6 +1,6 @@
 "use client";
 
-// Slide-over "metric report" behind every clickable dashboard KPI card (dashboard-metric-drilldown
+// Centered modal "metric report" behind every clickable dashboard KPI card (dashboard-metric-drilldown
 // spec, Feature 2). A plain-language receipt + a region × time (today / yesterday / last-7d)
 // breakdown — operator-first: a hero number, colored movement chips, and proportional mini-bars,
 // no formulas. Fetches the aggregates-only /api/dashboard/metric-breakdown on open (once per open).
@@ -165,16 +165,16 @@ export default function MetricDrawer({ metric, onClose }: { metric: MetricKey | 
   const total = data?.total;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`${m.label} breakdown`}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`${m.label} breakdown`}>
       <button
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
       />
-      <div className="relative h-full w-full max-w-md overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-app)] shadow-2xl">
+      <div className="relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl">
         {/* Header — icon + title + subtitle, mirrors the prompt modal's chrome. */}
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-app)] px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div className="min-w-0">
             <span className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text-1)]">
               <Icon size={15} className={m.accent} /> {m.label}
@@ -186,7 +186,7 @@ export default function MetricDrawer({ metric, onClose }: { metric: MetricKey | 
           </button>
         </div>
 
-        <div className="grid gap-4 p-5">
+        <div className="grid min-h-0 gap-4 overflow-y-auto p-5">
           {loading && <p className="py-10 text-center text-xs text-[var(--text-3)]">Loading breakdown…</p>}
           {error && <p className="py-10 text-center text-xs text-amber-400">Couldn&apos;t load this breakdown ({error}).</p>}
 
