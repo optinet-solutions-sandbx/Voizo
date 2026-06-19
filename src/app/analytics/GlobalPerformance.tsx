@@ -6,7 +6,7 @@
 // until the prompt-attribution slice. Data: /api/dashboard/analytics.
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Phone, Zap, CheckCircle2, Trophy, Mic, FileText, Search, X } from "lucide-react";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
@@ -16,6 +16,7 @@ import RankedTables, { type AgentRow, type CampaignLbRow, type PromptRow } from 
 import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
+import { type MetricKey } from "./MetricDrawer";
 import HeatMap from "./HeatMap";
 import type { TrendPoint, VolumeResult, HeatmapResult } from "@/lib/dashboardAnalytics";
 
@@ -70,6 +71,7 @@ interface GlobalPerformanceProps {
   filters: Filters;
   onChange: (next: Filters) => void;
   onFocusCampaign: (id: string) => void; // set campaignIds=[id] + scroll to this section
+  onMetricClick?: (m: MetricKey) => void; // open the metric drill-down drawer (state lifted to DashboardView)
 }
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
@@ -157,18 +159,33 @@ function KpiCard({
   value,
   valueColor = "text-[var(--text-1)]",
   sub,
+  onClick,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   valueColor?: string;
   sub: ReactNode;
+  onClick?: () => void;
 }) {
   const magnetRef = useMagnetic<HTMLDivElement>();
+  // Interactive props spread only when clickable (correct ARIA button pattern; inert div otherwise).
+  const interactive = onClick
+    ? {
+        onClick,
+        role: "button" as const,
+        tabIndex: 0,
+        title: "Click for the full breakdown",
+        onKeyDown: (e: ReactKeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+        },
+      }
+    : {};
   return (
     <div
       ref={magnetRef}
-      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5"
+      {...interactive}
+      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
     >
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</span>
@@ -218,7 +235,7 @@ function BestCard({
   );
 }
 
-export default function GlobalPerformance({ filters, onChange, onFocusCampaign }: GlobalPerformanceProps) {
+export default function GlobalPerformance({ filters, onChange, onFocusCampaign, onMetricClick }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -397,12 +414,14 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
       {/* KPI grid — Row 1 totals. */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
         <KpiCard
+          onClick={() => onMetricClick?.("calls")}
           icon={<Phone size={14} />}
           label="Total Calls"
           value={(k?.calls ?? 0).toLocaleString()}
           sub={data ? `across ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"} · last ${data.rangeDays}d` : "—"}
         />
         <KpiCard
+          onClick={() => onMetricClick?.("connect")}
           icon={<Zap size={14} />}
           label="Connect Rate"
           valueColor="text-emerald-400"
@@ -414,6 +433,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
           }
         />
         <KpiCard
+          onClick={() => onMetricClick?.("success")}
           icon={<CheckCircle2 size={14} />}
           label="Success Rate"
           valueColor="text-amber-400"

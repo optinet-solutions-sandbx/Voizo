@@ -6,7 +6,7 @@
 // tables, leaderboard, charts, heatmap). Reuses the app's card/theme/animated-icon language.
 // Connect = ANSWER (incl. voicemail); Success% = goal_reached / connected. Ghost + test excluded.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PhoneCall, Zap, MessageSquare, Radio } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
@@ -16,6 +16,7 @@ import type {
   RunningCampaignCard as RunningCard,
 } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
+import MetricDrawer, { type MetricKey } from "./MetricDrawer";
 import CampaignDetailsModal from "./CampaignDetailsModal";
 import { useMagnetic } from "@/components/useMagnetic";
 import { formatCampaign } from "@/lib/campaignDisplay";
@@ -99,12 +100,26 @@ function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => 
   );
 }
 
-function OpsCell({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+function OpsCell({ icon, label, children, onClick }: { icon: ReactNode; label: string; children: ReactNode; onClick?: () => void }) {
   const magnetRef = useMagnetic<HTMLDivElement>();
+  // Interactive props spread only when clickable: keeps onClick + role + tabIndex + keydown
+  // together (correct ARIA button pattern); a non-clickable card stays an inert div.
+  const interactive = onClick
+    ? {
+        onClick,
+        role: "button" as const,
+        tabIndex: 0,
+        title: "Click for the full breakdown",
+        onKeyDown: (e: ReactKeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+        },
+      }
+    : {};
   return (
     <div
       ref={magnetRef}
-      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4"
+      {...interactive}
+      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
     >
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">
         {icon}
@@ -123,6 +138,7 @@ export default function DashboardView() {
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
   const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
+  const [drawerMetric, setDrawerMetric] = useState<MetricKey | null>(null);
 
   const focusCampaign = useCallback((id: string) => {
     setFilters((f) => ({ ...f, campaignIds: [id] }));
@@ -198,7 +214,7 @@ export default function DashboardView() {
 
       {/* Ops strip (4 cells). */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        <OpsCell icon={<PhoneCall size={12} />} label="Calls Today">
+        <OpsCell icon={<PhoneCall size={12} />} label="Calls Today" onClick={() => setDrawerMetric("calls")}>
           <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
             {(ops?.callsToday ?? 0).toLocaleString()}
           </div>
@@ -210,7 +226,7 @@ export default function DashboardView() {
           )}
         </OpsCell>
 
-        <OpsCell icon={<Zap size={12} />} label="Connect Rate Today">
+        <OpsCell icon={<Zap size={12} />} label="Connect Rate Today" onClick={() => setDrawerMetric("connect")}>
           <div className="text-3xl font-bold font-mono text-emerald-400 mt-2">{pct(ops?.connectRateToday ?? null)}</div>
           <div
             className="text-[11px] text-[var(--text-3)] mt-2"
@@ -222,7 +238,7 @@ export default function DashboardView() {
           </div>
         </OpsCell>
 
-        <OpsCell icon={<MessageSquare size={12} />} label="Messages Sent Today">
+        <OpsCell icon={<MessageSquare size={12} />} label="Messages Sent Today" onClick={() => setDrawerMetric("messages")}>
           <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
             {(ops?.messagesSentToday ?? 0).toLocaleString()}
           </div>
@@ -259,7 +275,7 @@ export default function DashboardView() {
       {/* Global Performance — filters + KPI grid → charts → campaign table → heatmap → ranked tables.
           (Charts/heatmap/ranked tables share GlobalPerformance's fetched data, so the section owns the
           full ordered flow; the campaign table is self-contained and slotted into that order.) */}
-      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
+      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} onMetricClick={setDrawerMetric} />
       </div>
 
       {detailFor && (
@@ -275,6 +291,8 @@ export default function DashboardView() {
           onFilter={() => focusCampaign(detailFor.id)}
         />
       )}
+
+      <MetricDrawer metric={drawerMetric} onClose={() => setDrawerMetric(null)} />
     </>
   );
 }
