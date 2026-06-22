@@ -409,7 +409,12 @@ export async function POST(request: NextRequest) {
       // conversation-leg end reason, and our transcript-based voicemail flag. voicemailDetected
       // (not vapiCall.endedReason) is the source of truth for voicemail — Vapi rarely sets
       // endedReason='voicemail' on our SIP calls (see cloneAssistant.ts beepMaxAwaitSeconds note).
-      ended_reason: vapiCall?.endedReason ?? null,
+      // Artifact-path bug (2026-06-22): like `artifact` (see ~line 92), the end-of-call-report
+      // delivers `endedReason` as a sibling of `message.call`, NOT nested inside it. Reading
+      // `vapiCall.endedReason` (= message.call.endedReason) yielded null for 115/115 real calls
+      // while the Vapi API had a real reason (assistant-ended-call/silence-timed-out/…). Read
+      // `message.endedReason` first; keep `vapiCall.endedReason` as a fallback for the alt shape.
+      ended_reason: (message.endedReason ?? vapiCall?.endedReason ?? null) as string | null,
       voicemail: voicemailDetected,
     })
     .eq("id", callRow.id);
