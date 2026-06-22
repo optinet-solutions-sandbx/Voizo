@@ -229,12 +229,23 @@ export default function DashboardView() {
         <OpsCell icon={<Zap size={12} />} label="Connect Rate Today" onClick={() => setDrawerMetric("connect")}>
           <div className="text-3xl font-bold font-mono text-emerald-400 mt-2">{pct(ops?.connectRateToday ?? null)}</div>
           <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Connect = answered, including voicemail. Human-only ‘Reach’ is a later slice."
+            className="text-[11px] text-[var(--text-3)] mt-2 space-y-0.5"
+            title="Connect = answered (incl. voicemail). Reach = human-only connects (connected − voicemail). Voicemail-rate is over evaluated connects; both fill forward from the call-observability deploy."
           >
-            {ops
-              ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
-              : "—"}
+            <div>
+              {ops
+                ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
+                : "—"}
+            </div>
+            {ops && (ops.voicemailEvaluatedToday > 0 ? (
+              <div>
+                <span className="text-[var(--text-2)] font-medium">{ops.reachToday.toLocaleString()}</span> reached
+                {" · "}
+                <span className="text-[var(--text-2)] font-medium">{pct(ops.voicemailRateToday)}</span> voicemail
+              </div>
+            ) : (
+              <div className="text-[var(--text-3)]">Reach / voicemail tracking from deploy</div>
+            ))}
           </div>
         </OpsCell>
 

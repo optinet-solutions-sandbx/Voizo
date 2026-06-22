@@ -34,6 +34,7 @@ export interface DashCallRow {
   status?: string | null;
   goal_reached?: boolean | null;
   created_at?: string | null; // ISO
+  voicemail?: boolean | null; // calls_v2.voicemail (transcript-detected); NULL = not evaluated (historical/pre-deploy)
 }
 export interface DashCampaignRow {
   id: string;
@@ -73,6 +74,12 @@ export interface RateRow {
   successful: number; // goal_reached === true
   connectRate: number | null; // connected / terminal
   successRate: number | null; // successful / connected
+  // voicemail / reach (call-observability slice) — connected-gated, null-safe over evaluated calls.
+  // Mirrors campaignAnalytics' locked defs so the dashboard layer stays a single source of truth.
+  voicemailConnected: number; // connected calls flagged voicemail===true
+  voicemailEvaluated: number; // connected calls with a non-null voicemail flag (true|false)
+  reach: number; // human-only connects = connected − voicemailConnected (unevaluated count as reached)
+  voicemailRate: number | null; // voicemailConnected / voicemailEvaluated (NULL until calls are evaluated)
 }
 
 export interface CampaignRollup extends RateRow {
@@ -149,6 +156,11 @@ export interface TodaySnapshot {
     connectRateToday: number | null;
     connectedToday: number; // numerator for "X of Y"
     terminalToday: number; // denominator for "X of Y"
+    // Reach / voicemail (call-observability slice) — connected-gated, null-safe; fill forward from deploy.
+    reachToday: number; // human-only connects today = connectedToday − voicemailConnectedToday
+    voicemailConnectedToday: number; // connected calls today flagged voicemail===true
+    voicemailEvaluatedToday: number; // connected calls today with a non-null voicemail flag
+    voicemailRateToday: number | null; // voicemailConnectedToday / voicemailEvaluatedToday (NULL until evaluated)
     messagesSentToday: number;
     messagesShareOfCalls: number | null; // sent / callsToday
     messagesShareOfConnected: number | null; // sent / connectedToday
@@ -169,12 +181,21 @@ function isTerminal(status: string | null | undefined): boolean {
 }
 
 function emptyRate(): RateRow {
-  return { calls: 0, connected: 0, terminal: 0, successful: 0, connectRate: null, successRate: null };
+  return {
+    calls: 0, connected: 0, terminal: 0, successful: 0, connectRate: null, successRate: null,
+    voicemailConnected: 0, voicemailEvaluated: 0, reach: 0, voicemailRate: null,
+  };
 }
 
 function accumulate(row: RateRow, c: DashCallRow): void {
   row.calls += 1;
-  if (isConnected(c.status)) row.connected += 1;
+  if (isConnected(c.status)) {
+    row.connected += 1;
+    // Voicemail/reach: only CONNECTED ('completed') calls can be a voicemail. NULL = not
+    // evaluated (historical/pre-deploy) → excluded from the rate denominator.
+    if (c.voicemail === true) row.voicemailConnected += 1;
+    if (c.voicemail != null) row.voicemailEvaluated += 1;
+  }
   if (isTerminal(c.status)) row.terminal += 1;
   if (c.goal_reached === true) row.successful += 1;
 }
@@ -182,6 +203,8 @@ function accumulate(row: RateRow, c: DashCallRow): void {
 function finalizeRate(row: RateRow): RateRow {
   row.connectRate = safeDiv(row.connected, row.terminal);
   row.successRate = safeDiv(row.successful, row.connected);
+  row.reach = row.connected - row.voicemailConnected; // unevaluated connects count as reached
+  row.voicemailRate = safeDiv(row.voicemailConnected, row.voicemailEvaluated);
   return row;
 }
 
@@ -853,6 +876,10 @@ export function computeToday(
       connectRateToday: todayRate.connectRate,
       connectedToday: todayRate.connected,
       terminalToday: todayRate.terminal,
+      reachToday: todayRate.reach,
+      voicemailConnectedToday: todayRate.voicemailConnected,
+      voicemailEvaluatedToday: todayRate.voicemailEvaluated,
+      voicemailRateToday: todayRate.voicemailRate,
       messagesSentToday,
       messagesShareOfCalls: safeDiv(messagesSentToday, callsToday),
       messagesShareOfConnected: safeDiv(messagesSentToday, todayRate.connected),

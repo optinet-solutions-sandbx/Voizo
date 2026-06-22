@@ -32,8 +32,9 @@ function call(
   goal_reached: boolean | null,
   created_at: string,
   campaign_number_id?: string,
+  voicemail?: boolean | null,
 ): DashCallRow {
-  return { campaign_id, status, goal_reached, created_at, campaign_number_id };
+  return { campaign_id, status, goal_reached, created_at, campaign_number_id, voicemail };
 }
 
 function camp(id: string, over: Partial<DashCampaignRow> = {}): DashCampaignRow {
@@ -66,6 +67,29 @@ describe("computeKpis — rate definitions", () => {
     expect(k.successful).toBe(2); // goal_reached === true only
     expect(k.connectRate).toBeCloseTo(4 / 6, 6);
     expect(k.successRate).toBeCloseTo(2 / 4, 6); // off connected (4), NOT calls (8)
+  });
+
+  it("voicemail/reach: connected-gated, null-safe over evaluated; reach counts unevaluated as reached", () => {
+    const calls: DashCallRow[] = [
+      call("c", "completed", true, "2026-06-10T00:00:00Z", "n1", true), // voicemail
+      call("c", "completed", false, "2026-06-10T00:00:00Z", "n2", true), // voicemail
+      call("c", "completed", true, "2026-06-10T00:00:00Z", "n3", false), // human
+      call("c", "completed", null, "2026-06-10T00:00:00Z", "n4", null), // connected, NOT evaluated
+      call("c", "no_answer", false, "2026-06-10T00:00:00Z", "n5", true), // not connected — voicemail ignored
+    ];
+    const k = computeKpis(calls);
+    expect(k.connected).toBe(4);
+    expect(k.voicemailConnected).toBe(2); // 2 connected+voicemail (the no_answer is not connected)
+    expect(k.voicemailEvaluated).toBe(3); // 3 connected with a non-null flag (n4 excluded)
+    expect(k.voicemailRate).toBeCloseTo(2 / 3, 6); // voicemailConnected / voicemailEvaluated
+    expect(k.reach).toBe(2); // connected(4) − voicemailConnected(2); n4 (unevaluated) counts as reached
+  });
+
+  it("voicemailRate is null when no connected call has been evaluated (forward-only)", () => {
+    const k = computeKpis([call("c", "completed", true, "2026-06-10T00:00:00Z", "n1")]);
+    expect(k.voicemailEvaluated).toBe(0);
+    expect(k.voicemailRate).toBeNull();
+    expect(k.reach).toBe(1); // unevaluated connect still counts as reached
   });
 
   it("returns null rates (never NaN) on empty input", () => {
@@ -173,6 +197,10 @@ describe("bestBySuccess — min-volume guard", () => {
     successful: Math.round(connected * successRate),
     connectRate: 1,
     successRate,
+    voicemailConnected: 0,
+    voicemailEvaluated: 0,
+    reach: connected,
+    voicemailRate: null,
   });
   it("ignores below-floor rows so a 1-2 call 100% can't win", () => {
     const rows = [mk(20, 0.1, 100), mk(5, 1.0, 5)];
@@ -197,11 +225,11 @@ describe("computeToday — always-live snapshot", () => {
     camp("cT", { status: "running", voice_id: "vT", is_test: true }),
   ];
   const calls: DashCallRow[] = [
-    // today (>= 06-15T00Z)
-    call("c1", "completed", true, "2026-06-15T09:00:00Z"),
+    // today (>= 06-15T00Z) — voicemail flags: c1=VM, c2=human, c3=unevaluated(null)
+    call("c1", "completed", true, "2026-06-15T09:00:00Z", "n1", true),
     call("c1", "no_answer", false, "2026-06-15T09:05:00Z"),
-    call("c2", "completed", false, "2026-06-15T10:00:00Z"),
-    call("c3", "completed", true, "2026-06-15T11:00:00Z"),
+    call("c2", "completed", false, "2026-06-15T10:00:00Z", "n2", false),
+    call("c3", "completed", true, "2026-06-15T11:00:00Z", "n3", null),
     call("cG", "completed", true, "2026-06-15T08:00:00Z"), // ghost — excluded
     call("cT", "completed", true, "2026-06-15T08:30:00Z"), // test — excluded
     // yesterday (also inside the prior-7d window)
@@ -236,6 +264,13 @@ describe("computeToday — always-live snapshot", () => {
     expect(snap.ops.connectedToday).toBe(3);
     expect(snap.ops.terminalToday).toBe(4);
     expect(snap.ops.connectRateToday).toBeCloseTo(3 / 4, 6);
+  });
+  it("today reach + voicemail-rate (connected-gated, null-safe)", () => {
+    // 3 connected today: c1(VM), c2(human), c3(unevaluated)
+    expect(snap.ops.voicemailConnectedToday).toBe(1); // c1
+    expect(snap.ops.voicemailEvaluatedToday).toBe(2); // c1(true) + c2(false); c3(null) excluded
+    expect(snap.ops.voicemailRateToday).toBeCloseTo(1 / 2, 6);
+    expect(snap.ops.reachToday).toBe(2); // connected(3) − voicemail(1); c3 unevaluated counts as reached
   });
   it("messages sent today + shares (sent/delivered only, ghost excluded)", () => {
     expect(snap.ops.messagesSentToday).toBe(2);

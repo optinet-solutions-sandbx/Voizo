@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
   const [callsRes, campaignsRes, smsRes] = await Promise.all([
     supabaseAdmin
       .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, created_at")
+      .select("campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail")
       .gte("created_at", callsCutoff),
     supabaseAdmin
       .from("campaigns_v2")
