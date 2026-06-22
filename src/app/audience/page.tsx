@@ -638,6 +638,8 @@ function outcomeBadgeClasses(outcome: string): string {
       return "bg-violet-500/15 text-violet-400 border-violet-500/30";
     case "sent_sms":
       return "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+    case "sms_delivered":
+      return "bg-teal-500/15 text-teal-400 border-teal-500/30";
     default:
       return "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]";
   }

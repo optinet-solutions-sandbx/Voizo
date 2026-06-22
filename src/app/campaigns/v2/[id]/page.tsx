@@ -107,7 +107,7 @@ function SmsDetailRow({ sms }: { sms: Row }) {
 // even though they're in the campaign (audit N3, 2026-05-22).
 const OUTCOME_DISPLAY_ORDER = [
   "pending", "in_progress", "pending_retry",
-  "sent_sms", "not_interested", "declined_offer", "wrong_number",
+  "sent_sms", "sms_delivered", "not_interested", "declined_offer", "wrong_number",
   "unreached", "suppressed", "removed_from_segment",
 ] as const;
 
@@ -116,6 +116,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   in_progress: "In progress",
   pending_retry: "Awaiting retry",
   sent_sms: "Texted on call",
+  sms_delivered: "Reached via SMS",
   not_interested: "Not interested",
   declined_offer: "Declined",
   wrong_number: "Wrong number",
@@ -136,6 +137,7 @@ const OUTCOME_BADGE_CLASS: Record<string, string> = {
   in_progress: "bg-blue-500/12 text-blue-400 border border-blue-500/30",
   pending_retry: "bg-amber-500/12 text-amber-400 border border-amber-500/30",
   sent_sms: "bg-emerald-500/12 text-emerald-400 border border-emerald-500/30",
+  sms_delivered: "bg-teal-500/12 text-teal-400 border border-teal-500/30",
   not_interested: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
   declined_offer: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
   wrong_number: "bg-[var(--bg-elevated)] text-[var(--text-3)] border border-[var(--border)]",
@@ -517,9 +519,11 @@ export default function CampaignV2DetailPage() {
 
   // Contacts we actually sent a text to, counted from the SMS log (sms_messages_v2) rather than the
   // outcome bucket. The outcome chips alone undercount texts: a registered_optin voicemail follow-up
-  // IS texted but its number stays under 'Awaiting retry' (the webhook leaves voicemail outcomes for
-  // the retry sweeper), so it never shows as 'SMS sent'. This surfaces the true texted total
-  // (Ernie ticket 2026-06-16). Uses the same per-phone map that drives the per-row SMS column.
+  // IS texted but its number stays under 'Awaiting retry' until delivery confirms — once the carrier
+  // confirms (DLR), the scheduler retires it to 'Reached via SMS' (sms_delivered) and stops dialing
+  // (2026-06-22); a 'sent'-only text on a non-reporting route still sits under 'Awaiting retry'. So
+  // this SMS-log count can still exceed the sent_sms + sms_delivered buckets. Surfaces the true texted
+  // total (Ernie ticket 2026-06-16). Uses the same per-phone map that drives the per-row SMS column.
   const textedCount = useMemo(() => {
     let n = 0;
     for (const row of smsByPhone.values()) if ((row.status as string) === "sent") n++;
@@ -2069,7 +2073,7 @@ export default function CampaignV2DetailPage() {
                 {textedCount > 0 && (
                   <span
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/12 text-sky-400 border border-sky-500/30 ml-1"
-                    title="Contacts we actually sent a text to, counted from the SMS log. Includes voicemail follow-ups (which sit under 'Awaiting retry'), so this can exceed the 'SMS sent' bucket."
+                    title="Contacts we actually sent a text to, counted from the SMS log. Includes voicemail follow-ups — once delivery confirms they move to 'Reached via SMS'; sent-but-unconfirmed ones still sit under 'Awaiting retry' — so this can exceed the 'Texted on call' + 'Reached via SMS' buckets."
                   >
                     <span className="font-semibold">{textedCount}</span>
                     <span>Texted</span>

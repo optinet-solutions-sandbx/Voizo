@@ -388,6 +388,7 @@ describe("call records", () => {
     expect(deriveRecordStatus("pending_retry", false)).toBe("awaiting_retry");
     expect(deriveRecordStatus("unreached", false)).toBe("unreached");
     expect(deriveRecordStatus("sent_sms", false)).toBe("successful");
+    expect(deriveRecordStatus("sms_delivered", false)).toBe("successful"); // offer delivered by SMS (voicemail follow-up) = success
     expect(deriveRecordStatus("wrong_number", false)).toBe("wrong_number");
     expect(deriveRecordStatus("not_interested", true)).toBe("successful"); // a goal overrides
     expect(deriveRecordStatus(null, false)).toBe("unreached");

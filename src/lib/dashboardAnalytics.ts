@@ -727,6 +727,7 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
   if (anyGoal) return "successful"; // a goal on any attempt wins
   switch ((outcome ?? "").toLowerCase()) {
     case "sent_sms":
+    case "sms_delivered": // offer delivered by SMS (registered_optin voicemail follow-up) — retired from retries
       return "successful";
     case "not_interested":
     case "declined_offer":

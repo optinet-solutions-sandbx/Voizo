@@ -5,6 +5,7 @@ import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
+import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 import { CRON_NAMES, recordHeartbeat, postSlackNote, postSlackAlert, shouldAlertSpawnFail } from "@/lib/alerts/slack";
@@ -260,6 +261,76 @@ export async function GET(request: NextRequest) {
       id: numberId,
       result: action === "unreached_max" ? "unreached_exhausted" : "unreached_terminal_campaign",
     });
+  }
+
+  // ── Retire numbers whose offer SMS was DELIVERED (cost optimisation, 2026-06-22) ──
+  // registered_optin voicemail follow-ups text the opted-in player the offer link even on a
+  // voicemail pickup (smsDispatchDecision.ts), but the number stays pending_retry and the dialer
+  // keeps calling it for ~zero marginal value — the offer already landed. Once the carrier CONFIRMS
+  // delivery, stop dialing it. Voicemail-only BY CONSTRUCTION (a reached human is already terminal
+  // sent_sms, never pending_retry). Delivered-only (D1): a 'sent' SMS may have silently failed and a
+  // route that never reports DLRs simply keeps retrying as before — no regression. Runs BEFORE the
+  // resume-sweep so we never fire a call for a number we're about to retire. The decision is the
+  // pure, unit-tested shouldRetireForSmsDelivery (retireOnSmsDelivery.ts); this only does the I/O.
+  // Bounded scan; the guarded UPDATE (.eq outcome pending_retry) is race-safe + idempotent.
+  const RETIRE_SCAN_LIMIT = 300;
+  const { data: retryCandidates, error: retryScanErr } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .select("id, outcome")
+    .eq("outcome", "pending_retry")
+    .limit(RETIRE_SCAN_LIMIT);
+  if (retryScanErr) {
+    console.error("[scheduler.smsRetire] pending_retry scan failed:", retryScanErr);
+  } else if (retryCandidates && retryCandidates.length > 0) {
+    // Statuses of each candidate's SMS rows, grouped per number — NOT pre-filtered to 'delivered',
+    // so the pure predicate (not the query) owns the delivered-only decision. Chunked .in to stay
+    // under PostgREST URL limits.
+    const candidateIds = retryCandidates.map((n) => n.id as string);
+    const statusesByNumber = new Map<string, string[]>();
+    for (let i = 0; i < candidateIds.length; i += 100) {
+      const chunk = candidateIds.slice(i, i + 100);
+      const { data: smsRows, error: smsErr } = await supabaseAdmin
+        .from("sms_messages_v2")
+        .select("campaign_number_id, status")
+        .in("campaign_number_id", chunk);
+      if (smsErr) {
+        console.error("[scheduler.smsRetire] SMS status lookup failed for a chunk:", smsErr);
+        continue;
+      }
+      for (const s of smsRows ?? []) {
+        const id = s.campaign_number_id as string | null;
+        if (!id) continue;
+        const arr = statusesByNumber.get(id) ?? [];
+        arr.push((s.status as string | null) ?? "");
+        statusesByNumber.set(id, arr);
+      }
+    }
+    const retireIds = retryCandidates
+      .filter((n) =>
+        shouldRetireForSmsDelivery({
+          outcome: n.outcome as string | null,
+          smsStatuses: statusesByNumber.get(n.id as string) ?? [],
+        }),
+      )
+      .map((n) => n.id as string);
+    if (retireIds.length > 0) {
+      const { error: retireUpErr } = await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({ outcome: "sms_delivered" })
+        .in("id", retireIds)
+        .eq("outcome", "pending_retry"); // race-safe: only flip those still pending_retry
+      if (retireUpErr) console.error("[scheduler.smsRetire] retire update failed:", retireUpErr);
+      else
+        console.log(
+          `[scheduler.smsRetire] retired ${retireIds.length} number(s) → sms_delivered ` +
+          `(offer SMS confirmed delivered; retries stopped)`,
+        );
+    }
+    if (retryCandidates.length === RETIRE_SCAN_LIMIT) {
+      console.log(
+        `[scheduler.smsRetire] scan hit limit ${RETIRE_SCAN_LIMIT}; remaining pending_retry numbers retire next tick`,
+      );
+    }
   }
 
   // ── Resume idle running campaigns where retries are due (B2) ──

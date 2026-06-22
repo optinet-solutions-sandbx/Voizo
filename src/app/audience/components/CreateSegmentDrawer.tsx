@@ -87,6 +87,7 @@ const SENSITIVE_OUTCOMES: OutcomeTile[] = [
   { key: "declined_offer", label: "Declined offer", description: "Explicit no on the bonus",          tone: "sensitive" },
   { key: "not_interested", label: "Not interested", description: "Explicit no overall",                tone: "sensitive" },
   { key: "sent_sms",       label: "Sent SMS",       description: "SMS delivered, no conversion yet",   tone: "sensitive" },
+  { key: "sms_delivered",  label: "Reached via SMS", description: "Offer SMS delivered on a voicemail follow-up; retries stopped", tone: "sensitive" },
 ];
 
 const SENSITIVE_SET: ReadonlySet<string> = new Set(SENSITIVE_OUTCOMES.map((o) => o.key));

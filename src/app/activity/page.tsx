@@ -623,6 +623,8 @@ function numberOutcomeTone(outcome: string): Tone {
   switch (outcome) {
     case "sent_sms":
       return { bg: "bg-emerald-500/15", bgSolid: "bg-emerald-500", text: "text-emerald-400", border: "border-emerald-500/30" };
+    case "sms_delivered":
+      return { bg: "bg-teal-500/15", bgSolid: "bg-teal-500", text: "text-teal-400", border: "border-teal-500/30" };
     case "in_progress":
       return { bg: "bg-cyan-500/15", bgSolid: "bg-cyan-500", text: "text-cyan-400", border: "border-cyan-500/30" };
     case "pending":
