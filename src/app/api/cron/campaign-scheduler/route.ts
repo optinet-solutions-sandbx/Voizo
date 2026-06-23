@@ -6,6 +6,7 @@ import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 import { CRON_NAMES, recordHeartbeat, postSlackNote, postSlackAlert, shouldAlertSpawnFail } from "@/lib/alerts/slack";
@@ -272,16 +273,23 @@ export async function GET(request: NextRequest) {
   // route that never reports DLRs simply keeps retrying as before — no regression. Runs BEFORE the
   // resume-sweep so we never fire a call for a number we're about to retire. The decision is the
   // pure, unit-tested shouldRetireForSmsDelivery (retireOnSmsDelivery.ts); this only does the I/O.
-  // Bounded scan; the guarded UPDATE (.eq outcome pending_retry) is race-safe + idempotent.
-  const RETIRE_SCAN_LIMIT = 300;
-  const { data: retryCandidates, error: retryScanErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select("id, outcome")
-    .eq("outcome", "pending_retry")
-    .limit(RETIRE_SCAN_LIMIT);
-  if (retryScanErr) {
-    console.error("[scheduler.smsRetire] pending_retry scan failed:", retryScanErr);
-  } else if (retryCandidates && retryCandidates.length > 0) {
+  // The guarded UPDATE (.eq outcome pending_retry) is race-safe + idempotent.
+  // Scan ALL pending_retry numbers via the paginating helper. A fixed .limit(300)
+  // here STARVED the retire: with >300 pending_retry the delivered candidates sorted
+  // past the cap and were never scanned (0 retired over ~16h of ticks — found 2026-06-23
+  // with 49 delivered candidates all beyond offset 300). fetchAllRows pages through every
+  // row ordered by the stable `id` key and loud-warns past 100k (never silent-truncates).
+  // ponytail: scans the whole pending_retry set each tick — cheap at PoC scale (~1 page +
+  // a few SMS chunks). If the never-delivered backlog ever makes this costly, invert to
+  // scan the (much smaller) delivered-SMS set instead.
+  const retryCandidates = await fetchAllRows(
+    supabaseAdmin,
+    "campaign_numbers_v2",
+    "id, outcome",
+    "id",
+    { column: "outcome", value: "pending_retry" },
+  );
+  if (retryCandidates.length > 0) {
     // Statuses of each candidate's SMS rows, grouped per number — NOT pre-filtered to 'delivered',
     // so the pure predicate (not the query) owns the delivered-only decision. Chunked .in to stay
     // under PostgREST URL limits.
@@ -325,11 +333,6 @@ export async function GET(request: NextRequest) {
           `[scheduler.smsRetire] retired ${retireIds.length} number(s) → sms_delivered ` +
           `(offer SMS confirmed delivered; retries stopped)`,
         );
-    }
-    if (retryCandidates.length === RETIRE_SCAN_LIMIT) {
-      console.log(
-        `[scheduler.smsRetire] scan hit limit ${RETIRE_SCAN_LIMIT}; remaining pending_retry numbers retire next tick`,
-      );
     }
   }
 
