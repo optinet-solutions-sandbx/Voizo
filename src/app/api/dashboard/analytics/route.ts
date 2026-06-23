@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "calls_v2",
-      "campaign_id, campaign_number_id, status, goal_reached, created_at",
+      "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail",
       "id",
       undefined,
       { column: "created_at", value: startIso },

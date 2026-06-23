@@ -39,6 +39,10 @@ interface AnalyticsResponse {
     successful: number;
     connectRate: number | null;
     successRate: number | null;
+    // Reach / voicemail (call-observability slice) — mirrors RateRow; fills forward from deploy.
+    reach: number;
+    voicemailEvaluated: number;
+    voicemailRate: number | null;
   };
   campaignCount: number;
   best: { campaign: BestPerformer | null; agent: BestPerformer | null; prompt: BestPerformer | null };
@@ -427,8 +431,22 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
           valueColor="text-emerald-400"
           value={pct(k?.connectRate ?? null)}
           sub={
-            <span title="Connect = answered, including voicemail. Human-only ‘Reach’ is a later slice.">
-              {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
+            <span
+              className="block space-y-0.5"
+              title="Connect = answered (incl. voicemail). Reach = human-only connects (connected − voicemail). Voicemail-rate is over evaluated connects; both fill forward from the call-observability deploy."
+            >
+              <span className="block">
+                {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
+              </span>
+              {k && (k.voicemailEvaluated > 0 ? (
+                <span className="block">
+                  <span className="text-[var(--text-2)] font-medium">{k.reach.toLocaleString()}</span> reached
+                  {" · "}
+                  <span className="text-[var(--text-2)] font-medium">{pct(k.voicemailRate)}</span> voicemail
+                </span>
+              ) : (
+                <span className="block text-[var(--text-3)]">Reach / voicemail tracking from deploy</span>
+              ))}
             </span>
           }
         />
