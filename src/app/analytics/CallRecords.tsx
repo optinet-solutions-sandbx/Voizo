@@ -78,7 +78,7 @@ const inputCls =
 // Calm muted chip — colored dot + label, matching CampaignSummary's legend treatment.
 function Chip({ label, color }: { label: string; color: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]">
+    <span className="inline-flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]">
       <span className="h-1.5 w-1.5 shrink-0 rounded-full opacity-90" style={{ background: color }} />
       {label}
     </span>
@@ -92,12 +92,12 @@ function AttemptCell({ attempt, overflow }: { attempt: CallAttempt | undefined; 
   if (!attempt) return <td className="px-3 py-2 text-center text-[var(--text-3)] text-xs">—</td>;
   return (
     <td className="px-3 py-2 align-top">
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col items-start gap-1">
         <Chip label={ATTEMPT_TAG_LABELS[attempt.tag]} color={ATTEMPT_TAG_COLOR[attempt.tag]} />
-        <span className="pl-3 font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">
+        <span className="pl-5 whitespace-nowrap font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">
           {fmtDateTime(attempt.atMs)}
         </span>
-        {overflow > 0 && <span className="pl-3 text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
+        {overflow > 0 && <span className="pl-5 text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
       </div>
     </td>
   );
@@ -161,6 +161,9 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="bg-[var(--bg-app)]/40 border-t border-[var(--border)] px-5 py-4">
+      {/* Center the records module and cap its width so rows don't overstretch on wide
+          desktops; the inner overflow-x-auto + min-w keeps it scrollable on narrow screens. */}
+      <div className="mx-auto w-fit max-w-6xl">
       {/* Exports (CSV + Audio + Transcripts), by outcome category. */}
       <div className="mb-3">
         <ExportMenu campaignId={campaignId} records={records ?? []} />
@@ -203,7 +206,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       ) : (
         <>
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="w-full text-sm min-w-[640px]">
+            <table className="w-auto mx-auto text-sm min-w-[640px]">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                   <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-10">#</th>
@@ -240,7 +243,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
                         const overflow = isLastCol ? Math.max(0, r.attempts.length - maxAttempts) : 0;
                         return <AttemptCell key={`attempt-${idx}`} attempt={r.attempts[idx]} overflow={overflow} />;
                       })}
-                      <td className="px-3 py-2 font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
                     </tr>
                   ))
                 )}
@@ -252,6 +255,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
           </p>
         </>
       )}
+      </div>
     </div>
   );
 }
