@@ -8,13 +8,20 @@ import { triggerDownload, csvCell, CSV_BOM } from "./download";
  * useCampaignExport
  *
  * Client-side export engine for campaign V2 reporting. Drives the Export
- * dropdown on the campaign detail page. Two output shapes:
+ * dropdown on the campaign detail page. Three output shapes (mode):
  *
- *   CSV-only       → single .csv with metadata + transcripts
- *   CSV + Audio    → .zip with summary.csv at root and recordings/<phone>/
+ *   csv            → single .csv with metadata + transcripts
+ *   audio          → .zip with summary.csv at root and recordings/<phone>/
  *                    attempt_<N>_<duration>s.<ext> for every call that has a
  *                    recording. Audio is streamed through /api/recordings/proxy
  *                    to bypass the storage.vapi.ai CORS gap.
+ *   transcripts    → .zip with one transcripts/<phone>/attempt_<N>.txt per call
+ *                    that has transcript text. Reuses the audio-zip skipped.txt
+ *                    pattern for calls with no transcript. No network fetch —
+ *                    transcripts already arrive in the metadata payload.
+ *
+ * Category (`type`) and output shape (`mode`) are orthogonal: every category
+ * in the unified taxonomy can be exported as csv, audio, or transcripts.
  *
  * Reasoning behind specific quirks:
  *   - UTF-8 BOM at the head of the CSV so Excel decodes Greek/Spanish/German
@@ -31,13 +38,23 @@ import { triggerDownload, csvCell, CSV_BOM } from "./download";
  *     silently disappearing — operator sees which calls didn't bundle.
  */
 
+// Unified category taxonomy (mirrors the dashboardAnalytics AttemptTag contract,
+// plus "all"). The export-metadata route tags each call via deriveAttemptTag and
+// filters by the requested category (a contact matches if its tag === the category;
+// "all" = no filter). Old per-bucket names (sms_sent / not_interested_or_declined /
+// unreached_or_retry / wrong_number) are retired.
 export type ExportType =
   | "all"
-  | "sms_sent"
-  | "not_interested_or_declined"
+  | "positive"
+  | "neutral"
+  | "declined"
+  | "early_hangup"
   | "voicemail"
-  | "unreached_or_retry"
-  | "wrong_number";
+  | "unreachable";
+
+// Output shape. `boolean` is accepted for back-compat with the original
+// (type, includeAudio) call sites: false → "csv", true → "audio".
+export type ExportMode = "csv" | "audio" | "transcripts";
 
 export interface ExportAttempt {
   attemptNumber: number;
@@ -204,7 +221,11 @@ export function useCampaignExport(campaignId: string) {
   }, []);
 
   const startExport = useCallback(
-    async (type: ExportType, includeAudio: boolean) => {
+    async (type: ExportType, mode: ExportMode | boolean) => {
+      // Normalize the legacy boolean (false → csv, true → audio) into the mode enum.
+      const resolvedMode: ExportMode =
+        typeof mode === "boolean" ? (mode ? "audio" : "csv") : mode;
+
       setExporting(true);
       setError(null);
       setProgress({ current: 0, total: 0, stage: "Fetching metadata..." });
@@ -232,12 +253,14 @@ export function useCampaignExport(campaignId: string) {
           throw new Error("No data matches this filter.");
         }
 
-        const includeSmsCols = type === "sms_sent" || type === "all";
-        const csvContent = buildCsv(leads, includeSmsCols);
+        // SMS columns are meaningful where a post-goal offer SMS can exist:
+        // the full export and the positive-response cut (consent-gated SMS).
+        const includeSmsCols = type === "all" || type === "positive";
         const safeType = type.replace(/_/g, "-");
         const shortId = campaignId.slice(0, 8);
 
-        if (!includeAudio) {
+        if (resolvedMode === "csv") {
+          const csvContent = buildCsv(leads, includeSmsCols);
           setProgress({ current: 1, total: 1, stage: "Triggering download..." });
           const blob = new Blob([csvContent], {
             type: "text/csv;charset=utf-8;",
@@ -246,6 +269,61 @@ export function useCampaignExport(campaignId: string) {
           return;
         }
 
+        if (resolvedMode === "transcripts") {
+          // Transcript .txt bundle. No network fetch — transcript text already
+          // arrives in the metadata payload. One transcripts/<phone>/attempt_<N>.txt
+          // per call that has text; calls with no transcript go to skipped.txt
+          // (same loud-skip pattern as the audio bundle).
+          const zip = new JSZip();
+          const transcriptsFolder = zip.folder("transcripts");
+          const skipped: string[] = [];
+
+          let written = 0;
+          let total = 0;
+          for (const lead of leads) {
+            for (const att of lead.attempts) {
+              total++;
+              const text = att.transcript?.trim();
+              if (!text) {
+                skipped.push(
+                  `${lead.phone} attempt #${att.attemptNumber}: no transcript text`,
+                );
+                continue;
+              }
+              const folder = transcriptsFolder?.folder(
+                sanitizePhoneForFolder(lead.phone),
+              );
+              folder?.file(`attempt_${att.attemptNumber}.txt`, text + "\n");
+              written++;
+            }
+          }
+
+          if (total === 0) {
+            throw new Error("No calls exist for this filter.");
+          }
+          if (written === 0) {
+            throw new Error("No call transcripts exist for this filter.");
+          }
+
+          if (skipped.length > 0) {
+            zip.file(
+              "skipped.txt",
+              `The following calls had no transcript text:\n\n${skipped.join("\n")}\n\nThe rest of the bundle is unaffected.\n`,
+            );
+          }
+
+          setProgress({
+            current: written,
+            total: written,
+            stage: "Compiling ZIP archive...",
+          });
+          const zipBlob = await zip.generateAsync({ type: "blob" });
+          triggerDownload(zipBlob, `voizo_${safeType}_transcripts_${shortId}.zip`);
+          return;
+        }
+
+        // resolvedMode === "audio"
+        const csvContent = buildCsv(leads, includeSmsCols);
         const zip = new JSZip();
         zip.file("summary.csv", csvContent);
         const recordingsFolder = zip.folder("recordings");

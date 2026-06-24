@@ -1196,17 +1196,18 @@ export default function CampaignV2DetailPage() {
                   <div className="py-1">
                     {([
                       ["all", "All Calls"],
-                      ["sms_sent", "SMS Sent"],
-                      ["not_interested_or_declined", "Not Interested / Declined"],
-                      ["voicemail", "Voicemails"],
-                      ["unreached_or_retry", "Unreached / Awaiting Retry"],
-                      ["wrong_number", "Wrong Numbers"],
+                      ["positive", "Positive response"],
+                      ["neutral", "Neutral"],
+                      ["declined", "Declined"],
+                      ["early_hangup", "Early hangup"],
+                      ["voicemail", "Voicemail detected"],
+                      ["unreachable", "Unreachable"],
                     ] as [ExportType, string][]).map(([type, label]) => (
                       <button
                         key={`csv-${type}`}
                         onClick={() => {
                           setExportMenuOpen(false);
-                          startExport(type, false);
+                          startExport(type, "csv");
                         }}
                         className="w-full text-left px-4 py-2 text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
                       >
@@ -1220,14 +1221,18 @@ export default function CampaignV2DetailPage() {
                   <div className="py-1">
                     {([
                       ["all", "All Recordings"],
-                      ["voicemail", "Voicemails Only"],
-                      ["sms_sent", "SMS-Reached Only"],
+                      ["positive", "Positive response"],
+                      ["neutral", "Neutral"],
+                      ["declined", "Declined"],
+                      ["early_hangup", "Early hangup"],
+                      ["voicemail", "Voicemail detected"],
+                      ["unreachable", "Unreachable"],
                     ] as [ExportType, string][]).map(([type, label]) => (
                       <button
                         key={`zip-${type}`}
                         onClick={() => {
                           setExportMenuOpen(false);
-                          startExport(type, true);
+                          startExport(type, "audio");
                         }}
                         className="w-full text-left px-4 py-2 text-xs text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
                       >

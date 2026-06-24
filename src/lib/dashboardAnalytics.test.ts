@@ -33,8 +33,9 @@ function call(
   created_at: string,
   campaign_number_id?: string,
   voicemail?: boolean | null,
+  duration_seconds?: number | null,
 ): DashCallRow {
-  return { campaign_id, status, goal_reached, created_at, campaign_number_id, voicemail };
+  return { campaign_id, status, goal_reached, created_at, campaign_number_id, voicemail, duration_seconds };
 }
 
 function camp(id: string, over: Partial<DashCampaignRow> = {}): DashCampaignRow {
@@ -420,28 +421,50 @@ describe("call records", () => {
     expect(deriveRecordStatus(null, false)).toBe("unreached");
   });
 
-  it("computeCallRecords aggregates attempts + last attempt + status per number", () => {
+  it("computeCallRecords derives per-attempt tags (ordered asc) + a funnel-furthest contact tag", () => {
     const numbers = [
-      { id: "n1", phone_e164: "+1", outcome: "not_interested" },
-      { id: "n2", phone_e164: "+2", outcome: "pending_retry" },
-      { id: "n3", phone_e164: "+3", outcome: "pending" },
+      { id: "n1", phone_e164: "+1", outcome: "completed" }, // no_answer then completed+goal
+      { id: "n2", phone_e164: "+2", outcome: "declined_offer" }, // declined contact
+      { id: "n3", phone_e164: "+3", outcome: "completed" }, // early hangup (8s)
+      { id: "n4", phone_e164: "+4", outcome: "completed" }, // voicemail
+      { id: "n5", phone_e164: "+5", outcome: "pending" }, // never dialed
     ];
     const calls = [
-      call("x", "completed", true, "2026-06-10T10:00:00Z", "n1"),
-      call("x", "completed", false, "2026-06-11T10:00:00Z", "n1"),
-      call("x", "no_answer", false, "2026-06-09T10:00:00Z", "n2"),
+      // n1: attempt 1 = no_answer (unreachable), attempt 2 = completed+goal (positive)
+      call("x", "no_answer", false, "2026-06-09T10:00:00Z", "n1"),
+      call("x", "completed", true, "2026-06-11T10:00:00Z", "n1"),
+      // n2: completed call, no goal, contact outcome declined_offer → declined
+      call("x", "completed", false, "2026-06-10T10:00:00Z", "n2"),
+      // n3: completed, short duration, no goal/decline → early_hangup
+      call("x", "completed", false, "2026-06-10T10:00:00Z", "n3", null, 8),
+      // n4: completed, voicemail true → voicemail
+      call("x", "completed", false, "2026-06-10T10:00:00Z", "n4", true),
     ];
     const recs = computeCallRecords(numbers, calls);
+
     const r1 = recs.find((r) => r.campaignNumberId === "n1")!;
-    expect(r1.attempts).toBe(2);
-    expect(r1.status).toBe("successful"); // anyGoal
+    expect(r1.attempts).toHaveLength(2);
+    expect(r1.attempts[0]).toMatchObject({ index: 1, tag: "unreachable" }); // earliest first
+    expect(r1.attempts[1]).toMatchObject({ index: 2, tag: "positive" });
+    expect(r1.tag).toBe("positive"); // funnel-furthest
     expect(r1.lastAttemptedMs).toBe(Date.parse("2026-06-11T10:00:00Z"));
+
     const r2 = recs.find((r) => r.campaignNumberId === "n2")!;
-    expect(r2.attempts).toBe(1);
-    expect(r2.status).toBe("awaiting_retry");
+    expect(r2.attempts[0].tag).toBe("declined");
+    expect(r2.tag).toBe("declined");
+
     const r3 = recs.find((r) => r.campaignNumberId === "n3")!;
-    expect(r3.attempts).toBe(0); // never dialed
-    expect(r3.lastAttemptedMs).toBeNull();
+    expect(r3.attempts[0].tag).toBe("early_hangup");
+    expect(r3.tag).toBe("early_hangup");
+
+    const r4 = recs.find((r) => r.campaignNumberId === "n4")!;
+    expect(r4.attempts[0].tag).toBe("voicemail");
+    expect(r4.tag).toBe("voicemail");
+
+    const r5 = recs.find((r) => r.campaignNumberId === "n5")!;
+    expect(r5.attempts).toEqual([]); // never dialed
+    expect(r5.tag).toBe("awaiting_retry"); // pending outcome, no calls
+    expect(r5.lastAttemptedMs).toBeNull();
   });
 });
 

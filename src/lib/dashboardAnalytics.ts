@@ -35,6 +35,7 @@ export interface DashCallRow {
   goal_reached?: boolean | null;
   created_at?: string | null; // ISO
   voicemail?: boolean | null; // calls_v2.voicemail (transcript-detected); NULL = not evaluated (historical/pre-deploy)
+  duration_seconds?: number | null; // calls_v2.duration_seconds — < EARLY_HANGUP_SEC ⇒ early hangup
 }
 export interface DashCampaignRow {
   id: string;
@@ -768,36 +769,126 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
   }
 }
 
+// ── Per-attempt + contact outcome tagging (Campaign Performance Phase 2) ─────
+// SHARED CONTRACT — every Phase-2 piece imports these verbatim. Per-attempt rules
+// mirror campaignAnalytics.computeOne's outcomeBreakdown (+ ANALYTICS_CONFIG.EARLY_HANGUP_SEC);
+// the contact tag is the funnel-furthest attempt tag (positive > declined > neutral >
+// early_hangup > voicemail > unreachable), or an outcome-derived tag when there are no calls.
+export type AttemptTag = "unreachable" | "voicemail" | "positive" | "declined" | "early_hangup" | "neutral";
+export type ContactTag = AttemptTag | "awaiting_retry" | "wrong_number";
+
+export interface CallAttempt {
+  index: number; // 1-based attempt number (created_at asc)
+  tag: AttemptTag;
+  atMs: number | null;
+}
+
 export interface CallRecord {
   campaignNumberId: string;
   phone: string | null;
-  status: RecordStatus;
-  attempts: number;
+  tag: ContactTag; // contact-level overall outcome (drives the filter)
+  attempts: CallAttempt[]; // ordered by created_at asc; attempt 1 first
   lastAttemptedMs: number | null;
 }
 
-/** One record per campaign_number: status (derived), attempt count + last-attempt time
- *  (from its calls). `calls` should be that campaign's calls. */
+export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
+  unreachable: "Unreachable",
+  voicemail: "Voicemail detected",
+  positive: "Positive response",
+  declined: "Declined",
+  early_hangup: "Early hangup",
+  neutral: "Neutral",
+  awaiting_retry: "Awaiting retry",
+  wrong_number: "Wrong number",
+};
+
+// Muted accents — MATCH src/components/analytics/CampaignSummary.tsx (calm palette, low chroma).
+export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
+  positive: "#5fb39a",
+  neutral: "#8b939c",
+  declined: "#cf8a8a",
+  early_hangup: "#c9a86a",
+  voicemail: "#9f90c9",
+  unreachable: "#c98a8a",
+  awaiting_retry: "#7fa8d0",
+  wrong_number: "#8b939c",
+};
+
+// Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
+const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "voicemail", "unreachable"];
+
+/** Per-attempt outcome tag for a single call. `declinedContact` = the call's CONTACT has
+ *  campaign_numbers_v2.outcome === 'declined_offer'. Mirrors campaignAnalytics' priority
+ *  (voicemail===null is NOT voicemail — treated as a human). */
+export function deriveAttemptTag(call: DashCallRow, declinedContact: boolean): AttemptTag {
+  if (!isConnected(call.status)) return "unreachable";
+  if (call.voicemail === true) return "voicemail";
+  if (call.goal_reached === true) return "positive";
+  if (declinedContact) return "declined";
+  if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    return "early_hangup";
+  return "neutral";
+}
+
+/** One record per campaign_number: ordered per-attempt tags + a contact-level tag + last-attempt
+ *  time. `calls` should be that campaign's calls. Numbers with no calls still produce a record. */
 export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[]): CallRecord[] {
-  const agg = new Map<string, { attempts: number; lastMs: number | null; anyGoal: boolean }>();
+  // Contacts whose outcome is an explicit decline (drives the per-attempt 'declined' tag).
+  const declinedContactIds = new Set(
+    numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
+  );
+
+  // Group calls by campaign_number_id.
+  const callsByNumber = new Map<string, DashCallRow[]>();
   for (const c of calls) {
     const id = c.campaign_number_id ?? "";
     if (!id) continue;
-    const a = agg.get(id) ?? { attempts: 0, lastMs: null, anyGoal: false };
-    a.attempts += 1;
-    const t = c.created_at ? Date.parse(c.created_at) : NaN;
-    if (Number.isFinite(t) && (a.lastMs === null || t > a.lastMs)) a.lastMs = t;
-    if (c.goal_reached === true) a.anyGoal = true;
-    agg.set(id, a);
+    let group = callsByNumber.get(id);
+    if (!group) {
+      group = [];
+      callsByNumber.set(id, group);
+    }
+    group.push(c);
   }
+
   return numbers.map((n) => {
-    const a = agg.get(n.id);
+    const group = callsByNumber.get(n.id) ?? [];
+    const declined = declinedContactIds.has(n.id);
+    // Sort by created_at asc (attempt 1 first); unparseable dates sort last (stable).
+    const sorted = [...group].sort((a, b) => {
+      const ta = a.created_at ? Date.parse(a.created_at) : NaN;
+      const tb = b.created_at ? Date.parse(b.created_at) : NaN;
+      const va = Number.isFinite(ta) ? ta : Infinity;
+      const vb = Number.isFinite(tb) ? tb : Infinity;
+      return va - vb;
+    });
+    const attempts: CallAttempt[] = sorted.map((c, i) => {
+      const t = c.created_at ? Date.parse(c.created_at) : NaN;
+      return { index: i + 1, tag: deriveAttemptTag(c, declined), atMs: Number.isFinite(t) ? t : null };
+    });
+    let lastAttemptedMs: number | null = null;
+    for (const a of attempts) {
+      if (a.atMs !== null && (lastAttemptedMs === null || a.atMs > lastAttemptedMs)) lastAttemptedMs = a.atMs;
+    }
+
+    // Contact tag: funnel-furthest attempt tag; else derive from outcome when no calls.
+    let tag: ContactTag;
+    if (attempts.length === 0) {
+      const outcome = (n.outcome ?? "").toLowerCase();
+      if (outcome === "wrong_number") tag = "wrong_number";
+      else if (outcome === "pending" || outcome === "pending_retry" || outcome === "") tag = "awaiting_retry";
+      else tag = "unreachable";
+    } else {
+      const present = new Set(attempts.map((a) => a.tag));
+      tag = CONTACT_TAG_PRIORITY.find((p) => present.has(p)) ?? "unreachable";
+    }
+
     return {
       campaignNumberId: n.id,
       phone: n.phone_e164 ?? null,
-      status: deriveRecordStatus(n.outcome ?? null, a?.anyGoal ?? false),
-      attempts: a?.attempts ?? 0,
-      lastAttemptedMs: a?.lastMs ?? null,
+      tag,
+      attempts,
+      lastAttemptedMs,
     };
   });
 }

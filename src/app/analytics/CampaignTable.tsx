@@ -82,6 +82,38 @@ function runWindow(r: Row): string {
   return `${start} → ${fmtShort(r.endAt ?? r.lastCallAt) ?? "ended"}`;
 }
 
+const DAY_MS = 86_400_000;
+// Parse a YYYY-MM-DD picker value into a UTC ms bound. endOfDay pushes to 23:59:59.999
+// so the To date is inclusive (mirrors the API's parseDay). Invalid/empty → null (no bound).
+function parseDayMs(value: string, endOfDay: boolean): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return null;
+  const base = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return endOfDay ? base + DAY_MS - 1 : base;
+}
+
+// Does this campaign have call activity that intersects the picked [from, to] window?
+// Row metrics are LIFETIME (server no longer windows them); the picker only filters WHICH
+// campaigns are listed. We use the campaign's activity span — run-window start through its
+// last-call (or end_at) — and keep the row only if that span overlaps the picked range.
+// Campaigns with NO call activity (no lastCallAt) and no usable window are dropped when a
+// filter is set. fromMs null = open lower bound; toMs null = open upper bound.
+function activeInRange(r: Row, fromMs: number | null, toMs: number | null): boolean {
+  if (fromMs === null && toMs === null) return true; // no filter → show all
+  const startMs = r.startAt ? Date.parse(r.startAt) : NaN;
+  const lastMs = r.lastCallAt ? Date.parse(r.lastCallAt) : NaN;
+  const endMs = r.endAt ? Date.parse(r.endAt) : NaN;
+  // Activity span end = last call ever, else campaign end, else its start (a point).
+  const spanEnd = Number.isFinite(lastMs) ? lastMs : Number.isFinite(endMs) ? endMs : startMs;
+  const spanStart = Number.isFinite(startMs) ? startMs : spanEnd;
+  // Drop campaigns with no usable activity signal at all once a filter is active.
+  if (!Number.isFinite(spanStart) && !Number.isFinite(spanEnd)) return false;
+  const lo = fromMs ?? Number.NEGATIVE_INFINITY;
+  const hi = toMs ?? Number.POSITIVE_INFINITY;
+  // Overlap test: [spanStart, spanEnd] intersects [lo, hi].
+  return spanStart <= hi && spanEnd >= lo;
+}
+
 // Compact run duration ("1d 3h" / "6h" / "45m") from a span in ms. Reuses the
 // span the bar already computes (start → end / last-call / range-end), so
 // ongoing campaigns read as elapsed-so-far. Pure — no Date.now() in render.
@@ -221,7 +253,7 @@ export default function CampaignTable() {
           sort={sort}
           setSort={setSort}
           keys={["newest", "calls", "reached", "sms"]}
-          labels={{ newest: "Newest", calls: "Attempts", reached: "Reached", sms: "SMS" }}
+          labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
         />
       </div>
 
@@ -259,16 +291,16 @@ export default function CampaignTable() {
       {/* Table. */}
       <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[880px]">
+          <table className="w-full text-sm min-w-[1040px]">
             <thead>
               <tr className="border-b border-[var(--border)]">
                 <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3">Campaign</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Players</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Attempts</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Reached</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">SMS</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Players in Campaign</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Call Attempts</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Reached Player</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">SMS Sent</th>
                 <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Status</th>
-                <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3">Run Window</th>
+                <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3 whitespace-nowrap">Run Window</th>
               </tr>
             </thead>
             <tbody>

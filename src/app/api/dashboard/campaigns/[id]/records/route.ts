@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { computeCallRecords, type DashCallRow, type DashNumberRow } from "@/lib/dashboardAnalytics";
 
 /**
@@ -31,22 +32,24 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ records: [] });
   }
 
-  const [numbersRes, callsRes] = await Promise.all([
-    supabaseAdmin.from("campaign_numbers_v2").select("id, phone_e164, outcome").eq("campaign_id", id),
-    supabaseAdmin
-      .from("calls_v2")
-      .select("campaign_id, campaign_number_id, created_at, goal_reached, status")
-      .eq("campaign_id", id),
+  // Page past the 1000-row cap so a hot campaign (>1000 numbers/calls) isn't truncated.
+  const [numbersData, callsData] = await Promise.all([
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, phone_e164, outcome", "id", {
+      column: "campaign_id",
+      value: id,
+    }),
+    fetchAllRows(
+      supabaseAdmin,
+      "calls_v2",
+      "campaign_id, campaign_number_id, created_at, goal_reached, status, voicemail, duration_seconds",
+      "id",
+      { column: "campaign_id", value: id },
+    ),
   ]);
 
-  if (numbersRes.error || callsRes.error) {
-    console.error("[dashboard/campaigns/records] query failed:", numbersRes.error ?? callsRes.error);
-    return NextResponse.json({ error: "Failed to read call records" }, { status: 500 });
-  }
-
   const records = computeCallRecords(
-    (numbersRes.data ?? []) as unknown as DashNumberRow[],
-    (callsRes.data ?? []) as unknown as DashCallRow[],
+    numbersData as unknown as DashNumberRow[],
+    callsData as unknown as DashCallRow[],
   );
   records.sort((a, b) => (b.lastAttemptedMs ?? 0) - (a.lastAttemptedMs ?? 0));
 

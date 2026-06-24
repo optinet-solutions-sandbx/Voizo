@@ -1,49 +1,42 @@
 "use client";
 
-// Per-campaign CSV + Audio export dropdowns (Slice 3c) for the expandable call-records
-// panel. Reuses the shipped useCampaignExport hook (CSV w/ transcripts + audio-recordings
-// zip via the recordings proxy) — no rebuild. Labels use the export's HONEST filter
-// semantics; counts are best-effort from the visible records. The hook's progress/error
-// surfaces inline (acts as the toast). NOTE: "voicemail" / "wrong_number" are 0 today
-// (unstored buckets) — consistent with the records table.
+// Per-campaign CSV + Audio + Transcripts export dropdowns (Slice 3c) for the
+// expandable call-records panel. Reuses the shipped useCampaignExport hook
+// (CSV w/ transcripts, audio-recordings zip via the recordings proxy, and the
+// transcript .txt bundle) — no rebuild. Categories use the UNIFIED taxonomy
+// (the dashboardAnalytics ContactTag contract); counts are best-effort from the
+// visible records' contact tag. The hook's progress/error surfaces inline (acts
+// as the toast).
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { FileText, Mic, ChevronDown } from "lucide-react";
-import { useCampaignExport, type ExportType } from "@/lib/useCampaignExport";
-import type { CallRecord } from "@/lib/dashboardAnalytics";
+import { FileText, Mic, ScrollText, ChevronDown } from "lucide-react";
+import {
+  useCampaignExport,
+  type ExportType,
+  type ExportMode,
+} from "@/lib/useCampaignExport";
+import { type CallRecord, ATTEMPT_TAG_LABELS } from "@/lib/dashboardAnalytics";
 
-const CSV_OPTS: { label: string; type: ExportType }[] = [
+// Unified category set, shared across CSV / Audio / Transcripts. Labels come
+// from the contract's ATTEMPT_TAG_LABELS so they never drift from the records
+// table. "all" is the only non-tag entry.
+const CATEGORY_OPTS: { label: string; type: ExportType }[] = [
   { label: "All Calls", type: "all" },
-  { label: "SMS Sent", type: "sms_sent" },
-  { label: "Not Interested", type: "not_interested_or_declined" },
-  { label: "Voicemails", type: "voicemail" },
-  { label: "Unreached / Retry", type: "unreached_or_retry" },
-  { label: "Wrong Numbers", type: "wrong_number" },
-];
-const AUDIO_OPTS: { label: string; type: ExportType }[] = [
-  { label: "All Recordings", type: "all" },
-  { label: "SMS Sent", type: "sms_sent" },
-  { label: "Voicemail Only", type: "voicemail" },
+  { label: ATTEMPT_TAG_LABELS.positive, type: "positive" },
+  { label: ATTEMPT_TAG_LABELS.neutral, type: "neutral" },
+  { label: ATTEMPT_TAG_LABELS.declined, type: "declined" },
+  { label: ATTEMPT_TAG_LABELS.early_hangup, type: "early_hangup" },
+  { label: ATTEMPT_TAG_LABELS.voicemail, type: "voicemail" },
+  { label: ATTEMPT_TAG_LABELS.unreachable, type: "unreachable" },
 ];
 
-// Approximate count from the visible records (mapped to the export filter).
+// Approximate count from the visible records, by the record's CONTACT tag —
+// matches the server-side filter (a contact matches a category when its tag
+// === the category; "all" = every record). Contacts whose tag is awaiting_retry
+// or wrong_number only ever fall under "all".
 function csvCount(type: ExportType, records: CallRecord[]): number {
-  switch (type) {
-    case "all":
-      return records.length;
-    case "sms_sent":
-      return records.filter((r) => r.status === "successful").length;
-    case "not_interested_or_declined":
-      return records.filter((r) => r.status === "not_interested").length;
-    case "voicemail":
-      return records.filter((r) => r.status === "voicemail").length;
-    case "unreached_or_retry":
-      return records.filter((r) => r.status === "unreached" || r.status === "awaiting_retry").length;
-    case "wrong_number":
-      return records.filter((r) => r.status === "wrong_number").length;
-    default:
-      return 0;
-  }
+  if (type === "all") return records.length;
+  return records.filter((r) => r.tag === type).length;
 }
 
 function Dropdown({
@@ -105,25 +98,35 @@ function Dropdown({
 
 export default function ExportMenu({ campaignId, records }: { campaignId: string; records: CallRecord[] }) {
   const { startExport, exporting, progress, error } = useCampaignExport(campaignId);
+  const pick = (mode: ExportMode) => (t: ExportType) => startExport(t, mode);
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <Dropdown
         label="CSV Export"
         icon={<FileText size={13} />}
-        options={CSV_OPTS}
+        options={CATEGORY_OPTS}
         records={records}
         showCount
         disabled={exporting}
-        onPick={(t) => startExport(t, false)}
+        onPick={pick("csv")}
       />
       <Dropdown
         label="Audio Export"
         icon={<Mic size={13} />}
-        options={AUDIO_OPTS}
+        options={CATEGORY_OPTS}
         records={records}
         showCount={false}
         disabled={exporting}
-        onPick={(t) => startExport(t, true)}
+        onPick={pick("audio")}
+      />
+      <Dropdown
+        label="Transcripts Export"
+        icon={<ScrollText size={13} />}
+        options={CATEGORY_OPTS}
+        records={records}
+        showCount={false}
+        disabled={exporting}
+        onPick={pick("transcripts")}
       />
       {exporting && <span className="text-[11px] text-[var(--text-3)]">{progress.stage || "Exporting…"}</span>}
       {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}

@@ -40,29 +40,28 @@ export async function GET(request: NextRequest) {
   const toMs = parseDay(searchParams.get("to"), now, true);
   const fromMs = parseDay(searchParams.get("from"), now - 30 * MS_PER_DAY, false);
 
-  const [callsRes, campaignsRes, numbers, sms] = await Promise.all([
-    supabaseAdmin
-      .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail")
-      .gte("created_at", new Date(fromMs).toISOString())
-      .lte("created_at", new Date(toMs).toISOString()),
+  const [calls, campaignsRes, numbers, sms] = await Promise.all([
+    // Attempts/Reached are campaign-LIFETIME totals (NOT windowed) so the row metrics match the
+    // expanded breakdown. fetchAllRows pages past PostgREST's 1000-row cap (lifetime calls exceed
+    // it). The from/to params are NOT applied here — they only echo in the response + the date
+    // picker filters WHICH campaigns are listed (client-side, by activity), not the per-row numbers.
+    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail", "id"),
     supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
-    // Players (full roster) + SMS sent are campaign-LIFETIME totals (NOT windowed): the roster has
-    // no "last 30 days", and texts-sent reads as a campaign total. Attempts/Reached stay windowed
-    // (from the calls above). fetchAllRows pages past PostgREST's 1000-row cap (both tables exceed it).
+    // Players (full roster) + SMS sent are also campaign-LIFETIME totals: the roster has no "last
+    // 30 days", and texts-sent reads as a campaign total. fetchAllRows pages past the 1000-row cap.
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id", "id"),
     fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status", "id"),
   ]);
 
-  if (callsRes.error || campaignsRes.error) {
-    console.error("[dashboard/campaigns] query failed:", callsRes.error ?? campaignsRes.error);
+  if (campaignsRes.error) {
+    console.error("[dashboard/campaigns] query failed:", campaignsRes.error);
     return NextResponse.json({ error: "Failed to read campaigns" }, { status: 500 });
   }
 
   const rows = computeCampaignTable(
-    (callsRes.data ?? []) as unknown as DashCallRow[],
+    calls as unknown as DashCallRow[],
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     now,
     ENDED_IDLE_DAYS,

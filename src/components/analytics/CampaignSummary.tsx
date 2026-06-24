@@ -2,7 +2,7 @@
 
 // Operator-legible per-campaign summary — the DEFAULT content of a campaigns-list row expand.
 // Calm, proportion-first treatment (chosen over the old saturated card grid):
-//   1. OVERVIEW                  — a divided row of top-level counts (Players / Attempts / Reached / SMS / Goal)
+//   1. OVERVIEW                  — a divided row of top-level counts (Players / Attempts / Reached / SMS)
 //   2. CALL ATTEMPTS · BREAKDOWN — one segmented proportion bar (Unreachable / Voicemail / Connected) + legend
 //   3. CONNECTED CALLS · OUTCOME — one segmented proportion bar (Positive / Neutral / Declined / Early hangup)
 // Each breakdown tier IS a partition, so a single stacked bar shows it at a glance; the numerals stay quiet
@@ -40,12 +40,6 @@ export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
     smsSent === 0
       ? "no texts sent"
       : `${a.sms.delivered.toLocaleString()} delivered${a.sms.failed > 0 ? ` · ${a.sms.failed.toLocaleString()} failed` : ""}`;
-  const goalSub =
-    a.goalTarget != null
-      ? a.goalCalls >= a.goalTarget
-        ? "goal reached · operator-set"
-        : `${sharePct(a.goalCalls, a.goalTarget)} of target`
-      : "goals reached";
 
   // Tier 2 — call attempts partition (of COMPLETED attempts; in-flight excluded so it sums to 100%).
   const completed = a.connected + a.nonConnectTotal;
@@ -70,28 +64,11 @@ export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
       {/* ── Tier 1 · Overview ── */}
       <section className="border-b border-[var(--border)] py-5 first:pt-1">
         <Eyebrow>Overview</Eyebrow>
-        <div className="mt-4 grid grid-cols-2 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mt-4 grid grid-cols-2 gap-y-5 sm:grid-cols-3 lg:grid-cols-4">
           <OverStat value={a.targeted.toLocaleString()} label="Players in campaign" sub="loaded at campaign start" hint="Players loaded into this campaign (the full contact roster) — a campaign property, not affected by the date range." />
-          <OverStat value={a.totalCalls.toLocaleString()} label="Call attempts" sub={attemptsPerPlayer ? `avg ${attemptsPerPlayer}× per player` : "—"} hint="Calls placed — a player can be dialed more than once (retries). Scoped to the selected date range." />
+          <OverStat value={a.totalCalls.toLocaleString()} label="Call attempts" sub={attemptsPerPlayer ? `avg ${attemptsPerPlayer}× per player` : "—"} hint="Calls placed — a player can be dialed more than once (retries). Lifetime total for this campaign." />
           <OverStat value={a.reach.toLocaleString()} label="Reached player" sub={`live humans · ${sharePct(a.reach, a.totalCalls)} of attempts`} hint="Live humans = connected − detected voicemails. Unevaluated connects count as reached, so on older data this can equal connected." />
           <OverStat value={smsSent.toLocaleString()} label="SMS sent" sub={smsSub} hint="Offer texts dispatched (every message handed to the provider, regardless of delivery receipt). Lifetime total, not date-scoped." />
-          <OverStat
-            value={
-              a.goalTarget != null ? (
-                <>
-                  {a.goalCalls.toLocaleString()}
-                  <span className="text-[16px] font-normal text-[var(--text-3)]"> /&nbsp;{a.goalTarget.toLocaleString()}</span>
-                </>
-              ) : (
-                a.goalCalls.toLocaleString()
-              )
-            }
-            label="Campaign goal"
-            sub={goalSub}
-            hint={a.goalTarget != null
-              ? "Goals reached vs the target set at campaign creation. 'Goal reached' = the player agreed to receive the offer SMS (upstream of a deposit)."
-              : "Goals reached so far. No target was set, so there's no denominator. 'Goal reached' = the player agreed to receive the offer SMS."}
-          />
         </div>
       </section>
 
