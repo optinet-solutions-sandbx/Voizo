@@ -1,127 +1,174 @@
 "use client";
 
 // Operator-legible per-campaign summary — the DEFAULT content of a campaigns-list row expand.
-// Plain language, leads with the story, then the few numbers that matter; the jargon lives in
-// hover tooltips. The dense deep-dive (AnalyticsRowExpand) sits behind an "Advanced" toggle in
-// CampaignExpand. Funnel mirrors the collapsed row's numbers (Contacts / Calls / Answered /
-// Goal) so nothing has to be reconciled.
+// Calm, proportion-first treatment (chosen over the old saturated card grid):
+//   1. OVERVIEW                  — a divided row of top-level counts (Players / Attempts / Reached / SMS / Goal)
+//   2. CALL ATTEMPTS · BREAKDOWN — one segmented proportion bar (Unreachable / Voicemail / Connected) + legend
+//   3. CONNECTED CALLS · OUTCOME — one segmented proportion bar (Positive / Neutral / Declined / Early hangup)
+// Each breakdown tier IS a partition, so a single stacked bar shows it at a glance; the numerals stay quiet
+// (mono, muted) and color is desaturated + used sparingly. Visible one-line descriptions carry the meaning;
+// the fuller, honest caveats live in the hover tooltips. Engineer deep-dive is still behind "Advanced".
 
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
 
-function pct(v: number | null): string {
-  return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
+// Desaturated accents — color guides the eye, never shouts. Shared by the bar segments + legend dots.
+const ACCENT = {
+  rose: "#cf8a8a", // unreachable / declined
+  violet: "#9f90c9", // voicemail
+  green: "#5fb39a", // connected / reached / positive
+  grey: "#8b939c", // neutral
+  amber: "#c9a86a", // early hangup
+} as const;
+
+function sharePct(n: number, base: number): string {
+  return base > 0 ? `${((n / base) * 100).toFixed(1)}%` : "—";
 }
 
-// Funnel stage colours (Contacts → Calls → Answered → Goal).
-const STAGE_BAR = ["bg-[var(--text-3)]", "bg-blue-500", "bg-emerald-500", "bg-amber-500"];
+interface Seg {
+  label: string;
+  count: number;
+  color: string;
+  desc: string; // visible one-liner (Val's wording)
+  hint?: string; // fuller honest caveat (hover)
+}
 
 export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
-  // Shared baseline = the largest stage, so bars are comparable and never overflow (a contact
-  // can be dialed more than once, so Calls can exceed Contacts on retry-heavy campaigns).
-  const base = Math.max(a.targeted, a.totalCalls, a.connected, a.goalCalls, 1);
-  const stages = [
-    { label: "Contacts", count: a.targeted, hint: "People targeted by this campaign." },
-    { label: "Calls", count: a.totalCalls, hint: "Calls placed — a contact can be dialed more than once." },
-    { label: "Connected", count: a.connected, hint: "Calls that connected. Includes voicemail." },
-    { label: "Goal", count: a.goalCalls, hint: "Calls where the agent reached the campaign's goal." },
+  // Overview
+  const attemptsPerPlayer = a.targeted > 0 ? (a.totalCalls / a.targeted).toFixed(1) : null;
+  const smsSent = a.sms.delivered + a.sms.inFlight + a.sms.failed; // all dispatched (matches the row)
+  const smsSub =
+    smsSent === 0
+      ? "no texts sent"
+      : `${a.sms.delivered.toLocaleString()} delivered${a.sms.failed > 0 ? ` · ${a.sms.failed.toLocaleString()} failed` : ""}`;
+  const goalSub =
+    a.goalTarget != null
+      ? a.goalCalls >= a.goalTarget
+        ? "goal reached · operator-set"
+        : `${sharePct(a.goalCalls, a.goalTarget)} of target`
+      : "goals reached";
+
+  // Tier 2 — call attempts partition (of COMPLETED attempts; in-flight excluded so it sums to 100%).
+  const completed = a.connected + a.nonConnectTotal;
+  const inFlight = Math.max(0, a.totalCalls - completed);
+  const attemptSegs: Seg[] = [
+    { label: "Unreachable", count: a.nonConnectTotal, color: ACCENT.rose, desc: "No answer, busy signal, or failed connection" },
+    { label: "Voicemail detected", count: a.voicemailConnected, color: ACCENT.violet, desc: "Call connected but resolved to the player's voicemail", hint: "Voicemail detection began recently — on older calls this reads low (unevaluated connects fall into Connected to player)." },
+    { label: "Connected to player", count: a.reach, color: ACCENT.green, desc: "Live player answered and engaged with the agent", hint: "Connected minus detected voicemails. Calls not yet evaluated for voicemail count here, so on older data this can run high." },
   ];
 
-  // Texts actually dispatched (sms_messages_v2 aggregate) — NOT the "sent_sms" outcome bucket.
-  // 'Sent' = handed to the provider; mobivate delivery receipts often don't return, so most
-  // sit in-flight rather than confirmed-'delivered'.
-  const textsSent = a.sms.delivered + a.sms.inFlight;
-  const smsSub =
-    a.sms.failed > 0
-      ? `${a.sms.failed.toLocaleString()} failed`
-      : a.sms.delivered > 0
-        ? `${a.sms.delivered.toLocaleString()} delivered`
-        : textsSent > 0
-          ? "awaiting carrier receipts"
-          : undefined;
+  // Tier 3 — outcome partition (of reached humans). All proxies → "estimated".
+  const ob = a.outcomeBreakdown;
+  const outcomeSegs: Seg[] = [
+    { label: "Positive response", count: ob.positive, color: ACCENT.green, desc: "Expressed interest or accepted the offer", hint: "Reached the campaign goal. Note: 'goal' = agreed to receive the offer SMS — upstream of an actual deposit. Estimated." },
+    { label: "Neutral", count: ob.neutral, color: ACCENT.grey, desc: "Listened but gave no clear commitment or signal", hint: "Estimated — the remainder after positive, declined, and early-hangup." },
+    { label: "Declined", count: ob.declined, color: ACCENT.rose, desc: "Explicitly declined the offer or callback", hint: "Estimated from the player's final disposition (declined_offer)." },
+    { label: "Early hangup", count: ob.earlyHangup, color: ACCENT.amber, desc: "Hung up before intent could be established", hint: "Estimated — a very short call (under 15s) with no goal and no explicit decline." },
+  ];
 
   return (
-    <div className="grid gap-4">
-      {/* The story — a simple shrinking funnel, plain labels, real counts. */}
-      <div className="grid gap-1.5">
-        <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">How this campaign is doing</div>
-        {stages.map((s, i) => (
-          <div key={s.label} className="flex items-center gap-3" title={s.hint}>
-            <span className="w-16 shrink-0 text-xs text-[var(--text-2)]">{s.label}</span>
-            <div className="h-4 flex-1 overflow-hidden rounded bg-[var(--bg-elevated)]">
-              <div
-                className={`h-full rounded ${STAGE_BAR[i]}`}
-                style={{ width: `${s.count > 0 ? Math.max((s.count / base) * 100, 2) : 0}%` }}
-              />
-            </div>
-            <span className="w-12 shrink-0 text-right font-mono text-xs text-[var(--text-1)]">{s.count.toLocaleString()}</span>
-          </div>
-        ))}
-      </div>
+    <div className="grid gap-1">
+      {/* ── Tier 1 · Overview ── */}
+      <section className="border-b border-[var(--border)] py-5 first:pt-1">
+        <Eyebrow>Overview</Eyebrow>
+        <div className="mt-4 grid grid-cols-2 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
+          <OverStat value={a.targeted.toLocaleString()} label="Players in campaign" sub="loaded at campaign start" hint="Players loaded into this campaign (the full contact roster) — a campaign property, not affected by the date range." />
+          <OverStat value={a.totalCalls.toLocaleString()} label="Call attempts" sub={attemptsPerPlayer ? `avg ${attemptsPerPlayer}× per player` : "—"} hint="Calls placed — a player can be dialed more than once (retries). Scoped to the selected date range." />
+          <OverStat value={a.reach.toLocaleString()} label="Reached player" sub={`live humans · ${sharePct(a.reach, a.totalCalls)} of attempts`} hint="Live humans = connected − detected voicemails. Unevaluated connects count as reached, so on older data this can equal connected." />
+          <OverStat value={smsSent.toLocaleString()} label="SMS sent" sub={smsSub} hint="Offer texts dispatched (every message handed to the provider, regardless of delivery receipt). Lifetime total, not date-scoped." />
+          <OverStat
+            value={
+              a.goalTarget != null ? (
+                <>
+                  {a.goalCalls.toLocaleString()}
+                  <span className="text-[16px] font-normal text-[var(--text-3)]"> /&nbsp;{a.goalTarget.toLocaleString()}</span>
+                </>
+              ) : (
+                a.goalCalls.toLocaleString()
+              )
+            }
+            label="Campaign goal"
+            sub={goalSub}
+            hint={a.goalTarget != null
+              ? "Goals reached vs the target set at campaign creation. 'Goal reached' = the player agreed to receive the offer SMS (upstream of a deposit)."
+              : "Goals reached so far. No target was set, so there's no denominator. 'Goal reached' = the player agreed to receive the offer SMS."}
+          />
+        </div>
+      </section>
 
-      {/* The few numbers that matter — plain words; precise definitions in the tooltips. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <Stat
-          label="Connect"
-          value={pct(a.connectRate)}
-          sub={`${a.connected.toLocaleString()} of ${a.totalCalls.toLocaleString()} calls`}
-          color="text-emerald-400"
-          hint="Connected ÷ calls placed. Includes voicemail (no minimum-duration floor) — see Reach for human-only. Same as the Connect column."
-        />
-        <Stat
-          label="Reach"
-          value={a.reach.toLocaleString()}
-          sub="humans (excl. voicemail)"
-          color="text-teal-400"
-          hint="Connected calls minus detected voicemails — roughly how many real humans we reached. Calls not yet evaluated for voicemail count as reach, so on older data this can equal Connected."
-        />
-        <Stat
-          label="Voicemail"
-          value={pct(a.voicemailRate)}
-          sub={a.voicemailRate === null ? "not tracked yet" : `${a.voicemailConnected.toLocaleString()} of ${a.voicemailEvaluated.toLocaleString()} evaluated`}
-          color="text-violet-400"
-          hint="Share of EVALUATED connected calls that reached voicemail. Voicemail tracking began recently, so this shows — until evaluated calls exist; historical connects read as reach, not voicemail."
-        />
-        <Stat
-          label="Declined"
-          value={pct(a.activeDeclineRate)}
-          sub="of those engaged"
-          color="text-red-400"
-          hint="Contacts who said not-interested or declined the offer ÷ everyone the agent engaged. High here means the pitch or offer isn't landing."
-        />
-        <Stat
-          label="Success"
-          value={pct(a.conversion)}
-          sub={`${a.goalCalls.toLocaleString()} of ${a.connected.toLocaleString()} connected`}
-          color="text-amber-400"
-          hint="Goal reached ÷ connected calls. The campaign's Success rate — same as the Success column."
-        />
-        <Stat
-          label="Typical call"
-          value={a.durationMedian == null ? "—" : `${Math.round(a.durationMedian)}s`}
-          sub={a.durationP95 == null ? undefined : `longest 5% ~${Math.round(a.durationP95)}s`}
-          color="text-[var(--text-1)]"
-          hint="Median length of an answered call."
-        />
-        <Stat
-          label="Texts sent"
-          value={textsSent.toLocaleString()}
-          sub={smsSub}
-          color="text-sky-400"
-          hint="Texts dispatched for this campaign (every send, regardless of call outcome). 'Sent' = handed to the SMS provider; carrier delivery receipts often aren't returned, so 'delivered' can read low even when the texts went out. This is NOT the 'sent_sms' disposition bucket."
-        />
-      </div>
+      {/* ── Tier 2 · Call attempts breakdown ── */}
+      <BarTier
+        title="Call attempts · breakdown"
+        baseNote={`% of ${completed.toLocaleString()} attempts${inFlight > 0 ? ` · ${inFlight.toLocaleString()} in progress` : ""}`}
+        segs={attemptSegs}
+        total={completed}
+      />
+
+      {/* ── Tier 3 · Connected-calls outcome breakdown ── */}
+      <BarTier
+        title="Connected calls · outcome breakdown"
+        tag="Estimated"
+        baseNote={`% of ${a.reach.toLocaleString()} reached`}
+        segs={outcomeSegs}
+        total={a.reach}
+      />
     </div>
   );
 }
 
-function Stat({ label, value, sub, hint, color }: {
-  label: string; value: string; sub?: string; hint: string; color: string;
-}) {
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return <span className="text-[10.5px] font-semibold uppercase tracking-[0.13em] text-[var(--text-3)]">{children}</span>;
+}
+
+function OverStat({ value, label, sub, hint }: { value: React.ReactNode; label: string; sub: string; hint: string }) {
   return (
-    <div title={hint} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3">
-      <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">{label}</div>
-      <div className={`mt-0.5 font-mono text-xl font-bold leading-tight ${color}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[10px] text-[var(--text-3)]">{sub}</div>}
+    <div
+      title={hint}
+      className="flex flex-col gap-1.5 px-6 first:pl-0 [&:not(:first-child)]:border-l [&:not(:first-child)]:border-[var(--border)]"
+    >
+      <span className="font-mono text-[26px] font-medium leading-none tracking-tight text-[var(--text-1)] [font-variant-numeric:tabular-nums]">{value}</span>
+      <span className="text-[12.5px] font-medium text-[var(--text-2)]">{label}</span>
+      <span className="text-[11px] leading-tight text-[var(--text-3)]">{sub}</span>
     </div>
+  );
+}
+
+function BarTier({ title, tag, baseNote, segs, total }: { title: string; tag?: string; baseNote: string; segs: Seg[]; total: number }) {
+  const ariaParts = segs.map((s) => `${s.label} ${sharePct(s.count, total)}`).join(", ");
+  return (
+    <section className="border-b border-[var(--border)] py-5 last:border-b-0">
+      <div className="mb-4 flex items-center gap-3">
+        <Eyebrow>{title}</Eyebrow>
+        {tag && (
+          <span className="rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]">
+            {tag}
+          </span>
+        )}
+        <span className="ml-auto text-[11px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">{baseNote}</span>
+      </div>
+
+      {/* Stacked proportion bar */}
+      <div className="mb-5 flex h-4 w-full gap-[2px] overflow-hidden rounded-lg bg-[var(--bg-elevated)]" role="img" aria-label={`${title}: ${ariaParts}`}>
+        {segs.map((s) =>
+          total > 0 && s.count > 0 ? (
+            <span key={s.label} className="h-full opacity-90" style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
+          ) : null,
+        )}
+      </div>
+
+      {/* Legend */}
+      <ul className={`grid list-none gap-x-7 gap-y-4 p-0 ${segs.length === 4 ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
+        {segs.map((s) => (
+          <li key={s.label} className="flex flex-col gap-1.5" title={s.hint ?? s.desc}>
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 shrink-0 rounded-full opacity-90" style={{ background: s.color }} />
+              <span className="text-[12.5px] font-medium text-[var(--text-1)]">{s.label}</span>
+              <span className="ml-auto font-mono text-[12.5px] font-medium text-[var(--text-2)] [font-variant-numeric:tabular-nums]">{sharePct(s.count, total)}</span>
+              <span className="whitespace-nowrap font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">{s.count.toLocaleString()} of {total.toLocaleString()}</span>
+            </span>
+            <span className="pl-4 text-[11px] leading-snug text-[var(--text-3)]">{s.desc}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

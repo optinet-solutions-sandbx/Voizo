@@ -2,7 +2,7 @@
 
 import { useMemo, type Dispatch } from "react";
 import {
-  CalendarDays, Globe2, Info, Play, Repeat, Timer,
+  CalendarDays, Globe2, Info, Play, Repeat, Target, Timer,
 } from "lucide-react";
 
 import { RecurrenceEditor } from "@/components/RecurrenceEditor";
@@ -77,6 +77,9 @@ export default function StepSchedule({ state, dispatch }: Props) {
   function setScheduledDate(value: string) {
     dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { scheduledDate: value } });
   }
+  function setGoalTargetText(value: string) {
+    dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { goalTargetText: value } });
+  }
 
   const enabledRows = useMemo(
     () => state.scheduleRows.filter((r) => r.enabled),
@@ -115,6 +118,32 @@ export default function StepSchedule({ state, dispatch }: Props) {
             name="Repeat daily"
             description="Auto-spawn a fresh child each scheduled day with the latest segment."
           />
+        </div>
+
+        {/* Campaign goal (target) — optional. Applies to both run modes. */}
+        <div className="flex flex-col gap-2">
+          <label
+            htmlFor="campaign-goal-target"
+            className="text-xs font-medium text-[var(--text-2)] inline-flex items-center gap-1.5"
+          >
+            <Target size={13} className="text-[var(--text-3)]" />
+            Campaign goal (target)
+          </label>
+          <input
+            id="campaign-goal-target"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            step={1}
+            value={state.goalTargetText}
+            onChange={(e) => setGoalTargetText(e.target.value)}
+            placeholder="e.g. 50"
+            className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+          />
+          <p className="text-[11px] text-[var(--text-3)] leading-snug">
+            Optional. Target number of successful outcomes (e.g. deposits) for this
+            campaign — shown as X / Y in the performance report.
+          </p>
         </div>
 
         {/* Branch */}

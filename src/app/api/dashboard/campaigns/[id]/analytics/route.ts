@@ -43,7 +43,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   // The campaign row doubles as the ghost segregation check + the computeCampaignAnalytics input.
   const { data: camp, error: campErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, status, is_test, source, start_at, created_at, end_at, campaign_type")
+    .select("id, name, status, is_test, source, start_at, created_at, end_at, campaign_type, goal_target")
     .eq("id", id)
     .single();
   if (campErr || !camp) {

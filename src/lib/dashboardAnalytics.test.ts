@@ -379,6 +379,32 @@ describe("computeCampaignTable", () => {
     expect(by.c3).toBe("paused"); // paused, idle 2d
     expect(by.c4).toBe("ended"); // paused, no calls
   });
+
+  it("players/smsSent default to 0 when no numbers/sms passed", () => {
+    expect(rows.find((r) => r.id === "c1")!.players).toBe(0);
+    expect(rows.find((r) => r.id === "c1")!.smsSent).toBe(0);
+  });
+
+  it("counts players (roster), reach (human connects), SMS sent (all dispatched incl. failed)", () => {
+    const c = [
+      call("p1", "completed", true, iso(now - 1 * day), "n1", false), // reached human
+      call("p1", "completed", false, iso(now - 1 * day), "n2", true), // voicemail → not reach
+    ];
+    const camps = [camp("p1", { status: "running" })];
+    const numbers = [{ campaign_id: "p1" }, { campaign_id: "p1" }, { campaign_id: "p1" }]; // 3-strong roster
+    const sms = [
+      { campaign_id: "p1", status: "delivered" },
+      { campaign_id: "p1", status: "sent" },
+      { campaign_id: "p1", status: "queued" },
+      { campaign_id: "p1", status: "failed" }, // dispatched → counted
+      { campaign_id: "p1", status: "undelivered" }, // dispatched → counted
+    ];
+    const r = computeCampaignTable(c, camps, now, 7, numbers, sms).find((x) => x.id === "p1")!;
+    expect(r.players).toBe(3);
+    expect(r.connected).toBe(2);
+    expect(r.reach).toBe(1); // 2 connected − 1 voicemail
+    expect(r.smsSent).toBe(5); // every dispatched message (delivered + in-flight + failed/undelivered)
+  });
 });
 
 describe("call records", () => {

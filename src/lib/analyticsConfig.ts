@@ -34,6 +34,11 @@ export const ANALYTICS_CONFIG = {
   // Histogram band edges (seconds) for the connected-call duration distribution.
   // Buckets: [0,15) [15,30) [30,60) [60,120) [120,300) [300, ∞). Top bucket is open-ended.
   DURATION_BUCKETS_SEC: [0, 15, 30, 60, 120, 300],
+
+  // Connected-calls outcome breakdown (proxy): a reached human call shorter than this,
+  // with no goal and no explicit decline, is treated as an "early hangup" (hung up before
+  // intent could be established). Tunable estimate — see computeOne's outcomeBreakdown.
+  EARLY_HANGUP_SEC: 15,
 } as const;
 
 /** Combined per-minute proxy rate (telephony + AI). Labeled "est." everywhere it surfaces. */

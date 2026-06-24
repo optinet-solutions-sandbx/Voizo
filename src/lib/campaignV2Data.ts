@@ -53,6 +53,15 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       is_test: input.isTest ?? false,
       created_by: input.createdBy || null,
       source: input.source ?? "production",
+      // Optional goal target (X / Y in the performance report). Normalize to a
+      // positive integer or null at the write edge so a malformed payload can't
+      // reach the DB CHECK (goal_target IS NULL OR goal_target > 0).
+      goal_target:
+        typeof input.goalTarget === "number" &&
+        Number.isInteger(input.goalTarget) &&
+        input.goalTarget > 0
+          ? input.goalTarget
+          : null,
     })
     .select()
     .single();

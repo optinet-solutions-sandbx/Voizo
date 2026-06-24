@@ -243,10 +243,12 @@ function CampaignsPageInner() {
     const totalCalls = analyticsRecords.reduce((s, v) => s + v.totalCalls, 0);
     const connectCount = analyticsRecords.reduce((s, v) => s + v.connected, 0);
     const goalCount = analyticsRecords.reduce((s, v) => s + v.goalCalls, 0);
+    const totalReach = analyticsRecords.reduce((s, v) => s + v.reach, 0);
+    const totalSms = analyticsRecords.reduce((s, v) => s + v.sms.delivered + v.sms.inFlight + v.sms.failed, 0);
     const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
     // Success = goal-based Conversion (goal ÷ connected) — app-wide canon.
     const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
-    return { totalContacts, totalCalls, connectCount, goalCount, connectRate, successRate };
+    return { totalContacts, totalCalls, connectCount, goalCount, totalReach, totalSms, connectRate, successRate };
   }, [analyticsRecords]);
 
   const totalPages = Math.max(1, Math.ceil(displayCampaigns.length / PAGE_SIZE));
@@ -343,10 +345,10 @@ function CampaignsPageInner() {
 
       {/* KPI strip — reflects the current search / filters / date window. */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
-        <StatCard label="Contacts"     value={totals.totalContacts.toLocaleString()} />
-        <StatCard label="Calls"        value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
-        <StatCard label="Connect Rate" value={`${totals.connectRate}%`}              accent="text-emerald-400" hint="connected ÷ all calls — no min-duration floor; 2s answer-drops count (spec §6.5)" />
-        <StatCard label="Success Rate" value={`${totals.successRate}%`}              accent="text-amber-400" hint="goal ÷ connected — app-wide canon" />
+        <StatCard label="Players"       value={totals.totalContacts.toLocaleString()} />
+        <StatCard label="Call attempts" value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
+        <StatCard label="Reached"       value={totals.totalReach.toLocaleString()}    accent="text-teal-400" hint="live humans = connected − detected voicemails (unevaluated connects count as reached)" />
+        <StatCard label="SMS sent"      value={totals.totalSms.toLocaleString()}      accent="text-sky-400" hint="offer texts dispatched (delivered + in-flight + failed)" />
       </section>
 
       {/* Toolbar */}
@@ -444,8 +446,8 @@ function CampaignsPageInner() {
                 const a = analytics[id];
                 const totalContacts = a?.targeted ?? 0;
                 const totalCalls = a?.totalCalls ?? 0;
-                const connectCount = a?.connected ?? 0;
-                const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) + "%" : "0%";
+                const reach = a?.reach ?? 0;
+                const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
                 const hasActivity = totalCalls > 0;
                 const when = formatWhen(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
@@ -473,18 +475,22 @@ function CampaignsPageInner() {
                         {when.sub && <span className="text-[var(--text-3)] ml-1">· {when.sub}</span>}
                       </p>
                     </div>
-                    <div className="grid grid-cols-3 gap-3 ml-10">
+                    <div className="grid grid-cols-4 gap-3 ml-10">
                       <div>
-                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Contacts</p>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Players</p>
                         <p className="text-xs font-semibold text-[var(--text-2)]">{totalContacts.toLocaleString()}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Calls</p>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Attempts</p>
                         <p className="text-xs font-semibold text-[var(--text-2)]">{totalCalls.toLocaleString()}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Connect</p>
-                        <p className="text-xs font-semibold text-[var(--text-2)]">{connectRate}</p>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">Reached</p>
+                        <p className="text-xs font-semibold text-teal-400">{reach.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[var(--text-3)] mb-0.5">SMS</p>
+                        <p className="text-xs font-semibold text-sky-400">{smsSent.toLocaleString()}</p>
                       </div>
                     </div>
                   </div>
@@ -505,10 +511,10 @@ function CampaignsPageInner() {
                   <tr>
                     <Th>Campaign</Th>
                     <Th>When</Th>
-                    <Th alignRight>Contacts</Th>
-                    <Th alignRight>Calls</Th>
-                    <Th alignRight>Connect</Th>
-                    <Th alignRight>Success</Th>
+                    <Th alignRight>Players</Th>
+                    <Th alignRight>Call attempts</Th>
+                    <Th alignRight>Reached</Th>
+                    <Th alignRight>SMS</Th>
                     <Th>Status</Th>
                     <Th />
                   </tr>
@@ -523,11 +529,8 @@ function CampaignsPageInner() {
                     const a = analytics[id];
                     const totalContacts = a?.targeted ?? 0;
                     const totalCalls = a?.totalCalls ?? 0;
-                    const connectCount = a?.connected ?? 0;
-                    const goalCount = a?.goalCalls ?? 0;
-                    const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0";
-                    // Success = goal-based Conversion (a.conversion); null (0 connected) => "0".
-                    const successRate = a?.conversion != null ? (a.conversion * 100).toFixed(1) : "0";
+                    const reach = a?.reach ?? 0;
+                    const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
                     const hasActivity = totalCalls > 0;
                     const when = formatWhen(c);
                     const status = (c.status as string) || "draft";
@@ -579,12 +582,10 @@ function CampaignsPageInner() {
                           <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{totalCalls.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
-                          <span className={Number(connectRate) > 0 ? "text-emerald-400" : "text-[var(--text-3)]"}>{connectRate}%</span>
-                          <span className="text-[var(--text-3)] text-[11px] ml-1">({connectCount})</span>
+                          <span className={reach > 0 ? "text-teal-400" : "text-[var(--text-3)]"}>{reach.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
-                          <span className={Number(successRate) > 0 ? "text-amber-400" : "text-[var(--text-3)]"}>{successRate}%</span>
-                          <span className="text-[var(--text-3)] text-[11px] ml-1">({goalCount})</span>
+                          <span className={smsSent > 0 ? "text-sky-400" : "text-[var(--text-3)]"}>{smsSent.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4"><StatusBadge status={status} /></td>
                         <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>

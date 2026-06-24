@@ -337,3 +337,81 @@ describe("computeCampaignAnalytics — voicemail / reach (call-observability sli
     expect(g["g"].reach).toBe(0); // 1 connected − 1 voicemail
   });
 });
+
+describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy) + goal target", () => {
+  it("goalTarget passes through campaigns_v2.goal_target; null when unset", () => {
+    const r = computeCampaignAnalytics(FIXTURE_INPUT);
+    expect(r["big"].goalTarget).toBeNull(); // fixtures set no goal_target
+
+    const withTarget = computeCampaignAnalytics({
+      campaigns: [{ id: "t", name: "T", created_at: "2026-06-01T00:00:00Z", goal_target: 25 }],
+      numbers: [{ id: "t1", campaign_id: "t", outcome: "pending" }],
+      calls: [], sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(withTarget["t"].goalTarget).toBe(25);
+  });
+
+  it("partitions REACHED human calls into positive/declined/earlyHangup/neutral (sums to reach)", () => {
+    const r = computeCampaignAnalytics({
+      campaigns: [{ id: "ob", name: "OB", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [
+        { id: "nP", campaign_id: "ob", outcome: "sent_sms" },
+        { id: "nD", campaign_id: "ob", outcome: "declined_offer" },
+        { id: "nE", campaign_id: "ob", outcome: "pending" },
+        { id: "nN", campaign_id: "ob", outcome: "not_interested" },
+        { id: "nV", campaign_id: "ob", outcome: "sent_sms" },
+      ],
+      calls: [
+        // positive: goal reached
+        { campaign_id: "ob", campaign_number_id: "nP", status: "completed", goal_reached: true, duration_seconds: 80, voicemail: false },
+        // declined: contact outcome declined_offer (not a goal)
+        { campaign_id: "ob", campaign_number_id: "nD", status: "completed", goal_reached: false, duration_seconds: 40, voicemail: false },
+        // early hangup: < EARLY_HANGUP_SEC (15s), no goal, not declined
+        { campaign_id: "ob", campaign_number_id: "nE", status: "completed", goal_reached: false, duration_seconds: 8, voicemail: false },
+        // neutral: reached, engaged, no clear signal
+        { campaign_id: "ob", campaign_number_id: "nN", status: "completed", goal_reached: false, duration_seconds: 50, voicemail: false },
+        // voicemail: connected but NOT a reached human → excluded from the breakdown
+        { campaign_id: "ob", campaign_number_id: "nV", status: "completed", goal_reached: false, duration_seconds: 3, voicemail: true },
+        // not connected → excluded
+        { campaign_id: "ob", campaign_number_id: "nE", status: "no_answer", goal_reached: null, duration_seconds: null, voicemail: null },
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    const a = r["ob"];
+    expect(a.connected).toBe(5);
+    expect(a.reach).toBe(4); // 5 connected − 1 voicemail
+    expect(a.outcomeBreakdown).toEqual({ positive: 1, declined: 1, earlyHangup: 1, neutral: 1 });
+    const b = a.outcomeBreakdown;
+    expect(b.positive + b.declined + b.earlyHangup + b.neutral).toBe(a.reach); // clean partition of reach
+  });
+
+  it("priority: goal beats all; explicit decline beats a sub-threshold early hangup", () => {
+    const r = computeCampaignAnalytics({
+      campaigns: [{ id: "p", name: "P", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [
+        { id: "g", campaign_id: "p", outcome: "declined_offer" }, // goal call on a 'declined' contact → positive (goal wins)
+        { id: "d", campaign_id: "p", outcome: "declined_offer" }, // short AND declined → declined (decline beats duration)
+      ],
+      calls: [
+        { campaign_id: "p", campaign_number_id: "g", status: "completed", goal_reached: true, duration_seconds: 5, voicemail: false },
+        { campaign_id: "p", campaign_number_id: "d", status: "completed", goal_reached: false, duration_seconds: 5, voicemail: false },
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(r["p"].outcomeBreakdown).toEqual({ positive: 1, declined: 1, earlyHangup: 0, neutral: 0 });
+  });
+
+  it("no reached humans → all buckets 0 (no NaN, clean partition)", () => {
+    const r = computeCampaignAnalytics({
+      campaigns: [{ id: "z", name: "Z", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "z1", campaign_id: "z", outcome: "sent_sms" }],
+      calls: [
+        { campaign_id: "z", campaign_number_id: "z1", status: "completed", goal_reached: false, duration_seconds: 30, voicemail: true }, // voicemail
+        { campaign_id: "z", campaign_number_id: "z1", status: "no_answer", goal_reached: null, duration_seconds: null, voicemail: null },
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(r["z"].reach).toBe(0);
+    expect(r["z"].outcomeBreakdown).toEqual({ positive: 0, declined: 0, earlyHangup: 0, neutral: 0 });
+  });
+});

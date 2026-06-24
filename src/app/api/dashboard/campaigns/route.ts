@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { computeCampaignTable, type DashCallRow, type DashCampaignRow } from "@/lib/dashboardAnalytics";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import { computeCampaignTable, type DashCallRow, type DashCampaignRow, type DashSmsRow } from "@/lib/dashboardAnalytics";
 
 /**
  * GET /api/dashboard/campaigns?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -39,15 +40,20 @@ export async function GET(request: NextRequest) {
   const toMs = parseDay(searchParams.get("to"), now, true);
   const fromMs = parseDay(searchParams.get("from"), now - 30 * MS_PER_DAY, false);
 
-  const [callsRes, campaignsRes] = await Promise.all([
+  const [callsRes, campaignsRes, numbers, sms] = await Promise.all([
     supabaseAdmin
       .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, created_at")
+      .select("campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail")
       .gte("created_at", new Date(fromMs).toISOString())
       .lte("created_at", new Date(toMs).toISOString()),
     supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
+    // Players (full roster) + SMS sent are campaign-LIFETIME totals (NOT windowed): the roster has
+    // no "last 30 days", and texts-sent reads as a campaign total. Attempts/Reached stay windowed
+    // (from the calls above). fetchAllRows pages past PostgREST's 1000-row cap (both tables exceed it).
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id", "id"),
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status", "id"),
   ]);
 
   if (callsRes.error || campaignsRes.error) {
@@ -60,6 +66,8 @@ export async function GET(request: NextRequest) {
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     now,
     ENDED_IDLE_DAYS,
+    numbers as unknown as Array<{ campaign_id: string }>,
+    sms as unknown as DashSmsRow[],
   );
 
   return NextResponse.json({

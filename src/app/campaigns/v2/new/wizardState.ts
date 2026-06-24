@@ -137,6 +137,14 @@ export interface WizardState {
   startMode: StartMode;
   delayMinutes: number;
   scheduledDate: string;           // R2: keep as string, never Date | null
+  /**
+   * Optional "Campaign goal (target)" — number of successful outcomes the
+   * operator is aiming for (shown as X / Y in the performance report). Stored
+   * as a STRING so an empty input is clean state ("" = not set). buildCreateInput
+   * parses it to a positive integer or null. Lives in Step 3 alongside the other
+   * campaign-shaping numerics.
+   */
+  goalTargetText: string;
 
   // Step 3 — Schedule (Repeat branch)
   recurrencePattern: RecurrencePattern;
@@ -193,7 +201,7 @@ export type AgentPayload = Partial<
  * action surface small while still allowing fine-grained updates.
  */
 export type SchedulePayload = Partial<
-  Pick<WizardState, "campaignType" | "scheduleRows" | "startMode" | "delayMinutes" | "scheduledDate">
+  Pick<WizardState, "campaignType" | "scheduleRows" | "startMode" | "delayMinutes" | "scheduledDate" | "goalTargetText">
 >;
 
 /**
@@ -328,6 +336,7 @@ export function createInitialState(): WizardState {
     startMode: "now",
     delayMinutes: 60,
     scheduledDate: "",
+    goalTargetText: "",
 
     recurrencePattern: defaultRecurrencePattern(new Date(), detectedTz),
     recurrenceErrors: [],
@@ -491,6 +500,20 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 // catches before merge.
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * Parse the optional "Campaign goal (target)" input. Empty/whitespace or any
+ * non-positive / non-integer value collapses to null (treated as "not set").
+ * Returns a positive integer otherwise. Mirrors the DB CHECK
+ * (goal_target IS NULL OR goal_target > 0).
+ */
+export function parseGoalTarget(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
 /** Mirrors classic page-classic.tsx:241-244. */
 function composedSmsTemplate(state: WizardState): string {
   const parts = [state.smsMessage.trim(), state.smsLink.trim(), state.smsOptout.trim()].filter(
@@ -578,6 +601,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       campaignType: "recurring",
       recurrencePattern: state.recurrencePattern,
       isTest: state.isTest,
+      goalTarget: parseGoalTarget(state.goalTargetText),
     };
   }
 
@@ -616,6 +640,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     smsConsentMode: state.smsConsentMode,
     numbers: parsePhoneList(state.numbersText),
     isTest: state.isTest,
+    goalTarget: parseGoalTarget(state.goalTargetText),
   };
 }
 
@@ -627,6 +652,13 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
 export function validateBeforeSubmit(state: WizardState): string | null {
   if (!state.name.trim()) return "Campaign name is required.";
   if (!state.vapiAssistantId.trim()) return "Pick a Vapi assistant.";
+
+  // Optional campaign goal target. Empty is always valid; a non-empty value
+  // that isn't a positive whole number is rejected (mirrors the DB CHECK
+  // goal_target > 0). Applies to both Fixed and Recurring.
+  if (state.goalTargetText.trim() && parseGoalTarget(state.goalTargetText) === null) {
+    return "Campaign goal must be a whole number greater than 0 (or leave it blank).";
+  }
 
   if (state.campaignType === "recurring") {
     if (state.recurrenceErrors.length > 0) {

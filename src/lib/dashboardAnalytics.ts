@@ -655,6 +655,9 @@ export interface CampaignTableRow {
   successful: number;
   connectRate: number | null;
   successRate: number | null;
+  players: number; // campaign roster size (campaign_numbers_v2 count) — lifetime, NOT windowed
+  reach: number; // human-only connects in window = connected − voicemailConnected
+  smsSent: number; // texts dispatched (delivered + in-flight) for this campaign
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
@@ -669,9 +672,23 @@ export function computeCampaignTable(
   campaigns: DashCampaignRow[],
   nowMs: number,
   idleDays = 7,
+  numbers: Array<{ campaign_id: string }> = [],
+  sms: DashSmsRow[] = [],
 ): CampaignTableRow[] {
   const index = buildCampaignIndex(campaigns);
   const rollupMap = new Map(computeCampaignRollups(calls, index).map((r) => [r.id, r]));
+  // Players = full roster (lifetime; numbers are NOT windowed by the caller). SMS sent = every
+  // message dispatched for the campaign (delivered + in-flight + failed/undelivered) — "sent" =
+  // handed to the provider regardless of receipt, matching the report's "SMS sent" total.
+  const playersByCampaign = new Map<string, number>();
+  for (const n of numbers) playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
+  const smsByCampaign = new Map<string, number>();
+  for (const m of sms) {
+    const s = m.status ?? "";
+    if (s === "delivered" || s === "queued" || s === "sent" || s === "failed" || s === "undelivered") {
+      smsByCampaign.set(m.campaign_id, (smsByCampaign.get(m.campaign_id) ?? 0) + 1);
+    }
+  }
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
@@ -698,6 +715,9 @@ export function computeCampaignTable(
         successful: r?.successful ?? 0,
         connectRate: r?.connectRate ?? null,
         successRate: r?.successRate ?? null,
+        players: playersByCampaign.get(c.id) ?? 0,
+        reach: r?.reach ?? 0,
+        smsSent: smsByCampaign.get(c.id) ?? 0,
         startAt: (c.start_at ?? c.created_at) ?? null,
         endAt: c.end_at ?? null,
         lastCallAt: lastCallMs ? new Date(lastCallMs).toISOString() : null,

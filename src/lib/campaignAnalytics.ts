@@ -21,6 +21,7 @@ export interface CampaignRow {
   created_at?: string | null;
   end_at?: string | null;
   campaign_type?: string | null;
+  goal_target?: number | null; // campaigns_v2.goal_target — operator-set target count of goal-reached calls; NULL when unset
 }
 export interface NumberRow {
   id: string;
@@ -91,6 +92,18 @@ export interface SmsCounts {
   byProvider: Record<string, { delivered: number; failed: number; inFlight: number }>;
 }
 
+export interface OutcomeBreakdown {
+  // Partition of REACHED human calls (connected, not voicemail; count == reach). Sums to reach.
+  // ALL FOUR ARE PROXIES (labeled "est." in the UI) over existing fields — NOT a persisted
+  // disposition. positive = goal_reached (SMS opt-in, upstream of a sale); declined = the call's
+  // contact has outcome 'declined_offer'; earlyHangup = reached call shorter than EARLY_HANGUP_SEC
+  // with no goal/decline; neutral = the remainder. See computeOne for the priority order.
+  positive: number;
+  declined: number;
+  earlyHangup: number;
+  neutral: number;
+}
+
 export interface CampaignAnalytics {
   id: string;
   name: string;
@@ -111,6 +124,9 @@ export interface CampaignAnalytics {
   reach: number; // human-only connects = connected − voicemailConnected (unevaluated count as reached)
   goalCalls: number;
   goalNumbers: number;
+  goalTarget: number | null; // operator-set target count of goals (campaigns_v2.goal_target); NULL when unset
+  // connected-calls outcome breakdown — proxy partition of REACHED humans (== reach)
+  outcomeBreakdown: OutcomeBreakdown;
   // rates (null = uncomputable; never NaN — G1)
   conversion: number | null;
   voicemailRate: number | null; // voicemailConnected / voicemailEvaluated (NULL until calls are evaluated)
@@ -319,6 +335,26 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     recently_called_elsewhere: safeDiv(outcomeCounts["recently_called_elsewhere"] ?? 0, targeted) ?? 0,
   };
 
+  // ── Connected-calls outcome breakdown (PROXY — labeled "est." in the UI) ──────────────────
+  // Partition the REACHED human calls (connected, voicemail!==true → count == reach) by priority:
+  //   goal reached → explicit decline (contact outcome) → early hangup (< EARLY_HANGUP_SEC) → neutral.
+  // Heuristics over existing fields, not a persisted sentiment. Mixing note: 'declined' joins a
+  // (call-level) reached call to its (contact-level) declined_offer outcome — fine for the common
+  // one-call-per-reached-contact case; documented as an estimate.
+  const declinedContactIds = new Set(
+    numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
+  );
+  const outcomeBreakdown: OutcomeBreakdown = { positive: 0, declined: 0, earlyHangup: 0, neutral: 0 };
+  for (const c of calls) {
+    if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
+    if (c.voicemail === true) continue; // voicemail is not a reached human (keeps the sum == reach)
+    if (c.goal_reached === true) outcomeBreakdown.positive++;
+    else if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) outcomeBreakdown.declined++;
+    else if (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+      outcomeBreakdown.earlyHangup++;
+    else outcomeBreakdown.neutral++;
+  }
+
   // ── Duration / density (G2: numeric guard; only connected calls carry reliable seconds) ──
   const connectedDurations: number[] = [];
   let talkSeconds = 0;
@@ -466,6 +502,8 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
     reach: connected - voicemailConnected,
     goalCalls,
     goalNumbers: goalNums.size,
+    goalTarget: campaign.goal_target ?? null,
+    outcomeBreakdown,
     conversion: safeDiv(goalCalls, connected),
     voicemailRate: safeDiv(voicemailConnected, voicemailEvaluated),
     yield: safeDiv(goalNums.size, targeted),

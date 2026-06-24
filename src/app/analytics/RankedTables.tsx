@@ -46,7 +46,7 @@ export interface PromptRow {
   campaignCount: number;
 }
 
-export type SortKey = "calls" | "connect" | "success" | "newest";
+export type SortKey = "calls" | "connect" | "success" | "newest" | "reached" | "sms";
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 function sortVal(r: { calls: number; connectRate: number | null; successRate: number | null }, key: SortKey): number {
@@ -84,10 +84,12 @@ export function SortControl({
   sort,
   setSort,
   keys = ["calls", "connect", "success"],
+  labels,
 }: {
   sort: SortKey;
   setSort: (s: SortKey) => void;
   keys?: SortKey[];
+  labels?: Partial<Record<SortKey, string>>; // display override (e.g. calls → "Attempts", sms → "SMS")
 }) {
   return (
     <div className="inline-flex items-center gap-2">
@@ -102,7 +104,7 @@ export function SortControl({
               sort === k ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
             }`}
           >
-            {k}
+            {labels?.[k] ?? k}
           </button>
         ))}
       </div>

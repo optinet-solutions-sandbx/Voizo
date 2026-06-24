@@ -37,6 +37,9 @@ interface Row {
   successful: number;
   connectRate: number | null;
   successRate: number | null;
+  players: number; // campaign roster size (lifetime)
+  reach: number; // human-only connects in window
+  smsSent: number; // texts dispatched for this campaign
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
@@ -57,7 +60,6 @@ const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: b
 };
 
 const PAGE_SIZE = 10; // rows per page (mirrors the /campaigns list)
-const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 // Deterministic per-campaign color (stable across the dashboard; reused by charts later).
 function campaignColor(id: string): string {
@@ -105,15 +107,16 @@ function StatusPill({ s }: { s: DisplayStatus }) {
 }
 
 function sortValue(r: Row, key: SortKey): number {
-  if (key === "calls") return r.calls;
-  if (key === "connect") return r.connectRate ?? -1;
+  if (key === "calls") return r.calls; // "Attempts" column
+  if (key === "reached") return r.reach;
+  if (key === "sms") return r.smsSent;
   if (key === "newest") {
     // Newest first (desc): run-window start as ms. No created_at in the payload,
     // so startAt is the truest available recency proxy. Null/invalid → sort last.
     const t = r.startAt ? Date.parse(r.startAt) : NaN;
     return Number.isFinite(t) ? t : -1;
   }
-  return r.successRate ?? -1;
+  return r.calls; // fallback (e.g. a stale "connect"/"success" key) → by attempts
 }
 
 export default function CampaignTable() {
@@ -214,7 +217,12 @@ export default function CampaignTable() {
           <h2 className="text-[20px] font-bold tracking-tight">Campaign Performance</h2>
           <p className="text-sm text-[var(--text-3)] mt-1">Status, run window &amp; full call records · its own date range.</p>
         </div>
-        <SortControl sort={sort} setSort={setSort} keys={["newest", "calls", "connect", "success"]} />
+        <SortControl
+          sort={sort}
+          setSort={setSort}
+          keys={["newest", "calls", "reached", "sms"]}
+          labels={{ newest: "Newest", calls: "Attempts", reached: "Reached", sms: "SMS" }}
+        />
       </div>
 
       {/* Table-level filters (independent of the global bar). */}
@@ -251,13 +259,14 @@ export default function CampaignTable() {
       {/* Table. */}
       <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[760px]">
+          <table className="w-full text-sm min-w-[880px]">
             <thead>
               <tr className="border-b border-[var(--border)]">
                 <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3">Campaign</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Calls</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Connect</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Success</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Players</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Attempts</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Reached</th>
+                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">SMS</th>
                 <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Status</th>
                 <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3">Run Window</th>
               </tr>
@@ -265,7 +274,7 @@ export default function CampaignTable() {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-10 text-center text-xs text-[var(--text-3)]">
+                  <td colSpan={7} className="px-5 py-10 text-center text-xs text-[var(--text-3)]">
                     {data ? "No campaigns match these filters." : "Loading campaigns…"}
                   </td>
                 </tr>
@@ -314,9 +323,10 @@ export default function CampaignTable() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-right font-mono text-[var(--text-2)]">{r.calls.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right font-mono text-emerald-400">{pct(r.connectRate)}</td>
-                      <td className="px-3 py-3 text-right font-mono text-amber-400">{pct(r.successRate)}</td>
+                      <td className="px-3 py-3 text-right font-mono text-[var(--text-2)]">{r.players.toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-blue-400">{r.calls.toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-teal-400">{r.reach.toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-sky-400">{r.smsSent.toLocaleString()}</td>
                       <td className="px-3 py-3"><StatusPill s={r.displayStatus} /></td>
                       <td className="px-5 py-3">
                         <div className="text-[11px] font-mono text-[var(--text-2)]">
@@ -330,7 +340,7 @@ export default function CampaignTable() {
                     </tr>
                     {expanded.has(r.id) && (
                       <tr>
-                        <td colSpan={6} className="p-0">
+                        <td colSpan={7} className="p-0">
                           <div className="px-4 py-4 bg-[var(--bg-app)] border-b border-[var(--border)]">
                             {analytics[r.id] === undefined ? (
                               <p className="text-xs text-[var(--text-3)] py-2">Loading campaign analytics…</p>
