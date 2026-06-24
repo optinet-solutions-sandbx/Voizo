@@ -94,10 +94,8 @@ function AttemptCell({ attempt, overflow }: { attempt: CallAttempt | undefined; 
     <td className="px-3 py-2 align-top">
       <div className="flex flex-col items-start gap-1">
         <Chip label={ATTEMPT_TAG_LABELS[attempt.tag]} color={ATTEMPT_TAG_COLOR[attempt.tag]} />
-        <span className="pl-5 whitespace-nowrap font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">
-          {fmtDateTime(attempt.atMs)}
-        </span>
-        {overflow > 0 && <span className="pl-5 text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
+        {/* Per-attempt time intentionally omitted — the timestamp lives once, in Last Attempted. */}
+        {overflow > 0 && <span className="text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
       </div>
     </td>
   );
@@ -205,8 +203,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
         <p className="text-xs text-[var(--text-3)] py-3">Loading call records…</p>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="w-auto mx-auto text-sm min-w-[640px]">
+          <div className="w-fit max-w-full overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="w-auto text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                   <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-10">#</th>
