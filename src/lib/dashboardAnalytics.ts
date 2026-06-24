@@ -786,7 +786,8 @@ export interface CallAttempt {
 export interface CallRecord {
   campaignNumberId: string;
   phone: string | null;
-  tag: ContactTag; // contact-level overall outcome (drives the filter)
+  status: RecordStatus; // contact DISPOSITION (lifecycle) — drives the Status column + status filter
+  tag: ContactTag; // contact-level overall OUTCOME (drives the outcome filter + export)
   attempts: CallAttempt[]; // ordered by created_at asc; attempt 1 first
   lastAttemptedMs: number | null;
 }
@@ -854,6 +855,7 @@ export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[
   return numbers.map((n) => {
     const group = callsByNumber.get(n.id) ?? [];
     const declined = declinedContactIds.has(n.id);
+    const anyGoal = group.some((c) => c.goal_reached === true);
     // Sort by created_at asc (attempt 1 first); unparseable dates sort last (stable).
     const sorted = [...group].sort((a, b) => {
       const ta = a.created_at ? Date.parse(a.created_at) : NaN;
@@ -886,6 +888,7 @@ export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[
     return {
       campaignNumberId: n.id,
       phone: n.phone_e164 ?? null,
+      status: deriveRecordStatus(n.outcome ?? null, anyGoal),
       tag,
       attempts,
       lastAttemptedMs,

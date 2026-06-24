@@ -446,12 +446,14 @@ describe("call records", () => {
     expect(r1.attempts).toHaveLength(2);
     expect(r1.attempts[0]).toMatchObject({ index: 1, tag: "unreachable" }); // earliest first
     expect(r1.attempts[1]).toMatchObject({ index: 2, tag: "positive" });
-    expect(r1.tag).toBe("positive"); // funnel-furthest
+    expect(r1.tag).toBe("positive"); // funnel-furthest OUTCOME
+    expect(r1.status).toBe("successful"); // DISPOSITION: a goal on any attempt wins
     expect(r1.lastAttemptedMs).toBe(Date.parse("2026-06-11T10:00:00Z"));
 
     const r2 = recs.find((r) => r.campaignNumberId === "n2")!;
     expect(r2.attempts[0].tag).toBe("declined");
-    expect(r2.tag).toBe("declined");
+    expect(r2.tag).toBe("declined"); // OUTCOME
+    expect(r2.status).toBe("not_interested"); // DISPOSITION ≠ outcome: declined_offer → status not_interested
 
     const r3 = recs.find((r) => r.campaignNumberId === "n3")!;
     expect(r3.attempts[0].tag).toBe("early_hangup");
@@ -464,6 +466,7 @@ describe("call records", () => {
     const r5 = recs.find((r) => r.campaignNumberId === "n5")!;
     expect(r5.attempts).toEqual([]); // never dialed
     expect(r5.tag).toBe("awaiting_retry"); // pending outcome, no calls
+    expect(r5.status).toBe("awaiting_retry"); // disposition: pending → awaiting retry
     expect(r5.lastAttemptedMs).toBeNull();
   });
 });
