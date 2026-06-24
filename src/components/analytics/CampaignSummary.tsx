@@ -133,7 +133,6 @@ function OverStat({ value, label, sub, hint }: { value: React.ReactNode; label: 
 }
 
 function BarTier({ title, tag, baseNote, segs, total }: { title: string; tag?: string; baseNote: string; segs: Seg[]; total: number }) {
-  const ariaParts = segs.map((s) => `${s.label} ${sharePct(s.count, total)}`).join(", ");
   return (
     <section className="border-b border-[var(--border)] py-5 last:border-b-0">
       <div className="mb-4 flex items-center gap-3">
@@ -146,8 +145,8 @@ function BarTier({ title, tag, baseNote, segs, total }: { title: string; tag?: s
         <span className="ml-auto text-[11px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">{baseNote}</span>
       </div>
 
-      {/* Stacked proportion bar */}
-      <div className="mb-5 flex h-4 w-full gap-[2px] overflow-hidden rounded-lg bg-[var(--bg-elevated)]" role="img" aria-label={`${title}: ${ariaParts}`}>
+      {/* Stacked proportion bar — decorative; the legend below carries every segment as real text. */}
+      <div className="mb-5 flex h-4 w-full gap-[2px] overflow-hidden rounded-lg bg-[var(--bg-elevated)]" aria-hidden="true">
         {segs.map((s) =>
           total > 0 && s.count > 0 ? (
             <span key={s.label} className="h-full opacity-90" style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
