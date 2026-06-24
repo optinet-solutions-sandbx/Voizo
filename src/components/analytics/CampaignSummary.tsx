@@ -155,14 +155,18 @@ function BarTier({ title, tag, baseNote, segs, total }: { title: string; tag?: s
       </div>
 
       {/* Legend */}
-      <ul className={`grid list-none gap-x-7 gap-y-4 p-0 ${segs.length === 4 ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
+      <ul className={`grid list-none gap-x-7 gap-y-5 p-0 ${segs.length === 4 ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
         {segs.map((s) => (
-          <li key={s.label} className="flex flex-col gap-1.5" title={s.hint ?? s.desc}>
+          <li key={s.label} className="flex flex-col gap-1" title={s.hint ?? s.desc}>
+            {/* dot + label */}
             <span className="flex items-center gap-2">
               <span className="h-2 w-2 shrink-0 rounded-full opacity-90" style={{ background: s.color }} />
               <span className="text-[12.5px] font-medium text-[var(--text-1)]">{s.label}</span>
-              <span className="ml-auto font-mono text-[12.5px] font-medium text-[var(--text-2)] [font-variant-numeric:tabular-nums]">{sharePct(s.count, total)}</span>
-              <span className="whitespace-nowrap font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">{s.count.toLocaleString()} of {total.toLocaleString()}</span>
+            </span>
+            {/* value sits directly UNDER the label (aligned past the dot) so the number reads with its row */}
+            <span className="flex items-baseline gap-1.5 pl-4">
+              <span className="font-mono text-[13px] font-semibold text-[var(--text-1)] [font-variant-numeric:tabular-nums]">{sharePct(s.count, total)}</span>
+              <span className="font-mono text-[10.5px] text-[var(--text-3)] [font-variant-numeric:tabular-nums]">{s.count.toLocaleString()} of {total.toLocaleString()}</span>
             </span>
             <span className="pl-4 text-[11px] leading-snug text-[var(--text-3)]">{s.desc}</span>
           </li>
