@@ -161,7 +161,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
     <div className="bg-[var(--bg-app)]/40 border-t border-[var(--border)] px-5 py-4">
       {/* Center the records module and cap its width so rows don't overstretch on wide
           desktops; the inner overflow-x-auto + min-w keeps it scrollable on narrow screens. */}
-      <div className="mx-auto w-fit max-w-6xl">
+      <div className="mx-auto w-full max-w-6xl">
       {/* Exports (CSV + Audio + Transcripts), by outcome category. */}
       <div className="mb-3">
         <ExportMenu campaignId={campaignId} records={records ?? []} />
@@ -203,8 +203,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
         <p className="text-xs text-[var(--text-3)] py-3">Loading call records…</p>
       ) : (
         <>
-          <div className="w-fit max-w-full overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="w-auto text-sm">
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="w-full text-sm min-w-[640px]">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                   <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-10">#</th>
@@ -215,7 +215,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
                       Attempt {i + 1}
                     </th>
                   ))}
-                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
+                  {/* Last Attempted absorbs the table's slack (w-full) and pins its time to the right edge. */}
+                  <th className="text-right w-full text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
                 </tr>
               </thead>
               <tbody>
@@ -241,7 +242,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
                         const overflow = isLastCol ? Math.max(0, r.attempts.length - maxAttempts) : 0;
                         return <AttemptCell key={`attempt-${idx}`} attempt={r.attempts[idx]} overflow={overflow} />;
                       })}
-                      <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
                     </tr>
                   ))
                 )}
