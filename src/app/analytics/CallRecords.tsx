@@ -204,7 +204,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       ) : (
         <>
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="w-full text-sm min-w-[640px]">
+            {/* table-fixed: the # index stays narrow (w-10); the remaining columns share the width evenly. */}
+            <table className="table-fixed w-full text-sm min-w-[640px]">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
                   <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-10">#</th>
@@ -215,8 +216,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
                       Attempt {i + 1}
                     </th>
                   ))}
-                  {/* Last Attempted absorbs the table's slack (w-full) and pins its time to the right edge. */}
-                  <th className="text-right w-full text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
+                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
                 </tr>
               </thead>
               <tbody>
@@ -242,7 +242,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
                         const overflow = isLastCol ? Math.max(0, r.attempts.length - maxAttempts) : 0;
                         return <AttemptCell key={`attempt-${idx}`} attempt={r.attempts[idx]} overflow={overflow} />;
                       })}
-                      <td className="px-3 py-2 text-right whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
                     </tr>
                   ))
                 )}
