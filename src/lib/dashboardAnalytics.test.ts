@@ -12,6 +12,7 @@ import {
   computeCampaignTable,
   deriveRecordStatus,
   computeCallRecords,
+  recordHasAttemptOutcome,
   promptLabel,
   representativeBaseBySha,
   computePromptRollups,
@@ -468,6 +469,32 @@ describe("call records", () => {
     expect(r5.tag).toBe("awaiting_retry"); // pending outcome, no calls
     expect(r5.status).toBe("awaiting_retry"); // disposition: pending → awaiting retry
     expect(r5.lastAttemptedMs).toBeNull();
+  });
+
+  it("recordHasAttemptOutcome matches when ANY attempt carries the tag", () => {
+    // n1: attempt 1 = no_answer (unreachable), attempt 2 = completed+goal (positive)
+    const numbers = [{ id: "n1", phone_e164: "+1", outcome: "completed" }];
+    const calls = [
+      call("x", "no_answer", false, "2026-06-09T10:00:00Z", "n1"),
+      call("x", "completed", true, "2026-06-11T10:00:00Z", "n1"),
+    ];
+    const [rec] = computeCallRecords(numbers, calls);
+    expect(rec.attempts.map((a) => a.tag)).toEqual(["unreachable", "positive"]);
+    // per-attempt filter semantics: a record matches EITHER of its attempt tags
+    expect(recordHasAttemptOutcome(rec, "unreachable")).toBe(true);
+    expect(recordHasAttemptOutcome(rec, "positive")).toBe(true);
+    // a tag no attempt carries → no match
+    expect(recordHasAttemptOutcome(rec, "voicemail")).toBe(false);
+  });
+
+  it("recordHasAttemptOutcome returns false for a never-dialed contact (no attempts)", () => {
+    const numbers = [{ id: "n5", phone_e164: "+5", outcome: "pending" }];
+    const [rec] = computeCallRecords(numbers, []);
+    expect(rec.attempts).toEqual([]);
+    // a zero-attempt contact matches NO attempt-outcome filter (documented behavior change
+    // vs the old contact-rollup filter, which would have matched on r.tag)
+    expect(recordHasAttemptOutcome(rec, "unreachable")).toBe(false);
+    expect(recordHasAttemptOutcome(rec, "positive")).toBe(false);
   });
 });
 

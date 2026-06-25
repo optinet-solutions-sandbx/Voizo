@@ -7,8 +7,11 @@
 //   • Attempt 1, Attempt 2, … — the per-call OUTCOME (Positive response / Neutral / Declined /
 //               Early hangup / Voicemail detected / Unreachable) + the date·time of each attempt.
 // They answer different questions, so they never duplicate (a contact can be "Awaiting Retry"
-// whose Attempt 1 = "Voicemail detected"). Two filters (status + outcome) slice each axis; the
-// export categories use the outcome taxonomy. Data: /api/dashboard/campaigns/[id]/records.
+// whose Attempt 1 = "Voicemail detected"). Two ORTHOGONAL filters: Status filters the contact
+// disposition; Attempt-outcome filters the per-attempt cells (matches a contact if ANY attempt
+// carries the tag, via recordHasAttemptOutcome). The outcome categories are best-effort PROXY
+// classifications (flagged "estimated" in the UI, defined in ATTEMPT_TAG_DESC tooltips), and the
+// export categories use the same taxonomy. Data: /api/dashboard/campaigns/[id]/records.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -19,10 +22,11 @@ import {
   type RecordStatus,
   ATTEMPT_TAG_LABELS,
   ATTEMPT_TAG_COLOR,
+  ATTEMPT_TAG_DESC,
+  recordHasAttemptOutcome,
 } from "@/lib/dashboardAnalytics";
 import ExportMenu from "./ExportMenu";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import DatePickerField from "@/components/DatePickerField";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -56,14 +60,9 @@ const STATUS_DROPDOWN: DropdownOption[] = [
   ...DISPO_ORDER.map((s) => ({ value: s, label: DISPO_LABEL[s] })),
 ];
 const OUTCOME_DROPDOWN: DropdownOption[] = [
-  { value: "all", label: "All outcomes" },
+  { value: "all", label: "All attempt outcomes" },
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
-const HOUR_DROPDOWN: DropdownOption[] = [
-  { value: "any", label: "Any hour" },
-  ...Array.from({ length: 24 }, (_, h) => ({ value: String(h), label: `${String(h).padStart(2, "0")}:00` })),
-];
-
 function fmtDateTime(ms: number | null): string {
   if (ms === null) return "—";
   const d = new Date(ms);
@@ -76,9 +75,13 @@ const inputCls =
   "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500";
 
 // Calm muted chip — colored dot + label, matching CampaignSummary's legend treatment.
-function Chip({ label, color }: { label: string; color: string }) {
+// `title` adds a native hover tooltip (used to disclose the honest meaning of outcome tags).
+function Chip({ label, color, title }: { label: string; color: string; title?: string }) {
   return (
-    <span className="inline-flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]">
+    <span
+      title={title}
+      className={`inline-flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]${title ? " cursor-help" : ""}`}
+    >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full opacity-90" style={{ background: color }} />
       {label}
     </span>
@@ -93,7 +96,7 @@ function AttemptCell({ attempt, overflow }: { attempt: CallAttempt | undefined; 
   return (
     <td className="px-3 py-2 align-top">
       <div className="flex flex-col items-start gap-1">
-        <Chip label={ATTEMPT_TAG_LABELS[attempt.tag]} color={ATTEMPT_TAG_COLOR[attempt.tag]} />
+        <Chip label={ATTEMPT_TAG_LABELS[attempt.tag]} color={ATTEMPT_TAG_COLOR[attempt.tag]} title={ATTEMPT_TAG_DESC[attempt.tag]} />
         {/* Per-attempt time intentionally omitted — the timestamp lives once, in Last Attempted. */}
         {overflow > 0 && <span className="text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
       </div>
@@ -105,10 +108,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
   const [records, setRecords] = useState<CallRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dispo, setDispo] = useState<RecordStatus | "all">("all"); // Status (disposition) filter
-  const [outcome, setOutcome] = useState<AttemptTag | "all">("all"); // Outcome filter (contact's overall outcome)
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [hour, setHour] = useState<string>("any");
+  const [outcome, setOutcome] = useState<AttemptTag | "all">("all"); // Attempt-outcome filter (matches any attempt)
   const [phone, setPhone] = useState("");
 
   const load = useCallback(async () => {
@@ -131,19 +131,13 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
     if (!records) return [];
     return records.filter((r) => {
       if (dispo !== "all" && r.status !== dispo) return false;
-      if (outcome !== "all" && r.tag !== outcome) return false;
+      // Attempt-outcome is a PER-ATTEMPT axis: a contact matches if ANY of its attempts carries
+      // the tag (orthogonal to the contact-level disposition filter above).
+      if (outcome !== "all" && !recordHasAttemptOutcome(r, outcome)) return false;
       if (phone.trim() && !(r.phone ?? "").includes(phone.trim())) return false;
-      if (r.lastAttemptedMs !== null) {
-        const d = new Date(r.lastAttemptedMs);
-        if (from && d.getTime() < Date.parse(`${from}T00:00:00Z`)) return false;
-        if (to && d.getTime() > Date.parse(`${to}T23:59:59Z`)) return false;
-        if (hour !== "any" && d.getUTCHours() !== Number(hour)) return false;
-      } else if (from || to || hour !== "any") {
-        return false; // never-attempted rows fall out when a time filter is active
-      }
       return true;
     });
-  }, [records, dispo, outcome, phone, from, to, hour]);
+  }, [records, dispo, outcome, phone]);
 
   // Dynamic attempt-column count: widest filtered contact, capped at MAX_ATTEMPT_COLS.
   const maxAttempts = useMemo(() => {
@@ -155,7 +149,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
   const attemptCols = Array.from({ length: maxAttempts }, (_, i) => i); // 0-based attempt indices
   const colSpan = 3 + maxAttempts; // # · Phone · Status · …attempts… · Last Attempted
 
-  const anyFilter = dispo !== "all" || outcome !== "all" || from || to || hour !== "any" || phone;
+  const anyFilter = dispo !== "all" || outcome !== "all" || phone;
 
   return (
     <div className="bg-[var(--bg-app)]/40 border-t border-[var(--border)] px-5 py-4">
@@ -166,20 +160,22 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       <div className="mb-3">
         <ExportMenu campaignId={campaignId} records={records ?? []} />
       </div>
-      {/* Filters: Status (disposition) + Outcome (per-call) + date / hour / phone. */}
+      {/* Filters (orthogonal): Status = contact disposition · Attempt outcome = per-attempt (estimated) · phone search.
+          Date/hour filters removed 2026-06-25: the panel is per-campaign (usually a single day), so they were noise. */}
       <div className="flex items-center gap-2 flex-wrap mb-3">
         <div className="w-[160px]">
           <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
         </div>
-        <div className="w-[170px]">
+        <div className="w-[200px]">
           <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "all")} options={OUTCOME_DROPDOWN} />
         </div>
-        <DatePickerField value={from} onChange={setFrom} placeholder="From date" ariaLabel="From date" />
-        <span className="text-[var(--text-3)] text-xs">→</span>
-        <DatePickerField value={to} onChange={setTo} placeholder="To date" ariaLabel="To date" />
-        <div className="w-[130px]">
-          <StyledSelect size="sm" value={hour} onChange={setHour} options={HOUR_DROPDOWN} />
-        </div>
+        {/* Honesty signal: the attempt-outcome categories are best-effort proxies (see per-chip tooltips). */}
+        <span
+          title="Attempt outcomes are best-effort classifications from call data, not verified labels."
+          className="cursor-help rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]"
+        >
+          Estimated
+        </span>
         <input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
@@ -188,7 +184,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
         />
         {anyFilter && (
           <button
-            onClick={() => { setDispo("all"); setOutcome("all"); setFrom(""); setTo(""); setHour("any"); setPhone(""); }}
+            onClick={() => { setDispo("all"); setOutcome("all"); setPhone(""); }}
             className="text-sm text-[var(--text-2)] hover:text-[var(--text-1)] px-2.5 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
           >
             Reset

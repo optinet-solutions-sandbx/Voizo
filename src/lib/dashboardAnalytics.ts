@@ -803,6 +803,21 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
   wrong_number: "Wrong number",
 };
 
+// Honest, plain-English definitions for each tag — surfaced as hover tooltips on the records
+// outcome chips. These are PROXY classifications (best-effort, derived from call data), not
+// verified labels; the wording discloses that without renaming the categories. Mirrors the
+// "estimated" hint treatment on CampaignSummary's breakdown bars.
+export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
+  positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
+  neutral: "Connected to a person, but no clear positive or negative outcome was detected.",
+  declined: "Contact declined the offer — applied to the whole contact, so it can show on earlier attempts too.",
+  early_hangup: "Call ended in under 15 seconds — likely a quick hangup.",
+  voicemail: "Best-effort automated voicemail detection; may misclassify.",
+  unreachable: "Call didn't connect (no answer, busy, or failed).",
+  awaiting_retry: "Not yet resolved — still scheduled for another attempt.",
+  wrong_number: "Marked as a wrong or invalid number.",
+};
+
 // Muted accents — MATCH src/components/analytics/CampaignSummary.tsx (calm palette, low chroma).
 export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
   positive: "#5fb39a",
@@ -894,6 +909,13 @@ export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[
       lastAttemptedMs,
     };
   });
+}
+
+/** True when ANY of the contact's attempts carries `tag`. Backs the records "Attempt outcome"
+ *  filter — a per-attempt axis distinct from the contact DISPOSITION (status) filter. A contact
+ *  with no attempts matches no attempt outcome. Pure; no classification logic here. */
+export function recordHasAttemptOutcome(record: CallRecord, tag: AttemptTag): boolean {
+  return record.attempts.some((a) => a.tag === tag);
 }
 
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
