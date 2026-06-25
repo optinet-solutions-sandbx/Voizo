@@ -20,10 +20,13 @@
 //                      not the call, and agents announced on only ~5% of live
 //                      calls — gating on it dropped texts to nearly everyone.
 //
-// ABSOLUTE vetoes in BOTH modes: on-call opt-out and (registered mode) an
-// explicit customer "don't text me" — a no must always win. Voicemail vetoes
-// in verbal_yes only; in registered_optin a voicemail pickup TRIGGERS the
-// missed-call follow-up text instead (client-agreed 2026-06-11).
+// ABSOLUTE veto in BOTH modes: on-call opt-out — a "stop calling" must always win.
+// Voicemail vetoes in verbal_yes only; in registered_optin a voicemail pickup TRIGGERS the
+// missed-call follow-up text instead (client-agreed 2026-06-11). An explicit customer "don't
+// text me" (customerDeclinedSms) still vetoes a registered_optin LIVE-human send — but it is
+// checked AFTER the voicemail follow-up (2026-06-25 fix): the decline classifier false-positives
+// on machine greetings ("No message can be left…"), and a voicemail has no human to genuinely
+// decline, so the follow-up wins.
 
 export type SmsConsentMode = "verbal_yes" | "registered_optin";
 
@@ -68,14 +71,18 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
 
   if (i.mode === "registered_optin") {
-    if (i.customerDeclinedSms) return { attempt: false, reason: "customer_declined_sms" };
-    // Missed-call follow-up (2026-06-11 EOD, Jasiel: agreed with Val off-thread,
-    // announced in the GC): a voicemail pickup gets the text too — the player
-    // opted in at registration and the offer link IS the payload. The announce /
-    // human-conversation requirements only apply to the live-human path (no
-    // announce is possible on a voicemail — prefix rule #4 ends those calls).
-    // The per-player dedup in the webhook caps retried voicemails at ONE text.
+    // Missed-call follow-up (2026-06-11 EOD, Jasiel: agreed with Val off-thread, announced in
+    // the GC): a voicemail pickup gets the text too — the player opted in at registration and
+    // the offer link IS the payload. CHECKED BEFORE customerDeclinedSms (2026-06-25 fix): the
+    // SMS-decline classifier false-positives on machine greetings — a "message bank full"
+    // voicemail ("No message can be left on this service…") is STT-labeled as a user turn and
+    // matches SMS_DECLINE_PATTERNS' /\bno …messages?\b/. A voicemail carries no live human to
+    // genuinely decline, so the follow-up takes precedence. (optedOut is still checked first,
+    // above — a real "stop calling" must always win.) The announce / human-conversation gates
+    // only apply to the live-human path (no announce is possible on a voicemail — prefix rule
+    // #4 ends those calls). The per-player dedup in the webhook caps retried voicemails at ONE text.
     if (i.voicemailDetected) return { attempt: true, reason: "registered_optin_voicemail_followup" };
+    if (i.customerDeclinedSms) return { attempt: false, reason: "customer_declined_sms" };
     if (!i.humanConversation) return { attempt: false, reason: "no_human_conversation" };
     // 2026-06-16 (Ernie ticket, Val approved): the announce requirement is REMOVED — a reached
     // human (not opted-out, no explicit "don't text me", not suppressed) is texted. Consent is the
