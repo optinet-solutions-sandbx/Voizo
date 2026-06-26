@@ -24,6 +24,7 @@ import {
   TERMINAL_NONCONNECT,
 } from "./campaignAnalytics";
 import { ANALYTICS_CONFIG } from "./analyticsConfig";
+import { substantiveUserTurnCount } from "./transcriptClassify";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -36,6 +37,8 @@ export interface DashCallRow {
   created_at?: string | null; // ISO
   voicemail?: boolean | null; // calls_v2.voicemail (transcript-detected); NULL = not evaluated (historical/pre-deploy)
   duration_seconds?: number | null; // calls_v2.duration_seconds — < EARLY_HANGUP_SEC ⇒ early hangup
+  ended_reason?: string | null; // calls_v2.ended_reason — 'customer-ended-call' marks a customer hangup
+  transcript?: { text?: string | null } | string | null; // calls_v2.transcript (jsonb {text}); engagement signal
 }
 export interface DashCampaignRow {
   id: string;
@@ -811,7 +814,7 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
   neutral: "Connected to a person, but no clear positive or negative outcome was detected.",
   declined: "Contact declined the offer — applied to the whole contact, so it can show on earlier attempts too.",
-  early_hangup: "Call ended in under 15 seconds — likely a quick hangup.",
+  early_hangup: "Connected but ended with little or no real conversation — a quick hangup or no engagement.",
   voicemail: "Best-effort automated voicemail detection; may misclassify.",
   unreachable: "Call didn't connect (no answer, busy, or failed).",
   awaiting_retry: "Not yet resolved — still scheduled for another attempt.",
@@ -833,6 +836,12 @@ export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
 // Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
 const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "voicemail", "unreachable"];
 
+/** calls_v2.transcript is jsonb `{ text }` from the DB, but a plain string in unit tests. */
+function transcriptText(t: DashCallRow["transcript"]): string {
+  if (!t) return "";
+  return typeof t === "string" ? t : (t.text ?? "");
+}
+
 /** Per-attempt outcome tag for a single call. `declinedContact` = the call's CONTACT has
  *  campaign_numbers_v2.outcome === 'declined_offer'. Mirrors campaignAnalytics' priority
  *  (voicemail===null is NOT voicemail — treated as a human). */
@@ -841,6 +850,11 @@ export function deriveAttemptTag(call: DashCallRow, declinedContact: boolean): A
   if (call.voicemail === true) return "voicemail";
   if (call.goal_reached === true) return "positive";
   if (declinedContact) return "declined";
+  // Engagement (2026-06-26): a connected call with no real conversation, or a pickup-and-bail,
+  // is an early hangup — not "neutral". Duration alone misses bails (a 30s clock with one "Hello?").
+  const userTurns = substantiveUserTurnCount(transcriptText(call.transcript));
+  if (userTurns === 0) return "early_hangup";
+  if (call.ended_reason === "customer-ended-call" && userTurns <= 1) return "early_hangup";
   if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
     return "early_hangup";
   return "neutral";

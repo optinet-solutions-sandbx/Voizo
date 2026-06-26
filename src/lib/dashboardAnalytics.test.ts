@@ -13,6 +13,7 @@ import {
   deriveRecordStatus,
   computeCallRecords,
   recordHasAttemptOutcome,
+  deriveAttemptTag,
   promptLabel,
   representativeBaseBySha,
   computePromptRollups,
@@ -35,8 +36,10 @@ function call(
   campaign_number_id?: string,
   voicemail?: boolean | null,
   duration_seconds?: number | null,
+  ended_reason?: string | null,
+  transcript?: string | null,
 ): DashCallRow {
-  return { campaign_id, status, goal_reached, created_at, campaign_number_id, voicemail, duration_seconds };
+  return { campaign_id, status, goal_reached, created_at, campaign_number_id, voicemail, duration_seconds, ended_reason, transcript };
 }
 
 function camp(id: string, over: Partial<DashCampaignRow> = {}): DashCampaignRow {
@@ -495,6 +498,39 @@ describe("call records", () => {
     // vs the old contact-rollup filter, which would have matched on r.tag)
     expect(recordHasAttemptOutcome(rec, "unreachable")).toBe(false);
     expect(recordHasAttemptOutcome(rec, "positive")).toBe(false);
+  });
+});
+
+describe("deriveAttemptTag — engagement rules (real-data cases)", () => {
+  // attempt 1 (prod +61474932636): completed, empty transcript, dur 23s → early hangup (no real conversation)
+  it("tags a connected call with 0 substantive customer turns as early_hangup", () => {
+    const c = call("x", "completed", null, "2026-06-26T08:39:07Z", "n1", null, 23, null, "");
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  // attempt 2 (prod): customer "Hello?" then customer-ended-call, dur 30s → early hangup (pickup-and-bail)
+  it("tags a customer-ended-call with <=1 customer turn as early_hangup regardless of duration", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:15:20Z", "n2", false, 30, "customer-ended-call", "User: Hello?\nAI: Hey. Victor here from Lucky seven.");
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  // a REAL multi-turn conversation the customer ends → stays neutral (no false positive)
+  it("keeps a multi-turn customer-ended-call as neutral", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n3", false, 40, "customer-ended-call", "AI: Hi\nUser: yeah what is this\nAI: an offer\nUser: not right now thanks");
+    expect(deriveAttemptTag(c, false)).toBe("neutral");
+  });
+  // voicemail still wins over the engagement rules
+  it("tags voicemail before engagement", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:15:21Z", "n4", true, 20, "assistant-ended-call", "User: You have reached the message bank of...");
+    expect(deriveAttemptTag(c, false)).toBe("voicemail");
+  });
+  // accepts the jsonb {text} shape straight from the DB
+  it("normalizes the jsonb {text} transcript shape", () => {
+    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", transcript: { text: "" } };
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  // a goal-reached call stays positive even with a thin transcript (rule order)
+  it("keeps goal_reached as positive ahead of engagement", () => {
+    const c = call("x", "completed", true, "2026-06-26T10:00:00Z", "n5", false, 30, "customer-ended-call", "User: yes");
+    expect(deriveAttemptTag(c, false)).toBe("positive");
   });
 });
 
