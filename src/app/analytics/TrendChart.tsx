@@ -1,8 +1,8 @@
 "use client";
 
-// Slice 5a — Trend chart: daily Connect Rate (area, emerald) + Success Rate (line, amber)
-// on a dual Y-axis. Driven by the global filters (data comes pre-windowed from the endpoint).
-// Recharts (installed). Colors stay consistent with the rest of the dashboard.
+// Activity Trend (Val 2026-06-26): daily Call Attempts (area) + Reached (line) + SMS Sent (line)
+// as COUNTS on a single axis — replaces the old Connect/Success rate dual-axis chart. Driven by
+// the global filters (data comes pre-windowed from the endpoint). Recharts (installed).
 
 import { useState } from "react";
 import { Activity } from "lucide-react";
@@ -15,7 +15,14 @@ function shortDay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : iso;
 }
-const fmtPct = (v: number) => `${Math.round(v * 100)}%`;
+const fmtCount = (v: number) => v.toLocaleString();
+
+// dataKey → [label, hex, tailwind dot]. Order = legend + tooltip order.
+const SERIES = [
+  ["calls", "Call attempts", "#94a3b8", "bg-slate-400"],
+  ["reached", "Reached", "#34d399", "bg-emerald-400"],
+  ["smsSent", "SMS sent", "#38bdf8", "bg-sky-400"],
+] as const;
 
 function TrendTooltip({
   active,
@@ -31,9 +38,9 @@ function TrendTooltip({
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs shadow-xl">
       <div className="text-[var(--text-2)] font-medium mb-1">{shortDay(label ?? p.day)}</div>
-      <div className="text-emerald-400">Connect {p.connectRate === null ? "—" : fmtPct(p.connectRate)}</div>
-      <div className="text-amber-400">Success {p.successRate === null ? "—" : fmtPct(p.successRate)}</div>
-      <div className="text-[var(--text-3)] mt-0.5">{p.calls.toLocaleString()} calls</div>
+      <div className="text-slate-300">{p.calls.toLocaleString()} attempts</div>
+      <div className="text-emerald-400">{p.reached.toLocaleString()} reached</div>
+      <div className="text-sky-400">{p.smsSent.toLocaleString()} SMS sent</div>
     </div>
   );
 }
@@ -45,26 +52,26 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 flex flex-col">
       <div className="flex items-center gap-2 mb-1">
         <Activity size={15} className="text-[var(--text-3)]" />
-        <h3 className="text-[15px] font-semibold">Connect &amp; Success Trend</h3>
+        <h3 className="text-[15px] font-semibold">Activity Trend</h3>
       </div>
       <p className="text-[11px] text-[var(--text-3)] mb-3">
-        Daily connect rate (area) + success rate (line). Each line has its own scale.
+        Daily call attempts, players reached, and offer texts sent.
       </p>
       <div className="flex-1 min-h-[240px]">
         <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 5, right: 8, left: -8, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey="day" tickFormatter={shortDay} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} minTickGap={24} />
-          <YAxis yAxisId="left" tickFormatter={fmtPct} stroke="#34d399" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} />
-          <YAxis yAxisId="right" orientation="right" tickFormatter={fmtPct} stroke="#fbbf24" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} />
+          <YAxis tickFormatter={fmtCount} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} allowDecimals={false} />
           <Tooltip content={<TrendTooltip />} />
-          {!hidden.has("connectRate") && <Area yAxisId="left" type="monotone" dataKey="connectRate" stroke="#34d399" fill="#34d399" fillOpacity={0.12} strokeWidth={2} connectNulls />}
-          {!hidden.has("successRate") && <Line yAxisId="right" type="monotone" dataKey="successRate" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />}
+          {!hidden.has("calls") && <Area type="monotone" dataKey="calls" stroke="#94a3b8" fill="#94a3b8" fillOpacity={0.1} strokeWidth={2} connectNulls />}
+          {!hidden.has("reached") && <Line type="monotone" dataKey="reached" stroke="#34d399" strokeWidth={2} dot={false} connectNulls />}
+          {!hidden.has("smsSent") && <Line type="monotone" dataKey="smsSent" stroke="#38bdf8" strokeWidth={2} dot={false} connectNulls />}
         </ComposedChart>
         </ResponsiveContainer>
       </div>
       <div className="flex items-center gap-4 mt-2 text-[11px]">
-        {([["connectRate", "Connect rate", "bg-emerald-400"], ["successRate", "Success rate", "bg-amber-400"]] as const).map(([key, label, dot]) => {
+        {SERIES.map(([key, label, , dot]) => {
           const off = hidden.has(key);
           return (
             <button
