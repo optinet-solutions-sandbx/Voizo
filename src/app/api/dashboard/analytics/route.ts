@@ -11,8 +11,10 @@ import {
   promptLabel,
   representativeBaseBySha,
   bestByPositiveResponse,
+  smsSentByCampaign,
   type DashCallRow,
   type DashCampaignRow,
+  type DashSmsRow,
 } from "@/lib/dashboardAnalytics";
 import { sha256Hex } from "@/lib/promptVersionExtract";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
@@ -78,7 +80,7 @@ export async function GET(request: NextRequest) {
   // trend, and heatmap to the first 1000. campaigns_v2 is paged too (defensive: it
   // feeds the index filterCalls joins against). fetchAllRows degrades-to-partial and
   // logs loudly on a page error, so there's no all-or-nothing 500 here.
-  const [callRows, campaignRows] = await Promise.all([
+  const [callRows, campaignRows, smsRows] = await Promise.all([
     fetchAllRows(
       supabaseAdmin,
       "calls_v2",
@@ -92,6 +94,15 @@ export async function GET(request: NextRequest) {
       "campaigns_v2",
       "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, system_prompt, start_at, created_at, end_at, timezone",
       "id",
+    ),
+    // SMS-sent series/columns (Slice 3): windowed, scoped to in-filter campaigns below.
+    fetchAllRows(
+      supabaseAdmin,
+      "sms_messages_v2",
+      "campaign_id, created_at, status",
+      "id",
+      undefined,
+      { column: "created_at", value: startIso },
     ),
   ]);
 
@@ -139,6 +150,20 @@ export async function GET(request: NextRequest) {
   const prompts = computePromptRollups(filtered, promptByCampaign);
   const bestPrompt = bestByPositiveResponse(prompts, (r) => ({ key: r.sha, label: r.label }));
 
+  // SMS-sent (Slice 3): scope to the campaigns the call filter kept, then count per campaign /
+  // per base-agent / per prompt sha so the ranked tables + trend can surface "SMS sent".
+  const inScopeCampaigns = new Set(filtered.map((c) => c.campaign_id));
+  const scopedSms = (smsRows as unknown as DashSmsRow[]).filter((m) => inScopeCampaigns.has(m.campaign_id));
+  const smsByCampaign = smsSentByCampaign(scopedSms);
+  const smsByAgent = new Map<string, number>();
+  const smsByPrompt = new Map<string, number>();
+  for (const [campId, n] of smsByCampaign) {
+    const agentId = index.get(campId)?.base_assistant_id ?? null;
+    if (agentId) smsByAgent.set(agentId, (smsByAgent.get(agentId) ?? 0) + n);
+    const sha = promptByCampaign.get(campId)?.sha ?? null;
+    if (sha) smsByPrompt.set(sha, (smsByPrompt.get(sha) ?? 0) + n);
+  }
+
   // Dropdown options — full live set.
   const campaignOptions = live.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
   const agentMap = new Map<string, string | null>();
@@ -175,6 +200,9 @@ export async function GET(request: NextRequest) {
       calls: r.calls,
       connectRate: r.connectRate,
       successRate: r.successRate,
+      reach: r.reach,
+      positiveResponseRate: r.positiveResponseRate,
+      smsSent: smsByCampaign.get(r.id) ?? 0,
     })),
     agents: global.agentRollups.map((r) => ({
       baseAssistantId: r.baseAssistantId,
@@ -183,6 +211,9 @@ export async function GET(request: NextRequest) {
       terminal: r.terminal,
       connectRate: r.connectRate,
       successRate: r.successRate,
+      reach: r.reach,
+      positiveResponseRate: r.positiveResponseRate,
+      smsSent: smsByAgent.get(r.baseAssistantId) ?? 0,
       campaignCount: r.campaignCount,
     })),
     prompts: prompts.map((r) => ({
@@ -193,9 +224,12 @@ export async function GET(request: NextRequest) {
       calls: r.calls,
       connectRate: r.connectRate,
       successRate: r.successRate,
+      reach: r.reach,
+      positiveResponseRate: r.positiveResponseRate,
+      smsSent: smsByPrompt.get(r.sha) ?? 0,
       campaignCount: r.campaignCount,
     })),
-    trend: computeTrend(filtered, startMs, now),
+    trend: computeTrend(filtered, startMs, now, scopedSms),
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, now),
     heatmap: computeHeatmap(filtered, campaigns),
     options: { campaigns: campaignOptions, agents: agentOptions, prompts: promptOptions },

@@ -18,6 +18,7 @@ import {
   representativeBaseBySha,
   computePromptRollups,
   computeTrend,
+  smsSentByCampaign,
   computeDailyVolume,
   computeHeatmap,
   localDayHourInTimezone,
@@ -628,6 +629,19 @@ describe("prompt rollups", () => {
   });
 });
 
+describe("smsSentByCampaign", () => {
+  it("counts dispatched rows per campaign; excludes non-sent statuses", () => {
+    const m = smsSentByCampaign([
+      { campaign_id: "a", status: "delivered" },
+      { campaign_id: "a", status: "queued" },
+      { campaign_id: "a", status: "rejected" }, // excluded
+      { campaign_id: "b", status: "failed" },
+    ]);
+    expect(m.get("a")).toBe(2);
+    expect(m.get("b")).toBe(1);
+  });
+});
+
 describe("computeTrend", () => {
   it("zero-fills the day range + computes per-day connect/success", () => {
     const start = Date.parse("2026-06-10T00:00:00Z");
@@ -641,9 +655,26 @@ describe("computeTrend", () => {
     expect(t.map((p) => p.day)).toEqual(["2026-06-10", "2026-06-11", "2026-06-12"]);
     expect(t[0].calls).toBe(0);
     expect(t[0].connectRate).toBeNull();
-    expect(t[1].calls).toBe(3);
+    expect(t[0].reached).toBe(0);
+    expect(t[0].smsSent).toBe(0);
+    expect(t[1].calls).toBe(3); // attempts
     expect(t[1].connectRate).toBeCloseTo(2 / 3, 6); // 2 completed / 3 terminal
     expect(t[1].successRate).toBeCloseTo(1 / 2, 6); // 1 goal / 2 connected
+    expect(t[1].reached).toBe(2); // 2 connected − 0 voicemail
+  });
+
+  it("counts dispatched SMS per day (smsSent series)", () => {
+    const start = Date.parse("2026-06-10T00:00:00Z");
+    const end = Date.parse("2026-06-11T12:00:00Z");
+    const sms: DashSmsRow[] = [
+      { campaign_id: "c", created_at: "2026-06-11T09:00:00Z", status: "delivered" },
+      { campaign_id: "c", created_at: "2026-06-11T10:00:00Z", status: "sent" },
+      { campaign_id: "c", created_at: "2026-06-11T11:00:00Z", status: "failed" },
+      { campaign_id: "c", created_at: "2026-06-11T11:30:00Z", status: "rejected" }, // not a "sent" status → excluded
+    ];
+    const t = computeTrend([], start, end, sms);
+    expect(t.find((p) => p.day === "2026-06-10")!.smsSent).toBe(0);
+    expect(t.find((p) => p.day === "2026-06-11")!.smsSent).toBe(3); // delivered+sent+failed; rejected excluded
   });
 });
 

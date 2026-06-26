@@ -462,12 +462,36 @@ export interface TrendPoint {
   day: string; // YYYY-MM-DD (UTC)
   connectRate: number | null;
   successRate: number | null;
-  calls: number;
+  calls: number; // = call attempts that day
+  reached: number; // human-only connects that day (connected − voicemail)
+  smsSent: number; // offer texts dispatched that day
 }
 
-/** Per-day connect/success rates over [startMs, endMs], zero-filled so the x-axis is even. */
-export function computeTrend(calls: DashCallRow[], startMs: number, endMs: number): TrendPoint[] {
+// "SMS sent" = a message handed to the provider, regardless of receipt — every dispatched row
+// (delivered / in-flight / failed / undelivered / queued / sent). Matches the report's SMS total.
+const SMS_SENT_STATUSES = new Set(["delivered", "queued", "sent", "failed", "undelivered"]);
+function isSmsSent(status: string | null | undefined): boolean {
+  return SMS_SENT_STATUSES.has(status ?? "");
+}
+/** Per-campaign count of dispatched SMS. Pure; shared by the campaign table, ranked tables, trend. */
+export function smsSentByCampaign(sms: DashSmsRow[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sms) if (isSmsSent(s.status)) m.set(s.campaign_id, (m.get(s.campaign_id) ?? 0) + 1);
+  return m;
+}
+
+/** Per-day attempts / reached / SMS-sent (+ legacy connect/success rates) over [startMs, endMs],
+ *  zero-filled so the x-axis is even. `sms` drives the per-day SMS-sent series. */
+export function computeTrend(calls: DashCallRow[], startMs: number, endMs: number, sms: DashSmsRow[] = []): TrendPoint[] {
   const byDay = rollup(calls, (c) => (c.created_at ? utcDayString(Date.parse(c.created_at)) : null));
+  const smsByDay = new Map<string, number>();
+  for (const s of sms) {
+    if (!isSmsSent(s.status) || !s.created_at) continue;
+    const t = Date.parse(s.created_at);
+    if (!Number.isFinite(t)) continue;
+    const d = utcDayString(t);
+    smsByDay.set(d, (smsByDay.get(d) ?? 0) + 1);
+  }
   const out: TrendPoint[] = [];
   const first = Date.UTC(
     new Date(startMs).getUTCFullYear(),
@@ -475,8 +499,16 @@ export function computeTrend(calls: DashCallRow[], startMs: number, endMs: numbe
     new Date(startMs).getUTCDate(),
   );
   for (let t = first; t <= endMs; t += MS_PER_DAY) {
-    const r = byDay.get(utcDayString(t));
-    out.push({ day: utcDayString(t), connectRate: r?.connectRate ?? null, successRate: r?.successRate ?? null, calls: r?.calls ?? 0 });
+    const day = utcDayString(t);
+    const r = byDay.get(day);
+    out.push({
+      day,
+      connectRate: r?.connectRate ?? null,
+      successRate: r?.successRate ?? null,
+      calls: r?.calls ?? 0,
+      reached: r?.reach ?? 0,
+      smsSent: smsByDay.get(day) ?? 0,
+    });
   }
   return out;
 }
@@ -689,13 +721,7 @@ export function computeCampaignTable(
   // handed to the provider regardless of receipt, matching the report's "SMS sent" total.
   const playersByCampaign = new Map<string, number>();
   for (const n of numbers) playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
-  const smsByCampaign = new Map<string, number>();
-  for (const m of sms) {
-    const s = m.status ?? "";
-    if (s === "delivered" || s === "queued" || s === "sent" || s === "failed" || s === "undelivered") {
-      smsByCampaign.set(m.campaign_id, (smsByCampaign.get(m.campaign_id) ?? 0) + 1);
-    }
-  }
+  const smsByCampaign = smsSentByCampaign(sms);
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
