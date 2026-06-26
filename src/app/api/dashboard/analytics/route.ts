@@ -10,7 +10,7 @@ import {
   computeHeatmap,
   promptLabel,
   representativeBaseBySha,
-  bestBySuccess,
+  bestByPositiveResponse,
   type DashCallRow,
   type DashCampaignRow,
 } from "@/lib/dashboardAnalytics";
@@ -137,7 +137,7 @@ export async function GET(request: NextRequest) {
 
   const global = computeGlobalKpis(filtered, index);
   const prompts = computePromptRollups(filtered, promptByCampaign);
-  const bestPrompt = bestBySuccess(prompts, (r) => ({ key: r.sha, label: r.label }));
+  const bestPrompt = bestByPositiveResponse(prompts, (r) => ({ key: r.sha, label: r.label }));
 
   // Dropdown options — full live set.
   const campaignOptions = live.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));

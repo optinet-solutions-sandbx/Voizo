@@ -6,7 +6,6 @@ import {
   buildCampaignIndex,
   computeCampaignRollups,
   computeAgentRollups,
-  bestBySuccess,
   computeGlobalKpis,
   deriveDisplayStatus,
   computeCampaignTable,
@@ -14,6 +13,7 @@ import {
   computeCallRecords,
   recordHasAttemptOutcome,
   deriveAttemptTag,
+  bestByPositiveResponse,
   promptLabel,
   representativeBaseBySha,
   computePromptRollups,
@@ -101,6 +101,21 @@ describe("computeKpis — rate definitions", () => {
     const k = computeKpis([]);
     expect(k.connectRate).toBeNull();
     expect(k.successRate).toBeNull();
+    expect(k.positiveResponseRate).toBeNull();
+  });
+
+  it("positiveResponseRate is goal/reach — distinct from successRate's goal/connected", () => {
+    const calls: DashCallRow[] = [
+      call("c", "completed", true, "2026-06-10T00:00:00Z", "n1", false), // human, goal
+      call("c", "completed", false, "2026-06-10T00:00:00Z", "n2", false), // human, no goal
+      call("c", "completed", false, "2026-06-10T00:00:00Z", "n3", true), // voicemail (not reached)
+    ];
+    const k = computeKpis(calls);
+    expect(k.connected).toBe(3);
+    expect(k.reach).toBe(2); // 3 connected − 1 voicemail
+    expect(k.successful).toBe(1);
+    expect(k.successRate).toBeCloseTo(1 / 3, 6); // goal / connected
+    expect(k.positiveResponseRate).toBeCloseTo(1 / 2, 6); // goal / reach
   });
 });
 
@@ -193,29 +208,31 @@ describe("computeCampaignRollups + computeAgentRollups", () => {
   });
 });
 
-describe("bestBySuccess — min-volume guard", () => {
-  const mk = (connected: number, successRate: number, calls: number): RateRow & { id: string } => ({
+describe("bestByPositiveResponse — min-volume guard", () => {
+  // reach === connected here, so positiveResponseRate == the supplied rate.
+  const mk = (connected: number, rate: number, calls: number): RateRow & { id: string } => ({
     id: `r${connected}`,
     calls,
     connected,
     terminal: connected,
-    successful: Math.round(connected * successRate),
+    successful: Math.round(connected * rate),
     connectRate: 1,
-    successRate,
+    successRate: rate,
     voicemailConnected: 0,
     voicemailEvaluated: 0,
     reach: connected,
     voicemailRate: null,
+    positiveResponseRate: rate,
   });
   it("ignores below-floor rows so a 1-2 call 100% can't win", () => {
     const rows = [mk(20, 0.1, 100), mk(5, 1.0, 5)];
-    const best = bestBySuccess(rows, (r) => ({ key: r.id, label: r.id }));
-    expect(best?.successRate).toBeCloseTo(0.1, 6);
+    const best = bestByPositiveResponse(rows, (r) => ({ key: r.id, label: r.id }));
+    expect(best?.positiveResponseRate).toBeCloseTo(0.1, 6);
     expect(best?.calls).toBe(100);
   });
   it("returns null when nothing meets the floor", () => {
     const rows = [mk(3, 1.0, 3)];
-    expect(bestBySuccess(rows, (r) => ({ key: r.id, label: r.id }))).toBeNull();
+    expect(bestByPositiveResponse(rows, (r) => ({ key: r.id, label: r.id }))).toBeNull();
   });
 });
 
@@ -316,13 +333,14 @@ describe("computeGlobalKpis", () => {
     expect(g.campaignCount).toBe(3);
   });
 
-  it("best campaign + best agent ranked by success (floor-gated)", () => {
+  it("best campaign + best agent ranked by positive response (floor-gated)", () => {
+    // no voicemail in this fixture, so reach == connected and positiveResponseRate == successRate.
     expect(g.bestCampaign?.key).toBe("A");
-    expect(g.bestCampaign?.successRate).toBeCloseTo(0.5, 6);
+    expect(g.bestCampaign?.positiveResponseRate).toBeCloseTo(0.5, 6);
     // base1 = A+B (7/23 ≈ 0.30) beats base2 = C (0/10). key = base_assistant_id; the UI resolves the name.
     expect(g.bestAgent?.key).toBe("base1");
     expect(g.bestAgent?.label).toBe("base1");
-    expect(g.bestAgent?.successRate).toBeCloseTo(7 / 23, 6);
+    expect(g.bestAgent?.positiveResponseRate).toBeCloseTo(7 / 23, 6);
   });
 });
 

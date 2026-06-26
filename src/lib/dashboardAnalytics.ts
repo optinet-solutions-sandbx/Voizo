@@ -84,6 +84,7 @@ export interface RateRow {
   voicemailEvaluated: number; // connected calls with a non-null voicemail flag (true|false)
   reach: number; // human-only connects = connected − voicemailConnected (unevaluated count as reached)
   voicemailRate: number | null; // voicemailConnected / voicemailEvaluated (NULL until calls are evaluated)
+  positiveResponseRate: number | null; // successful / reach — "agreed to the offer" over humans reached (NOT goal/connected)
 }
 
 export interface CampaignRollup extends RateRow {
@@ -134,7 +135,7 @@ export interface AgentRollup extends RateRow {
 export interface BestPerformer {
   key: string;
   label: string;
-  successRate: number;
+  positiveResponseRate: number; // goal_reached / reach — the metric the "Best" cards rank + display
   calls: number;
 }
 
@@ -187,7 +188,7 @@ function isTerminal(status: string | null | undefined): boolean {
 function emptyRate(): RateRow {
   return {
     calls: 0, connected: 0, terminal: 0, successful: 0, connectRate: null, successRate: null,
-    voicemailConnected: 0, voicemailEvaluated: 0, reach: 0, voicemailRate: null,
+    voicemailConnected: 0, voicemailEvaluated: 0, reach: 0, voicemailRate: null, positiveResponseRate: null,
   };
 }
 
@@ -209,6 +210,7 @@ function finalizeRate(row: RateRow): RateRow {
   row.successRate = safeDiv(row.successful, row.connected);
   row.reach = row.connected - row.voicemailConnected; // unevaluated connects count as reached
   row.voicemailRate = safeDiv(row.voicemailConnected, row.voicemailEvaluated);
+  row.positiveResponseRate = safeDiv(row.successful, row.reach); // goal over humans reached (not connected)
   return row;
 }
 
@@ -329,19 +331,20 @@ export function computeAgentRollups(
   return out;
 }
 
-/** Best performer by successRate, gated by a minimum connected-call volume so a 1–2 call
- *  campaign/agent can't show as "best" (Val's requirement). Returns null when none qualify. */
-export function bestBySuccess<T extends RateRow>(
+/** Best performer by positiveResponseRate (goal/reach), gated by a minimum connected-call volume
+ *  so a 1–2 call campaign/agent can't show as "best" (Val's requirement). Returns null when none
+ *  qualify. Renamed from bestBySuccess 2026-06-26 — "success" is retired in favour of positive response. */
+export function bestByPositiveResponse<T extends RateRow>(
   rows: T[],
   labelOf: (r: T) => { key: string; label: string },
   minConnected = ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN,
 ): BestPerformer | null {
   let best: BestPerformer | null = null;
   for (const r of rows) {
-    if (r.connected < minConnected || r.successRate === null) continue;
+    if (r.connected < minConnected || r.positiveResponseRate === null) continue;
     const { key, label } = labelOf(r);
-    if (!best || r.successRate > best.successRate) {
-      best = { key, label, successRate: r.successRate, calls: r.calls };
+    if (!best || r.positiveResponseRate > best.positiveResponseRate) {
+      best = { key, label, positiveResponseRate: r.positiveResponseRate, calls: r.calls };
     }
   }
   return best;
@@ -365,8 +368,8 @@ export function computeGlobalKpis(calls: DashCallRow[], index: Map<string, DashC
   return {
     kpis: computeKpis(calls),
     campaignCount: new Set(calls.map((c) => c.campaign_id)).size,
-    bestCampaign: bestBySuccess(campaignRollups, (r) => ({ key: r.id, label: r.name })),
-    bestAgent: bestBySuccess(agentRollups, (r) => ({ key: r.baseAssistantId, label: r.baseAssistantId })),
+    bestCampaign: bestByPositiveResponse(campaignRollups, (r) => ({ key: r.id, label: r.name })),
+    bestAgent: bestByPositiveResponse(agentRollups, (r) => ({ key: r.baseAssistantId, label: r.baseAssistantId })),
     campaignRollups,
     agentRollups,
   };

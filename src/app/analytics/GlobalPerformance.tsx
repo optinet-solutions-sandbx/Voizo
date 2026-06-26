@@ -27,7 +27,7 @@ const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Las
 interface BestPerformer {
   key: string;
   label: string;
-  successRate: number;
+  positiveResponseRate: number;
   calls: number;
 }
 interface AnalyticsResponse {
@@ -228,7 +228,7 @@ function BestCard({
             {best.label}
           </div>
           <div className="text-[11px] text-[var(--text-3)] mt-1">
-            <span className="text-[var(--text-2)] font-medium">{pct(best.successRate)} success</span> ·{" "}
+            <span className="text-[var(--text-2)] font-medium">{pct(best.positiveResponseRate)} positive response</span> ·{" "}
             {best.calls.toLocaleString()} calls
           </div>
         </>
