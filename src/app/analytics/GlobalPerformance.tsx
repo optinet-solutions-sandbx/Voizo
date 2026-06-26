@@ -7,7 +7,7 @@
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Phone, Zap, CheckCircle2, Trophy, Mic, FileText, Search, X } from "lucide-react";
+import { Phone, Zap, CheckCircle2, Trophy, Mic, FileText, Search, X, UserCheck, Voicemail } from "lucide-react";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
 import { useMagnetic } from "@/components/useMagnetic";
@@ -43,6 +43,7 @@ interface AnalyticsResponse {
     reach: number;
     voicemailEvaluated: number;
     voicemailRate: number | null;
+    positiveResponseRate: number | null; // goal_reached / reach (the renamed "success" metric)
   };
   campaignCount: number;
   best: { campaign: BestPerformer | null; agent: BestPerformer | null; prompt: BestPerformer | null };
@@ -415,8 +416,9 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
         </div>
       )}
 
-      {/* KPI grid — Row 1 totals. */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+      {/* KPI grid — Row 1 totals. Connected vs Reached are now distinct cards (Val 2026-06-26):
+          "connected" = answered (incl. voicemail); "reached" = a live human picked up. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
         <KpiCard
           onClick={() => onMetricClick?.("calls")}
           icon={<Phone size={14} />}
@@ -431,32 +433,44 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
           valueColor="text-emerald-400"
           value={pct(k?.connectRate ?? null)}
           sub={
-            <span
-              className="block space-y-0.5"
-              title="Connect = answered (incl. voicemail). Reach = human-only connects (connected − voicemail). Voicemail-rate is over evaluated connects; both fill forward from the call-observability deploy."
-            >
-              <span className="block">
-                {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
-              </span>
-              {k && (k.voicemailEvaluated > 0 ? (
-                <span className="block">
-                  <span className="text-[var(--text-2)] font-medium">{k.reach.toLocaleString()}</span> reached
-                  {" · "}
-                  <span className="text-[var(--text-2)] font-medium">{pct(k.voicemailRate)}</span> voicemail
-                </span>
-              ) : (
-                <span className="block text-[var(--text-3)]">Reach / voicemail tracking from deploy</span>
-              ))}
+            <span title="Connected = answered, including voicemail. A human pickup is shown separately as Reached.">
+              {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
+            </span>
+          }
+        />
+        <KpiCard
+          icon={<UserCheck size={14} />}
+          label="Reached"
+          valueColor="text-teal-400"
+          value={(k?.reach ?? 0).toLocaleString()}
+          sub={
+            <span title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data).">
+              {k ? "live humans reached" : "—"}
+            </span>
+          }
+        />
+        <KpiCard
+          icon={<Voicemail size={14} />}
+          label="Voicemail"
+          valueColor="text-violet-300"
+          value={k && k.voicemailEvaluated > 0 ? pct(k.voicemailRate) : "—"}
+          sub={
+            <span title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy.">
+              {k && k.voicemailEvaluated > 0 ? "of evaluated connects" : "tracking from deploy"}
             </span>
           }
         />
         <KpiCard
           onClick={() => onMetricClick?.("success")}
           icon={<CheckCircle2 size={14} />}
-          label="Success Rate"
+          label="Positive Response Rate"
           valueColor="text-amber-400"
-          value={pct(k?.successRate ?? null)}
-          sub={k ? `${k.successful.toLocaleString()} successful from ${k.connected.toLocaleString()} connected` : "—"}
+          value={pct(k?.positiveResponseRate ?? null)}
+          sub={
+            <span title="Players who agreed to receive the offer SMS (goal reached) ÷ humans reached. NOT a confirmed sale — real success (deposit/login) isn't visible yet.">
+              {k ? `${k.successful.toLocaleString()} positive of ${k.reach.toLocaleString()} reached` : "—"}
+            </span>
+          }
         />
       </div>
 
