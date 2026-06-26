@@ -68,7 +68,9 @@ export interface Filters {
   prompt: string; // "" = all (prompt sha)
   phone: string;
 }
-export const DEFAULTS: Filters = { range: "30d", campaignIds: [], agent: "", prompt: "", phone: "" };
+// Default 7d (Val 2026-06-26): reach-based metrics (Reached, Positive Response) are only
+// fully accurate post voicemail-detection deploy (~19 Jun) — a 7d default keeps them honest.
+export const DEFAULTS: Filters = { range: "7d", campaignIds: [], agent: "", prompt: "", phone: "" };
 
 interface GlobalPerformanceProps {
   // Controlled by DashboardView (lifted 2026-06-16) so both the running cards and the leaderboard
@@ -158,6 +160,19 @@ function MultiSelect({
   );
 }
 
+// Compact "estimated" pill — shown on reach-derived cards when the window includes connects
+// not yet evaluated for voicemail (those count as reached, inflating reach / diluting positive rate).
+function EstBadge({ title }: { title: string }) {
+  return (
+    <span
+      title={title}
+      className="text-[8.5px] font-semibold uppercase tracking-wider text-amber-400/90 border border-amber-400/30 rounded px-1 py-px leading-none cursor-help"
+    >
+      est
+    </span>
+  );
+}
+
 function KpiCard({
   icon,
   label,
@@ -165,6 +180,7 @@ function KpiCard({
   valueColor = "text-[var(--text-1)]",
   sub,
   onClick,
+  badge,
 }: {
   icon: ReactNode;
   label: string;
@@ -172,6 +188,7 @@ function KpiCard({
   valueColor?: string;
   sub: ReactNode;
   onClick?: () => void;
+  badge?: ReactNode;
 }) {
   const magnetRef = useMagnetic<HTMLDivElement>();
   // Interactive props spread only when clickable (correct ARIA button pattern; inert div otherwise).
@@ -192,9 +209,12 @@ function KpiCard({
       {...interactive}
       className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</span>
-        <span className="text-[var(--text-3)]">{icon}</span>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] truncate">{label}</span>
+          {badge}
+        </span>
+        <span className="text-[var(--text-3)] shrink-0">{icon}</span>
       </div>
       <div className={`text-[34px] leading-none font-bold font-mono mt-3 ${valueColor}`}>{value}</div>
       <div className="text-[11px] text-[var(--text-3)] mt-2">{sub}</div>
@@ -273,7 +293,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
     promptAgentLabel(baseAgentName(promptBaseBySha.get(sha) ?? null), label);
   const set = (patch: Partial<Filters>) => onChange({ ...filters, ...patch });
   const isDefault =
-    filters.range === "30d" &&
+    filters.range === "7d" &&
     filters.campaignIds.length === 0 &&
     !filters.agent &&
     !filters.prompt &&
@@ -309,6 +329,11 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
   ];
 
   const k = data?.kpis;
+  // Reach is materially "estimated" when a big share of connects aren't yet evaluated for voicemail
+  // (those count as reached). Voicemail detection is forward-only (~19 Jun), so long windows have low
+  // coverage. Flag the "est" caveat below ~80% coverage — keeps the default 7d view (≈95%) clean.
+  const reachCoverage = k && k.connected > 0 ? k.voicemailEvaluated / k.connected : 1;
+  const reachEstimated = !!k && reachCoverage < 0.8;
   const phoneMatch = data?.phone?.query ? data.phone : null;
   // Friendly labels for the best-performer cards.
   const bestCampaign = data?.best.campaign
@@ -442,6 +467,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
           icon={<UserCheck size={14} />}
           label="Reached"
           valueColor="text-teal-400"
+          badge={reachEstimated ? <EstBadge title="Estimated — includes connects not yet evaluated for voicemail (before ~19 Jun), which count as reached. Accurate on recent windows." /> : undefined}
           value={(k?.reach ?? 0).toLocaleString()}
           sub={
             <span title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data).">
@@ -464,6 +490,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
           icon={<CheckCircle2 size={14} />}
           label="Positive Response Rate"
           valueColor="text-amber-400"
+          badge={reachEstimated ? <EstBadge title="Estimated — measured over reached players; on older windows the reached base includes connects not yet evaluated for voicemail, so this can read low." /> : undefined}
           value={pct(k?.positiveResponseRate ?? null)}
           sub={
             <span title="Players who agreed to receive the offer SMS (goal reached) ÷ humans reached. NOT a confirmed sale — real success (deposit/login) isn't visible yet.">
