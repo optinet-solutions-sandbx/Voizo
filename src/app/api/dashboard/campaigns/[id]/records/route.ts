@@ -41,7 +41,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     fetchAllRows(
       supabaseAdmin,
       "calls_v2",
-      "campaign_id, campaign_number_id, created_at, goal_reached, status, voicemail, duration_seconds",
+      "campaign_id, campaign_number_id, created_at, goal_reached, status, voicemail, duration_seconds, ended_reason, transcript",
       "id",
       { column: "campaign_id", value: id },
     ),

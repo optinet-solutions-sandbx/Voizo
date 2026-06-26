@@ -65,6 +65,7 @@ type RawCall = {
   transcript: { text?: string } | null;
   recording_url: string | null;
   created_at: string;
+  ended_reason: string | null;
 };
 
 type RawSms = {
@@ -137,7 +138,8 @@ export async function GET(
         goal_reached,
         transcript,
         recording_url,
-        created_at
+        created_at,
+        ended_reason
       ),
       sms_messages:sms_messages_v2 (
         body,
@@ -181,13 +183,15 @@ export async function GET(
     const callTags: AttemptTag[] = sortedCalls.map((c) =>
       deriveAttemptTag(
         {
-          // deriveAttemptTag only reads status / voicemail / goal_reached /
-          // duration_seconds; campaign_id is required by the DashCallRow shape.
+          // deriveAttemptTag reads status / voicemail / goal_reached / duration_seconds
+          // / ended_reason / transcript; campaign_id is required by the DashCallRow shape.
           campaign_id: campaignId,
           status: c.status,
           voicemail: c.voicemail,
           goal_reached: c.goal_reached,
           duration_seconds: c.duration_seconds,
+          ended_reason: c.ended_reason,
+          transcript: c.transcript,
         } as DashCallRow,
         declinedContact,
       ),

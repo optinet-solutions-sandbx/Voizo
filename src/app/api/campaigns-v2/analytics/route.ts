@@ -31,7 +31,7 @@ import { fetchAllRows } from "@/lib/supabaseFetchAll";
 export async function GET() {
   const [numbers, calls, sms] = await Promise.all([
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id, outcome, created_at"),
-    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail"),
+    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail, ended_reason, transcript"),
     fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, provider"),
   ]);
 
