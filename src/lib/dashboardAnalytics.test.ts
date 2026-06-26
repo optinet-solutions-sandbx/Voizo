@@ -501,13 +501,13 @@ describe("call records", () => {
   });
 });
 
-describe("deriveAttemptTag — engagement rules (real-data cases)", () => {
-  // attempt 1 (prod +61474932636): completed, empty transcript, dur 23s → early hangup (no real conversation)
-  it("tags a connected call with 0 substantive customer turns as early_hangup", () => {
-    const c = call("x", "completed", null, "2026-06-26T08:39:07Z", "n1", null, 23, null, "");
+describe("deriveAttemptTag — engagement rules (validated against 14d of prod)", () => {
+  // silence-timed-out: connected but the customer never spoke → early hangup
+  it("tags silence-timed-out as early_hangup", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", false, 32, "silence-timed-out", "");
     expect(deriveAttemptTag(c, false)).toBe("early_hangup");
   });
-  // attempt 2 (prod): customer "Hello?" then customer-ended-call, dur 30s → early hangup (pickup-and-bail)
+  // attempt 2 (prod +61474932636): customer "Hello?" then customer-ended-call, dur 30s → pickup-and-bail
   it("tags a customer-ended-call with <=1 customer turn as early_hangup regardless of duration", () => {
     const c = call("x", "completed", false, "2026-06-26T10:15:20Z", "n2", false, 30, "customer-ended-call", "User: Hello?\nAI: Hey. Victor here from Lucky seven.");
     expect(deriveAttemptTag(c, false)).toBe("early_hangup");
@@ -517,14 +517,25 @@ describe("deriveAttemptTag — engagement rules (real-data cases)", () => {
     const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n3", false, 40, "customer-ended-call", "AI: Hi\nUser: yeah what is this\nAI: an offer\nUser: not right now thanks");
     expect(deriveAttemptTag(c, false)).toBe("neutral");
   });
+  // attempt 1 (prod): completed, null transcript, null ended_reason, dur 23 → AMBIGUOUS → stays neutral
+  // (conservative: don't reclassify a connect whose transcript merely wasn't captured)
+  it("leaves an ambiguous null/null connect (>=15s) as neutral", () => {
+    const c = call("x", "completed", null, "2026-06-26T08:39:07Z", "n1", null, 23, null, "");
+    expect(deriveAttemptTag(c, false)).toBe("neutral");
+  });
+  // existing duration rule preserved: a genuinely short call → early hangup
+  it("keeps the duration<15s early_hangup rule", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "nS", false, 8);
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
   // voicemail still wins over the engagement rules
   it("tags voicemail before engagement", () => {
     const c = call("x", "completed", false, "2026-06-26T10:15:21Z", "n4", true, 20, "assistant-ended-call", "User: You have reached the message bank of...");
     expect(deriveAttemptTag(c, false)).toBe("voicemail");
   });
-  // accepts the jsonb {text} shape straight from the DB
+  // accepts the jsonb {text} shape straight from the DB (customer-ended-call + empty {text} → bail)
   it("normalizes the jsonb {text} transcript shape", () => {
-    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", transcript: { text: "" } };
+    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", ended_reason: "customer-ended-call", transcript: { text: "" } };
     expect(deriveAttemptTag(c, false)).toBe("early_hangup");
   });
   // a goal-reached call stays positive even with a thin transcript (rule order)

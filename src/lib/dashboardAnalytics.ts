@@ -850,11 +850,15 @@ export function deriveAttemptTag(call: DashCallRow, declinedContact: boolean): A
   if (call.voicemail === true) return "voicemail";
   if (call.goal_reached === true) return "positive";
   if (declinedContact) return "declined";
-  // Engagement (2026-06-26): a connected call with no real conversation, or a pickup-and-bail,
-  // is an early hangup — not "neutral". Duration alone misses bails (a 30s clock with one "Hello?").
+  // Engagement (2026-06-26): a connected call where no real conversation happened is an early
+  // hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
+  // against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
+  // ended_reason silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous).
+  // We reclassify only the DEFINITIVE no-conversation signals; ambiguous null/null connects stay
+  // neutral ("unclear") rather than over-reclassifying calls whose transcript merely wasn't captured.
   const userTurns = substantiveUserTurnCount(transcriptText(call.transcript));
-  if (userTurns === 0) return "early_hangup";
-  if (call.ended_reason === "customer-ended-call" && userTurns <= 1) return "early_hangup";
+  if (call.ended_reason === "silence-timed-out") return "early_hangup"; // connected, customer never spoke
+  if (call.ended_reason === "customer-ended-call" && userTurns <= 1) return "early_hangup"; // pickup-and-bail
   if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
     return "early_hangup";
   return "neutral";
