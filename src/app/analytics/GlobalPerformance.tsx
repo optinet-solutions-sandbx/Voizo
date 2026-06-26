@@ -317,7 +317,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
 
   // Active-filter chips.
   const chips: { key: string; label: string; onRemove: () => void }[] = [
-    { key: "range", label: RANGE_LABEL[filters.range], onRemove: () => set({ range: "30d" }) },
+    { key: "range", label: RANGE_LABEL[filters.range], onRemove: () => set({ range: "7d" }) },
     ...filters.campaignIds.map((id) => ({
       key: `c-${id}`,
       label: campaignName(id),
