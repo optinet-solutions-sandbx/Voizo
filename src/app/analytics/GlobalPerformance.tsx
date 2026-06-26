@@ -461,7 +461,6 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
           }
         />
         <KpiCard
-          onClick={() => onMetricClick?.("success")}
           icon={<CheckCircle2 size={14} />}
           label="Positive Response Rate"
           valueColor="text-amber-400"

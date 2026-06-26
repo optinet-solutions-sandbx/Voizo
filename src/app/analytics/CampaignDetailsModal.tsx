@@ -14,7 +14,9 @@ import PromptVersionsPanel from "./PromptVersionsPanel";
 export interface CampaignDetailMetrics {
   calls: number;
   connectRate: number | null;
-  successRate: number | null;
+  reach: number;
+  positiveResponseRate: number | null;
+  smsSent?: number; // only the leaderboard path carries SMS; the running-card RateRow doesn't
 }
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
@@ -122,8 +124,16 @@ export default function CampaignDetailsModal({
           <Meta label="Connect">
             <span className="font-mono text-emerald-400">{pct(metrics.connectRate)}</span>
           </Meta>
-          <Meta label="Success">
-            <span className="font-mono text-amber-400">{pct(metrics.successRate)}</span>
+          <Meta label="Reached">
+            <span className="font-mono text-teal-400">{metrics.reach.toLocaleString()}</span>
+          </Meta>
+          {metrics.smsSent != null && (
+            <Meta label="SMS sent">
+              <span className="font-mono text-sky-400">{metrics.smsSent.toLocaleString()}</span>
+            </Meta>
+          )}
+          <Meta label="Positive response">
+            <span className="font-mono text-amber-400">{pct(metrics.positiveResponseRate)}</span>
           </Meta>
         </div>
 

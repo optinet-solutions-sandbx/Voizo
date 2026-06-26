@@ -23,6 +23,9 @@ export interface AgentRow {
   calls: number;
   connectRate: number | null;
   successRate: number | null;
+  reach: number;
+  smsSent: number;
+  positiveResponseRate: number | null;
   campaignCount: number;
 }
 export interface CampaignLbRow {
@@ -34,6 +37,9 @@ export interface CampaignLbRow {
   calls: number;
   connectRate: number | null;
   successRate: number | null;
+  reach: number;
+  smsSent: number;
+  positiveResponseRate: number | null;
 }
 export interface PromptRow {
   sha: string;
@@ -43,19 +49,45 @@ export interface PromptRow {
   calls: number;
   connectRate: number | null;
   successRate: number | null;
+  reach: number;
+  smsSent: number;
+  positiveResponseRate: number | null;
   campaignCount: number;
 }
 
-export type SortKey = "calls" | "connect" | "success" | "newest" | "reached" | "sms";
+export type SortKey = "calls" | "connect" | "success" | "newest" | "reached" | "sms" | "positive";
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
-function sortVal(r: { calls: number; connectRate: number | null; successRate: number | null }, key: SortKey): number {
+// Metric columns shown in the ranked tables + the sort toggles (Val 2026-06-26: "Success" retired).
+const RANKED_SORT_KEYS: SortKey[] = ["calls", "connect", "reached", "sms", "positive"];
+const RANKED_SORT_LABELS: Partial<Record<SortKey, string>> = { reached: "Reached", sms: "SMS", positive: "Positive" };
+
+type SortableRow = {
+  calls: number;
+  connectRate: number | null;
+  successRate: number | null;
+  reach?: number;
+  smsSent?: number;
+  positiveResponseRate?: number | null;
+};
+function sortVal(r: SortableRow, key: SortKey): number {
   if (key === "calls") return r.calls;
   if (key === "connect") return r.connectRate ?? -1;
-  return r.successRate ?? -1;
+  if (key === "reached") return r.reach ?? -1;
+  if (key === "sms") return r.smsSent ?? -1;
+  if (key === "positive") return r.positiveResponseRate ?? -1;
+  return r.successRate ?? -1; // "success"/"newest" legacy fallback
+}
+/** Formatted value for the metric being sorted (counts vs rates) — for the leaderboard cards. */
+function metricText(r: SortableRow, key: SortKey): string {
+  if (key === "calls") return r.calls.toLocaleString();
+  if (key === "connect") return pct(r.connectRate);
+  if (key === "reached") return (r.reach ?? 0).toLocaleString();
+  if (key === "sms") return (r.smsSent ?? 0).toLocaleString();
+  return pct(r.positiveResponseRate ?? null); // "positive" (default)
 }
 /** Qualified rows (>= MIN_RANK calls) sorted by the metric, then thin rows after. */
-function rankOrder<T extends { calls: number; connectRate: number | null; successRate: number | null }>(
+function rankOrder<T extends SortableRow>(
   rows: T[],
   key: SortKey,
 ): { qualified: T[]; thin: T[] } {
@@ -83,7 +115,7 @@ function RankBadge({ rank, medal }: { rank: number; medal: boolean }) {
 export function SortControl({
   sort,
   setSort,
-  keys = ["calls", "connect", "success"],
+  keys = RANKED_SORT_KEYS,
   labels,
 }: {
   sort: SortKey;
@@ -104,7 +136,7 @@ export function SortControl({
               sort === k ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
             }`}
           >
-            {labels?.[k] ?? k}
+            {labels?.[k] ?? RANKED_SORT_LABELS[k] ?? k}
           </button>
         ))}
       </div>
@@ -113,7 +145,7 @@ export function SortControl({
 }
 
 function AgentTable({ agents }: { agents: AgentRow[] }) {
-  const [sort, setSort] = useState<SortKey>("success");
+  const [sort, setSort] = useState<SortKey>("positive");
   const [page, setPage] = useState(1);
   const baseAgentName = useBaseAgentNames();
   const { qualified, thin } = rankOrder(agents, sort);
@@ -138,9 +170,11 @@ function AgentTable({ agents }: { agents: AgentRow[] }) {
           <div className="flex items-center gap-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-3)] border-b border-[var(--border)] mb-1">
             <span className="w-6" />
             <span className="flex-1">Agent</span>
-            <span className="w-16 text-right">Calls</span>
-            <span className="w-16 text-right">Connect</span>
-            <span className="w-16 text-right">Success</span>
+            <span className="w-14 text-right">Calls</span>
+            <span className="w-14 text-right">Connect</span>
+            <span className="w-14 text-right">Reached</span>
+            <span className="w-14 text-right">SMS</span>
+            <span className="w-16 text-right">Positive</span>
           </div>
           {pageRows.map((a, i) => {
             const isThin = a.calls < MIN_RANK;
@@ -154,9 +188,11 @@ function AgentTable({ agents }: { agents: AgentRow[] }) {
                   </div>
                   <div className="text-[10px] text-[var(--text-3)]">{a.campaignCount} campaign{a.campaignCount === 1 ? "" : "s"}</div>
                 </div>
-                <div className="font-mono text-xs text-[var(--text-2)] w-16 text-right">{a.calls.toLocaleString()}</div>
-                <div className="font-mono text-xs text-emerald-400 w-16 text-right">{pct(a.connectRate)}</div>
-                <div className="font-mono text-xs text-amber-400 w-16 text-right">{pct(a.successRate)}</div>
+                <div className="font-mono text-xs text-[var(--text-2)] w-14 text-right">{a.calls.toLocaleString()}</div>
+                <div className="font-mono text-xs text-emerald-400 w-14 text-right">{pct(a.connectRate)}</div>
+                <div className="font-mono text-xs text-teal-400 w-14 text-right">{a.reach.toLocaleString()}</div>
+                <div className="font-mono text-xs text-sky-400 w-14 text-right">{a.smsSent.toLocaleString()}</div>
+                <div className="font-mono text-xs text-amber-400 w-16 text-right">{pct(a.positiveResponseRate)}</div>
               </div>
             );
           })}
@@ -185,7 +221,7 @@ function Leaderboard({
   rangeDays: number;
   onFocusCampaign: (id: string) => void;
 }) {
-  const [sort, setSort] = useState<SortKey>("success");
+  const [sort, setSort] = useState<SortKey>("positive");
   const [page, setPage] = useState(1);
   const [detailFor, setDetailFor] = useState<CampaignLbRow | null>(null);
   const baseAgentName = useBaseAgentNames();
@@ -227,7 +263,7 @@ function Leaderboard({
                     {baseAgentName(c.baseAssistantId) ?? "—"} · {c.calls.toLocaleString()} calls
                   </div>
                 </div>
-                <div className="font-mono text-sm font-semibold text-amber-400 shrink-0">{pct(c.successRate)}</div>
+                <div className="font-mono text-sm font-semibold text-amber-400 shrink-0">{metricText(c, sort)}</div>
               </button>
             );
           })}
@@ -250,7 +286,7 @@ function Leaderboard({
           country={detailFor.country}
           status={detailFor.status}
           baseAssistantId={detailFor.baseAssistantId}
-          metrics={{ calls: detailFor.calls, connectRate: detailFor.connectRate, successRate: detailFor.successRate }}
+          metrics={{ calls: detailFor.calls, connectRate: detailFor.connectRate, reach: detailFor.reach, smsSent: detailFor.smsSent, positiveResponseRate: detailFor.positiveResponseRate }}
           metricsLabel={`Last ${rangeDays}d`}
           onClose={() => setDetailFor(null)}
           onFilter={() => onFocusCampaign(detailFor.id)}
@@ -261,7 +297,7 @@ function Leaderboard({
 }
 
 function PromptTable({ prompts }: { prompts: PromptRow[] }) {
-  const [sort, setSort] = useState<SortKey>("success");
+  const [sort, setSort] = useState<SortKey>("positive");
   const [promptFor, setPromptFor] = useState<{ campaignId: string; title: string } | null>(null);
   const [page, setPage] = useState(1);
   const baseAgentName = useBaseAgentNames();
@@ -289,7 +325,9 @@ function PromptTable({ prompts }: { prompts: PromptRow[] }) {
             <span className="flex-1">Prompt</span>
             <span className="w-14 text-right">Calls</span>
             <span className="w-14 text-right">Connect</span>
-            <span className="w-14 text-right">Success</span>
+            <span className="w-14 text-right">Reached</span>
+            <span className="w-14 text-right">SMS</span>
+            <span className="w-16 text-right">Positive</span>
           </div>
           {pageRows.map((p, i) => {
             const isThin = p.calls < MIN_RANK;
@@ -322,7 +360,9 @@ function PromptTable({ prompts }: { prompts: PromptRow[] }) {
                 </div>
                 <div className="font-mono text-xs text-[var(--text-2)] w-14 text-right">{p.calls.toLocaleString()}</div>
                 <div className="font-mono text-xs text-emerald-400 w-14 text-right">{pct(p.connectRate)}</div>
-                <div className="font-mono text-xs text-amber-400 w-14 text-right">{pct(p.successRate)}</div>
+                <div className="font-mono text-xs text-teal-400 w-14 text-right">{p.reach.toLocaleString()}</div>
+                <div className="font-mono text-xs text-sky-400 w-14 text-right">{p.smsSent.toLocaleString()}</div>
+                <div className="font-mono text-xs text-amber-400 w-16 text-right">{pct(p.positiveResponseRate)}</div>
               </div>
             );
           })}
