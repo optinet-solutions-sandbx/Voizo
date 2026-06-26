@@ -7,7 +7,7 @@
 // Connect = ANSWER (incl. voicemail); Success% = goal_reached / connected. Ghost + test excluded.
 
 import { useCallback, useEffect, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { PhoneCall, Zap, MessageSquare, Radio } from "lucide-react";
+import { PhoneCall, Zap, MessageSquare, Radio, UserCheck, Voicemail } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type {
@@ -212,8 +212,9 @@ export default function DashboardView() {
         </section>
       )}
 
-      {/* Ops strip (4 cells). */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+      {/* Ops strip (6 cells). Reached + Voicemail are now their own cells (Val 2026-06-26):
+          "connected" = answered incl. voicemail; "reached" = a live human picked up. */}
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         <OpsCell icon={<PhoneCall size={12} />} label="Calls Today" onClick={() => setDrawerMetric("calls")}>
           <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
             {(ops?.callsToday ?? 0).toLocaleString()}
@@ -229,23 +230,34 @@ export default function DashboardView() {
         <OpsCell icon={<Zap size={12} />} label="Connect Rate Today" onClick={() => setDrawerMetric("connect")}>
           <div className="text-3xl font-bold font-mono text-emerald-400 mt-2">{pct(ops?.connectRateToday ?? null)}</div>
           <div
-            className="text-[11px] text-[var(--text-3)] mt-2 space-y-0.5"
-            title="Connect = answered (incl. voicemail). Reach = human-only connects (connected − voicemail). Voicemail-rate is over evaluated connects; both fill forward from the call-observability deploy."
+            className="text-[11px] text-[var(--text-3)] mt-2"
+            title="Connected = answered, including voicemail. A human pickup is shown separately as Reached."
           >
-            <div>
-              {ops
-                ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
-                : "—"}
-            </div>
-            {ops && (ops.voicemailEvaluatedToday > 0 ? (
-              <div>
-                <span className="text-[var(--text-2)] font-medium">{ops.reachToday.toLocaleString()}</span> reached
-                {" · "}
-                <span className="text-[var(--text-2)] font-medium">{pct(ops.voicemailRateToday)}</span> voicemail
-              </div>
-            ) : (
-              <div className="text-[var(--text-3)]">Reach / voicemail tracking from deploy</div>
-            ))}
+            {ops
+              ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
+              : "—"}
+          </div>
+        </OpsCell>
+
+        <OpsCell icon={<UserCheck size={12} />} label="Reached Today">
+          <div className="text-3xl font-bold font-mono text-teal-400 mt-2">{(ops?.reachToday ?? 0).toLocaleString()}</div>
+          <div
+            className="text-[11px] text-[var(--text-3)] mt-2"
+            title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data)."
+          >
+            {ops ? "live humans reached" : "—"}
+          </div>
+        </OpsCell>
+
+        <OpsCell icon={<Voicemail size={12} />} label="Voicemail Today">
+          <div className="text-3xl font-bold font-mono text-violet-300 mt-2">
+            {ops && ops.voicemailEvaluatedToday > 0 ? pct(ops.voicemailRateToday) : "—"}
+          </div>
+          <div
+            className="text-[11px] text-[var(--text-3)] mt-2"
+            title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy."
+          >
+            {ops && ops.voicemailEvaluatedToday > 0 ? "of evaluated connects" : "tracking from deploy"}
           </div>
         </OpsCell>
 
