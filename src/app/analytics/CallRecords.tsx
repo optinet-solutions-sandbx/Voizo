@@ -33,7 +33,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 // Status column = contact DISPOSITION (lifecycle). Calm muted chips (matches CampaignSummary).
 const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
 const DISPO_LABEL: Record<RecordStatus, string> = {
-  successful: "Successful",
+  successful: "Positive response", // "Success" retired (Val 2026-06-26) — goal = agreed to the offer SMS, not a sale
   not_interested: "Not Interested",
   awaiting_retry: "Awaiting Retry",
   voicemail: "Voicemail",

@@ -58,7 +58,7 @@ function StatTriple({ rate }: { rate: RateRow }) {
     <div className="grid grid-cols-3 gap-2 mt-3">
       {statCell(rate.calls.toLocaleString(), "Calls", "text-[var(--text-1)]")}
       {statCell(pct(rate.connectRate), "Connect", "text-emerald-400")}
-      {statCell(pct(rate.successRate), "Success", "text-amber-400")}
+      {statCell(pct(rate.positiveResponseRate), "Positive", "text-amber-400")}
     </div>
   );
 }

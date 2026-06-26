@@ -46,8 +46,8 @@ export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
   const inFlight = Math.max(0, a.totalCalls - completed);
   const attemptSegs: Seg[] = [
     { label: "Unreachable", count: a.nonConnectTotal, color: ACCENT.rose, desc: "No answer, busy signal, or failed connection" },
-    { label: "Voicemail detected", count: a.voicemailConnected, color: ACCENT.violet, desc: "Call connected but resolved to the player's voicemail", hint: "Voicemail detection began recently — on older calls this reads low (unevaluated connects fall into Connected to player)." },
-    { label: "Connected to player", count: a.reach, color: ACCENT.green, desc: "Live player answered and engaged with the agent", hint: "Connected minus detected voicemails. Calls not yet evaluated for voicemail count here, so on older data this can run high." },
+    { label: "Voicemail detected", count: a.voicemailConnected, color: ACCENT.violet, desc: "Call connected but resolved to the player's voicemail", hint: "Voicemail detection began recently — on older calls this reads low (unevaluated connects fall into Reached player)." },
+    { label: "Reached player", count: a.reach, color: ACCENT.green, desc: "Live player answered and engaged with the agent", hint: "Connected minus detected voicemails. Calls not yet evaluated for voicemail count here, so on older data this can run high." },
   ];
 
   // Tier 3 — outcome partition (of reached humans). All proxies → "estimated".
@@ -80,9 +80,9 @@ export default function CampaignSummary({ a }: { a: CampaignAnalytics }) {
         total={completed}
       />
 
-      {/* ── Tier 3 · Connected-calls outcome breakdown ── */}
+      {/* ── Tier 3 · Customer-reached outcome breakdown ── */}
       <BarTier
-        title="Connected calls · outcome breakdown"
+        title="Customer reached · outcome breakdown"
         tag="Estimated"
         baseNote={`% of ${a.reach.toLocaleString()} reached`}
         segs={outcomeSegs}
