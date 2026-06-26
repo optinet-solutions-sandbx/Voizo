@@ -9,6 +9,7 @@
  * and campaign_numbers_v2.outcome 'wrong_number' are never written by any code path.
  */
 import { ANALYTICS_CONFIG, CONFIG_RATE_PER_MIN } from "./analyticsConfig";
+import { substantiveUserTurnCount } from "./transcriptClassify";
 
 // ── Input row shapes (only the columns Task 8 selects) ──────────────────────
 export interface CampaignRow {
@@ -38,6 +39,8 @@ export interface CallRow {
   duration_seconds?: number | null;
   created_at?: string | null;
   voicemail?: boolean | null; // calls_v2.voicemail (transcript-detected); NULL = not evaluated (historical / pre-deploy)
+  ended_reason?: string | null; // calls_v2.ended_reason — 'silence-timed-out' / 'customer-ended-call' drive the early-hangup proxy
+  transcript?: { text?: string | null } | string | null; // calls_v2.transcript (jsonb {text}); engagement signal
 }
 export interface SmsRow {
   campaign_id: string;
@@ -348,11 +351,21 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   for (const c of calls) {
     if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
     if (c.voicemail === true) continue; // voicemail is not a reached human (keeps the sum == reach)
-    if (c.goal_reached === true) outcomeBreakdown.positive++;
-    else if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) outcomeBreakdown.declined++;
-    else if (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    if (c.goal_reached === true) { outcomeBreakdown.positive++; continue; }
+    if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) { outcomeBreakdown.declined++; continue; }
+    // Engagement-based early-hangup — MIRRORS dashboardAnalytics.deriveAttemptTag (2026-06-26).
+    // Only DEFINITIVE no-conversation signals reclassify; ambiguous null/null connects stay neutral.
+    const txt = typeof c.transcript === "string" ? c.transcript : (c.transcript?.text ?? "");
+    const userTurns = substantiveUserTurnCount(txt);
+    if (
+      c.ended_reason === "silence-timed-out" ||
+      (c.ended_reason === "customer-ended-call" && userTurns <= 1) ||
+      (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    ) {
       outcomeBreakdown.earlyHangup++;
-    else outcomeBreakdown.neutral++;
+    } else {
+      outcomeBreakdown.neutral++;
+    }
   }
 
   // ── Duration / density (G2: numeric guard; only connected calls carry reliable seconds) ──

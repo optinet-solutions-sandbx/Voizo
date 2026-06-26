@@ -385,6 +385,30 @@ describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy)
     expect(b.positive + b.declined + b.earlyHangup + b.neutral).toBe(a.reach); // clean partition of reach
   });
 
+  it("counts silence-timeouts and pickup-and-bails as earlyHangup (engagement rule)", () => {
+    const r = computeCampaignAnalytics({
+      campaigns: [{ id: "eg", name: "EG", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [
+        { id: "s", campaign_id: "eg", outcome: "pending" },
+        { id: "b", campaign_id: "eg", outcome: "pending" },
+        { id: "m", campaign_id: "eg", outcome: "not_interested" },
+      ],
+      calls: [
+        // silence-timed-out, 30s, no transcript → earlyHangup (no one spoke)
+        { campaign_id: "eg", campaign_number_id: "s", status: "completed", goal_reached: false, duration_seconds: 30, voicemail: false, ended_reason: "silence-timed-out", transcript: null },
+        // customer-ended-call, 30s, one "Hello?" → earlyHangup (pickup-and-bail)
+        { campaign_id: "eg", campaign_number_id: "b", status: "completed", goal_reached: false, duration_seconds: 30, voicemail: false, ended_reason: "customer-ended-call", transcript: "User: Hello?" },
+        // customer-ended-call but a multi-turn real conversation → neutral (no false positive)
+        { campaign_id: "eg", campaign_number_id: "m", status: "completed", goal_reached: false, duration_seconds: 45, voicemail: false, ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: what is this about\nUser: not interested" },
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    const a = r["eg"];
+    expect(a.reach).toBe(3);
+    expect(a.outcomeBreakdown).toEqual({ positive: 0, declined: 0, earlyHangup: 2, neutral: 1 });
+    expect(a.outcomeBreakdown.positive + a.outcomeBreakdown.declined + a.outcomeBreakdown.earlyHangup + a.outcomeBreakdown.neutral).toBe(a.reach);
+  });
+
   it("priority: goal beats all; explicit decline beats a sub-threshold early hangup", () => {
     const r = computeCampaignAnalytics({
       campaigns: [{ id: "p", name: "P", created_at: "2026-06-01T00:00:00Z" }],
