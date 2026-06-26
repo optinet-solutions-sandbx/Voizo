@@ -280,3 +280,13 @@ export function hasRealConversation(transcript: string | null | undefined): bool
   const turns = parseTranscriptTurns(transcript);
   return turns.some((t) => t.speaker === "user" && t.text.trim().length >= 2);
 }
+
+/** Count of substantive CUSTOMER (user) turns — a `user` turn with >=2 non-space chars.
+ *  Engagement signal for the proxy attempt-tagger: 0 ⇒ no real conversation; <=1 with a
+ *  customer-ended-call ⇒ pickup-and-bail. Reuses parseTranscriptTurns. */
+export function substantiveUserTurnCount(transcript: string | null | undefined): number {
+  if (!transcript || !transcript.trim()) return 0;
+  return parseTranscriptTurns(transcript).filter(
+    (t) => t.speaker === "user" && t.text.trim().length >= 2,
+  ).length;
+}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isVoicemail, hasRealConversation, hasGenuineCustomerConsent,
-  agentMentionedSms, customerDeclinedSms,
+  agentMentionedSms, customerDeclinedSms, substantiveUserTurnCount,
 } from "./transcriptClassify";
 
 // Real AU "message bank" voicemails the filter MISSED (campaign 9df71cd3, 2026-06-03).
@@ -355,5 +355,23 @@ describe("customerDeclinedSms (explicit text-directed refusal)", () => {
     expect(customerDeclinedSms("AI: Don't worry, I won't text you twice.\nUser: Okay.")).toBe(false);
     expect(customerDeclinedSms("don't text me")).toBe(false);
     expect(customerDeclinedSms(null)).toBe(false);
+  });
+});
+
+describe("substantiveUserTurnCount", () => {
+  it("returns 0 for empty/absent transcript", () => {
+    expect(substantiveUserTurnCount("")).toBe(0);
+    expect(substantiveUserTurnCount(null)).toBe(0);
+    expect(substantiveUserTurnCount(undefined)).toBe(0);
+  });
+  it("counts only substantive user turns (>=2 chars), not AI turns", () => {
+    // attempt-2 real data (+61474932636): one user turn ("Hello?") then the AI talks
+    expect(substantiveUserTurnCount("User: Hello?\nAI: Hey. Victor here from Lucky seven dot com.")).toBe(1);
+  });
+  it("counts multiple real user turns", () => {
+    expect(substantiveUserTurnCount("AI: Hi\nUser: yes go on\nAI: great\nUser: not interested")).toBe(2);
+  });
+  it("ignores a 1-char user turn", () => {
+    expect(substantiveUserTurnCount("User: y")).toBe(0);
   });
 });
