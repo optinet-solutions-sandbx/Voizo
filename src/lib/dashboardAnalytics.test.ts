@@ -23,6 +23,7 @@ import {
   computeHeatmap,
   localDayHourInTimezone,
   computeToday,
+  callWindowBreakdown,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -53,6 +54,39 @@ function many(campaign_id: string, total: number, goals: number): DashCallRow[] 
     call(campaign_id, "completed", i < goals, "2026-06-10T00:00:00Z"),
   );
 }
+
+describe("callWindowBreakdown — per-window call partition (Today cards)", () => {
+  const T = Date.UTC(2026, 5, 27); // window [T, T+1d)
+  const inW = new Date(T + 3_600_000).toISOString();
+  const outW = new Date(T - 3_600_000).toISOString();
+  it("partitions attempts into reach/voicemail/unreachable + in-flight, and reach into outcomes", () => {
+    const calls: DashCallRow[] = [
+      call("c", "completed", true, inW), // positive (reach)
+      call("c", "completed", false, inW, "d"), // declined contact (reach)
+      call("c", "completed", false, inW, undefined, false, 5), // early hangup (<15s, reach)
+      call("c", "completed", false, inW, undefined, false, 60), // neutral (reach)
+      call("c", "completed", false, inW, undefined, true), // voicemail (connected)
+      call("c", "no_answer", false, inW), // unreachable (terminal non-connect)
+      call("c", "initiated", null, inW), // in-flight (not terminal)
+      call("c", "completed", true, outW), // OUT of window — excluded
+    ];
+    const b = callWindowBreakdown(calls, new Set(["d"]), T, T + 86_400_000);
+    expect(b.total).toBe(7);
+    expect(b.connected).toBe(5);
+    expect(b.terminal).toBe(6);
+    expect(b.inFlight).toBe(1);
+    expect(b.reach).toBe(4);
+    expect(b.voicemail).toBe(1);
+    expect(b.unreachable).toBe(1);
+    expect(b.positive + b.declined + b.earlyHangup + b.neutral).toBe(b.reach);
+    expect({ positive: b.positive, declined: b.declined, earlyHangup: b.earlyHangup, neutral: b.neutral }).toEqual({
+      positive: 1,
+      declined: 1,
+      earlyHangup: 1,
+      neutral: 1,
+    });
+  });
+});
 
 describe("computeKpis — rate definitions", () => {
   it("Success% is off CONNECTED (not calls); connectRate denominator excludes in-flight", () => {

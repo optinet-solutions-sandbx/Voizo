@@ -965,6 +965,65 @@ export function recordHasAttemptOutcome(record: CallRecord, tag: AttemptTag): bo
   return record.attempts.some((a) => a.tag === tag);
 }
 
+// ── Today's Performance card breakdowns (per-window partitions) ──────────────
+// Powers the 3-card Today's Performance redesign (Val's mockup, 2026-06-29). The Reached
+// split is a PROXY that mirrors campaignAnalytics.outcomeBreakdown EXACTLY (same priority,
+// same EARLY_HANGUP_SEC), so the cards reconcile with the records drawer. "estimated" in UI.
+export interface CallBreakdown {
+  total: number; // all attempts in the window
+  terminal: number; // connected + terminal-nonconnect (excludes in-flight)
+  connected: number; // CONNECTED_STATUSES (incl. voicemail)
+  inFlight: number; // total − terminal (still dialing/ringing)
+  reach: number; // connected − voicemail (live humans)
+  voicemail: number; // connected & voicemail===true
+  unreachable: number; // terminal − connected
+  // Reached split — partitions `reach` (sums to reach).
+  positive: number;
+  neutral: number;
+  declined: number;
+  earlyHangup: number;
+}
+
+/** Partition calls with created_at in [startMs, endMs) into the Call-Attempts + Reached card
+ *  rows. `declinedIds` = campaign_number_ids whose contact outcome is 'declined_offer'. */
+export function callWindowBreakdown(
+  calls: DashCallRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+): CallBreakdown {
+  const b: CallBreakdown = {
+    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
+    positive: 0, neutral: 0, declined: 0, earlyHangup: 0,
+  };
+  for (const c of calls) {
+    const t = c.created_at ? Date.parse(c.created_at) : NaN;
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += 1;
+    if (isTerminal(c.status)) b.terminal += 1;
+    if (!isConnected(c.status)) continue;
+    b.connected += 1;
+    if (c.voicemail === true) { b.voicemail += 1; continue; }
+    // Reached human → outcome split (mirror outcomeBreakdown priority verbatim).
+    b.reach += 1;
+    if (c.goal_reached === true) { b.positive += 1; continue; }
+    if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) { b.declined += 1; continue; }
+    const userTurns = substantiveUserTurnCount(transcriptText(c.transcript));
+    if (
+      c.ended_reason === "silence-timed-out" ||
+      (c.ended_reason === "customer-ended-call" && userTurns <= 1) ||
+      (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    ) {
+      b.earlyHangup += 1;
+    } else {
+      b.neutral += 1;
+    }
+  }
+  b.unreachable = b.terminal - b.connected;
+  b.inFlight = b.total - b.terminal;
+  return b;
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
