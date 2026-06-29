@@ -1,0 +1,221 @@
+"use client";
+
+// Inline drill-down drawer for the Today's Performance 3-card redesign (Val's mockup, 2026-06-29).
+// Clicking any card total / row / sub-row opens THIS drawer below the cards, pre-filtered to that
+// slice (status + attempt-outcome [+ smsOnly]). Fetches the day's records once per day-view and
+// filters client-side. Export is CSV-only here (built from the visible records) — Audio/Transcripts
+// stay on the per-campaign page because they're campaign-scoped (this view spans all campaigns).
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X, FileText, Search } from "lucide-react";
+import {
+  type TodayCallRecord,
+  type RecordStatus,
+  type AttemptTag,
+  ATTEMPT_TAG_LABELS,
+  recordHasAttemptOutcome,
+  recordIsReached,
+} from "@/lib/dashboardAnalytics";
+import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
+import RecordsTable, { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./RecordsTable";
+
+// The slice a clicked stat maps to. `outcome` adds a "reached" group (human-conversation attempts)
+// on top of the per-attempt tags; `smsOnly` restricts to contacts texted that day (SMS card).
+export interface DrawerFilter {
+  status: RecordStatus | "all";
+  outcome: AttemptTag | "reached" | "all";
+  smsOnly: boolean;
+  title: string;
+}
+
+const STATUS_DROPDOWN: DropdownOption[] = [
+  { value: "all", label: "All statuses" },
+  ...DISPO_ORDER.map((s) => ({ value: s, label: DISPO_LABEL[s] })),
+];
+const OUTCOME_DROPDOWN: DropdownOption[] = [
+  { value: "all", label: "All attempt outcomes" },
+  { value: "reached", label: "Reached (human)" },
+  ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
+];
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function isoDateTime(ms: number | null): string {
+  if (ms === null) return "";
+  const d = new Date(ms);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+// Client-side CSV from the VISIBLE records (no campaignId needed). Audio/Transcripts are
+// per-campaign exports and intentionally not offered in this cross-campaign drawer.
+function downloadCsv(records: TodayCallRecord[], filename: string) {
+  const header = ["#", "Phone", "Status", "Attempt outcomes", "Texted today", "Last attempted (UTC)"];
+  const lines = records.map((r, i) => [
+    String(i + 1),
+    r.phone ?? "",
+    DISPO_LABEL[r.status],
+    r.attempts.map((a) => ATTEMPT_TAG_LABELS[a.tag]).join(" | "),
+    r.smsSentToday ? "yes" : "no",
+    isoDateTime(r.lastAttemptedMs),
+  ]);
+  const esc = (cell: string) => `"${cell.replace(/"/g, '""')}"`;
+  const csv = [header, ...lines].map((row) => row.map(esc).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export default function TodayRecordsDrawer({
+  day,
+  filter,
+  previewDate,
+  onClose,
+}: {
+  day: "today" | "yesterday";
+  filter: DrawerFilter | null;
+  previewDate: string | null;
+  onClose: () => void;
+}) {
+  const open = filter !== null;
+  // Records cached per day-view (and per preview date). Keyed so switching the toggle refetches once.
+  const [cache, setCache] = useState<Record<string, TodayCallRecord[]>>({});
+  const [error, setError] = useState<string | null>(null);
+  // The drawer's own refinement controls, seeded from the clicked slice.
+  const [dispo, setDispo] = useState<RecordStatus | "all">("all");
+  const [outcome, setOutcome] = useState<AttemptTag | "reached" | "all">("all");
+  const [phone, setPhone] = useState("");
+
+  const cacheKey = `${day}|${previewDate ?? ""}`;
+  const records = cache[cacheKey];
+
+  // Seed the controls from the entry filter whenever a new slice is clicked.
+  useEffect(() => {
+    if (filter) {
+      setDispo(filter.status);
+      setOutcome(filter.outcome);
+      setPhone("");
+    }
+  }, [filter]);
+
+  // Fetch the day's records once per day-view (lazy: only when open + not cached).
+  useEffect(() => {
+    if (!open || cache[cacheKey]) return;
+    const controller = new AbortController();
+    const qs = new URLSearchParams({ day });
+    if (previewDate) qs.set("date", previewDate);
+    fetch(`/api/dashboard/today/records?${qs.toString()}`, { cache: "no-store", signal: controller.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((j: { records: TodayCallRecord[] }) => {
+        setCache((c) => ({ ...c, [cacheKey]: j.records }));
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Failed to load");
+      });
+    return () => controller.abort();
+  }, [open, cacheKey, day, previewDate, cache]);
+
+  // Close on Escape.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseRef.current(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const visible = useMemo(() => {
+    if (!records) return [];
+    const smsOnly = filter?.smsOnly ?? false;
+    return records.filter((r) => {
+      if (smsOnly && !r.smsSentToday) return false;
+      if (dispo !== "all" && r.status !== dispo) return false;
+      if (outcome === "reached") {
+        if (!recordIsReached(r)) return false;
+      } else if (outcome !== "all" && !recordHasAttemptOutcome(r, outcome)) {
+        return false;
+      }
+      if (phone.trim() && !(r.phone ?? "").includes(phone.trim())) return false;
+      return true;
+    });
+  }, [records, filter, dispo, outcome, phone]);
+
+  const onExport = useCallback(() => {
+    const slug = (filter?.title ?? "records").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    downloadCsv(visible, `today-${day}-${slug || "records"}.csv`);
+  }, [visible, filter, day]);
+
+  if (!open) return null;
+
+  return (
+    <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
+      {/* Header: title + slice badge + close */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]/40">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileText size={14} className="text-[var(--text-3)] shrink-0" />
+          <span className="text-sm font-semibold text-[var(--text-1)] truncate">{filter?.title ?? "Call records"}</span>
+          <span className="text-[11px] text-[var(--text-3)] shrink-0">· {day === "today" ? "Today" : "Yesterday"}</span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors shrink-0"
+        >
+          <X size={12} /> Close
+        </button>
+      </div>
+
+      {/* Toolbar: CSV export + status/outcome filters + search */}
+      <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-[var(--border)]">
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={!records || visible.length === 0}
+          className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <FileText size={13} /> CSV export
+        </button>
+        <span className="w-px h-4 bg-[var(--border)] mx-0.5" />
+        <div className="w-[160px]">
+          <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
+        </div>
+        <div className="w-[190px]">
+          <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "reached" | "all")} options={OUTCOME_DROPDOWN} />
+        </div>
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Search number…"
+            className="pl-8 pr-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500 w-[150px]"
+          />
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="px-4 py-3">
+        {error ? (
+          <p className="text-xs text-amber-400 font-mono py-3">{error}</p>
+        ) : !records ? (
+          <p className="text-xs text-[var(--text-3)] py-3">Loading records…</p>
+        ) : (
+          <>
+            <RecordsTable records={visible} />
+            <p className="text-[11px] text-[var(--text-3)] mt-2">
+              Showing {visible.length.toLocaleString()} of {records.length.toLocaleString()} contacts dialed {day === "today" ? "today" : "yesterday"}.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
