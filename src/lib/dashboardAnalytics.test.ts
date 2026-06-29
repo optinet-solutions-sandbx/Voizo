@@ -13,6 +13,7 @@ import {
   computeCallRecords,
   recordHasAttemptOutcome,
   recordIsReached,
+  attachSmsSent,
   deriveAttemptTag,
   bestByPositiveResponse,
   promptLabel,
@@ -175,6 +176,22 @@ describe("recordIsReached — human-conversation group predicate (Today drawer)"
     expect(recordIsReached(rec(["early_hangup"]))).toBe(true);
     expect(recordIsReached(rec(["voicemail", "unreachable"]))).toBe(false);
     expect(recordIsReached(rec([]))).toBe(false);
+  });
+});
+
+describe("attachSmsSent — flags records texted today (Today drawer)", () => {
+  const rec = (id: string): CallRecord => ({
+    campaignNumberId: id,
+    phone: null,
+    status: "unreached",
+    tag: "unreachable",
+    attempts: [],
+    lastAttemptedMs: null,
+  });
+  it("sets smsSentToday true for campaignNumberIds in the sent set, false otherwise", () => {
+    const out = attachSmsSent([rec("n1"), rec("n2")], new Set(["n1"]));
+    expect(out.find((r) => r.campaignNumberId === "n1")!.smsSentToday).toBe(true);
+    expect(out.find((r) => r.campaignNumberId === "n2")!.smsSentToday).toBe(false);
   });
 });
 

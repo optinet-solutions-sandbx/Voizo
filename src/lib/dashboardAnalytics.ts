@@ -1004,6 +1004,15 @@ export function recordIsReached(record: CallRecord): boolean {
   return record.attempts.some((a) => HUMAN_TAGS.has(a.tag));
 }
 
+/** A day-scoped record + whether the contact got a sent|delivered SMS that day — lets the Today
+ *  SMS card drill into texted contacts. Returned by /api/dashboard/today/records. */
+export type TodayCallRecord = CallRecord & { smsSentToday: boolean };
+
+/** Attach `smsSentToday` (campaignNumberId ∈ the day's sent/delivered SMS set) to each record. Pure. */
+export function attachSmsSent(records: CallRecord[], sentNumberIds: Set<string>): TodayCallRecord[] {
+  return records.map((r) => ({ ...r, smsSentToday: sentNumberIds.has(r.campaignNumberId) }));
+}
+
 // ── Today's Performance card breakdowns (per-window partitions) ──────────────
 // Powers the 3-card Today's Performance redesign (Val's mockup, 2026-06-29). The Reached
 // split is a PROXY that mirrors campaignAnalytics.outcomeBreakdown EXACTLY (same priority,
