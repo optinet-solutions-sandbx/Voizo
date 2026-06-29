@@ -30,6 +30,7 @@ const MS_PER_DAY = 86_400_000;
 
 // ── Input row shapes (only the columns the dashboard selects) ────────────────
 export interface DashCallRow {
+  id?: string | null; // calls_v2.id — join key for sms_messages_v2.call_id (Today SMS breakdown)
   campaign_id: string;
   campaign_number_id?: string | null;
   status?: string | null;
@@ -59,6 +60,8 @@ export interface DashSmsRow {
   campaign_id: string;
   created_at?: string | null;
   status?: string | null;
+  call_id?: string | null; // sms_messages_v2.call_id — links the text to the call that triggered it
+  campaign_number_id?: string | null; // fallback contact link
 }
 
 export interface DashFilters {
@@ -1021,6 +1024,48 @@ export function callWindowBreakdown(
   }
   b.unreachable = b.terminal - b.connected;
   b.inFlight = b.total - b.terminal;
+  return b;
+}
+
+export interface SmsBreakdown {
+  total: number; // sent|delivered SMS in the window
+  reached: number; // SMS to a reached human (positive|neutral|declined|early_hangup)
+  voicemail: number; // SMS to a voicemail pickup (registered_optin follow-up)
+  unreachable: number; // SMS whose call didn't connect
+  // by-response of the reached SMS (early_hangup has no named sub-row; it still counts in `reached`).
+  positive: number;
+  neutral: number;
+  declined: number;
+}
+
+/** Bucket each sent|delivered SMS (created_at in [startMs, endMs)) by its recipient call's
+ *  outcome, joining sms.call_id → calls_v2.id. SMS with no matching call count in `total` only
+ *  (honest — we can't attribute an outcome). Reuses deriveAttemptTag (single source of truth). */
+export function smsWindowBreakdown(
+  sms: DashSmsRow[],
+  calls: DashCallRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+): SmsBreakdown {
+  const callById = new Map<string, DashCallRow>();
+  for (const c of calls) if (c.id) callById.set(c.id, c);
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  for (const m of sms) {
+    if (m.status !== "sent" && m.status !== "delivered") continue;
+    const t = m.created_at ? Date.parse(m.created_at) : NaN;
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += 1;
+    const call = m.call_id ? callById.get(m.call_id) : undefined;
+    if (!call) continue; // unmatched → counted in total only
+    const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)));
+    if (tag === "voicemail") { b.voicemail += 1; continue; }
+    if (tag === "unreachable") { b.unreachable += 1; continue; }
+    b.reached += 1; // positive | neutral | declined | early_hangup
+    if (tag === "positive") b.positive += 1;
+    else if (tag === "neutral") b.neutral += 1;
+    else if (tag === "declined") b.declined += 1;
+  }
   return b;
 }
 

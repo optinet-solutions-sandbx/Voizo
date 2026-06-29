@@ -24,6 +24,7 @@ import {
   localDayHourInTimezone,
   computeToday,
   callWindowBreakdown,
+  smsWindowBreakdown,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -85,6 +86,39 @@ describe("callWindowBreakdown — per-window call partition (Today cards)", () =
       earlyHangup: 1,
       neutral: 1,
     });
+  });
+});
+
+describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => {
+  const T = Date.UTC(2026, 5, 27);
+  const c = (id: string, over: Partial<DashCallRow> = {}) => ({
+    id,
+    campaign_id: "x",
+    campaign_number_id: id,
+    status: "completed",
+    goal_reached: false,
+    voicemail: false,
+    created_at: new Date(T + 1000).toISOString(),
+    ...over,
+  });
+  const s = (call_id: string | null, status = "delivered") => ({
+    campaign_id: "x",
+    call_id,
+    campaign_number_id: call_id,
+    status,
+    created_at: new Date(T + 2000).toISOString(),
+  });
+  it("buckets sent/delivered SMS by call outcome; unmatched counted in total only", () => {
+    const calls = [c("p", { goal_reached: true }), c("v", { voicemail: true }), c("u", { status: "no_answer" }), c("d")];
+    const messages = [s("p"), s("v"), s("u"), s("d"), s(null), s("p", "failed")];
+    const b = smsWindowBreakdown(messages, calls, new Set(["d"]), T, T + 86_400_000);
+    expect(b.total).toBe(5); // failed excluded; null-call_id included in total only
+    expect(b.reached).toBe(2); // p (positive) + d (declined)
+    expect(b.positive).toBe(1);
+    expect(b.declined).toBe(1);
+    expect(b.voicemail).toBe(1);
+    expect(b.unreachable).toBe(1);
+    expect(b.positive + b.neutral + b.declined).toBeLessThanOrEqual(b.reached); // reached ⊇ named sub-rows
   });
 });
 
