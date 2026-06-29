@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import {
   computeCallRecords,
   attachSmsSent,
+  parsePreviewDate,
   type DashCallRow,
   type DashNumberRow,
 } from "@/lib/dashboardAnalytics";
@@ -39,7 +40,8 @@ export async function GET(request: NextRequest) {
   }
 
   const day = request.nextUrl.searchParams.get("day") === "yesterday" ? "yesterday" : "today";
-  const now = Date.now();
+  // Dev preview: ?date=YYYY-MM-DD makes that date "today" (matches the today route's override).
+  const now = parsePreviewDate(request.nextUrl.searchParams.get("date")) ?? Date.now();
   const d = new Date(now);
   const todayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const dayStart = day === "yesterday" ? todayStart - MS_PER_DAY : todayStart;
@@ -68,12 +70,14 @@ export async function GET(request: NextRequest) {
 
   // Contacts dialed that day → fetch their campaign_numbers_v2 rows (chunked).
   const numIds = [...new Set(calls.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
+  // Chunk the .in() so the URL stays under PostgREST's ~16KB header limit (matches the today route).
+  const IN_CHUNK = 150;
   let numbers: DashNumberRow[] = [];
-  for (let i = 0; i < numIds.length; i += 1000) {
+  for (let i = 0; i < numIds.length; i += IN_CHUNK) {
     const { data, error } = await supabaseAdmin
       .from("campaign_numbers_v2")
       .select("id, phone_e164, outcome")
-      .in("id", numIds.slice(i, i + 1000));
+      .in("id", numIds.slice(i, i + IN_CHUNK));
     if (error) {
       console.error("[dashboard/today/records] numbers query failed:", error);
       return NextResponse.json({ error: "Failed to read today's records" }, { status: 500 });

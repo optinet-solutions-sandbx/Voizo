@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import {
   computeToday,
+  parsePreviewDate,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -38,7 +39,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const now = Date.now();
+  // Dev preview: ?date=YYYY-MM-DD makes that date "today" (eyeball a populated past day).
+  const now = parsePreviewDate(request.nextUrl.searchParams.get("date")) ?? Date.now();
   // 10 days back covers today + yesterday + each day's prior-7-day average window (the toggle).
   const callsCutoff = new Date(now - 10 * MS_PER_DAY).toISOString();
   // SMS breakdown spans the same 10-day window (per-day rows + 7d-avg baselines).
@@ -71,12 +73,15 @@ export async function GET(request: NextRequest) {
   // Contacts referenced by the windowed calls — needed for the Reached/SMS "declined" bucket
   // (campaign_numbers_v2.outcome === 'declined_offer'). Scoped to the call set, chunked for safety.
   const numIds = [...new Set(calls.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
+  // Chunk the .in() so the request URL stays under PostgREST's ~16KB header limit (each UUID is
+  // ~37 chars; 150 IDs ≈ 5.5KB). Larger chunks 500 with HeadersOverflowError on busy windows.
+  const IN_CHUNK = 150;
   let numbers: DashNumberRow[] = [];
-  for (let i = 0; i < numIds.length; i += 1000) {
+  for (let i = 0; i < numIds.length; i += IN_CHUNK) {
     const { data, error } = await supabaseAdmin
       .from("campaign_numbers_v2")
       .select("id, phone_e164, outcome")
-      .in("id", numIds.slice(i, i + 1000));
+      .in("id", numIds.slice(i, i + IN_CHUNK));
     if (error) {
       console.error("[dashboard/today] numbers query failed:", error);
       return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });

@@ -14,6 +14,7 @@ import {
   recordHasAttemptOutcome,
   recordIsReached,
   attachSmsSent,
+  parsePreviewDate,
   deriveAttemptTag,
   bestByPositiveResponse,
   promptLabel,
@@ -176,6 +177,15 @@ describe("recordIsReached — human-conversation group predicate (Today drawer)"
     expect(recordIsReached(rec(["early_hangup"]))).toBe(true);
     expect(recordIsReached(rec(["voicemail", "unreachable"]))).toBe(false);
     expect(recordIsReached(rec([]))).toBe(false);
+  });
+});
+
+describe("parsePreviewDate — dev ?date= override", () => {
+  it("valid YYYY-MM-DD → noon UTC ms; null/garbage/overflow → null", () => {
+    expect(parsePreviewDate("2026-06-25")).toBe(Date.UTC(2026, 5, 25, 12));
+    expect(parsePreviewDate(null)).toBeNull();
+    expect(parsePreviewDate("garbage")).toBeNull();
+    expect(parsePreviewDate("2026-13-40")).toBeNull(); // month/day overflow rejected
   });
 });
 
