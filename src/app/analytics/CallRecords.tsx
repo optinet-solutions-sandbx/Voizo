@@ -25,7 +25,8 @@ import {
 } from "@/lib/dashboardAnalytics";
 import ExportMenu from "./ExportMenu";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import RecordsTable, { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./RecordsTable";
+import RecordsTable from "./RecordsTable";
+import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./recordsDisplay";
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },

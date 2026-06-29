@@ -9,37 +9,13 @@
 import {
   type CallRecord,
   type CallAttempt,
-  type RecordStatus,
-  type AttemptTag,
   ATTEMPT_TAG_LABELS,
   ATTEMPT_TAG_COLOR,
   ATTEMPT_TAG_DESC,
 } from "@/lib/dashboardAnalytics";
+import { DISPO_LABEL, DISPO_COLOR } from "./recordsDisplay";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-// Status column = contact DISPOSITION (lifecycle). Calm muted chips (matches CampaignSummary).
-// Exported so consumers (CallRecords filter dropdown, the Today drawer) build their controls from
-// the same single source — no drift between the chips and the filter labels.
-export const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
-export const DISPO_LABEL: Record<RecordStatus, string> = {
-  successful: "Positive response", // "Success" retired (Val 2026-06-26) — goal = agreed to the offer SMS, not a sale
-  not_interested: "Not Interested",
-  awaiting_retry: "Awaiting Retry",
-  voicemail: "Voicemail",
-  unreached: "Unreached",
-  wrong_number: "Wrong Number",
-};
-export const DISPO_COLOR: Record<RecordStatus, string> = {
-  successful: "#5fb39a",
-  not_interested: "#cf8a8a",
-  awaiting_retry: "#c9a86a",
-  voicemail: "#9f90c9",
-  unreached: "#8b939c",
-  wrong_number: "#8b939c",
-};
-// Attempt columns + the outcome filter = per-call OUTCOME categories (the AttemptTag set).
-export const OUTCOME_ORDER: AttemptTag[] = ["positive", "neutral", "declined", "early_hangup", "voicemail", "unreachable"];
 
 // Cap attempt columns; a contact with more attempts folds the overflow into the last visible
 // column ("+N more"). Keeps the table from sprawling on heavy-retry rosters.

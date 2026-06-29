@@ -17,7 +17,8 @@ import {
   recordIsReached,
 } from "@/lib/dashboardAnalytics";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import RecordsTable, { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./RecordsTable";
+import RecordsTable from "./RecordsTable";
+import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./recordsDisplay";
 
 // The slice a clicked stat maps to. `outcome` adds a "reached" group (human-conversation attempts)
 // on top of the per-attempt tags; `smsOnly` restricts to contacts texted that day (SMS card).
@@ -91,14 +92,18 @@ export default function TodayRecordsDrawer({
   const cacheKey = `${day}|${previewDate ?? ""}`;
   const records = cache[cacheKey];
 
-  // Seed the controls from the entry filter whenever a new slice is clicked.
-  useEffect(() => {
+  // Seed the controls from the entry filter whenever a new slice is clicked. Adjust during render
+  // (prev-prop compare) rather than in an effect — routing this through useEffect would commit a
+  // stale UI for one frame (react.dev: you-might-not-need-an-effect / adjusting state on prop change).
+  const [prevFilter, setPrevFilter] = useState(filter);
+  if (filter !== prevFilter) {
+    setPrevFilter(filter);
     if (filter) {
       setDispo(filter.status);
       setOutcome(filter.outcome);
       setPhone("");
     }
-  }, [filter]);
+  }
 
   // Fetch the day's records once per day-view (lazy: only when open + not cached).
   useEffect(() => {
@@ -196,6 +201,7 @@ export default function TodayRecordsDrawer({
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="Search number…"
+            aria-label="Search by phone number"
             className="pl-8 pr-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500 w-[150px]"
           />
         </div>
