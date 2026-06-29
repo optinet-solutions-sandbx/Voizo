@@ -25,6 +25,8 @@ import {
   computeToday,
   callWindowBreakdown,
   smsWindowBreakdown,
+  pctDelta,
+  ppDelta,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -119,6 +121,19 @@ describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => 
     expect(b.voicemail).toBe(1);
     expect(b.unreachable).toBe(1);
     expect(b.positive + b.neutral + b.declined).toBeLessThanOrEqual(b.reached); // reached ⊇ named sub-rows
+  });
+});
+
+describe("pctDelta / ppDelta — Today card delta math", () => {
+  it("pctDelta: fractional change of a total, null-safe", () => {
+    expect(pctDelta(338, 290)).toBeCloseTo(0.1655, 3);
+    expect(pctDelta(5, 0)).toBeNull(); // no baseline
+    expect(pctDelta(5, null)).toBeNull();
+  });
+  it("ppDelta: percentage-point change of a rate, null-safe", () => {
+    expect(ppDelta(0.331, 0.343)).toBeCloseTo(-0.012, 3);
+    expect(ppDelta(null, 0.3)).toBeNull();
+    expect(ppDelta(0.3, null)).toBeNull();
   });
 });
 

@@ -1069,6 +1069,18 @@ export function smsWindowBreakdown(
   return b;
 }
 
+/** Fractional change of a TOTAL vs a baseline (0.166 ⇒ +16.6%). null when there's no baseline. */
+export function pctDelta(today: number, base: number | null): number | null {
+  if (base === null || base === 0) return null;
+  return (today - base) / base;
+}
+
+/** Percentage-POINT change of a RATE vs a baseline rate (-0.012 ⇒ -1.2pp). null when either is null. */
+export function ppDelta(todayRate: number | null, baseRate: number | null): number | null {
+  if (todayRate === null || baseRate === null) return null;
+  return todayRate - baseRate;
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
