@@ -1013,22 +1013,6 @@ export function attachSmsSent(records: CallRecord[], sentNumberIds: Set<string>)
   return records.map((r) => ({ ...r, smsSentToday: sentNumberIds.has(r.campaignNumberId) }));
 }
 
-/** Parse a dev `?date=YYYY-MM-DD` preview override to a noon-UTC timestamp (so that date becomes
- *  "today" for the snapshot). null for missing/malformed/overflow dates → caller falls back to
- *  Date.now(). Noon UTC sidesteps any day-boundary ambiguity. */
-export function parsePreviewDate(dateStr: string | null): number | null {
-  if (!dateStr) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const da = Number(m[3]);
-  const t = Date.UTC(y, mo - 1, da, 12, 0, 0);
-  const d = new Date(t);
-  if (d.getUTCFullYear() !== y || d.getUTCMonth() !== mo - 1 || d.getUTCDate() !== da) return null;
-  return t;
-}
-
 // ── Today's Performance card breakdowns (per-window partitions) ──────────────
 // Powers the 3-card Today's Performance redesign (Val's mockup, 2026-06-29). The Reached
 // split is a PROXY that mirrors campaignAnalytics.outcomeBreakdown EXACTLY (same priority,

@@ -72,12 +72,10 @@ function downloadCsv(records: TodayCallRecord[], filename: string) {
 export default function TodayRecordsDrawer({
   day,
   filter,
-  previewDate,
   onClose,
 }: {
   day: "today" | "yesterday";
   filter: DrawerFilter | null;
-  previewDate: string | null;
   onClose: () => void;
 }) {
   const open = filter !== null;
@@ -89,7 +87,7 @@ export default function TodayRecordsDrawer({
   const [outcome, setOutcome] = useState<AttemptTag | "reached" | "all">("all");
   const [phone, setPhone] = useState("");
 
-  const cacheKey = `${day}|${previewDate ?? ""}`;
+  const cacheKey = day;
   const records = cache[cacheKey];
 
   // Seed the controls from the entry filter whenever a new slice is clicked. Adjust during render
@@ -109,9 +107,7 @@ export default function TodayRecordsDrawer({
   useEffect(() => {
     if (!open || cache[cacheKey]) return;
     const controller = new AbortController();
-    const qs = new URLSearchParams({ day });
-    if (previewDate) qs.set("date", previewDate);
-    fetch(`/api/dashboard/today/records?${qs.toString()}`, { cache: "no-store", signal: controller.signal })
+    fetch(`/api/dashboard/today/records?day=${day}`, { cache: "no-store", signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -125,7 +121,7 @@ export default function TodayRecordsDrawer({
         setError(e instanceof Error ? e.message : "Failed to load");
       });
     return () => controller.abort();
-  }, [open, cacheKey, day, previewDate, cache]);
+  }, [open, cacheKey, day, cache]);
 
   // Close on Escape.
   const onCloseRef = useRef(onClose);

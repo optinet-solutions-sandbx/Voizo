@@ -99,10 +99,6 @@ export default function DashboardView() {
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
   const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
   const [drawerMetric, setDrawerMetric] = useState<MetricKey | null>(null);
-  // Dev preview: ?date=YYYY-MM-DD on the page URL renders that day as "today" (forwarded to the API).
-  const [previewDate] = useState<string | null>(() =>
-    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("date") : null,
-  );
 
   const focusCampaign = useCallback((id: string) => {
     setFilters((f) => ({ ...f, campaignIds: [id] }));
@@ -112,10 +108,7 @@ export default function DashboardView() {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const url = previewDate
-        ? `/api/dashboard/today?date=${encodeURIComponent(previewDate)}`
-        : "/api/dashboard/today";
-      const r = await fetch(url, { cache: "no-store" });
+      const r = await fetch("/api/dashboard/today", { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as TodaySnapshot);
       setError(null);
@@ -124,7 +117,7 @@ export default function DashboardView() {
     } finally {
       setRefreshing(false);
     }
-  }, [previewDate]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -175,7 +168,7 @@ export default function DashboardView() {
 
       {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
           SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer. */}
-      <TodayPerformanceCards data={data} previewDate={previewDate} />
+      <TodayPerformanceCards data={data} />
 
       {data && data.runningCampaigns.length === 0 && (
         <p className="text-center text-xs text-[var(--text-3)] py-1">No campaigns are running right now.</p>

@@ -147,7 +147,7 @@ function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: string, lab
   return { status: "all", outcome, smsOnly, title };
 }
 
-export default function TodayPerformanceCards({ data, previewDate }: { data: TodaySnapshot | null; previewDate: string | null }) {
+export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | null }) {
   const [day, setDay] = useState<"today" | "yesterday">("today");
   const [filter, setFilter] = useState<DrawerFilter | null>(null);
 
@@ -202,7 +202,7 @@ export default function TodayPerformanceCards({ data, previewDate }: { data: Tod
             <MetricCard label="Reached" metric={perf.reached} onOpenTotal={() => openTotal("reached")} onOpenRow={openRow("reached")} />
             <MetricCard label="SMS sent" metric={perf.sms} isSms onOpenTotal={() => openTotal("sms")} onOpenRow={openRow("sms")} />
           </div>
-          <TodayRecordsDrawer day={day} filter={filter} previewDate={previewDate} onClose={() => setFilter(null)} />
+          <TodayRecordsDrawer day={day} filter={filter} onClose={() => setFilter(null)} />
         </>
       )}
     </section>

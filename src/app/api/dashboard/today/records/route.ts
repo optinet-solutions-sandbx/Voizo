@@ -3,7 +3,6 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import {
   computeCallRecords,
   attachSmsSent,
-  parsePreviewDate,
   type DashCallRow,
   type DashNumberRow,
 } from "@/lib/dashboardAnalytics";
@@ -40,8 +39,7 @@ export async function GET(request: NextRequest) {
   }
 
   const day = request.nextUrl.searchParams.get("day") === "yesterday" ? "yesterday" : "today";
-  // Dev preview: ?date=YYYY-MM-DD makes that date "today" (matches the today route's override).
-  const now = parsePreviewDate(request.nextUrl.searchParams.get("date")) ?? Date.now();
+  const now = Date.now();
   const d = new Date(now);
   const todayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const dayStart = day === "yesterday" ? todayStart - MS_PER_DAY : todayStart;

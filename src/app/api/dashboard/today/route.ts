@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import {
   computeToday,
-  parsePreviewDate,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -39,8 +38,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Dev preview: ?date=YYYY-MM-DD makes that date "today" (eyeball a populated past day).
-  const now = parsePreviewDate(request.nextUrl.searchParams.get("date")) ?? Date.now();
+  const now = Date.now();
   // 10 days back covers today + yesterday + each day's prior-7-day average window (the toggle).
   const callsCutoff = new Date(now - 10 * MS_PER_DAY).toISOString();
   // SMS breakdown spans the same 10-day window (per-day rows + 7d-avg baselines).
