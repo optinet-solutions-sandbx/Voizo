@@ -127,6 +127,39 @@ describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => 
   });
 });
 
+describe("computeToday — today/yesterday performance blocks (3-card redesign)", () => {
+  const NOON = Date.UTC(2026, 5, 27, 12); // June 27 2026, noon UTC
+  it("emits today + yesterday TodayPerfDay with breakdowns and dual deltas", () => {
+    const campaigns = [camp("c", { status: "running" })];
+    const numbers = [{ id: "d", phone_e164: "+1", outcome: "declined_offer" }];
+    const calls: DashCallRow[] = [
+      // today (June 27)
+      { id: "t1", campaign_id: "c", campaign_number_id: "a", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-27T10:00:00Z" },
+      { id: "t2", campaign_id: "c", campaign_number_id: "b", status: "completed", goal_reached: false, voicemail: true, created_at: "2026-06-27T10:05:00Z" },
+      { id: "t3", campaign_id: "c", campaign_number_id: "d", status: "completed", goal_reached: false, voicemail: false, created_at: "2026-06-27T10:10:00Z" }, // declined contact
+      // yesterday (June 26)
+      { id: "y1", campaign_id: "c", campaign_number_id: "e", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-26T10:00:00Z" },
+      { id: "y2", campaign_id: "c", campaign_number_id: "f", status: "no_answer", goal_reached: false, created_at: "2026-06-26T11:00:00Z" },
+    ];
+    const sms: DashSmsRow[] = [
+      { campaign_id: "c", call_id: "t1", campaign_number_id: "a", status: "delivered", created_at: "2026-06-27T10:30:00Z" },
+    ];
+    const snap = computeToday(calls, campaigns, sms, NOON, numbers);
+
+    expect(snap.today.callAttempts.total).toBe(3);
+    expect(snap.today.inFlight).toBe(0);
+    expect(snap.today.reached.total).toBe(2); // t1 positive + t3 declined (t2 is voicemail)
+    expect(snap.today.reached.rows.find((r) => r.key === "positive")!.count).toBe(1);
+    expect(snap.today.reached.rows.find((r) => r.key === "declined")!.count).toBe(1);
+    expect(snap.today.reached.rows.find((r) => r.key === "positive")!.isEstimated).toBe(true);
+    expect(snap.today.callAttempts.rows.find((r) => r.key === "voicemail")!.count).toBe(1);
+    expect(snap.today.sms.total).toBe(1);
+    expect(snap.today.sms.rows.find((r) => r.key === "reached")!.count).toBe(1);
+    expect(snap.today.callAttempts.deltaPctVsYesterday).toBeCloseTo(0.5, 3); // (3-2)/2
+    expect(snap.yesterday.callAttempts.total).toBe(2);
+  });
+});
+
 describe("recordIsReached — human-conversation group predicate (Today drawer)", () => {
   const rec = (tags: AttemptTag[]): CallRecord => ({
     campaignNumberId: "n",

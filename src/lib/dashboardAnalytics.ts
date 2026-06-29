@@ -152,8 +152,34 @@ export interface RunningCampaignCard {
   today: RateRow;
 }
 
+// ── Today's Performance 3-card model (Val's mockup, 2026-06-29) ──────────────
+export interface PerfRow {
+  key: string;
+  label: string;
+  count: number;
+  pct: number | null; // share of the card denominator (CallAttempts→total; Reached→reach; SMS→total; sub-row→SMS-reached)
+  deltaPpVsYesterday: number | null; // pp change of this row's rate vs the prior day
+  deltaPpVsSevenDayAvg: number | null; // pp change vs the pooled 7-day rate
+  isEstimated?: boolean; // proxy outcome bucket → drives the "Estimated" tooltip
+  subRows?: PerfRow[]; // SMS "by response" sub-breakdown (lives under the Reached row)
+}
+export interface PerfMetric {
+  total: number;
+  deltaPctVsYesterday: number | null; // % change of the total vs the prior day
+  deltaPctVsSevenDayAvg: number | null; // % change vs the mean daily total over the prior 7 days
+  rows: PerfRow[];
+}
+export interface TodayPerfDay {
+  callAttempts: PerfMetric;
+  reached: PerfMetric;
+  sms: PerfMetric;
+  inFlight: number; // calls still dialing (rendered as "+N in progress", never as Unreachable)
+}
+
 export interface TodaySnapshot {
   dayUtc: string; // YYYY-MM-DD (UTC)
+  today: TodayPerfDay; // 3-card block for today (the toggle default)
+  yesterday: TodayPerfDay; // same block for yesterday (toggle)
   runningCampaigns: RunningCampaignCard[];
   ops: {
     callsToday: number;
@@ -1091,6 +1117,87 @@ export function ppDelta(todayRate: number | null, baseRate: number | null): numb
   return todayRate - baseRate;
 }
 
+// ── Today's Performance day assembly (3-card model) ──────────────────────────
+function mkRow(
+  key: string,
+  label: string,
+  count: number,
+  denom: number,
+  prevCount: number,
+  prevDenom: number,
+  avgCount: number,
+  avgDenom: number,
+  opts?: { isEstimated?: boolean; subRows?: PerfRow[] },
+): PerfRow {
+  const pct = safeDiv(count, denom);
+  const row: PerfRow = {
+    key,
+    label,
+    count,
+    pct,
+    deltaPpVsYesterday: ppDelta(pct, safeDiv(prevCount, prevDenom)),
+    deltaPpVsSevenDayAvg: ppDelta(pct, safeDiv(avgCount, avgDenom)),
+  };
+  if (opts?.isEstimated) row.isEstimated = true;
+  if (opts?.subRows) row.subRows = opts.subRows;
+  return row;
+}
+
+function mkMetric(total: number, prevTotal: number, avg7Total: number, rows: PerfRow[]): PerfMetric {
+  return {
+    total,
+    deltaPctVsYesterday: pctDelta(total, prevTotal),
+    deltaPctVsSevenDayAvg: pctDelta(total, avg7Total / 7), // 7d-avg of a total = mean daily
+    rows,
+  };
+}
+
+/** Assemble one day's 3-card Today's Performance block (today or yesterday), with vs-prior-day
+ *  and vs-7-day-avg deltas (7d rate = pooled over the prior 7 days). `liveCalls`/`liveSms` must
+ *  already exclude ghost + test. Denominators per spec: Call-Attempts rows % of total; Reached
+ *  rows % of reach; SMS rows % of SMS total; SMS by-response sub-rows % of SMS-reached. */
+export function computeTodayPerf(
+  liveCalls: DashCallRow[],
+  liveSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  dayStartMs: number,
+): TodayPerfDay {
+  const dEnd = dayStartMs + MS_PER_DAY;
+  const cb = callWindowBreakdown(liveCalls, declinedIds, dayStartMs, dEnd);
+  const sb = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs, dEnd);
+  const cbP = callWindowBreakdown(liveCalls, declinedIds, dayStartMs - MS_PER_DAY, dayStartMs);
+  const sbP = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - MS_PER_DAY, dayStartMs);
+  const cb7 = callWindowBreakdown(liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
+  const sb7 = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
+
+  const callAttempts = mkMetric(cb.total, cbP.total, cb7.total, [
+    mkRow("reached", "Reached", cb.reach, cb.total, cbP.reach, cbP.total, cb7.reach, cb7.total),
+    mkRow("voicemail", "Voicemail", cb.voicemail, cb.total, cbP.voicemail, cbP.total, cb7.voicemail, cb7.total),
+    mkRow("unreachable", "Unreachable", cb.unreachable, cb.total, cbP.unreachable, cbP.total, cb7.unreachable, cb7.total),
+  ]);
+
+  const est = { isEstimated: true };
+  const reached = mkMetric(cb.reach, cbP.reach, cb7.reach, [
+    mkRow("positive", "Positive", cb.positive, cb.reach, cbP.positive, cbP.reach, cb7.positive, cb7.reach, est),
+    mkRow("neutral", "Neutral", cb.neutral, cb.reach, cbP.neutral, cbP.reach, cb7.neutral, cb7.reach, est),
+    mkRow("declined", "Declined", cb.declined, cb.reach, cbP.declined, cbP.reach, cb7.declined, cb7.reach, est),
+    mkRow("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, cbP.earlyHangup, cbP.reach, cb7.earlyHangup, cb7.reach, est),
+  ]);
+
+  const smsReachedSub = [
+    mkRow("positive", "Positive", sb.positive, sb.reached, sbP.positive, sbP.reached, sb7.positive, sb7.reached),
+    mkRow("neutral", "Neutral", sb.neutral, sb.reached, sbP.neutral, sbP.reached, sb7.neutral, sb7.reached),
+    mkRow("declined", "Declined", sb.declined, sb.reached, sbP.declined, sbP.reached, sb7.declined, sb7.reached),
+  ];
+  const sms = mkMetric(sb.total, sbP.total, sb7.total, [
+    mkRow("reached", "Reached", sb.reached, sb.total, sbP.reached, sbP.total, sb7.reached, sb7.total, { subRows: smsReachedSub }),
+    mkRow("voicemail", "Voicemail", sb.voicemail, sb.total, sbP.voicemail, sbP.total, sb7.voicemail, sb7.total),
+    mkRow("unreachable", "Unreachable", sb.unreachable, sb.total, sbP.unreachable, sbP.total, sb7.unreachable, sb7.total),
+  ]);
+
+  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
@@ -1106,6 +1213,7 @@ export function computeToday(
   campaigns: DashCampaignRow[],
   sms: DashSmsRow[],
   now: number,
+  numbers: DashNumberRow[] = [], // campaign_numbers_v2 (id, outcome) for the windowed call set — drives declined detection
 ): TodaySnapshot {
   const index = buildCampaignIndex(campaigns);
   const liveCampaigns = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
@@ -1119,6 +1227,12 @@ export function computeToday(
     const camp = index.get(c.campaign_id);
     return camp && camp.source !== "ghost_portal" && camp.is_test !== true;
   });
+  // Non-ghost, non-test SMS (mirror the call exclusion) + contacts that explicitly declined the offer.
+  const liveSms = sms.filter((m) => {
+    const camp = index.get(m.campaign_id);
+    return camp && camp.source !== "ghost_portal" && camp.is_test !== true;
+  });
+  const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id));
 
   let callsToday = 0;
   let callsYesterday = 0;
@@ -1176,6 +1290,8 @@ export function computeToday(
 
   return {
     dayUtc: utcDayString(todayStartMs),
+    today: computeTodayPerf(liveCalls, liveSms, declinedIds, todayStartMs),
+    yesterday: computeTodayPerf(liveCalls, liveSms, declinedIds, yesterdayStartMs),
     runningCampaigns,
     ops: {
       callsToday,
