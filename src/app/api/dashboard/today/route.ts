@@ -5,6 +5,7 @@ import {
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
+  type DashNumberRow,
 } from "@/lib/dashboardAnalytics";
 
 /**
@@ -38,22 +39,22 @@ export async function GET(request: NextRequest) {
   }
 
   const now = Date.now();
-  // 8 days back covers today + the prior-7-day average window.
-  const callsCutoff = new Date(now - 8 * MS_PER_DAY).toISOString();
-  // SMS only needs today; pull 2 days for clock-skew safety.
-  const smsCutoff = new Date(now - 2 * MS_PER_DAY).toISOString();
+  // 10 days back covers today + yesterday + each day's prior-7-day average window (the toggle).
+  const callsCutoff = new Date(now - 10 * MS_PER_DAY).toISOString();
+  // SMS breakdown spans the same 10-day window (per-day rows + 7d-avg baselines).
+  const smsCutoff = new Date(now - 10 * MS_PER_DAY).toISOString();
 
   const [callsRes, campaignsRes, smsRes] = await Promise.all([
     supabaseAdmin
       .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail")
+      .select("id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds, transcript")
       .gte("created_at", callsCutoff),
     supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
     supabaseAdmin
       .from("sms_messages_v2")
-      .select("campaign_id, created_at, status")
+      .select("campaign_id, created_at, status, call_id, campaign_number_id")
       .gte("created_at", smsCutoff),
   ]);
 
@@ -65,11 +66,30 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });
   }
 
+  const calls = (callsRes.data ?? []) as unknown as DashCallRow[];
+
+  // Contacts referenced by the windowed calls — needed for the Reached/SMS "declined" bucket
+  // (campaign_numbers_v2.outcome === 'declined_offer'). Scoped to the call set, chunked for safety.
+  const numIds = [...new Set(calls.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
+  let numbers: DashNumberRow[] = [];
+  for (let i = 0; i < numIds.length; i += 1000) {
+    const { data, error } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("id, phone_e164, outcome")
+      .in("id", numIds.slice(i, i + 1000));
+    if (error) {
+      console.error("[dashboard/today] numbers query failed:", error);
+      return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });
+    }
+    numbers = numbers.concat((data ?? []) as unknown as DashNumberRow[]);
+  }
+
   const snapshot = computeToday(
-    (callsRes.data ?? []) as unknown as DashCallRow[],
+    calls,
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     (smsRes.data ?? []) as unknown as DashSmsRow[],
     now,
+    numbers,
   );
 
   return NextResponse.json(snapshot);
