@@ -12,6 +12,7 @@ import {
   deriveRecordStatus,
   computeCallRecords,
   recordHasAttemptOutcome,
+  recordIsReached,
   deriveAttemptTag,
   bestByPositiveResponse,
   promptLabel,
@@ -31,6 +32,8 @@ import {
   type DashCampaignRow,
   type DashSmsRow,
   type RateRow,
+  type CallRecord,
+  type AttemptTag,
 } from "./dashboardAnalytics";
 
 function call(
@@ -121,6 +124,24 @@ describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => 
     expect(b.voicemail).toBe(1);
     expect(b.unreachable).toBe(1);
     expect(b.positive + b.neutral + b.declined).toBeLessThanOrEqual(b.reached); // reached ⊇ named sub-rows
+  });
+});
+
+describe("recordIsReached — human-conversation group predicate (Today drawer)", () => {
+  const rec = (tags: AttemptTag[]): CallRecord => ({
+    campaignNumberId: "n",
+    phone: null,
+    status: "unreached",
+    tag: "unreachable",
+    attempts: tags.map((t, i) => ({ index: i + 1, tag: t, atMs: null })),
+    lastAttemptedMs: null,
+  });
+  it("true iff any attempt is a human-conversation tag (positive/neutral/declined/early_hangup)", () => {
+    expect(recordIsReached(rec(["voicemail", "positive"]))).toBe(true);
+    expect(recordIsReached(rec(["neutral"]))).toBe(true);
+    expect(recordIsReached(rec(["early_hangup"]))).toBe(true);
+    expect(recordIsReached(rec(["voicemail", "unreachable"]))).toBe(false);
+    expect(recordIsReached(rec([]))).toBe(false);
   });
 });
 

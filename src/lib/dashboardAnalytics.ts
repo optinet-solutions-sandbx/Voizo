@@ -968,6 +968,16 @@ export function recordHasAttemptOutcome(record: CallRecord, tag: AttemptTag): bo
   return record.attempts.some((a) => a.tag === tag);
 }
 
+/** Attempt tags that mean a live human conversation happened (the inverse of voicemail/unreachable).
+ *  Backs the "Reached" drill-down group on the Today cards. */
+export const HUMAN_TAGS: ReadonlySet<AttemptTag> = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup"]);
+
+/** True when the contact was reached by a live human on ANY attempt — the records-side counterpart
+ *  of the Reached card metric. Pure; no classification logic here. */
+export function recordIsReached(record: CallRecord): boolean {
+  return record.attempts.some((a) => HUMAN_TAGS.has(a.tag));
+}
+
 // ── Today's Performance card breakdowns (per-window partitions) ──────────────
 // Powers the 3-card Today's Performance redesign (Val's mockup, 2026-06-29). The Reached
 // split is a PROXY that mirrors campaignAnalytics.outcomeBreakdown EXACTLY (same priority,
