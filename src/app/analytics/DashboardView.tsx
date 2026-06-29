@@ -4,10 +4,9 @@
 // promoted 2026-06-15) and /analytics — thin page wrappers re-export this component.
 // Always-live "Today's Performance" (NEVER filtered) + Global Performance (filters → KPIs,
 // tables, leaderboard, charts, heatmap). Reuses the app's card/theme/animated-icon language.
-// Connect = ANSWER (incl. voicemail); Success% = goal_reached / connected. Ghost + test excluded.
+// Today's Performance is the 3-card redesign (Val's mockup 2026-06-29) — see TodayPerformanceCards.
 
-import { useCallback, useEffect, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { PhoneCall, Zap, MessageSquare, Radio, UserCheck, Voicemail } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type {
@@ -18,6 +17,7 @@ import type {
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import MetricDrawer, { type MetricKey } from "./MetricDrawer";
 import CampaignDetailsModal from "./CampaignDetailsModal";
+import TodayPerformanceCards from "./TodayPerformanceCards";
 import { useMagnetic } from "@/components/useMagnetic";
 import { formatCampaign } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
@@ -26,16 +26,6 @@ import { useBaseAgentNames } from "./useBaseAgentNames";
 const POLL_MS = 30_000;
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
-
-function fmtDelta(frac: number | null, suffix: string): { text: string; color: string } {
-  if (frac === null) return { text: `no baseline · ${suffix}`, color: "text-[var(--text-3)]" };
-  const p = frac * 100;
-  const up = p >= 0;
-  return {
-    text: `${up ? "▲" : "▼"} ${Math.abs(p).toFixed(1)}% ${suffix}`,
-    color: up ? "text-emerald-400" : "text-red-400",
-  };
-}
 
 // "2026-06-15" -> "15 Jun 2026" (manual, locale-independent — avoids hydration drift).
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -100,36 +90,6 @@ function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => 
   );
 }
 
-function OpsCell({ icon, label, children, onClick }: { icon: ReactNode; label: string; children: ReactNode; onClick?: () => void }) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  // Interactive props spread only when clickable: keeps onClick + role + tabIndex + keydown
-  // together (correct ARIA button pattern); a non-clickable card stays an inert div.
-  const interactive = onClick
-    ? {
-        onClick,
-        role: "button" as const,
-        tabIndex: 0,
-        title: "Click for the full breakdown",
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
-        },
-      }
-    : {};
-  return (
-    <div
-      ref={magnetRef}
-      {...interactive}
-      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
-    >
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">
-        {icon}
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 export default function DashboardView() {
   const [data, setData] = useState<TodaySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +99,10 @@ export default function DashboardView() {
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
   const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
   const [drawerMetric, setDrawerMetric] = useState<MetricKey | null>(null);
+  // Dev preview: ?date=YYYY-MM-DD on the page URL renders that day as "today" (forwarded to the API).
+  const [previewDate] = useState<string | null>(() =>
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("date") : null,
+  );
 
   const focusCampaign = useCallback((id: string) => {
     setFilters((f) => ({ ...f, campaignIds: [id] }));
@@ -148,7 +112,10 @@ export default function DashboardView() {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await fetch("/api/dashboard/today", { cache: "no-store" });
+      const url = previewDate
+        ? `/api/dashboard/today?date=${encodeURIComponent(previewDate)}`
+        : "/api/dashboard/today";
+      const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as TodaySnapshot);
       setError(null);
@@ -157,19 +124,13 @@ export default function DashboardView() {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [previewDate]);
 
   useEffect(() => {
     load();
     const id = window.setInterval(load, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
-
-  const ops = data?.ops;
-  const d1 = ops ? fmtDelta(ops.deltaVsYesterday, "vs yesterday") : null;
-  const d2 = ops
-    ? fmtDelta(ops.deltaVsSevenDayAvg, `vs last 7-day avg (${Math.round(ops.sevenDayAvg).toLocaleString()})`)
-    : null;
 
   return (
     <>
@@ -212,85 +173,10 @@ export default function DashboardView() {
         </section>
       )}
 
-      {/* Ops strip (6 cells). Reached + Voicemail are now their own cells (Val 2026-06-26):
-          "connected" = answered incl. voicemail; "reached" = a live human picked up. */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-        <OpsCell icon={<PhoneCall size={12} />} label="Calls Today" onClick={() => setDrawerMetric("calls")}>
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {(ops?.callsToday ?? 0).toLocaleString()}
-          </div>
-          {d1 && d2 && (
-            <div className="mt-2 space-y-0.5">
-              <div className={`text-[11px] ${d1.color}`}>{d1.text}</div>
-              <div className={`text-[11px] ${d2.color}`}>{d2.text}</div>
-            </div>
-          )}
-        </OpsCell>
+      {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
+          SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer. */}
+      <TodayPerformanceCards data={data} previewDate={previewDate} />
 
-        <OpsCell icon={<Zap size={12} />} label="Connect Rate Today" onClick={() => setDrawerMetric("connect")}>
-          <div className="text-3xl font-bold font-mono text-emerald-400 mt-2">{pct(ops?.connectRateToday ?? null)}</div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Connected = answered, including voicemail. A human pickup is shown separately as Reached."
-          >
-            {ops
-              ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
-              : "—"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<UserCheck size={12} />} label="Reached Today">
-          <div className="text-3xl font-bold font-mono text-teal-400 mt-2">{(ops?.reachToday ?? 0).toLocaleString()}</div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data)."
-          >
-            {ops ? "live humans reached" : "—"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<Voicemail size={12} />} label="Voicemail Today">
-          <div className="text-3xl font-bold font-mono text-violet-300 mt-2">
-            {ops && ops.voicemailEvaluatedToday > 0 ? pct(ops.voicemailRateToday) : "—"}
-          </div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy."
-          >
-            {ops && ops.voicemailEvaluatedToday > 0 ? "of evaluated connects" : "tracking from deploy"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<MessageSquare size={12} />} label="Messages Sent Today" onClick={() => setDrawerMetric("messages")}>
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {(ops?.messagesSentToday ?? 0).toLocaleString()}
-          </div>
-          {ops && (
-            <div className="mt-2 space-y-0.5 text-[11px] text-[var(--text-3)]">
-              <div>
-                <span className="text-[var(--text-2)] font-medium">{pct(ops.messagesShareOfCalls)}</span> of today&apos;s calls
-              </div>
-              <div>
-                <span className="text-[var(--text-2)] font-medium">{pct(ops.messagesShareOfConnected)}</span> of connected calls
-              </div>
-            </div>
-          )}
-        </OpsCell>
-
-        <OpsCell icon={<Radio size={12} />} label="Active AI Agents">
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {ops?.activeAgents ?? 0} <span className="text-[var(--text-3)]">/ {ops?.totalAgents ?? 0}</span>
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-2">
-            {ops
-              ? `${ops.idleAgents} idle · ${ops.runningCampaignCount} campaign${ops.runningCampaignCount === 1 ? "" : "s"} running`
-              : "—"}
-          </div>
-        </OpsCell>
-      </section>
-
-      {/* States */}
-      {!data && !error && <p className="text-center text-xs text-[var(--text-3)] py-8">Loading today&apos;s performance…</p>}
       {data && data.runningCampaigns.length === 0 && (
         <p className="text-center text-xs text-[var(--text-3)] py-1">No campaigns are running right now.</p>
       )}
