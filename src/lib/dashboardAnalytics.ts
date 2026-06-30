@@ -900,31 +900,47 @@ function transcriptText(t: DashCallRow["transcript"]): string {
   return typeof t === "string" ? t : (t.text ?? "");
 }
 
+/** Definitive "no real conversation" signal for a connected, non-voicemail, non-goal call.
+ *  Engagement (2026-06-26): a connected call where no real conversation happened is an early
+ *  hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
+ *  against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
+ *  silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous — stays
+ *  neutral). `opts.useTranscript:false` (lean/ranged path, spec §5.1) drops the transcript-only
+ *  "customer hung up with <=1 substantive turn" branch — passing transcript:null is NOT equivalent
+ *  (userTurns=0 would make it over-fire). Default true preserves today/per-campaign behaviour. */
+export function isEarlyHangup(call: DashCallRow, opts: { useTranscript?: boolean } = {}): boolean {
+  const useTranscript = opts.useTranscript !== false;
+  if (call.ended_reason === "silence-timed-out") return true; // connected, customer never spoke
+  if (
+    useTranscript &&
+    call.ended_reason === "customer-ended-call" &&
+    substantiveUserTurnCount(transcriptText(call.transcript)) <= 1
+  )
+    return true; // pickup-and-bail (transcript-derived)
+  if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    return true;
+  return false;
+}
+
 /** Per-attempt outcome tag for a single call. `declinedContact` = the call's CONTACT has
  *  campaign_numbers_v2.outcome === 'declined_offer'. Mirrors campaignAnalytics' priority
- *  (voicemail===null is NOT voicemail — treated as a human). */
-export function deriveAttemptTag(call: DashCallRow, declinedContact: boolean): AttemptTag {
+ *  (voicemail===null is NOT voicemail — treated as a human). `opts.useTranscript:false` selects the
+ *  lean (transcript-less) early-hangup rule for the ranged dashboard path (spec §5.1). */
+export function deriveAttemptTag(
+  call: DashCallRow,
+  declinedContact: boolean,
+  opts: { useTranscript?: boolean } = {},
+): AttemptTag {
   if (!isConnected(call.status)) return "unreachable";
   if (call.voicemail === true) return "voicemail";
   if (call.goal_reached === true) return "positive";
   if (declinedContact) return "declined";
-  // Engagement (2026-06-26): a connected call where no real conversation happened is an early
-  // hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
-  // against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
-  // ended_reason silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous).
-  // We reclassify only the DEFINITIVE no-conversation signals; ambiguous null/null connects stay
-  // neutral ("unclear") rather than over-reclassifying calls whose transcript merely wasn't captured.
-  const userTurns = substantiveUserTurnCount(transcriptText(call.transcript));
-  if (call.ended_reason === "silence-timed-out") return "early_hangup"; // connected, customer never spoke
-  if (call.ended_reason === "customer-ended-call" && userTurns <= 1) return "early_hangup"; // pickup-and-bail
-  if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
-    return "early_hangup";
-  return "neutral";
+  return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
 }
 
 /** One record per campaign_number: ordered per-attempt tags + a contact-level tag + last-attempt
  *  time. `calls` should be that campaign's calls. Numbers with no calls still produce a record. */
-export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[]): CallRecord[] {
+export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[], opts: { useTranscript?: boolean } = {}): CallRecord[] {
   // Contacts whose outcome is an explicit decline (drives the per-attempt 'declined' tag).
   const declinedContactIds = new Set(
     numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
@@ -957,7 +973,7 @@ export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[
     });
     const attempts: CallAttempt[] = sorted.map((c, i) => {
       const t = c.created_at ? Date.parse(c.created_at) : NaN;
-      return { index: i + 1, tag: deriveAttemptTag(c, declined), atMs: Number.isFinite(t) ? t : null };
+      return { index: i + 1, tag: deriveAttemptTag(c, declined, opts), atMs: Number.isFinite(t) ? t : null };
     });
     let lastAttemptedMs: number | null = null;
     for (const a of attempts) {
@@ -1039,6 +1055,7 @@ export function callWindowBreakdown(
   declinedIds: Set<string>,
   startMs: number,
   endMs: number,
+  opts: { useTranscript?: boolean } = {},
 ): CallBreakdown {
   const b: CallBreakdown = {
     total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
@@ -1052,20 +1069,11 @@ export function callWindowBreakdown(
     if (!isConnected(c.status)) continue;
     b.connected += 1;
     if (c.voicemail === true) { b.voicemail += 1; continue; }
-    // Reached human → outcome split (mirror outcomeBreakdown priority verbatim).
+    // Reached human → outcome split (mirror deriveAttemptTag priority verbatim via the shared seam).
     b.reach += 1;
     if (c.goal_reached === true) { b.positive += 1; continue; }
     if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) { b.declined += 1; continue; }
-    const userTurns = substantiveUserTurnCount(transcriptText(c.transcript));
-    if (
-      c.ended_reason === "silence-timed-out" ||
-      (c.ended_reason === "customer-ended-call" && userTurns <= 1) ||
-      (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
-    ) {
-      b.earlyHangup += 1;
-    } else {
-      b.neutral += 1;
-    }
+    if (isEarlyHangup(c, opts)) b.earlyHangup += 1; else b.neutral += 1;
   }
   b.unreachable = b.terminal - b.connected;
   b.inFlight = b.total - b.terminal;
@@ -1092,6 +1100,7 @@ export function smsWindowBreakdown(
   declinedIds: Set<string>,
   startMs: number,
   endMs: number,
+  opts: { useTranscript?: boolean } = {},
 ): SmsBreakdown {
   const callById = new Map<string, DashCallRow>();
   for (const c of calls) if (c.id) callById.set(c.id, c);
@@ -1103,7 +1112,7 @@ export function smsWindowBreakdown(
     b.total += 1;
     const call = m.call_id ? callById.get(m.call_id) : undefined;
     if (!call) continue; // unmatched → counted in total only
-    const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)));
+    const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)), opts);
     if (tag === "voicemail") { b.voicemail += 1; continue; }
     if (tag === "unreachable") { b.unreachable += 1; continue; }
     b.reached += 1; // positive | neutral | declined | early_hangup

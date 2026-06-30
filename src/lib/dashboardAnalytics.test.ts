@@ -900,3 +900,34 @@ describe("computeHeatmap", () => {
     expect(utcFallbackCalls).toBe(1);
   });
 });
+
+describe("isEarlyHangup / useTranscript seam — lean (transcript-less) classifier", () => {
+  // The ONLY transcript-dependent branch: customer-ended-call with <=1 substantive turn,
+  // duration >= EARLY_HANGUP_SEC. Lean mode must omit it (→ neutral), default keeps it (→ early_hangup).
+  const bail = call("x", "completed", false, "2026-06-26T10:15:20Z", "n2", false, 30, "customer-ended-call", "User: Hello?\nAI: Hey, Victor from Lucky Seven.");
+
+  it("default (useTranscript:true) keeps the pickup-and-bail as early_hangup", () => {
+    expect(deriveAttemptTag(bail, false)).toBe("early_hangup");
+  });
+  it("lean (useTranscript:false) reclassifies the pickup-and-bail as neutral", () => {
+    expect(deriveAttemptTag(bail, false, { useTranscript: false })).toBe("neutral");
+  });
+  it("lean still tags silence-timed-out and sub-threshold duration as early_hangup", () => {
+    const silence = call("x", "completed", false, "2026-06-26T10:00:00Z", "nS", false, 32, "silence-timed-out", "");
+    const short = call("x", "completed", false, "2026-06-26T10:00:00Z", "nD", false, 8, "customer-ended-call", "User: hi");
+    expect(deriveAttemptTag(silence, false, { useTranscript: false })).toBe("early_hangup");
+    expect(deriveAttemptTag(short, false, { useTranscript: false })).toBe("early_hangup");
+  });
+  it("callWindowBreakdown reclassifies that bail from earlyHangup to neutral in lean mode", () => {
+    const T = Date.UTC(2026, 5, 27);
+    const inW = new Date(T + 3_600_000).toISOString();
+    const calls = [call("c", "completed", false, inW, undefined, false, 30, "customer-ended-call", "User: Hello?")];
+    const full = callWindowBreakdown(calls, new Set(), T, T + 86_400_000);
+    const lean = callWindowBreakdown(calls, new Set(), T, T + 86_400_000, { useTranscript: false });
+    expect(full.earlyHangup).toBe(1);
+    expect(full.neutral).toBe(0);
+    expect(lean.earlyHangup).toBe(0);
+    expect(lean.neutral).toBe(1);
+    expect(lean.reach).toBe(1); // reach unchanged either way
+  });
+});
