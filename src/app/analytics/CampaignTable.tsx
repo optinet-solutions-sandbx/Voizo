@@ -1,26 +1,24 @@
 "use client";
 
-// Campaign Performance table (Val's spec). Has its OWN date range + status chips,
-// INDEPENDENT of the global filter bar above. Sort by Calls/Connect/Success (default
-// Success). Per row: campaign-colored dot + name (+country) + voice, Calls/Connect/Success,
-// derived status pill (incl. "Ended"), run window, duration bar. Name links to the existing
-// /campaigns/v2/[id] detail page (reuse). Expandable call records + exports = Slice 3b/3c.
+// Campaign Performance table (Val's endgame mockup, Slice C). Has its OWN date range + status chips,
+// INDEPENDENT of the global filter bar above. Sort by Newest/Call Attempts/Reached/SMS (default
+// Newest). Each row is the SHARED CampaignRow (the same camp-row as Today's campaigns): chips
+// (country/players/date) + a derived status pill (incl. "Ended") + run window + three compact
+// BreakdownColumns (Attempts/Reached/SMS, campaign-LIFETIME). Expands to the reused CampaignExpand
+// (records + CSV/Audio/Transcripts); a "trailing" link opens the /campaigns/v2/[id] detail page.
 // Data: /api/dashboard/campaigns?from=&to=.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronRight } from "lucide-react";
-import CampaignExpand from "@/components/analytics/CampaignExpand";
+import { ArrowRight } from "lucide-react";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
+import type { TodayPerfDay } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
-import { voiceName } from "@/lib/voiceOptions";
-import { useBaseAgentNames } from "./useBaseAgentNames";
 import PromptModal from "./PromptModal";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
 import { SortControl, type SortKey } from "./RankedTables";
-
-type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
+import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
 
 interface Row {
   id: string;
@@ -43,6 +41,7 @@ interface Row {
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
+  perf: TodayPerfDay; // per-campaign LIFETIME breakdown for the camp-row columns
 }
 interface Resp {
   from: string;
@@ -51,22 +50,8 @@ interface Resp {
 }
 
 const STATUS_ORDER: DisplayStatus[] = ["running", "completed", "ended", "paused", "inactive"];
-const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: boolean }> = {
-  running: { label: "Running", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", pulse: true },
-  completed: { label: "Completed", cls: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
-  ended: { label: "Ended", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
-  paused: { label: "Paused", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
-  inactive: { label: "Inactive", cls: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]" },
-};
 
 const PAGE_SIZE = 10; // rows per page (mirrors the /campaigns list)
-
-// Deterministic per-campaign color (stable across the dashboard; reused by charts later).
-function campaignColor(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 68% 55%)`;
-}
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtShort(iso: string | null): string | null {
@@ -114,41 +99,17 @@ function activeInRange(r: Row, fromMs: number | null, toMs: number | null): bool
   return spanStart <= hi && spanEnd >= lo;
 }
 
-// Compact run duration ("1d 3h" / "6h" / "45m") from a span in ms. Reuses the
-// span the bar already computes (start → end / last-call / range-end), so
-// ongoing campaigns read as elapsed-so-far. Pure — no Date.now() in render.
-function formatRunDuration(ms: number): string {
-  const totalMin = Math.floor(ms / 60_000);
-  if (totalMin < 1) return "<1m";
-  const d = Math.floor(totalMin / 1440);
-  const h = Math.floor((totalMin % 1440) / 60);
-  const m = totalMin % 60;
-  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
-  return `${m}m`;
-}
-
-function StatusPill({ s }: { s: DisplayStatus }) {
-  const m = STATUS_META[s];
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${m.cls}`}>
-      {m.pulse && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-      {m.label}
-    </span>
-  );
-}
-
 function sortValue(r: Row, key: SortKey): number {
-  if (key === "calls") return r.calls; // "Attempts" column
-  if (key === "reached") return r.reach;
-  if (key === "sms") return r.smsSent;
+  if (key === "calls") return r.perf.callAttempts.total; // "Call Attempts" column
+  if (key === "reached") return r.perf.reached.total;
+  if (key === "sms") return r.perf.sms.total;
   if (key === "newest") {
     // Newest first (desc): run-window start as ms. No created_at in the payload,
     // so startAt is the truest available recency proxy. Null/invalid → sort last.
     const t = r.startAt ? Date.parse(r.startAt) : NaN;
     return Number.isFinite(t) ? t : -1;
   }
-  return r.calls; // fallback (e.g. a stale "connect"/"success" key) → by attempts
+  return r.perf.callAttempts.total; // fallback (e.g. a stale "connect"/"success" key) → by attempts
 }
 
 export default function CampaignTable() {
@@ -165,7 +126,6 @@ export default function CampaignTable() {
   // undefined = not fetched/loading · null = no analytics (ghost/missing) · object = loaded.
   const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics | null>>({});
   const [page, setPage] = useState(1);
-  const baseAgentName = useBaseAgentNames();
 
   const load = useCallback(async (f: string, t: string) => {
     setLoading(true);
@@ -221,22 +181,11 @@ export default function CampaignTable() {
     if (willExpand && analytics[id] === undefined) fetchAnalytics(id);
   };
 
-  const { rows, maxSpan } = useMemo(() => {
-    const rs = data?.rows ?? [];
-    const refEnd = data ? Date.parse(data.to) : 0;
-    const withSpan = rs.map((r) => {
-      const startMs = r.startAt ? Date.parse(r.startAt) : NaN;
-      const endMs = r.endAt ? Date.parse(r.endAt) : r.lastCallAt ? Date.parse(r.lastCallAt) : refEnd;
-      const span = Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : 0;
-      return { row: r, span };
-    });
-    const max = withSpan.reduce((m, x) => Math.max(m, x.span), 0) || 1;
-    return { rows: withSpan, maxSpan: max };
-  }, [data]);
+  const rows = useMemo(() => data?.rows ?? [], [data]);
 
   const visible = rows
-    .filter((x) => !hidden.has(x.row.displayStatus))
-    .sort((a, b) => sortValue(b.row, sort) - sortValue(a.row, sort));
+    .filter((r) => !hidden.has(r.displayStatus))
+    .sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
 
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -288,108 +237,62 @@ export default function CampaignTable() {
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
 
-      {/* Table. */}
+      {/* Rows (shared camp-row, same as Today's campaigns). */}
       <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[1040px]">
-            <thead>
-              <tr className="border-b border-[var(--border)]">
-                <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3">Campaign</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Players in Campaign</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Call Attempts</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">Reached Player</th>
-                <th className="text-right font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3 whitespace-nowrap">SMS Sent</th>
-                <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-3 py-3">Status</th>
-                <th className="text-left font-medium text-[10px] uppercase tracking-wider text-[var(--text-3)] px-5 py-3 whitespace-nowrap">Run Window</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-xs text-[var(--text-3)]">
-                    {data ? "No campaigns match these filters." : "Loading campaigns…"}
-                  </td>
-                </tr>
-              ) : (
-                pageRows.map(({ row: r, span }) => (
-                  <Fragment key={r.id}>
-                    <tr className="group border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--bg-hover)]/40 transition-colors">
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleExpand(r.id)}
-                            className="text-[var(--text-3)] hover:text-[var(--text-1)] transition shrink-0"
-                            aria-label={expanded.has(r.id) ? "Collapse call records" : "Expand call records"}
-                          >
-                            <ChevronRight size={14} className={`transition-transform ${expanded.has(r.id) ? "rotate-90" : ""}`} />
-                          </button>
-                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: campaignColor(r.id) }} />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => toggleExpand(r.id)}
-                                title={r.name}
-                                className="font-medium text-[var(--text-1)] hover:text-blue-400 transition-colors text-left min-w-0"
-                              >
-                                <span className="block truncate max-w-[260px]">{formatCampaign(r.name).display}</span>
-                              </button>
-                              <Link
-                                href={`/campaigns/v2/${r.id}`}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-[var(--border)] text-[10px] font-medium text-[var(--text-2)] hover:text-blue-400 hover:border-blue-400/40 whitespace-nowrap shrink-0"
-                              >
-                                Open in campaign <ArrowRight size={10} />
-                              </Link>
-                            </div>
-                            <div className="text-[11px] text-[var(--text-3)] mt-0.5">
-                              {baseAgentName(r.baseAssistantId) ?? voiceName(r.voiceId, { short: true }) ?? "—"}
-                              {r.scheduleType === "recurring" ? " · recurring" : ""}
-                              {" · "}
-                              <button
-                                onClick={() => setPromptFor({ id: r.id, title: formatCampaign(r.name).display })}
-                                className="text-blue-400 hover:text-blue-300 transition-colors"
-                              >
-                                view prompt
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 text-right font-mono text-[var(--text-2)]">{r.players.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right font-mono text-blue-400">{r.calls.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right font-mono text-teal-400">{r.reach.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right font-mono text-sky-400">{r.smsSent.toLocaleString()}</td>
-                      <td className="px-3 py-3"><StatusPill s={r.displayStatus} /></td>
-                      <td className="px-5 py-3">
-                        <div className="text-[11px] font-mono text-[var(--text-2)]">
-                          {runWindow(r)}
-                          {span > 0 && <span className="text-[var(--text-3)]"> · {formatRunDuration(span)}</span>}
-                        </div>
-                        <div className="mt-1.5 h-1 rounded-full bg-[var(--bg-elevated)] w-full max-w-[160px] overflow-hidden">
-                          <div className="h-full rounded-full" style={{ width: `${Math.max(4, (span / maxSpan) * 100)}%`, backgroundColor: campaignColor(r.id) }} />
-                        </div>
-                      </td>
-                    </tr>
-                    {expanded.has(r.id) && (
-                      <tr>
-                        <td colSpan={7} className="p-0">
-                          <div className="px-4 py-4 bg-[var(--bg-app)] border-b border-[var(--border)]">
-                            {analytics[r.id] === undefined ? (
-                              <p className="text-xs text-[var(--text-3)] py-2">Loading campaign analytics…</p>
-                            ) : analytics[r.id] === null ? (
-                              <p className="text-xs text-[var(--text-3)] py-2">No analytics available for this campaign.</p>
-                            ) : (
-                              <CampaignExpand a={analytics[r.id]!} />
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))
-              )}
-            </tbody>
-          </table>
+          <div className="min-w-[920px]">
+            {/* Header */}
+            <div className={`${CAMPAIGN_ROW_GRID} px-4 py-3 border-b border-[var(--border)] text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]`}>
+              <div>Campaign</div>
+              <div>Status</div>
+              <div>Call attempts</div>
+              <div>Reached</div>
+              <div>SMS sent</div>
+            </div>
+
+            {visible.length === 0 ? (
+              <div className="px-4 py-10 text-center text-xs text-[var(--text-3)]">
+                {data ? "No campaigns match these filters." : "Loading campaigns…"}
+              </div>
+            ) : (
+              pageRows.map((r) => {
+                const rowData: CampaignRowData = {
+                  id: r.id,
+                  name: r.name,
+                  country: r.country,
+                  voiceId: r.voiceId,
+                  agentLabel: r.agentLabel,
+                  baseAssistantId: r.baseAssistantId,
+                  status: r.displayStatus,
+                  timeLabel: runWindow(r),
+                  players: r.players,
+                  startAt: r.startAt,
+                  perf: r.perf,
+                };
+                return (
+                  <CampaignRow
+                    key={r.id}
+                    c={rowData}
+                    expanded={expanded.has(r.id)}
+                    onToggle={() => toggleExpand(r.id)}
+                    analytics={analytics[r.id]}
+                    onViewPrompt={() => setPromptFor({ id: r.id, title: formatCampaign(r.name).display })}
+                    trailing={
+                      <>
+                        <span className="text-[var(--border-2)]">·</span>
+                        <Link
+                          href={`/campaigns/v2/${r.id}`}
+                          className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-blue-400 transition-colors"
+                        >
+                          open in campaign <ArrowRight size={10} />
+                        </Link>
+                      </>
+                    }
+                  />
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
 
