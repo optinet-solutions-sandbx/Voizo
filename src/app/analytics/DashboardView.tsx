@@ -15,7 +15,6 @@ import type {
   RunningCampaignCard as RunningCard,
 } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
-import MetricDrawer, { type MetricKey } from "./MetricDrawer";
 import CampaignDetailsModal from "./CampaignDetailsModal";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import { useMagnetic } from "@/components/useMagnetic";
@@ -98,7 +97,6 @@ export default function DashboardView() {
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
   const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
-  const [drawerMetric, setDrawerMetric] = useState<MetricKey | null>(null);
 
   const focusCampaign = useCallback((id: string) => {
     setFilters((f) => ({ ...f, campaignIds: [id] }));
@@ -177,7 +175,7 @@ export default function DashboardView() {
       {/* Global Performance — filters + KPI grid → charts → campaign table → heatmap → ranked tables.
           (Charts/heatmap/ranked tables share GlobalPerformance's fetched data, so the section owns the
           full ordered flow; the campaign table is self-contained and slotted into that order.) */}
-      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} onMetricClick={setDrawerMetric} />
+      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
       </div>
 
       {detailFor && (
@@ -193,8 +191,6 @@ export default function DashboardView() {
           onFilter={() => focusCampaign(detailFor.id)}
         />
       )}
-
-      <MetricDrawer metric={drawerMetric} onClose={() => setDrawerMetric(null)} />
     </>
   );
 }

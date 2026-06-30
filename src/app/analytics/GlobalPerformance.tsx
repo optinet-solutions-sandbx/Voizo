@@ -16,7 +16,6 @@ import RankedTables, { type AgentRow, type CampaignLbRow, type PromptRow } from 
 import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
-import { type MetricKey } from "./MetricDrawer";
 import HeatMap from "./HeatMap";
 import PerformanceCards from "./PerformanceCards";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
@@ -81,7 +80,6 @@ interface GlobalPerformanceProps {
   filters: Filters;
   onChange: (next: Filters) => void;
   onFocusCampaign: (id: string) => void; // set campaignIds=[id] + scroll to this section
-  onMetricClick?: (m: MetricKey) => void; // open the metric drill-down drawer (state lifted to DashboardView)
 }
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
