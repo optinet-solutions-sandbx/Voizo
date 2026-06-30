@@ -19,7 +19,8 @@ import DailyVolumeChart from "./DailyVolumeChart";
 import { type MetricKey } from "./MetricDrawer";
 import HeatMap from "./HeatMap";
 import PerformanceCards from "./PerformanceCards";
-import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay } from "@/lib/dashboardAnalytics";
+import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
+import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 
 type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d"];
@@ -217,6 +218,10 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
+  const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
+  const openTotal = (card: "callAttempts" | "reached" | "sms") => setDrawerFilter(totalFilter(card));
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) => setDrawerFilter(rowFilter(card, row.key, row.label));
 
   const load = useCallback(async (query: string) => {
     setLoading(true);
@@ -406,7 +411,8 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
               Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
             </p>
           )}
-          <PerformanceCards perf={data.perf} showDeltas={false} onOpenTotal={() => undefined} onOpenRow={() => undefined} />
+          <PerformanceCards perf={data.perf} showDeltas={false} onOpenTotal={openTotal} onOpenRow={openRow} />
+          <RangedRecordsDrawer filters={filters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
         </div>
       ) : data ? (
         <p className="text-center text-xs text-[var(--text-3)] py-8">Performance breakdown unavailable for this filter.</p>
