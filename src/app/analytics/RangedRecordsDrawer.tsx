@@ -4,13 +4,13 @@
 // card total / row / sub-row opens THIS drawer below the cards, pre-filtered to that slice (status +
 // attempt-outcome [+ smsOnly]) AND scoped by the section's filter bar (range/campaigns/agent/prompt/
 // phone). Unlike TodayRecordsDrawer (one day, client-filtered), this fetches a server-paginated PAGE
-// from /api/dashboard/records and supports prev/next + a full-set CSV export. Audio/Transcripts are
-// deferred to B2 (cross-campaign export). The bar above owns the phone search, so the drawer doesn't
+// from /api/dashboard/records and supports prev/next + CSV / Audio / Transcripts export (B2) via the
+// shared runExport engine over /api/dashboard/export-metadata. The bar above owns the phone search, so the drawer doesn't
 // duplicate it. Mirrors TodayRecordsDrawer's cache-by-query-key pattern (no synchronous setState in the
 // fetch effect — loading is derived from the cache) + prev-prop seeding + AbortController + Escape.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X, FileText, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, FileText, Mic, ScrollText, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   type CallRecord,
   type RecordStatus,
@@ -20,6 +20,8 @@ import {
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import RecordsTable from "./RecordsTable";
 import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./recordsDisplay";
+import { runExport, type ExportMode, type ExportProgress } from "@/lib/recordsExportEngine";
+import type { ExportLead } from "@/lib/exportLeads";
 import { type Filters } from "./GlobalPerformance";
 
 // The slice a clicked stat maps to (semantic — spec §6), same contract as the Today drawer.
@@ -56,13 +58,6 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function isoDateTime(ms: number | null): string {
-  if (ms === null) return "";
-  const d = new Date(ms);
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-}
-
 interface RecordsResponse {
   records: CallRecord[];
   total: number;
@@ -93,28 +88,6 @@ function buildRecordsQuery(
   return q.toString();
 }
 
-// Client CSV from a record set. No "Texted" column (ranged records carry no smsSentToday flag) and no
-// Audio/Transcripts (cross-campaign — B2).
-function downloadCsv(records: CallRecord[], filename: string) {
-  const header = ["#", "Phone", "Status", "Attempt outcomes", "Last attempted (UTC)"];
-  const lines = records.map((r, i) => [
-    String(i + 1),
-    r.phone ?? "",
-    DISPO_LABEL[r.status],
-    r.attempts.map((a) => ATTEMPT_TAG_LABELS[a.tag]).join(" | "),
-    isoDateTime(r.lastAttemptedMs),
-  ]);
-  const esc = (cell: string) => `"${cell.replace(/"/g, '""')}"`;
-  const csv = [header, ...lines].map((row) => row.map(esc).join(",")).join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function RangedRecordsDrawer({
   filters,
   filter,
@@ -134,6 +107,7 @@ export default function RangedRecordsDrawer({
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [truncatedNote, setTruncatedNote] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ExportProgress>({ current: 0, total: 0, stage: "" });
 
   // Seed the refinement controls from the clicked slice (adjust-state-on-prop-change during render —
   // NOT an effect; see react.dev you-might-not-need-an-effect). Also resets to page 0 on a new slice.
@@ -195,24 +169,44 @@ export default function RangedRecordsDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const onExport = useCallback(async () => {
-    if (!filter) return;
-    setExporting(true);
-    setTruncatedNote(null);
-    try {
-      const query = buildRecordsQuery(filters, filter, dispo, outcome, 0, "all");
-      const r = await fetch(`/api/dashboard/records?${query}`, { cache: "no-store" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j: RecordsResponse = await r.json();
-      const slug = filter.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      downloadCsv(j.records, `global-${filters.range}-${slug || "records"}.csv`);
-      if (j.truncated) setTruncatedNote(`Exported the first ${j.cap.toLocaleString()} of ${j.total.toLocaleString()} — narrow the filter for the rest.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Export failed");
-    } finally {
-      setExporting(false);
-    }
-  }, [filters, filter, dispo, outcome]);
+  // CSV / Audio / Transcripts export of the FULL filtered set via the shared engine. Fetches
+  // ExportLeads (transcript text + recording URLs) from /api/dashboard/export-metadata, then runExport
+  // compiles + downloads. Audio inherits the engine's 500-recording cap (throws → shown as an error).
+  const runDrawerExport = useCallback(
+    async (mode: ExportMode) => {
+      if (!filter) return;
+      setExporting(true);
+      setError(null);
+      setTruncatedNote(null);
+      setProgress({ current: 0, total: 0, stage: "Fetching export data…" });
+      const ctrl = new AbortController();
+      try {
+        const query = buildRecordsQuery(filters, filter, dispo, outcome, 0, "all");
+        const r = await fetch(`/api/dashboard/export-metadata?${query}`, { cache: "no-store", signal: ctrl.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j: { leads: ExportLead[]; total: number; truncated: boolean; cap: number } = await r.json();
+        if (!j.leads.length) throw new Error("No records match this filter.");
+        const slug = filter.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "records";
+        const base = `global-${filters.range}-${slug}`;
+        const includeSmsCols = filter.smsOnly || outcome === "positive" || outcome === "all";
+        await runExport({
+          leads: j.leads,
+          mode,
+          includeSmsCols,
+          filename: (m) => (m === "transcripts" ? `${base}_transcripts.zip` : m === "csv" ? `${base}.csv` : `${base}.zip`),
+          signal: ctrl.signal,
+          onProgress: setProgress,
+        });
+        if (j.truncated) setTruncatedNote(`Exported the first ${j.cap.toLocaleString()} of ${j.total.toLocaleString()} — narrow the filter for the rest.`);
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Export failed");
+      } finally {
+        setExporting(false);
+      }
+    },
+    [filters, filter, dispo, outcome],
+  );
 
   if (!open || !filter) return null;
 
@@ -243,14 +237,22 @@ export default function RangedRecordsDrawer({
 
       {/* Toolbar: CSV export + status/outcome refinement (phone search lives on the bar above) */}
       <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-[var(--border)]">
-        <button
-          type="button"
-          onClick={onExport}
-          disabled={exporting || total === 0}
-          className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <FileText size={13} /> {exporting ? "Exporting…" : "CSV export"}
-        </button>
+        {[
+          { mode: "csv" as const, label: "CSV", icon: <FileText size={13} /> },
+          { mode: "audio" as const, label: "Audio", icon: <Mic size={13} /> },
+          { mode: "transcripts" as const, label: "Transcripts", icon: <ScrollText size={13} /> },
+        ].map((b) => (
+          <button
+            key={b.mode}
+            type="button"
+            onClick={() => runDrawerExport(b.mode)}
+            disabled={exporting || total === 0}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {b.icon} {b.label}
+          </button>
+        ))}
+        {exporting && <span className="text-[11px] text-[var(--text-3)]">{progress.stage || "Exporting…"}</span>}
         <span className="w-px h-4 bg-[var(--border)] mx-0.5" />
         <div className="w-[160px]">
           <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
