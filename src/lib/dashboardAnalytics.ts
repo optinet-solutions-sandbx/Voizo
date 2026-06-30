@@ -150,6 +150,9 @@ export interface RunningCampaignCard {
   agentLabel: string | null;
   baseAssistantId: string | null;
   today: RateRow;
+  startAt: string | null; // run-window start — drives the "running for X" runtime (Slice A)
+  players: number; // campaign roster size (route-supplied; 0 when unavailable)
+  perf: TodayPerfDay; // per-campaign today breakdown (no deltas) for the Today's-campaigns rows
 }
 
 // ── Today's Performance 3-card model (Val's mockup, 2026-06-29) ──────────────
@@ -1286,6 +1289,48 @@ export function computeRangedPerf(
   return { callAttempts, reached, sms, inFlight: cb.inFlight };
 }
 
+/** Per-campaign TODAY breakdown for the Today's-campaigns rows (Slice A). Transcript-based (matches the
+ *  Today's Performance cards), no deltas (mockup campaign rows show none). `campaignCalls`/`campaignSms`
+ *  must already be filtered to ONE campaign (ghost/test excluded). Reuses the windowed breakdown
+ *  primitives + the no-delta assembly. */
+export function computeCampaignTodayPerf(
+  campaignCalls: DashCallRow[],
+  campaignSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  dayStartMs: number,
+  dayEndMs: number,
+): TodayPerfDay {
+  const cb = callWindowBreakdown(campaignCalls, declinedIds, dayStartMs, dayEndMs); // default: transcript
+  const sb = smsWindowBreakdown(campaignSms, campaignCalls, declinedIds, dayStartMs, dayEndMs);
+
+  const callAttempts = mkMetricNoDelta(cb.total, [
+    mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
+    mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
+    mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
+  ]);
+
+  const est = { isEstimated: true };
+  const reached = mkMetricNoDelta(cb.reach, [
+    mkRowNoDelta("positive", "Positive", cb.positive, cb.reach, est),
+    mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
+    mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
+    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
+  ]);
+
+  const smsReachedSub = [
+    mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
+    mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
+    mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
+  ];
+  const sms = mkMetricNoDelta(sb.total, [
+    mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
+    mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
+    mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
+  ]);
+
+  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
@@ -1302,6 +1347,7 @@ export function computeToday(
   sms: DashSmsRow[],
   now: number,
   numbers: DashNumberRow[] = [], // campaign_numbers_v2 (id, outcome) for the windowed call set — drives declined detection
+  rosterByCampaign: Map<string, number> = new Map(), // route-supplied per-campaign roster sizes (Slice A)
 ): TodaySnapshot {
   const index = buildCampaignIndex(campaigns);
   const liveCampaigns = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
@@ -1368,6 +1414,15 @@ export function computeToday(
       agentLabel: c.vapi_assistant_name ?? null,
       baseAssistantId: c.base_assistant_id ?? null,
       today: todayByCampaign.get(c.id) ?? emptyRate(),
+      startAt: c.start_at ?? c.created_at ?? null,
+      players: rosterByCampaign.get(c.id) ?? 0,
+      perf: computeCampaignTodayPerf(
+        liveCalls.filter((x) => x.campaign_id === c.id),
+        liveSms.filter((x) => x.campaign_id === c.id),
+        declinedIds,
+        todayStartMs,
+        todayStartMs + MS_PER_DAY,
+      ),
     }));
 
   const runningVoiceIds = new Set(

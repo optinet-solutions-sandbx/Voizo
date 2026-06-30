@@ -28,6 +28,7 @@ import {
   callWindowBreakdown,
   smsWindowBreakdown,
   computeRangedPerf,
+  computeCampaignTodayPerf,
   pctDelta,
   ppDelta,
   type DashCallRow,
@@ -968,5 +969,39 @@ describe("computeRangedPerf — ranged 3-card block (no deltas, lean classifier)
   it("keeps the est marker on the Reached outcome rows", () => {
     const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
     expect(perf.reached.rows.every((r) => r.isEstimated)).toBe(true);
+  });
+});
+
+describe("computeCampaignTodayPerf — per-campaign today breakdown (no deltas, transcript-based)", () => {
+  const T = Date.UTC(2026, 5, 27);
+  const inW = (h: number) => new Date(T + h * 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, inW(1), "p"),                                                          // positive (reach)
+    call("c", "completed", false, inW(2), undefined, false, 30, "customer-ended-call", "User: Hello?"), // transcript → early_hangup
+    call("c", "completed", false, inW(3), undefined, true),                                             // voicemail
+    call("c", "no_answer", false, inW(4)),                                                              // unreachable
+  ];
+  it("totals + rows match a transcript-based callWindowBreakdown; deltas null", () => {
+    const perf = computeCampaignTodayPerf(calls, [], new Set(), T, T + 86_400_000);
+    const b = callWindowBreakdown(calls, new Set(), T, T + 86_400_000); // default = transcript
+    expect(perf.callAttempts.total).toBe(b.total);
+    expect(perf.callAttempts.rows.find((r) => r.key === "reached")?.count).toBe(b.reach);
+    expect(perf.reached.rows.find((r) => r.key === "early_hangup")?.count).toBe(b.earlyHangup); // 1 (transcript)
+    expect(perf.callAttempts.deltaPctVsYesterday).toBeNull();
+    expect(perf.reached.rows.every((r) => r.deltaPpVsYesterday === null)).toBe(true);
+  });
+});
+
+describe("computeToday — running cards carry per-campaign perf + players", () => {
+  it("attaches perf + route-supplied roster to each running card", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const day = Date.UTC(2026, 5, 27);
+    const calls = [call("L7", "completed", true, new Date(day + 3_600_000).toISOString(), "n1")];
+    const campaigns = [camp("L7", { status: "running" })];
+    const snap = computeToday(calls, campaigns, [], now, [], new Map([["L7", 61]]));
+    const rc = snap.runningCampaigns.find((c) => c.id === "L7")!;
+    expect(rc.players).toBe(61);
+    expect(rc.perf.callAttempts.total).toBe(1);
+    expect(rc.perf.callAttempts.deltaPctVsYesterday).toBeNull();
   });
 });
