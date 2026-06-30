@@ -9,84 +9,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import type {
-  TodaySnapshot,
-  RateRow,
-  RunningCampaignCard as RunningCard,
-} from "@/lib/dashboardAnalytics";
+import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
-import CampaignDetailsModal from "./CampaignDetailsModal";
 import TodayPerformanceCards from "./TodayPerformanceCards";
-import { useMagnetic } from "@/components/useMagnetic";
-import { formatCampaign } from "@/lib/campaignDisplay";
-import { voiceName } from "@/lib/voiceOptions";
-import { useBaseAgentNames } from "./useBaseAgentNames";
+import TodaysCampaigns from "./TodaysCampaigns";
 
 const POLL_MS = 30_000;
-
-const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 // "2026-06-15" -> "15 Jun 2026" (manual, locale-independent — avoids hydration drift).
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtDay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : iso;
-}
-
-function statCell(value: string, label: string, color: string) {
-  return (
-    <div>
-      <div className={`text-lg font-bold font-mono ${color}`}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mt-0.5">{label}</div>
-    </div>
-  );
-}
-
-function StatTriple({ rate }: { rate: RateRow }) {
-  return (
-    <div className="grid grid-cols-3 gap-2 mt-3">
-      {statCell(rate.calls.toLocaleString(), "Calls", "text-[var(--text-1)]")}
-      {statCell(pct(rate.connectRate), "Connect", "text-emerald-400")}
-      {statCell(pct(rate.positiveResponseRate), "Positive", "text-amber-400")}
-    </div>
-  );
-}
-
-function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => void }) {
-  const fmt = formatCampaign(c.name);
-  const baseAgentName = useBaseAgentNames();
-  const magnetRef = useMagnetic<HTMLButtonElement>();
-  return (
-    <button
-      type="button"
-      ref={magnetRef}
-      onClick={onOpen}
-      title="View campaign details & prompt"
-      className="glow-card w-full text-left bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            {c.country !== "UNKNOWN" && (
-              <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-2)] shrink-0">
-                {c.country}
-              </span>
-            )}
-            <span className="text-sm font-semibold text-[var(--text-1)] truncate" title={c.name}>
-              {fmt.offer || fmt.display}
-            </span>
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-1 truncate">
-            {baseAgentName(c.baseAssistantId) ?? voiceName(c.voiceId, { short: true }) ?? "—"}
-          </div>
-        </div>
-        <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400 shrink-0">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> LIVE
-        </span>
-      </div>
-      <StatTriple rate={c.today} />
-    </button>
-  );
 }
 
 export default function DashboardView() {
@@ -96,7 +30,6 @@ export default function DashboardView() {
   // Global Performance filters live here (lifted 2026-06-16) so a running card AND the leaderboard
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
-  const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
 
   const focusCampaign = useCallback((id: string) => {
     setFilters((f) => ({ ...f, campaignIds: [id] }));
@@ -155,13 +88,9 @@ export default function DashboardView() {
         </div>
       </div>
 
-      {/* Running campaign cards — hidden entirely when none are running (Val's spec). */}
+      {/* Today's campaigns — expandable per-campaign rows (Val's mockup, Slice A). Hidden when none running. */}
       {data && data.runningCampaigns.length > 0 && (
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
-          {data.runningCampaigns.map((c) => (
-            <RunningCampaignCardView key={c.id} c={c} onOpen={() => setDetailFor(c)} />
-          ))}
-        </section>
+        <TodaysCampaigns campaigns={data.runningCampaigns} />
       )}
 
       {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
@@ -177,20 +106,6 @@ export default function DashboardView() {
           full ordered flow; the campaign table is self-contained and slotted into that order.) */}
       <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
       </div>
-
-      {detailFor && (
-        <CampaignDetailsModal
-          campaignId={detailFor.id}
-          name={detailFor.name}
-          country={detailFor.country}
-          status="running"
-          baseAssistantId={detailFor.baseAssistantId}
-          metrics={detailFor.today}
-          metricsLabel="Today"
-          onClose={() => setDetailFor(null)}
-          onFilter={() => focusCampaign(detailFor.id)}
-        />
-      )}
     </>
   );
 }
