@@ -1060,3 +1060,19 @@ describe("computeCampaignTable — per-campaign lifetime perf (Slice C)", () => 
     expect(row.perf.reached.total).toBe(row.reach);
   });
 });
+
+describe("filterCalls — base-agent dimension (Slice E)", () => {
+  it("keeps only calls whose campaign's base_assistant_id matches; null = no constraint", () => {
+    const campaigns = [camp("A", { base_assistant_id: "agent-1" }), camp("B", { base_assistant_id: "agent-2" })];
+    const index = buildCampaignIndex(campaigns);
+    const calls = [
+      call("A", "completed", true, "2026-06-10T10:00:00Z"),
+      call("B", "completed", true, "2026-06-10T10:00:00Z"),
+    ];
+    const win = { startMs: Date.UTC(2026, 5, 1), endMs: Date.UTC(2026, 5, 30) };
+    const only1 = filterCalls(calls, { ...win, baseAssistantId: "agent-1" }, index);
+    expect(only1.length).toBe(1);
+    expect(only1[0].campaign_id).toBe("A");
+    expect(filterCalls(calls, { ...win }, index).length).toBe(2); // no constraint
+  });
+});

@@ -45,6 +45,11 @@ describe("parseRecordsParams — Zero-Trust validation", () => {
     expect(p.campaignIds).toEqual(["a", "b", "c"]);
     expect(p.outcome).toBe("reached");
   });
+  it("parses + clamps baseAgent (Top Performers agent drill, Slice E)", () => {
+    expect(parseRecordsParams(new URLSearchParams("baseAgent=agent-xyz")).baseAgent).toBe("agent-xyz");
+    expect(parseRecordsParams(new URLSearchParams("")).baseAgent).toBeNull();
+    expect(parseRecordsParams(new URLSearchParams(`baseAgent=${"x".repeat(200)}`)).baseAgent!.length).toBe(80);
+  });
 });
 
 describe("filterRecordsBySlice", () => {

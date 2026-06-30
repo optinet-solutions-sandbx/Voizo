@@ -23,6 +23,7 @@ export interface RecordsParams {
   rangeDays: number;
   campaignIds: string[] | null;
   agent: string | null;
+  baseAgent: string | null; // base_assistant_id scope (Top Performers agent drill, Slice E)
   promptSha: string | null;
   phone: string;
   status: RecordStatus | "all";
@@ -45,6 +46,7 @@ export function parseRecordsParams(sp: URLSearchParams): RecordsParams {
   const campaignIds = campaignsRaw.length ? campaignsRaw : null;
 
   const agent = (sp.get("agent") || "").slice(0, 80) || null;
+  const baseAgent = (sp.get("baseAgent") || "").slice(0, 80) || null;
   const promptSha = (sp.get("prompt") || "").slice(0, 80) || null;
   const phone = (sp.get("phone") ?? "").replace(/[^\d+]/g, "").slice(0, 24);
 
@@ -62,7 +64,7 @@ export function parseRecordsParams(sp: URLSearchParams): RecordsParams {
     ? FULL_SET_CAP
     : Math.min(MAX_PAGE, Math.max(1, Math.trunc(Number(sp.get("limit")) || 50)));
 
-  return { rangeDays, campaignIds, agent, promptSha, phone, status, outcome, smsOnly, offset, limit, full };
+  return { rangeDays, campaignIds, agent, baseAgent, promptSha, phone, status, outcome, smsOnly, offset, limit, full };
 }
 
 /** Apply the clicked slice (status DISPOSITION + attempt OUTCOME + smsOnly) to the aggregated records.

@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     // Filter by range/campaign/agent/phone (same as analytics) + prompt (shared resolver, lazy).
     let filtered = filterCalls(
       callRows as unknown as DashCallRow[],
-      { startMs, endMs: now, campaignIds: p.campaignIds, voiceId: p.agent, numberIds },
+      { startMs, endMs: now, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
       index,
     );
     if (p.promptSha) {

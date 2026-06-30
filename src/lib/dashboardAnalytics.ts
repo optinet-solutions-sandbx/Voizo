@@ -69,6 +69,7 @@ export interface DashFilters {
   endMs: number; // window end (inclusive)
   campaignIds?: string[] | null; // null/undefined = all
   voiceId?: string | null; // single agent (campaign.voice_id)
+  baseAssistantId?: string | null; // single BASE agent (campaign.base_assistant_id) — Top Performers drill (Slice E)
   numberIds?: string[] | null; // phone-lookup, pre-resolved to campaign_number_ids
   includeTest?: boolean; // default false (test excluded from the client view)
 }
@@ -296,6 +297,7 @@ export function filterCalls(
     if (camp.is_test === true && !filters.includeTest) continue;
     if (campaignIdSet && !campaignIdSet.has(c.campaign_id)) continue;
     if (filters.voiceId && (camp.voice_id ?? null) !== filters.voiceId) continue;
+    if (filters.baseAssistantId && (camp.base_assistant_id ?? null) !== filters.baseAssistantId) continue;
     if (numberIdSet && !(c.campaign_number_id && numberIdSet.has(c.campaign_number_id))) continue;
     const t = c.created_at ? Date.parse(c.created_at) : NaN;
     if (!Number.isFinite(t) || t < filters.startMs || t > filters.endMs) continue;
