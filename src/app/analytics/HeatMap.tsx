@@ -2,8 +2,9 @@
 
 // Slice 5c — Daily × Hourly heatmap. Rows = dates, cols = hours 00–23 in each campaign's LOCAL
 // time (calls from campaigns with no/invalid timezone fall back to UTC — disclosed in the caption).
-// Cell color intensity ∝ call volume. Hover a cell for the full per-campaign breakdown (calls /
-// connect / success for that slot). CSS grid (no chart lib). Driven by the global filters.
+// Cell color intensity ∝ call volume. Hover a cell for the full per-campaign breakdown (attempts /
+// reached / voicemail / positive for that slot — post-06-26 vocab). CSS grid (no chart lib).
+// Driven by the global filters.
 
 import { useState } from "react";
 import { LayoutGrid } from "lucide-react";
@@ -14,6 +15,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (h: number) => String(h).padStart(2, "0");
 const pctOf = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+// Reached (human-only) = connected − voicemail. Works for both HeatCell and HeatBreakdown.
+const reachedOf = (x: { connected: number; voicemailConnected: number }) => x.connected - x.voicemailConnected;
 
 function dayLabel(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -106,16 +109,17 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           <div className="text-[var(--text-2)] font-medium">
             {dayLabel(hover.cell.day)} · {pad(hover.cell.hour)}:00
           </div>
-          <div className="flex items-center gap-3 mt-1 mb-1.5 text-[11px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 mb-1.5 text-[11px]">
             <span className="text-[var(--text-3)]">Attempts <span className="text-[var(--text-1)] font-mono">{hover.cell.calls}</span></span>
-            <span className="text-[var(--text-3)]">Connected <span className="text-emerald-400 font-mono">{hover.cell.connected} · {pctOf(hover.cell.connected, hover.cell.calls)}</span></span>
-            <span className="text-[var(--text-3)]">Success <span className="text-amber-400 font-mono">{hover.cell.successful} · {pctOf(hover.cell.successful, hover.cell.connected)}</span></span>
+            <span className="text-[var(--text-3)]">Reached <span className="text-emerald-400 font-mono">{reachedOf(hover.cell)} · {pctOf(reachedOf(hover.cell), hover.cell.calls)}</span></span>
+            <span className="text-[var(--text-3)]">Voicemail <span className="font-mono" style={{ color: "#9085e9" }}>{hover.cell.voicemailConnected}</span></span>
+            <span className="text-[var(--text-3)]">Positive <span className="text-amber-400 font-mono">{hover.cell.successful} · {pctOf(hover.cell.successful, reachedOf(hover.cell))}</span></span>
           </div>
           <div className="grid gap-0.5 border-t border-[var(--border)] pt-1.5">
             {hover.cell.breakdown.map((b, i) => (
               <div key={i} className="flex items-center gap-2 text-[11px]">
                 <span className="truncate text-[var(--text-2)] flex-1">{campaignShortLabel(b.name)}</span>
-                <span className="font-mono text-[var(--text-3)] shrink-0">{b.calls}c · {b.connected}conn · {b.successful}✓</span>
+                <span className="font-mono text-[var(--text-3)] shrink-0">{b.calls}c · {reachedOf(b)}r · {b.voicemailConnected}vm · {b.successful}✓</span>
               </div>
             ))}
           </div>
