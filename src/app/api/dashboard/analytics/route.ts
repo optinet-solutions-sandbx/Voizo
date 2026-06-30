@@ -12,9 +12,11 @@ import {
   representativeBaseBySha,
   bestByPositiveResponse,
   smsSentByCampaign,
+  computeRangedPerf,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
+  type TodayPerfDay,
 } from "@/lib/dashboardAnalytics";
 import { sha256Hex } from "@/lib/promptVersionExtract";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
@@ -84,7 +86,7 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "calls_v2",
-      "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail",
+      "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds",
       "id",
       undefined,
       { column: "created_at", value: startIso },
@@ -99,7 +101,7 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "sms_messages_v2",
-      "campaign_id, created_at, status",
+      "campaign_id, created_at, status, call_id, campaign_number_id",
       "id",
       undefined,
       { column: "created_at", value: startIso },
@@ -162,6 +164,37 @@ export async function GET(request: NextRequest) {
     if (agentId) smsByAgent.set(agentId, (smsByAgent.get(agentId) ?? 0) + n);
     const sha = promptByCampaign.get(campId)?.sha ?? null;
     if (sha) smsByPrompt.set(sha, (smsByPrompt.get(sha) ?? 0) + n);
+  }
+
+  // Declined contacts for the Reached split (campaign_numbers_v2.outcome='declined_offer'), scoped
+  // to the filtered call set. Chunk .in() at 150 (PostgREST ~16KB URL header guard).
+  const declinedIds = new Set<string>();
+  const declinedNumIds = [...new Set(filtered.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
+  const DECLINED_IN_CHUNK = 150;
+  for (let i = 0; i < declinedNumIds.length; i += DECLINED_IN_CHUNK) {
+    const { data, error } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("id, outcome")
+      .in("id", declinedNumIds.slice(i, i + DECLINED_IN_CHUNK));
+    if (error) {
+      // Degrade, don't fail: the Reached→Declined split is slightly under-counted; everything else is fine.
+      console.error("[dashboard/analytics] declined-numbers query failed:", error);
+      break;
+    }
+    for (const n of (data ?? []) as { id: string; outcome: string | null }[]) {
+      if ((n.outcome ?? "") === "declined_offer") declinedIds.add(n.id);
+    }
+  }
+
+  // Ranged 3-card Performance (Global Performance, Val's mockup). Reuses the already-filtered in-memory
+  // call set (no extra fetch) + the lean transcript-less classifier. Isolated failure domain: a perf
+  // error must NOT take down the charts/tables/leaderboard, so degrade to perf:null and log with counts.
+  let perf: TodayPerfDay | null = null;
+  try {
+    perf = computeRangedPerf(filtered, scopedSms, declinedIds, startMs, now);
+  } catch (e) {
+    console.error("[dashboard/analytics] computeRangedPerf failed:", e, { calls: filtered.length, sms: scopedSms.length });
+    perf = null;
   }
 
   // Dropdown options — full live set.
@@ -232,6 +265,7 @@ export async function GET(request: NextRequest) {
     trend: computeTrend(filtered, startMs, now, scopedSms),
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, now),
     heatmap: computeHeatmap(filtered, campaigns),
+    perf,
     options: { campaigns: campaignOptions, agents: agentOptions, prompts: promptOptions },
     phone: { query: phone || null, matchedCampaigns },
   });
