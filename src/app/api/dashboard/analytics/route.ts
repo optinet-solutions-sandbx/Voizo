@@ -12,6 +12,7 @@ import {
   bestByPositiveResponse,
   smsSentByCampaign,
   computeRangedPerf,
+  perfForCampaignScope,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -193,11 +194,34 @@ export async function GET(request: NextRequest) {
     ? campaigns.filter((c) => matchedCampaignIds.has(c.id)).map((c) => ({ id: c.id, name: c.name }))
     : [];
 
+  // Per-entity perf for the Top Performers breakdown cards (Slice E). In-memory over the already-
+  // filtered set; each isolated (try/catch → null) so one entity's failure can't drop the section.
+  const bestPerf = (ids: Set<string> | null): TodayPerfDay | null => {
+    if (!ids || ids.size === 0) return null;
+    try {
+      return perfForCampaignScope(filtered, scopedSms, declinedIds, startMs, now, ids);
+    } catch (e) {
+      console.error("[dashboard/analytics] perfForCampaignScope failed:", e, { ids: ids.size });
+      return null;
+    }
+  };
+  const campaignScope = global.bestCampaign ? new Set([global.bestCampaign.key]) : null;
+  const agentScope = global.bestAgent
+    ? new Set(live.filter((c) => (c.base_assistant_id ?? null) === global.bestAgent!.key).map((c) => c.id))
+    : null;
+  const promptScope = bestPrompt
+    ? new Set([...promptByCampaign].filter(([, pp]) => pp.sha === bestPrompt.key).map(([id]) => id))
+    : null;
+
   return NextResponse.json({
     rangeDays,
     kpis: global.kpis,
     campaignCount: global.campaignCount,
-    best: { campaign: global.bestCampaign, agent: global.bestAgent, prompt: bestPrompt },
+    best: {
+      campaign: global.bestCampaign ? { ...global.bestCampaign, perf: bestPerf(campaignScope) } : null,
+      agent: global.bestAgent ? { ...global.bestAgent, perf: bestPerf(agentScope) } : null,
+      prompt: bestPrompt ? { ...bestPrompt, perf: bestPerf(promptScope) } : null,
+    },
     campaigns: global.campaignRollups.map((r) => ({
       id: r.id,
       name: r.name,

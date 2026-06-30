@@ -30,6 +30,7 @@ import {
   computeRangedPerf,
   computeCampaignTodayPerf,
   computeWindowPerf,
+  perfForCampaignScope,
   pctDelta,
   ppDelta,
   type DashCallRow,
@@ -1058,6 +1059,17 @@ describe("computeCampaignTable — per-campaign lifetime perf (Slice C)", () => 
     expect(row.perf.callAttempts.total).toBe(2);
     expect(row.perf.callAttempts.rows.find((r) => r.key === "voicemail")?.count).toBe(1);
     expect(row.perf.reached.total).toBe(row.reach);
+  });
+});
+
+describe("perfForCampaignScope — per-entity ranged perf (Slice E)", () => {
+  it("scopes ranged perf to the campaign-id set; empty set → empty", () => {
+    const calls = [...many("A", 5, 2), ...many("B", 3, 0)]; // A:5 calls, B:3
+    const s = Date.UTC(2026, 5, 1);
+    const e = Date.UTC(2026, 5, 30);
+    const a = perfForCampaignScope(calls, [], new Set(), s, e, new Set(["A"]));
+    expect(a.callAttempts.total).toBe(5);
+    expect(perfForCampaignScope(calls, [], new Set(), s, e, new Set()).callAttempts.total).toBe(0);
   });
 });
 

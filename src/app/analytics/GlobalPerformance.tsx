@@ -25,11 +25,12 @@ type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d"];
 const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days" };
 
-interface BestPerformer {
+export interface BestPerformer {
   key: string;
   label: string;
   positiveResponseRate: number;
   calls: number;
+  perf?: TodayPerfDay | null; // per-entity ranged breakdown for the Top Performers cards (Slice E)
 }
 interface AnalyticsResponse {
   rangeDays: number;

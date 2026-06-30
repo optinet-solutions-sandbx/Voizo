@@ -1325,6 +1325,22 @@ export function computeRangedPerf(
   return computeWindowPerf(liveCalls, liveSms, declinedIds, startMs, endMs, { useTranscript: false });
 }
 
+/** Per-entity ranged perf (Slice E): scope calls+sms to a campaign-id set, then reuse the lean ranged
+ *  builder. Powers the Top Performers per-entity breakdown cards (Best Campaign/Agent/Prompt). Empty
+ *  set → empty perf. Pure — caller supplies the already-filtered/in-scope call+sms sets. */
+export function perfForCampaignScope(
+  calls: DashCallRow[],
+  sms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+  campaignIds: ReadonlySet<string>,
+): TodayPerfDay {
+  const c = calls.filter((x) => campaignIds.has(x.campaign_id));
+  const s = sms.filter((m) => campaignIds.has(m.campaign_id));
+  return computeRangedPerf(c, s, declinedIds, startMs, endMs);
+}
+
 /** Per-campaign TODAY breakdown for the Today's-campaigns rows (Slice A). Transcript-based (matches the
  *  Today's Performance cards), no deltas (mockup campaign rows show none). `campaignCalls`/`campaignSms`
  *  must already be filtered to ONE campaign (ghost/test excluded). Reuses the windowed breakdown
