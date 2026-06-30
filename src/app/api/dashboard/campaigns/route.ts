@@ -45,14 +45,14 @@ export async function GET(request: NextRequest) {
     // expanded breakdown. fetchAllRows pages past PostgREST's 1000-row cap (lifetime calls exceed
     // it). The from/to params are NOT applied here — they only echo in the response + the date
     // picker filters WHICH campaigns are listed (client-side, by activity), not the per-row numbers.
-    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail", "id"),
+    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds", "id"),
     supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
     // Players (full roster) + SMS sent are also campaign-LIFETIME totals: the roster has no "last
     // 30 days", and texts-sent reads as a campaign total. fetchAllRows pages past the 1000-row cap.
-    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id", "id"),
-    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status", "id"),
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id, id, outcome", "id"),
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, call_id, campaign_number_id", "id"),
   ]);
 
   if (campaignsRes.error) {
@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     now,
     ENDED_IDLE_DAYS,
-    numbers as unknown as Array<{ campaign_id: string }>,
+    numbers as unknown as Array<{ campaign_id: string; id: string; outcome: string | null }>,
     sms as unknown as DashSmsRow[],
   );
 
