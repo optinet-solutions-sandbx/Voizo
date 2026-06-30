@@ -902,6 +902,30 @@ describe("computeHeatmap", () => {
     expect(localizedCalls).toBe(1);
     expect(utcFallbackCalls).toBe(1);
   });
+
+  it("splits voicemail out of connected so Reached is human-only (per-slot + per-campaign)", () => {
+    const campaigns = [camp("A"), camp("B")]; // no tz → UTC
+    const calls = [
+      call("A", "completed", true, "2026-06-10T09:10:00Z", undefined, false), // human, goal
+      call("A", "completed", false, "2026-06-10T09:20:00Z", undefined, true), // voicemail
+      call("A", "completed", false, "2026-06-10T09:30:00Z", undefined, null), // unevaluated → reached
+      call("A", "no_answer", false, "2026-06-10T09:40:00Z"), // not connected
+      call("B", "completed", false, "2026-06-10T09:50:00Z", undefined, true), // voicemail (other campaign)
+    ];
+    const { cells } = computeHeatmap(calls, campaigns);
+    const c9 = cells.find((x) => x.day === "2026-06-10" && x.hour === 9)!;
+    expect(c9.calls).toBe(5);
+    expect(c9.connected).toBe(4); // 3 A-completed + 1 B-completed
+    expect(c9.voicemailConnected).toBe(2); // A vm + B vm
+    expect(c9.successful).toBe(1); // A goal
+    // Reached (derived) = connected − voicemailConnected; invariant: reached + vm === connected
+    expect(c9.connected - c9.voicemailConnected).toBe(2);
+    // Per-campaign breakdown carries the same split
+    const a = c9.breakdown.find((b) => b.name.includes("_A_"))!;
+    expect(a.connected).toBe(3);
+    expect(a.voicemailConnected).toBe(1);
+    expect(a.connected - a.voicemailConnected).toBe(2);
+  });
 });
 
 describe("isEarlyHangup / useTranscript seam — lean (transcript-less) classifier", () => {

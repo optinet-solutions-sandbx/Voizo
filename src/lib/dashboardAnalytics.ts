@@ -599,14 +599,16 @@ export function computeDailyVolume(
 export interface HeatBreakdown {
   name: string; // raw campaign name (UI formats)
   calls: number;
-  connected: number;
+  connected: number; // status ∈ CONNECTED_STATUSES (incl. voicemail)
+  voicemailConnected: number; // connected calls flagged voicemail===true (Reached = connected − this)
   successful: number;
 }
 export interface HeatCell {
   day: string; // YYYY-MM-DD (UTC)
   hour: number; // 0..23 (UTC)
   calls: number;
-  connected: number;
+  connected: number; // status ∈ CONNECTED_STATUSES (incl. voicemail)
+  voicemailConnected: number; // connected calls flagged voicemail===true (Reached = connected − this)
   successful: number;
   breakdown: HeatBreakdown[]; // top campaigns in this slot (for the hover tooltip)
 }
@@ -656,8 +658,9 @@ export function computeHeatmap(calls: DashCallRow[], campaigns: DashCampaignRow[
     hour: number;
     calls: number;
     connected: number;
+    voicemailConnected: number;
     successful: number;
-    byCampaign: Map<string, { calls: number; connected: number; successful: number }>;
+    byCampaign: Map<string, { calls: number; connected: number; voicemailConnected: number; successful: number }>;
   }
   const cells = new Map<string, Agg>();
   let localizedCalls = 0;
@@ -682,30 +685,33 @@ export function computeHeatmap(calls: DashCallRow[], campaigns: DashCampaignRow[
     const key = `${day}|${hour}`;
     let cell = cells.get(key);
     if (!cell) {
-      cell = { day, hour, calls: 0, connected: 0, successful: 0, byCampaign: new Map() };
+      cell = { day, hour, calls: 0, connected: 0, voicemailConnected: 0, successful: 0, byCampaign: new Map() };
       cells.set(key, cell);
     }
     const conn = isConnected(c.status);
+    const vm = conn && c.voicemail === true; // only a connected call can be a voicemail
     const succ = c.goal_reached === true;
     cell.calls++;
     if (conn) cell.connected++;
+    if (vm) cell.voicemailConnected++;
     if (succ) cell.successful++;
     let bc = cell.byCampaign.get(c.campaign_id);
     if (!bc) {
-      bc = { calls: 0, connected: 0, successful: 0 };
+      bc = { calls: 0, connected: 0, voicemailConnected: 0, successful: 0 };
       cell.byCampaign.set(c.campaign_id, bc);
     }
     bc.calls++;
     if (conn) bc.connected++;
+    if (vm) bc.voicemailConnected++;
     if (succ) bc.successful++;
   }
   const out: HeatCell[] = [];
   for (const cell of cells.values()) {
     const breakdown: HeatBreakdown[] = [...cell.byCampaign.entries()]
-      .map(([id, v]) => ({ name: index.get(id)?.name ?? id, calls: v.calls, connected: v.connected, successful: v.successful }))
+      .map(([id, v]) => ({ name: index.get(id)?.name ?? id, calls: v.calls, connected: v.connected, voicemailConnected: v.voicemailConnected, successful: v.successful }))
       .sort((a, b) => b.calls - a.calls)
       .slice(0, 8);
-    out.push({ day: cell.day, hour: cell.hour, calls: cell.calls, connected: cell.connected, successful: cell.successful, breakdown });
+    out.push({ day: cell.day, hour: cell.hour, calls: cell.calls, connected: cell.connected, voicemailConnected: cell.voicemailConnected, successful: cell.successful, breakdown });
   }
   return { cells: out, localizedCalls, utcFallbackCalls };
 }
