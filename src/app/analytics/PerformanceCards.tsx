@@ -143,12 +143,16 @@ export default function PerformanceCards({
   onOpenTotal: (card: "callAttempts" | "reached" | "sms") => void;
   onOpenRow: (card: "callAttempts" | "reached" | "sms", row: PerfRow, parentKey?: string) => void;
 }) {
+  // "In progress" (inFlight) is a LIVE concept — only meaningful on the always-live Today view.
+  // The ranged Global view is historical (older non-terminal-status calls aren't dialing now), so
+  // suppress it there. This matches Val's mockup, which shows no "in progress" on the Global cards.
+  const callInFlight = showDeltas ? perf.inFlight : undefined;
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       <MetricCard
         label="Call attempts"
         metric={perf.callAttempts}
-        inFlight={perf.inFlight}
+        inFlight={callInFlight}
         showDeltas={showDeltas}
         onOpenTotal={() => onOpenTotal("callAttempts")}
         onOpenRow={(row) => onOpenRow("callAttempts", row)}

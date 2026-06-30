@@ -6,8 +6,8 @@
 // until the prompt-attribution slice. Data: /api/dashboard/analytics.
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Phone, Zap, CheckCircle2, Trophy, Mic, FileText, Search, X, UserCheck, Voicemail } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Trophy, Mic, FileText, Search, X } from "lucide-react";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
 import { useMagnetic } from "@/components/useMagnetic";
@@ -18,7 +18,8 @@ import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import { type MetricKey } from "./MetricDrawer";
 import HeatMap from "./HeatMap";
-import type { TrendPoint, VolumeResult, HeatmapResult } from "@/lib/dashboardAnalytics";
+import PerformanceCards from "./PerformanceCards";
+import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay } from "@/lib/dashboardAnalytics";
 
 type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d"];
@@ -45,6 +46,7 @@ interface AnalyticsResponse {
     voicemailRate: number | null;
     positiveResponseRate: number | null; // goal_reached / reach (the renamed "success" metric)
   };
+  perf: TodayPerfDay | null; // ranged 3-card Performance block (Slice B)
   campaignCount: number;
   best: { campaign: BestPerformer | null; agent: BestPerformer | null; prompt: BestPerformer | null };
   campaigns: CampaignLbRow[];
@@ -173,55 +175,6 @@ function EstBadge({ title }: { title: string }) {
   );
 }
 
-function KpiCard({
-  icon,
-  label,
-  value,
-  valueColor = "text-[var(--text-1)]",
-  sub,
-  onClick,
-  badge,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  valueColor?: string;
-  sub: ReactNode;
-  onClick?: () => void;
-  badge?: ReactNode;
-}) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  // Interactive props spread only when clickable (correct ARIA button pattern; inert div otherwise).
-  const interactive = onClick
-    ? {
-        onClick,
-        role: "button" as const,
-        tabIndex: 0,
-        title: "Click for the full breakdown",
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
-        },
-      }
-    : {};
-  return (
-    <div
-      ref={magnetRef}
-      {...interactive}
-      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] truncate">{label}</span>
-          {badge}
-        </span>
-        <span className="text-[var(--text-3)] shrink-0">{icon}</span>
-      </div>
-      <div className={`text-[34px] leading-none font-bold font-mono mt-3 ${valueColor}`}>{value}</div>
-      <div className="text-[11px] text-[var(--text-3)] mt-2">{sub}</div>
-    </div>
-  );
-}
-
 function BestCard({
   icon,
   label,
@@ -260,7 +213,7 @@ function BestCard({
   );
 }
 
-export default function GlobalPerformance({ filters, onChange, onFocusCampaign, onMetricClick }: GlobalPerformanceProps) {
+export default function GlobalPerformance({ filters, onChange, onFocusCampaign }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -441,64 +394,25 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
         </div>
       )}
 
-      {/* KPI grid — Row 1 totals. Connected vs Reached are now distinct cards (Val 2026-06-26):
-          "connected" = answered (incl. voicemail); "reached" = a live human picked up. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
-        <KpiCard
-          onClick={() => onMetricClick?.("calls")}
-          icon={<Phone size={14} />}
-          label="Total Calls"
-          value={(k?.calls ?? 0).toLocaleString()}
-          sub={data ? `across ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"} · last ${data.rangeDays}d` : "—"}
-        />
-        <KpiCard
-          onClick={() => onMetricClick?.("connect")}
-          icon={<Zap size={14} />}
-          label="Connect Rate"
-          valueColor="text-emerald-400"
-          value={pct(k?.connectRate ?? null)}
-          sub={
-            <span title="Connected = answered, including voicemail. A human pickup is shown separately as Reached.">
-              {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<UserCheck size={14} />}
-          label="Reached"
-          valueColor="text-teal-400"
-          badge={reachEstimated ? <EstBadge title="Estimated — includes connects not yet evaluated for voicemail (before ~19 Jun), which count as reached. Accurate on recent windows." /> : undefined}
-          value={(k?.reach ?? 0).toLocaleString()}
-          sub={
-            <span title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data).">
-              {k ? "live humans reached" : "—"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<Voicemail size={14} />}
-          label="Voicemail"
-          valueColor="text-violet-300"
-          value={k && k.voicemailEvaluated > 0 ? pct(k.voicemailRate) : "—"}
-          sub={
-            <span title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy.">
-              {k && k.voicemailEvaluated > 0 ? "of evaluated connects" : "tracking from deploy"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<CheckCircle2 size={14} />}
-          label="Positive Response Rate"
-          valueColor="text-amber-400"
-          badge={reachEstimated ? <EstBadge title="Estimated — measured over reached players; on older windows the reached base includes connects not yet evaluated for voicemail, so this can read low." /> : undefined}
-          value={pct(k?.positiveResponseRate ?? null)}
-          sub={
-            <span title="Players who agreed to receive the offer SMS (goal reached) ÷ humans reached. NOT a confirmed sale — real success (deposit/login) isn't visible yet.">
-              {k ? `${k.successful.toLocaleString()} positive of ${k.reach.toLocaleString()} reached` : "—"}
-            </span>
-          }
-        />
-      </div>
+      {/* Ranged 3-card Performance (Val's mockup, Slice B) — replaces the old 5-card KPI strip.
+          NO deltas (mockup intent for Global). The Connect/Reached/Voicemail/Positive metrics now
+          live as breakdown ROWS inside the cards. `est` note when voicemail coverage is low on long
+          windows (forward-only detection). Drill-down drawer is wired in the next step. */}
+      {data?.perf ? (
+        <div className="grid gap-2">
+          {reachEstimated && (
+            <p className="text-[11px] text-[var(--text-3)] flex items-center gap-1.5">
+              <EstBadge title="Estimated — long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
+              Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
+            </p>
+          )}
+          <PerformanceCards perf={data.perf} showDeltas={false} onOpenTotal={() => undefined} onOpenRow={() => undefined} />
+        </div>
+      ) : data ? (
+        <p className="text-center text-xs text-[var(--text-3)] py-8">Performance breakdown unavailable for this filter.</p>
+      ) : (
+        <p className="text-center text-xs text-[var(--text-3)] py-8">Loading…</p>
+      )}
 
       {/* KPI grid — Row 2 best performers (min-volume gated). */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
