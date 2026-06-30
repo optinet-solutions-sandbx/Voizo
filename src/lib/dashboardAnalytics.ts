@@ -732,6 +732,7 @@ export interface CampaignTableRow {
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
+  perf: TodayPerfDay; // per-campaign LIFETIME breakdown (lean) for the camp-row columns (Slice C)
 }
 
 /** All live (non-ghost, non-test) campaigns as table rows — INCLUDING zero-call ones
@@ -743,7 +744,7 @@ export function computeCampaignTable(
   campaigns: DashCampaignRow[],
   nowMs: number,
   idleDays = 7,
-  numbers: Array<{ campaign_id: string }> = [],
+  numbers: Array<{ campaign_id: string; id?: string; outcome?: string | null }> = [],
   sms: DashSmsRow[] = [],
 ): CampaignTableRow[] {
   const index = buildCampaignIndex(campaigns);
@@ -754,6 +755,13 @@ export function computeCampaignTable(
   const playersByCampaign = new Map<string, number>();
   for (const n of numbers) playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
   const smsByCampaign = smsSentByCampaign(sms);
+  // Declined contacts (campaign_numbers_v2.outcome === 'declined_offer') for the per-campaign Reached split.
+  const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer" && n.id).map((n) => n.id as string));
+  // Group calls + sms by campaign once (O(n)) so each row's lifetime breakdown is a Map lookup, not a scan.
+  const callsByCampaign = new Map<string, DashCallRow[]>();
+  for (const c of calls) { const g = callsByCampaign.get(c.campaign_id); if (g) g.push(c); else callsByCampaign.set(c.campaign_id, [c]); }
+  const smsRowsByCampaign = new Map<string, DashSmsRow[]>();
+  for (const m of sms) { const g = smsRowsByCampaign.get(m.campaign_id); if (g) g.push(m); else smsRowsByCampaign.set(m.campaign_id, [m]); }
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
@@ -786,6 +794,14 @@ export function computeCampaignTable(
         startAt: (c.start_at ?? c.created_at) ?? null,
         endAt: c.end_at ?? null,
         lastCallAt: lastCallMs ? new Date(lastCallMs).toISOString() : null,
+        perf: computeWindowPerf(
+          callsByCampaign.get(c.id) ?? [],
+          smsRowsByCampaign.get(c.id) ?? [],
+          declinedIds,
+          0,
+          nowMs,
+          { useTranscript: false },
+        ),
       };
     });
 }
@@ -1247,19 +1263,20 @@ function mkMetricNoDelta(total: number, rows: PerfRow[]): PerfMetric {
   return { total, deltaPctVsYesterday: null, deltaPctVsSevenDayAvg: null, rows };
 }
 
-/** Ranged 3-card block for Global Performance. Mirrors computeTodayPerf's rows/denominators over an
- *  arbitrary [startMs,endMs) window, with no deltas and the lean (useTranscript:false) classifier so
- *  it never pulls transcripts. `liveCalls`/`liveSms` must already exclude ghost + test. */
-export function computeRangedPerf(
-  liveCalls: DashCallRow[],
-  liveSms: DashSmsRow[],
+/** Unified no-delta windowed perf core (Slice C) — assembles the 3-card breakdown (Call attempts /
+ *  Reached / SMS) over [startMs,endMs) with `opts.useTranscript` (default true). Single source for the
+ *  Global ranged cards (lean), the per-campaign Today rows (transcript), and the Campaign Performance
+ *  rows (lean). `calls`/`sms` must already exclude ghost + test (and be campaign-scoped, where per-campaign). */
+export function computeWindowPerf(
+  calls: DashCallRow[],
+  sms: DashSmsRow[],
   declinedIds: Set<string>,
   startMs: number,
   endMs: number,
+  opts: { useTranscript?: boolean } = {},
 ): TodayPerfDay {
-  const lean = { useTranscript: false } as const;
-  const cb = callWindowBreakdown(liveCalls, declinedIds, startMs, endMs, lean);
-  const sb = smsWindowBreakdown(liveSms, liveCalls, declinedIds, startMs, endMs, lean);
+  const cb = callWindowBreakdown(calls, declinedIds, startMs, endMs, opts);
+  const sb = smsWindowBreakdown(sms, calls, declinedIds, startMs, endMs, opts);
 
   const callAttempts = mkMetricNoDelta(cb.total, [
     mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
@@ -1280,13 +1297,24 @@ export function computeRangedPerf(
     mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
     mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
   ];
-  const sms = mkMetricNoDelta(sb.total, [
+  const smsMetric = mkMetricNoDelta(sb.total, [
     mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
     mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
     mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
   ]);
 
-  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+  return { callAttempts, reached, sms: smsMetric, inFlight: cb.inFlight };
+}
+
+/** Ranged 3-card block for Global Performance — lean (transcript-less) windowed perf (spec B §5.1). */
+export function computeRangedPerf(
+  liveCalls: DashCallRow[],
+  liveSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+): TodayPerfDay {
+  return computeWindowPerf(liveCalls, liveSms, declinedIds, startMs, endMs, { useTranscript: false });
 }
 
 /** Per-campaign TODAY breakdown for the Today's-campaigns rows (Slice A). Transcript-based (matches the
@@ -1300,35 +1328,7 @@ export function computeCampaignTodayPerf(
   dayStartMs: number,
   dayEndMs: number,
 ): TodayPerfDay {
-  const cb = callWindowBreakdown(campaignCalls, declinedIds, dayStartMs, dayEndMs); // default: transcript
-  const sb = smsWindowBreakdown(campaignSms, campaignCalls, declinedIds, dayStartMs, dayEndMs);
-
-  const callAttempts = mkMetricNoDelta(cb.total, [
-    mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
-    mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
-    mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
-  ]);
-
-  const est = { isEstimated: true };
-  const reached = mkMetricNoDelta(cb.reach, [
-    mkRowNoDelta("positive", "Positive", cb.positive, cb.reach, est),
-    mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
-    mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
-    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
-  ]);
-
-  const smsReachedSub = [
-    mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
-    mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
-    mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
-  ];
-  const sms = mkMetricNoDelta(sb.total, [
-    mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
-    mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
-    mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
-  ]);
-
-  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+  return computeWindowPerf(campaignCalls, campaignSms, declinedIds, dayStartMs, dayEndMs); // default: transcript
 }
 
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────

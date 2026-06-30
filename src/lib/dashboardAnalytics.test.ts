@@ -29,6 +29,7 @@ import {
   smsWindowBreakdown,
   computeRangedPerf,
   computeCampaignTodayPerf,
+  computeWindowPerf,
   pctDelta,
   ppDelta,
   type DashCallRow,
@@ -1003,5 +1004,35 @@ describe("computeToday — running cards carry per-campaign perf + players", () 
     expect(rc.players).toBe(61);
     expect(rc.perf.callAttempts.total).toBe(1);
     expect(rc.perf.callAttempts.deltaPctVsYesterday).toBeNull();
+  });
+});
+
+describe("computeWindowPerf — unified no-delta windowed perf (Slice C)", () => {
+  const T = Date.UTC(2026, 5, 1);
+  const end = T + 30 * 86_400_000;
+  const at = (d: number) => new Date(T + d * 86_400_000 + 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, at(1), "p"),
+    call("c", "completed", false, at(2), undefined, false, 30, "customer-ended-call", "User: Hi?"),
+  ];
+  it("useTranscript:true matches computeCampaignTodayPerf; false matches computeRangedPerf (parity)", () => {
+    expect(computeWindowPerf(calls, [], new Set(), T, end)).toEqual(computeCampaignTodayPerf(calls, [], new Set(), T, end));
+    expect(computeWindowPerf(calls, [], new Set(), T, end, { useTranscript: false })).toEqual(computeRangedPerf(calls, [], new Set(), T, end));
+  });
+});
+
+describe("computeCampaignTable — per-campaign lifetime perf (Slice C)", () => {
+  it("emits a lean per-campaign breakdown; reached card total == rollup reach", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const calls = [
+      call("X", "completed", true, "2026-06-10T00:00:00Z", "n1"),
+      call("X", "completed", false, "2026-06-11T00:00:00Z", undefined, true), // voicemail
+    ];
+    const campaigns = [camp("X", { status: "running" })];
+    const rows = computeCampaignTable(calls, campaigns, now, 7, [{ campaign_id: "X", id: "n1", outcome: "sent_sms" }], []);
+    const row = rows.find((r) => r.id === "X")!;
+    expect(row.perf.callAttempts.total).toBe(2);
+    expect(row.perf.callAttempts.rows.find((r) => r.key === "voicemail")?.count).toBe(1);
+    expect(row.perf.reached.total).toBe(row.reach);
   });
 });
