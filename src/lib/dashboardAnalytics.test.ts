@@ -27,6 +27,7 @@ import {
   computeToday,
   callWindowBreakdown,
   smsWindowBreakdown,
+  computeRangedPerf,
   pctDelta,
   ppDelta,
   type DashCallRow,
@@ -929,5 +930,43 @@ describe("isEarlyHangup / useTranscript seam — lean (transcript-less) classifi
     expect(lean.earlyHangup).toBe(0);
     expect(lean.neutral).toBe(1);
     expect(lean.reach).toBe(1); // reach unchanged either way
+  });
+});
+
+describe("computeRangedPerf — ranged 3-card block (no deltas, lean classifier)", () => {
+  const T = Date.UTC(2026, 5, 1);
+  const end = T + 30 * 86_400_000;
+  const at = (d: number) => new Date(T + d * 86_400_000 + 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, at(1), "p"),                                              // positive
+    call("c", "completed", false, at(2), "d"),                                             // declined
+    call("c", "completed", false, at(3), undefined, false, 30, "customer-ended-call", "User: Hi?"), // lean → neutral
+    call("c", "completed", false, at(4), undefined, true),                                 // voicemail
+    call("c", "no_answer", false, at(5)),                                                  // unreachable
+  ];
+  const sms: DashSmsRow[] = [];
+
+  it("totals + rows match a lean callWindowBreakdown over the same window", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    const b = callWindowBreakdown(calls, new Set(["d"]), T, end, { useTranscript: false });
+    expect(perf.callAttempts.total).toBe(b.total);
+    const reachedRow = perf.callAttempts.rows.find((r) => r.key === "reached");
+    expect(reachedRow?.count).toBe(b.reach);
+    const neutralRow = perf.reached.rows.find((r) => r.key === "neutral");
+    expect(neutralRow?.count).toBe(b.neutral); // the bail counts as neutral (lean)
+    expect(neutralRow?.count).toBe(1);
+  });
+  it("emits null deltas on totals and rows", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    expect(perf.callAttempts.deltaPctVsYesterday).toBeNull();
+    expect(perf.callAttempts.deltaPctVsSevenDayAvg).toBeNull();
+    for (const r of perf.reached.rows) {
+      expect(r.deltaPpVsYesterday).toBeNull();
+      expect(r.deltaPpVsSevenDayAvg).toBeNull();
+    }
+  });
+  it("keeps the est marker on the Reached outcome rows", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    expect(perf.reached.rows.every((r) => r.isEstimated)).toBe(true);
   });
 });

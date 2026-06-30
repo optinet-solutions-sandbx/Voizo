@@ -1216,6 +1216,76 @@ export function computeTodayPerf(
   return { callAttempts, reached, sms, inFlight: cb.inFlight };
 }
 
+// ── Ranged Performance (Global Performance 3-card — Val's mockup) ─────────────
+// Same rows/denominators as computeTodayPerf but over an arbitrary [startMs,endMs) window, with
+// NO deltas (the mockup's Global cards show count + pct + bar only) and the transcript-less lean
+// classifier (spec §5.1 — no PII in the always-on aggregate path).
+function mkRowNoDelta(
+  key: string,
+  label: string,
+  count: number,
+  denom: number,
+  opts?: { isEstimated?: boolean; subRows?: PerfRow[] },
+): PerfRow {
+  const row: PerfRow = {
+    key,
+    label,
+    count,
+    pct: safeDiv(count, denom),
+    deltaPpVsYesterday: null,
+    deltaPpVsSevenDayAvg: null,
+  };
+  if (opts?.isEstimated) row.isEstimated = true;
+  if (opts?.subRows) row.subRows = opts.subRows;
+  return row;
+}
+
+function mkMetricNoDelta(total: number, rows: PerfRow[]): PerfMetric {
+  return { total, deltaPctVsYesterday: null, deltaPctVsSevenDayAvg: null, rows };
+}
+
+/** Ranged 3-card block for Global Performance. Mirrors computeTodayPerf's rows/denominators over an
+ *  arbitrary [startMs,endMs) window, with no deltas and the lean (useTranscript:false) classifier so
+ *  it never pulls transcripts. `liveCalls`/`liveSms` must already exclude ghost + test. */
+export function computeRangedPerf(
+  liveCalls: DashCallRow[],
+  liveSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+): TodayPerfDay {
+  const lean = { useTranscript: false } as const;
+  const cb = callWindowBreakdown(liveCalls, declinedIds, startMs, endMs, lean);
+  const sb = smsWindowBreakdown(liveSms, liveCalls, declinedIds, startMs, endMs, lean);
+
+  const callAttempts = mkMetricNoDelta(cb.total, [
+    mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
+    mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
+    mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
+  ]);
+
+  const est = { isEstimated: true };
+  const reached = mkMetricNoDelta(cb.reach, [
+    mkRowNoDelta("positive", "Positive", cb.positive, cb.reach, est),
+    mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
+    mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
+    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
+  ]);
+
+  const smsReachedSub = [
+    mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
+    mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
+    mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
+  ];
+  const sms = mkMetricNoDelta(sb.total, [
+    mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
+    mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
+    mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
+  ]);
+
+  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
