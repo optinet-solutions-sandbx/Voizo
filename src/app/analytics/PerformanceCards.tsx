@@ -9,7 +9,8 @@
 import type { PerfMetric, PerfRow, TodayPerfDay } from "@/lib/dashboardAnalytics";
 
 // Row accent colors — match Val's mockup (vivid bars/dots, distinct from the muted records chips).
-const ROW_COLOR: Record<string, string> = {
+// Exported so the shared BreakdownColumn (Today's-campaigns rows, Slice A) uses the same palette.
+export const ROW_COLOR: Record<string, string> = {
   reached: "#1baf7a",
   voicemail: "#9085e9",
   unreachable: "#eda100",
