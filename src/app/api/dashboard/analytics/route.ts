@@ -8,7 +8,6 @@ import {
   computeTrend,
   computeDailyVolume,
   computeHeatmap,
-  promptLabel,
   representativeBaseBySha,
   bestByPositiveResponse,
   smsSentByCampaign,
@@ -18,7 +17,7 @@ import {
   type DashSmsRow,
   type TodayPerfDay,
 } from "@/lib/dashboardAnalytics";
-import { sha256Hex } from "@/lib/promptVersionExtract";
+import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
 
 /**
@@ -112,33 +111,8 @@ export async function GET(request: NextRequest) {
   const index = buildCampaignIndex(campaigns);
   const live = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
 
-  // Per-campaign prompt identity (sha + label): latest prompt_versions snapshot if any,
-  // else the campaign's stored system_prompt (hashed the same way so identical text groups).
-  const promptByCampaign = new Map<string, { sha: string; label: string; baseAssistantId: string | null }>();
-  const liveIds = live.map((c) => c.id);
-  const latestByCampaign = new Map<string, { system_prompt: string; sha: string }>();
-  if (liveIds.length) {
-    const { data: pv } = await supabaseAdmin
-      .from("prompt_versions")
-      .select("campaign_id, system_prompt, prompt_sha256, created_at")
-      .in("campaign_id", liveIds)
-      .order("created_at", { ascending: false });
-    for (const v of (pv ?? []) as { campaign_id: string; system_prompt: string; prompt_sha256: string }[]) {
-      if (!latestByCampaign.has(v.campaign_id)) {
-        latestByCampaign.set(v.campaign_id, { system_prompt: v.system_prompt, sha: v.prompt_sha256 });
-      }
-    }
-  }
-  for (const c of live) {
-    const baseAssistantId = c.base_assistant_id ?? null;
-    const latest = latestByCampaign.get(c.id);
-    if (latest) {
-      promptByCampaign.set(c.id, { sha: latest.sha, label: promptLabel(latest.system_prompt, latest.sha), baseAssistantId });
-    } else if (c.system_prompt) {
-      const sha = sha256Hex(c.system_prompt);
-      promptByCampaign.set(c.id, { sha, label: promptLabel(c.system_prompt, sha), baseAssistantId });
-    }
-  }
+  // Per-campaign prompt identity (sha + label + base agent) — shared resolver (chunked .in()).
+  const promptByCampaign = await resolvePromptByCampaign(live);
 
   let filtered = filterCalls(
     callRows as unknown as DashCallRow[],
