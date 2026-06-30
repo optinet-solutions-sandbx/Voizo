@@ -6,11 +6,10 @@
 // until the prompt-attribution slice. Data: /api/dashboard/analytics.
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Trophy, Mic, FileText, Search, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Search, X } from "lucide-react";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
-import { useMagnetic } from "@/components/useMagnetic";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import RankedTables, { type AgentRow, type CampaignLbRow, type PromptRow } from "./RankedTables";
 import CampaignTable from "./CampaignTable";
@@ -18,6 +17,7 @@ import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import HeatMap from "./HeatMap";
 import PerformanceCards from "./PerformanceCards";
+import TopPerformers from "./TopPerformers";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
 import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 
@@ -82,8 +82,6 @@ interface GlobalPerformanceProps {
   onChange: (next: Filters) => void;
   onFocusCampaign: (id: string) => void; // set campaignIds=[id] + scroll to this section
 }
-
-const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 function buildQuery(f: Filters): string {
   const p = new URLSearchParams();
@@ -172,44 +170,6 @@ function EstBadge({ title }: { title: string }) {
     >
       est
     </span>
-  );
-}
-
-function BestCard({
-  icon,
-  label,
-  best,
-  accent,
-}: {
-  icon: ReactNode;
-  label: string;
-  best: BestPerformer | null;
-  accent: string;
-}) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  return (
-    <div
-      ref={magnetRef}
-      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5"
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</span>
-        <span className="text-[var(--text-3)]">{icon}</span>
-      </div>
-      {best ? (
-        <>
-          <div className={`text-lg font-semibold mt-3 truncate ${accent}`} title={best.label}>
-            {best.label}
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-1">
-            <span className="text-[var(--text-2)] font-medium">{pct(best.positiveResponseRate)} positive response</span> ·{" "}
-            {best.calls.toLocaleString()} calls
-          </div>
-        </>
-      ) : (
-        <div className="text-sm text-[var(--text-3)] mt-3">Not enough call volume to rank yet</div>
-      )}
-    </div>
   );
 }
 
@@ -419,12 +379,9 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
         <p className="text-center text-xs text-[var(--text-3)] py-8">Loading…</p>
       )}
 
-      {/* KPI grid — Row 2 best performers (min-volume gated). */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-        <BestCard icon={<Trophy size={14} />} label="Best Campaign" best={bestCampaign} accent="text-[var(--text-1)]" />
-        <BestCard icon={<Mic size={14} />} label="Best Voice Agent" best={bestAgent} accent="text-blue-400" />
-        <BestCard icon={<FileText size={14} />} label="Best Prompt" best={bestPrompt} accent="text-amber-300" />
-      </div>
+      {/* Top Performers — per-entity breakdown cards with per-row drill-down (Val's mockup, Slice E).
+          Labels resolved here (campaign/agent/prompt) so the card uses the same friendly text as before. */}
+      <TopPerformers best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }} filters={filters} />
 
       {/* Trend + Daily Volume side-by-side (compact); they stack on narrow screens. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
