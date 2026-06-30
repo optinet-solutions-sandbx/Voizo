@@ -32,6 +32,15 @@ export interface DrawerFilter {
   title: string;
 }
 
+// Entity scope override (Slice E Top Performers): when present, REPLACES the bar's campaign/agent/
+// prompt/phone dims with a single entity (range still carries over). campaign + prompt are honored by
+// the records endpoint directly; baseAgent rides the base-agent filter dimension added in E1.
+export interface DrawerScope {
+  campaignIds?: string[];
+  baseAgent?: string;
+  prompt?: string;
+}
+
 // Map a clicked total/row to the semantic drawer filter (copied verbatim from the Today mapping so the
 // two views classify identically). `card`/`rowKey` come from PerformanceCards.
 export function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
@@ -73,13 +82,21 @@ function buildRecordsQuery(
   outcome: AttemptTag | "reached" | "all",
   offset: number,
   limit: number | "all",
+  scope?: DrawerScope,
 ): string {
   const q = new URLSearchParams();
   q.set("range", filters.range);
-  if (filters.campaignIds.length) q.set("campaigns", filters.campaignIds.join(","));
-  if (filters.agent) q.set("agent", filters.agent);
-  if (filters.prompt) q.set("prompt", filters.prompt);
-  if (filters.phone.trim()) q.set("phone", filters.phone.trim());
+  if (scope) {
+    // Entity drill (Top Performers): scope REPLACES the bar's entity dims; range still applies.
+    if (scope.campaignIds?.length) q.set("campaigns", scope.campaignIds.join(","));
+    if (scope.baseAgent) q.set("baseAgent", scope.baseAgent);
+    if (scope.prompt) q.set("prompt", scope.prompt);
+  } else {
+    if (filters.campaignIds.length) q.set("campaigns", filters.campaignIds.join(","));
+    if (filters.agent) q.set("agent", filters.agent);
+    if (filters.prompt) q.set("prompt", filters.prompt);
+    if (filters.phone.trim()) q.set("phone", filters.phone.trim());
+  }
   if (dispo !== "all") q.set("status", dispo);
   if (outcome !== "all") q.set("outcome", outcome);
   if (slice.smsOnly) q.set("smsOnly", "true");
@@ -91,10 +108,12 @@ function buildRecordsQuery(
 export default function RangedRecordsDrawer({
   filters,
   filter,
+  scope,
   onClose,
 }: {
   filters: Filters;
   filter: DrawerFilter | null;
+  scope?: DrawerScope;
   onClose: () => void;
 }) {
   const open = filter !== null;
@@ -125,8 +144,8 @@ export default function RangedRecordsDrawer({
   // Scope = everything except the page offset. When it changes (bar filters, slice, or the refinement
   // dropdowns), reset to page 0 so we never request an out-of-range offset.
   const scopeKey = useMemo(
-    () => (filter ? buildRecordsQuery(filters, filter, dispo, outcome, 0, PAGE_SIZE) : ""),
-    [filters, filter, dispo, outcome],
+    () => (filter ? buildRecordsQuery(filters, filter, dispo, outcome, 0, PAGE_SIZE, scope) : ""),
+    [filters, filter, dispo, outcome, scope],
   );
   const [prevScope, setPrevScope] = useState(scopeKey);
   if (scopeKey !== prevScope) {
@@ -135,7 +154,7 @@ export default function RangedRecordsDrawer({
     setError(null);
   }
 
-  const currentKey = filter ? buildRecordsQuery(filters, filter, dispo, outcome, page * PAGE_SIZE, PAGE_SIZE) : "";
+  const currentKey = filter ? buildRecordsQuery(filters, filter, dispo, outcome, page * PAGE_SIZE, PAGE_SIZE, scope) : "";
   const data = currentKey ? cache[currentKey] : undefined;
   const loading = open && !!filter && !data && !error;
 
@@ -181,7 +200,7 @@ export default function RangedRecordsDrawer({
       setProgress({ current: 0, total: 0, stage: "Fetching export data…" });
       const ctrl = new AbortController();
       try {
-        const query = buildRecordsQuery(filters, filter, dispo, outcome, 0, "all");
+        const query = buildRecordsQuery(filters, filter, dispo, outcome, 0, "all", scope);
         const r = await fetch(`/api/dashboard/export-metadata?${query}`, { cache: "no-store", signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j: { leads: ExportLead[]; total: number; truncated: boolean; cap: number } = await r.json();
@@ -205,7 +224,7 @@ export default function RangedRecordsDrawer({
         setExporting(false);
       }
     },
-    [filters, filter, dispo, outcome],
+    [filters, filter, dispo, outcome, scope],
   );
 
   if (!open || !filter) return null;
