@@ -87,12 +87,32 @@ export async function GET(request: NextRequest) {
     numbers = numbers.concat((data ?? []) as unknown as DashNumberRow[]);
   }
 
+  // Roster size (total contacts) per RUNNING campaign — for the Today's-campaigns "N players" chip.
+  // Running campaigns are few, so a per-campaign head count is cheap; degrade to absent (→ players 0).
+  const campaignRows = (campaignsRes.data ?? []) as unknown as DashCampaignRow[];
+  const runningIds = campaignRows
+    .filter((c) => c.source !== "ghost_portal" && c.is_test !== true && c.status === "running")
+    .map((c) => c.id);
+  const rosterByCampaign = new Map<string, number>();
+  for (const id of runningIds) {
+    const { count, error } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", id);
+    if (error) {
+      console.error("[dashboard/today] roster count failed:", id, error);
+      continue;
+    }
+    rosterByCampaign.set(id, count ?? 0);
+  }
+
   const snapshot = computeToday(
     calls,
-    (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
+    campaignRows,
     (smsRes.data ?? []) as unknown as DashSmsRow[],
     now,
     numbers,
+    rosterByCampaign,
   );
 
   return NextResponse.json(snapshot);
