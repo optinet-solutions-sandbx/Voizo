@@ -879,6 +879,7 @@ export interface CallRecord {
   tag: ContactTag; // contact-level overall OUTCOME (drives the outcome filter + export)
   attempts: CallAttempt[]; // ordered by created_at asc; attempt 1 first
   lastAttemptedMs: number | null;
+  smsSent?: boolean; // contact was sent an SMS in this campaign (route-supplied) — drives the "SMS sent" slice
 }
 
 export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {

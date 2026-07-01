@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { recordToCsv, recordCsvFilename } from "./recordsDisplay";
-import type { CallRecord } from "../../lib/dashboardAnalytics";
+import { recordToCsv, recordCsvFilename, sliceMatches } from "./recordsDisplay";
+import type { CallRecord, AttemptTag, CallAttempt } from "../../lib/dashboardAnalytics";
 
 describe("recordToCsv — per-row CSV export (A1)", () => {
   it("serializes a contact's visible fields to a header + one data row", () => {
@@ -46,5 +46,31 @@ describe("recordCsvFilename", () => {
   it("falls back to the campaignNumberId when phone is null", () => {
     const rec = { campaignNumberId: "cn-2", phone: null, status: "unreached", tag: "unreachable", attempts: [], lastAttemptedMs: null } as CallRecord;
     expect(recordCsvFilename(rec)).toBe("voizo_contact_cn2.csv");
+  });
+});
+
+describe("sliceMatches — records slice filter (campaign expand click-to-filter)", () => {
+  const rec = (over: Partial<CallRecord>): CallRecord => ({
+    campaignNumberId: "cn", phone: "+1", status: "unreached", tag: "unreachable", attempts: [], lastAttemptedMs: null, ...over,
+  });
+  const att = (tag: AttemptTag): CallAttempt => ({ index: 1, tag, atMs: null });
+
+  it("all → always true", () => {
+    expect(sliceMatches(rec({}), { kind: "all" })).toBe(true);
+  });
+  it("outcome → matches a contact whose attempt carries the tag", () => {
+    expect(sliceMatches(rec({ attempts: [att("voicemail")] }), { kind: "outcome", tag: "voicemail" })).toBe(true);
+    expect(sliceMatches(rec({ attempts: [att("unreachable")] }), { kind: "outcome", tag: "voicemail" })).toBe(false);
+  });
+  it("reached → true iff a human-answered attempt (positive/neutral/declined/early_hangup)", () => {
+    expect(sliceMatches(rec({ attempts: [att("early_hangup")] }), { kind: "reached" })).toBe(true);
+    expect(sliceMatches(rec({ attempts: [att("positive")] }), { kind: "reached" })).toBe(true);
+    expect(sliceMatches(rec({ attempts: [att("voicemail")] }), { kind: "reached" })).toBe(false);
+    expect(sliceMatches(rec({ attempts: [att("unreachable")] }), { kind: "reached" })).toBe(false);
+  });
+  it("texted → keys off smsSent", () => {
+    expect(sliceMatches(rec({ smsSent: true }), { kind: "texted" })).toBe(true);
+    expect(sliceMatches(rec({ smsSent: false }), { kind: "texted" })).toBe(false);
+    expect(sliceMatches(rec({}), { kind: "texted" })).toBe(false);
   });
 });

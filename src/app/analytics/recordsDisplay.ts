@@ -3,7 +3,7 @@
 // only-export-components). Single source for the Status DISPOSITION chips and the per-attempt
 // OUTCOME filter order, used by RecordsTable, CallRecords, and TodayRecordsDrawer.
 import type { RecordStatus, AttemptTag, CallRecord } from "../../lib/dashboardAnalytics";
-import { ATTEMPT_TAG_LABELS } from "../../lib/dashboardAnalytics";
+import { ATTEMPT_TAG_LABELS, recordHasAttemptOutcome } from "../../lib/dashboardAnalytics";
 import { csvCell, CSV_BOM } from "../../lib/download";
 
 export const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
@@ -47,4 +47,28 @@ export function recordToCsv(record: CallRecord): string {
 export function recordCsvFilename(record: CallRecord): string {
   const id = (record.phone ?? record.campaignNumberId).replace(/[^0-9A-Za-z]/g, "");
   return `voizo_contact_${id || "record"}.csv`;
+}
+
+// ── Records slice filter (campaign expand click-to-filter) ───────────────────
+// A metric/breakdown click in CampaignSummary maps to one of these slices; CallRecords filters by it.
+export type RecordSlice =
+  | { kind: "all" }
+  | { kind: "outcome"; tag: AttemptTag }
+  | { kind: "reached" }
+  | { kind: "texted" };
+
+// "Reached" = a live human answered — any attempt that connected to a person (not voicemail / no-connect).
+const REACHED_TAGS = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup"]);
+
+export function sliceMatches(r: CallRecord, s: RecordSlice): boolean {
+  switch (s.kind) {
+    case "all":
+      return true;
+    case "outcome":
+      return recordHasAttemptOutcome(r, s.tag);
+    case "reached":
+      return r.attempts.some((a) => REACHED_TAGS.has(a.tag));
+    case "texted":
+      return r.smsSent === true;
+  }
 }

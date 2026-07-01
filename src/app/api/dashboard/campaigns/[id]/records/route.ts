@@ -33,7 +33,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   // Page past the 1000-row cap so a hot campaign (>1000 numbers/calls) isn't truncated.
-  const [numbersData, callsData] = await Promise.all([
+  const [numbersData, callsData, smsData] = await Promise.all([
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, phone_e164, outcome", "id", {
       column: "campaign_id",
       value: id,
@@ -45,12 +45,24 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       "id",
       { column: "campaign_id", value: id },
     ),
+    // Contacts texted in this campaign → the "SMS sent" records slice.
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_number_id, status", "id", {
+      column: "campaign_id",
+      value: id,
+    }),
   ]);
+
+  const textedIds = new Set(
+    (smsData as unknown as Array<{ campaign_number_id: string | null; status: string | null }>)
+      .filter((s) => (s.status === "sent" || s.status === "delivered") && s.campaign_number_id)
+      .map((s) => s.campaign_number_id as string),
+  );
 
   const records = computeCallRecords(
     numbersData as unknown as DashNumberRow[],
     callsData as unknown as DashCallRow[],
   );
+  for (const r of records) r.smsSent = textedIds.has(r.campaignNumberId);
   records.sort((a, b) => (b.lastAttemptedMs ?? 0) - (a.lastAttemptedMs ?? 0));
 
   return NextResponse.json({ records });
