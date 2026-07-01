@@ -127,13 +127,14 @@ export default function CampaignTable() {
   const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics | null>>({});
   const [page, setPage] = useState(1);
 
-  const load = useCallback(async (f: string, t: string) => {
+  // The server returns ALL live campaigns with LIFETIME metrics regardless of from/to (it does not
+  // window them). So we fetch ONCE and let the date range filter the list client-side (see `visible`
+  // + activeInRange). No refetch on date change — that would re-run a heavy fetchAllRows for identical
+  // data. The date range narrows WHICH campaigns are listed (by activity overlap); the numbers stay lifetime.
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = new URLSearchParams();
-      if (f) qs.set("from", f);
-      if (t) qs.set("to", t);
-      const res = await fetch(`/api/dashboard/campaigns?${qs.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/dashboard/campaigns`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData((await res.json()) as Resp);
       setError(null);
@@ -145,19 +146,21 @@ export default function CampaignTable() {
   }, []);
 
   useEffect(() => {
-    load(from, to);
-  }, [load, from, to]);
+    load();
+  }, [load]);
 
-  // Reset to page 1 whenever the filters/sort/date change so you never land on an empty page.
-  useEffect(() => setPage(1), [hidden, sort, from, to]);
-
-  const toggleStatus = (s: DisplayStatus) =>
+  // Reset to page 1 whenever a filter/sort/date changes — done in the handlers (matches the SortControl
+  // pattern in RankedTables), NOT a state→state effect. `safePage` still clamps as a safety net so you
+  // never land on an empty page.
+  const toggleStatus = (s: DisplayStatus) => {
+    setPage(1);
     setHidden((prev) => {
       const next = new Set(prev);
       if (next.has(s)) next.delete(s);
       else next.add(s);
       return next;
     });
+  };
 
   const fetchAnalytics = useCallback(async (id: string) => {
     try {
@@ -183,8 +186,11 @@ export default function CampaignTable() {
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
 
+  // Date range (client-side): keep campaigns whose activity span overlaps the picked [from, to].
+  const fromMs = parseDayMs(from, false);
+  const toMs = parseDayMs(to, true);
   const visible = rows
-    .filter((r) => !hidden.has(r.displayStatus))
+    .filter((r) => !hidden.has(r.displayStatus) && activeInRange(r, fromMs, toMs))
     .sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
 
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -200,7 +206,7 @@ export default function CampaignTable() {
         </div>
         <SortControl
           sort={sort}
-          setSort={setSort}
+          setSort={(s) => { setSort(s); setPage(1); }}
           keys={["newest", "calls", "reached", "sms"]}
           labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
         />
@@ -224,15 +230,15 @@ export default function CampaignTable() {
           );
         })}
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
-        <DatePickerField value={from} onChange={setFrom} placeholder="From date" ariaLabel="From date" />
+        <DatePickerField value={from} onChange={(v) => { setFrom(v); setPage(1); }} placeholder="From date" ariaLabel="From date" />
         <span className="text-[var(--text-3)] text-xs">→</span>
-        <DatePickerField value={to} onChange={setTo} placeholder="To date" ariaLabel="To date" />
+        <DatePickerField value={to} onChange={(v) => { setTo(v); setPage(1); }} placeholder="To date" ariaLabel="To date" />
         {(from || to) && (
-          <button onClick={() => { setFrom(""); setTo(""); }} className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]">
+          <button type="button" onClick={() => { setFrom(""); setTo(""); setPage(1); }} className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]">
             Reset
           </button>
         )}
-        {!from && !to && <span className="text-[11px] text-[var(--text-3)]">Last 30 days</span>}
+        <span className="text-[11px] text-[var(--text-3)]">{from || to ? "activity in range · lifetime totals" : "all campaigns · lifetime totals"}</span>
         {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
