@@ -13,7 +13,9 @@ import {
   ATTEMPT_TAG_COLOR,
   ATTEMPT_TAG_DESC,
 } from "@/lib/dashboardAnalytics";
-import { DISPO_LABEL, DISPO_COLOR } from "./recordsDisplay";
+import { Download } from "lucide-react";
+import { triggerDownload } from "@/lib/download";
+import { DISPO_LABEL, DISPO_COLOR, recordToCsv, recordCsvFilename } from "./recordsDisplay";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -63,7 +65,7 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
   for (const r of records) if (r.attempts.length > maxAttempts) maxAttempts = r.attempts.length;
   maxAttempts = Math.min(maxAttempts, MAX_ATTEMPT_COLS);
   const attemptCols = Array.from({ length: maxAttempts }, (_, i) => i); // 0-based attempt indices
-  const colSpan = 3 + maxAttempts; // # · Phone · Status · …attempts… · Last Attempted
+  const colSpan = 4 + maxAttempts; // # · Phone · Status · …attempts… · Last Attempted · Export
 
   return (
     <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
@@ -80,6 +82,7 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
               </th>
             ))}
             <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
+            <th className="text-right text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-16">Export</th>
           </tr>
         </thead>
         <tbody>
@@ -106,6 +109,17 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
                   return <AttemptCell key={`attempt-${idx}`} attempt={r.attempts[idx]} overflow={overflow} />;
                 })}
                 <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => triggerDownload(new Blob([recordToCsv(r)], { type: "text/csv;charset=utf-8" }), recordCsvFilename(r))}
+                    title="Export this contact as CSV"
+                    aria-label={`Export ${r.phone ?? "contact"} as CSV`}
+                    className="inline-flex items-center justify-center rounded-md p-1 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                  >
+                    <Download size={13} />
+                  </button>
+                </td>
               </tr>
             ))
           )}

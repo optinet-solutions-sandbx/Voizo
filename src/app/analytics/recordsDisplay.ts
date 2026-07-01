@@ -2,7 +2,9 @@
 // so that component file only exports a component (React Fast Refresh / react-doctor
 // only-export-components). Single source for the Status DISPOSITION chips and the per-attempt
 // OUTCOME filter order, used by RecordsTable, CallRecords, and TodayRecordsDrawer.
-import type { RecordStatus, AttemptTag } from "@/lib/dashboardAnalytics";
+import type { RecordStatus, AttemptTag, CallRecord } from "../../lib/dashboardAnalytics";
+import { ATTEMPT_TAG_LABELS } from "../../lib/dashboardAnalytics";
+import { csvCell, CSV_BOM } from "../../lib/download";
 
 export const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
 export const DISPO_LABEL: Record<RecordStatus, string> = {
@@ -23,3 +25,26 @@ export const DISPO_COLOR: Record<RecordStatus, string> = {
 };
 // Attempt columns + the outcome filter = per-call OUTCOME categories (the AttemptTag set).
 export const OUTCOME_ORDER: AttemptTag[] = ["positive", "neutral", "declined", "early_hangup", "voicemail", "unreachable"];
+
+// ── Per-row CSV export (A1) ──────────────────────────────────────────────────
+// Serialize ONE contact's visible fields to a self-describing 1-row CSV (BOM + header + row),
+// entirely client-side from the already-loaded CallRecord — no fetch, no campaignId needed, so the
+// per-row download works in both the per-campaign panel and the cross-campaign drawers. Reuses the
+// shared csvCell (RFC-4180 quoting + formula-injection guard) + CSV_BOM so it matches the bulk exports.
+export function recordToCsv(record: CallRecord): string {
+  const attemptCols = record.attempts.map((_, i) => `Attempt ${i + 1}`);
+  const header = ["Phone", "Status", ...attemptCols, "Last Attempted"];
+  const row: Array<string | null> = [
+    record.phone,
+    DISPO_LABEL[record.status],
+    ...record.attempts.map((a) => ATTEMPT_TAG_LABELS[a.tag]),
+    record.lastAttemptedMs === null ? null : new Date(record.lastAttemptedMs).toISOString(),
+  ];
+  return `${CSV_BOM}${header.map(csvCell).join(",")}\r\n${row.map(csvCell).join(",")}\r\n`;
+}
+
+/** Safe download filename for a single contact's CSV (alphanumerics of phone, else the number id). */
+export function recordCsvFilename(record: CallRecord): string {
+  const id = (record.phone ?? record.campaignNumberId).replace(/[^0-9A-Za-z]/g, "");
+  return `voizo_contact_${id || "record"}.csv`;
+}
