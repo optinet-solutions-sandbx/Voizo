@@ -77,9 +77,9 @@ export default function TopPerformers({
             </div>
             {c.best.perf ? (
               <div className="grid gap-3 mt-1">
-                <BreakdownColumn metric={c.best.perf.callAttempts} label="Call attempts" onTotal={() => openSlice(c.scope, c.label, "callAttempts")} onRow={(r) => openSlice(c.scope, c.label, "callAttempts", r)} />
-                <BreakdownColumn metric={c.best.perf.reached} label="Reached" onTotal={() => openSlice(c.scope, c.label, "reached")} onRow={(r) => openSlice(c.scope, c.label, "reached", r)} />
-                <BreakdownColumn metric={c.best.perf.sms} label="SMS sent" onTotal={() => openSlice(c.scope, c.label, "sms")} onRow={(r) => openSlice(c.scope, c.label, "sms", r)} />
+                <BreakdownColumn metric={c.best.perf.callAttempts} label="Call attempts" collapsible onTotal={() => openSlice(c.scope, c.label, "callAttempts")} onRow={(r) => openSlice(c.scope, c.label, "callAttempts", r)} />
+                <BreakdownColumn metric={c.best.perf.reached} label="Reached" collapsible onTotal={() => openSlice(c.scope, c.label, "reached")} onRow={(r) => openSlice(c.scope, c.label, "reached", r)} />
+                <BreakdownColumn metric={c.best.perf.sms} label="SMS sent" collapsible onTotal={() => openSlice(c.scope, c.label, "sms")} onRow={(r) => openSlice(c.scope, c.label, "sms", r)} />
               </div>
             ) : (
               <div className="text-xs text-[var(--text-3)] mt-1">Breakdown unavailable for this window.</div>
