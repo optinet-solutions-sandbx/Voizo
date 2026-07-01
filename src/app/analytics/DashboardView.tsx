@@ -91,14 +91,15 @@ export default function DashboardView() {
         </div>
       </div>
 
+      {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
+          SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer.
+          Pinned above the running-campaign rows (Jasiel 2026-07-01) so the headline metrics stay on top. */}
+      <TodayPerformanceCards data={data} />
+
       {/* Today's campaigns — expandable per-campaign rows (Val's mockup, Slice A). Hidden when none running. */}
       {data && data.runningCampaigns.length > 0 && (
         <TodaysCampaigns campaigns={data.runningCampaigns} />
       )}
-
-      {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
-          SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer. */}
-      <TodayPerformanceCards data={data} />
 
       {data && data.runningCampaigns.length === 0 && (
         <p className="text-center text-xs text-[var(--text-3)] py-1">No campaigns are running right now.</p>
