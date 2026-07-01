@@ -52,7 +52,7 @@ function Pill({ pct, color }: { pct: number | null; color: string }) {
 function Bar({ pct, color }: { pct: number | null; color: string }) {
   const w = pct === null ? 0 : Math.max(pct * 100, pct > 0 ? 2 : 0);
   return (
-    <span className="block h-[3px] rounded-full bg-[var(--bg-elevated)] overflow-hidden">
+    <span className="block h-[2px] rounded-full bg-[var(--bg-elevated)] overflow-hidden">
       <span className="block h-full rounded-full" style={{ width: `${w}%`, background: color }} />
     </span>
   );
@@ -66,7 +66,7 @@ function Row({ row, onOpen, showDeltas, indent = false }: { row: PerfRow; onOpen
     <button
       type="button"
       onClick={onOpen}
-      className={`w-full text-left rounded-md px-1.5 py-1 -mx-1.5 hover:bg-[var(--bg-hover)] transition-colors ${indent ? "pl-4" : ""}`}
+      className={`w-full text-left rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-[var(--bg-hover)] transition-colors ${indent ? "pl-4" : ""}`}
     >
       <div className="flex items-center gap-2">
         <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color }} />
@@ -80,7 +80,7 @@ function Row({ row, onOpen, showDeltas, indent = false }: { row: PerfRow; onOpen
         <Pill pct={row.pct} color={color} />
         {showDeltas && <DeltaChips a={row.deltaPpVsYesterday} b={row.deltaPpVsSevenDayAvg} fmt={ppText} />}
       </div>
-      <div className="mt-1"><Bar pct={row.pct} color={color} /></div>
+      <div className="mt-0.5"><Bar pct={row.pct} color={color} /></div>
     </button>
   );
 }
@@ -103,7 +103,7 @@ function MetricCard({
   onOpenRow: (row: PerfRow, parentKey?: string) => void;
 }) {
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 flex flex-col gap-3">
+    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-3 flex flex-col gap-2.5">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</div>
       <button type="button" onClick={onOpenTotal} className="flex items-baseline gap-2 text-left group w-fit">
         <span className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-blue-400 transition-colors">
@@ -114,13 +114,13 @@ function MetricCard({
       {inFlight !== undefined && inFlight > 0 && (
         <div className="text-[10px] text-[var(--text-3)]">+{inFlight.toLocaleString()} in progress</div>
       )}
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         {metric.rows.map((row) => (
-          <div key={row.key} className="flex flex-col gap-1.5">
+          <div key={row.key} className="flex flex-col gap-1">
             <Row row={row} showDeltas={showDeltas} onOpen={() => onOpenRow(row)} />
             {/* SMS "by response" sub-rows live under the Reached row. */}
             {isSms && row.subRows && row.subRows.length > 0 && (
-              <div className="flex flex-col gap-1 border-l border-[var(--border)] ml-1.5">
+              <div className="flex flex-col gap-0.5 border-l border-[var(--border)] ml-1.5">
                 {row.subRows.map((sub) => (
                   <Row key={sub.key} row={sub} indent showDeltas={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
                 ))}
@@ -149,7 +149,7 @@ export default function PerformanceCards({
   // suppress it there. This matches Val's mockup, which shows no "in progress" on the Global cards.
   const callInFlight = showDeltas ? perf.inFlight : undefined;
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
       <MetricCard
         label="Call attempts"
         metric={perf.callAttempts}
