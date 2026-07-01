@@ -35,9 +35,20 @@ export default function TopPerformers({
 
   // A clicked total/row → the same semantic slice as the Global cards, scoped to the entity and with
   // an entity-prefixed title (e.g. "Best campaign · Reached"). rowFilter ignores the parent key.
+  // Re-clicking the slice that's already open closes the drawer (toggle) — same scope + same
+  // status/outcome/smsOnly (title is derived, so ignored).
   const openSlice = (scope: DrawerScope, entityLabel: string, card: Card, row?: PerfRow) => {
     const base = row ? rowFilter(card, row.key, row.label) : totalFilter(card);
-    setDrawer({ scope, filter: { ...base, title: `${entityLabel} · ${base.title}` } });
+    const next = { scope, filter: { ...base, title: `${entityLabel} · ${base.title}` } };
+    setDrawer((prev) =>
+      prev &&
+      JSON.stringify(prev.scope) === JSON.stringify(next.scope) &&
+      prev.filter.status === next.filter.status &&
+      prev.filter.outcome === next.filter.outcome &&
+      prev.filter.smsOnly === next.filter.smsOnly
+        ? null
+        : next,
+    );
   };
 
   // Labels are already resolved by the caller (campaign/agent/prompt friendly text).

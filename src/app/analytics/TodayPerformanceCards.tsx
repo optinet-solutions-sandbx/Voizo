@@ -36,8 +36,14 @@ export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | 
   // Close the drawer when switching the day (its records are day-scoped).
   const switchDay = (d: "today" | "yesterday") => { setDay(d); setFilter(null); };
 
-  const openTotal = (card: "callAttempts" | "reached" | "sms") => setFilter(totalFilter(card));
-  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) => setFilter(rowFilter(card, row.key, row.label));
+  // Re-clicking the slice that's already open closes the drawer (toggle) — status+outcome+smsOnly
+  // identify a slice; the title is derived so it's ignored.
+  const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
+    !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
+  const openTotal = (card: "callAttempts" | "reached" | "sms") =>
+    setFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) =>
+    setFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
 
   const toggle = useMemo(
     () => (

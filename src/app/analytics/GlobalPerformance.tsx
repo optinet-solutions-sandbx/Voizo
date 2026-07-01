@@ -179,8 +179,13 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
   const [loading, setLoading] = useState(false);
   // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
   const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
-  const openTotal = (card: "callAttempts" | "reached" | "sms") => setDrawerFilter(totalFilter(card));
-  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) => setDrawerFilter(rowFilter(card, row.key, row.label));
+  // Re-clicking the open slice closes the drawer (toggle); status+outcome+smsOnly identify a slice.
+  const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
+    !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
+  const openTotal = (card: "callAttempts" | "reached" | "sms") =>
+    setDrawerFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) =>
+    setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
 
   const load = useCallback(async (query: string) => {
     setLoading(true);
