@@ -51,7 +51,7 @@ interface Resp {
 
 const STATUS_ORDER: DisplayStatus[] = ["running", "completed", "ended", "paused", "inactive"];
 
-const PAGE_SIZE = 10; // rows per page (mirrors the /campaigns list)
+const PAGE_SIZE = 5; // rows per page (Jasiel 2026-07-01: 5 → less scrolling, paginate the rest)
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtShort(iso: string | null): string | null {

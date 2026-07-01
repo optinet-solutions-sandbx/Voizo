@@ -1,13 +1,13 @@
 "use client";
 
-// The content of an expanded campaigns-list row. Leads with the legible CampaignSummary, then
-// progressive-disclosure drill-ins (call records, the prompt that ran, the engineer-grade deep
-// dive) + the always-useful actions (per-campaign export, open the campaign). Records/advanced
-// are toggles so the default stays compact; "View prompt" opens a modal.
+// The content of an expanded campaigns-list row. Leads with the legible CampaignSummary, whose
+// metrics/breakdown rows are click-to-filter: clicking one opens the inline records filtered to that
+// slice (re-click or the badge × closes). Plus the always-useful actions (View prompt modal,
+// per-campaign export, open the campaign) and a quiet "Advanced analytics" link for the deep dive.
 
 import { useState } from "react";
 import Link from "next/link";
-import { Download, ChevronDown, ListChecks, FileText } from "lucide-react";
+import { Download, ChevronDown, FileText } from "lucide-react";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
 import { triggerDownload } from "@/lib/download";
 import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
@@ -16,6 +16,7 @@ import CampaignSummary from "./CampaignSummary";
 import AnalyticsRowExpand from "./AnalyticsRowExpand";
 import CallRecords from "@/app/analytics/CallRecords";
 import PromptModal from "@/app/analytics/PromptModal";
+import { type RecordSlice, sliceEq } from "@/app/analytics/recordsDisplay";
 
 const toggleCls =
   "inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]";
@@ -24,24 +25,23 @@ const exportCls =
 
 export default function CampaignExpand({ a }: { a: CampaignAnalytics }) {
   const [advanced, setAdvanced] = useState(false);
-  const [showRecords, setShowRecords] = useState(false);
+  const [pick, setPick] = useState<{ slice: RecordSlice; label: string } | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
+
+  // Click a metric/breakdown row in the overview → open the records filtered to that slice;
+  // click the same one again → close (toggle).
+  const togglePick = (slice: RecordSlice, label: string) =>
+    setPick((prev) => (prev && sliceEq(prev.slice, slice) ? null : { slice, label }));
 
   return (
     <div className="grid gap-4">
-      <CampaignSummary a={a} />
+      {/* Overview — its metrics/breakdown rows are click-to-filter, driving the inline records below. */}
+      <CampaignSummary a={a} onPick={togglePick} active={pick?.slice ?? null} />
 
-      {/* Drill-ins (left) + export / open (right). */}
+      {/* Actions: View prompt (prominent) + per-campaign export / open (right). */}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setShowRecords((v) => !v)} className={toggleCls}>
-          <ListChecks size={13} /> {showRecords ? "Hide call records" : "Call records"}
-        </button>
         <button type="button" onClick={() => setPromptOpen(true)} className={toggleCls}>
           <FileText size={13} /> View prompt
-        </button>
-        <button type="button" onClick={() => setAdvanced((v) => !v)} className={toggleCls}>
-          <ChevronDown size={13} className={`transition-transform ${advanced ? "rotate-180" : ""}`} />
-          {advanced ? "Hide advanced" : "Advanced analytics"}
         </button>
 
         <div className="ml-auto flex items-center gap-2">
@@ -71,13 +71,29 @@ export default function CampaignExpand({ a }: { a: CampaignAnalytics }) {
         </div>
       </div>
 
-      {showRecords && <CallRecords campaignId={a.id} />}
-
-      {advanced && (
-        <div className="border-t border-[var(--border)] pt-4">
-          <AnalyticsRowExpand a={a} />
-        </div>
+      {/* Inline records — appears when a metric/row is clicked, filtered to that slice (× or re-click
+          closes). Not keyed by slice: CallRecords filters reactively by the `slice` prop, so switching
+          metrics re-filters instantly with no re-fetch (records are the same campaign). */}
+      {pick && (
+        <CallRecords campaignId={a.id} slice={pick.slice} sliceLabel={pick.label} onClose={() => setPick(null)} />
       )}
+
+      {/* Advanced analytics — nice-to-have; quiet link at the bottom. */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setAdvanced((v) => !v)}
+          className="inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] transition hover:text-[var(--text-2)]"
+        >
+          <ChevronDown size={11} className={`transition-transform ${advanced ? "rotate-180" : ""}`} />
+          {advanced ? "Hide advanced analytics" : "Advanced analytics"}
+        </button>
+        {advanced && (
+          <div className="mt-2 border-t border-[var(--border)] pt-4">
+            <AnalyticsRowExpand a={a} />
+          </div>
+        )}
+      </div>
 
       {promptOpen && (
         <PromptModal campaignId={a.id} title={formatCampaign(a.name).display} onClose={() => setPromptOpen(false)} />

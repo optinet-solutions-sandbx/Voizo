@@ -72,3 +72,10 @@ export function sliceMatches(r: CallRecord, s: RecordSlice): boolean {
       return r.smsSent === true;
   }
 }
+
+// Slice equality — drives the active-highlight (CampaignSummary) + toggle-close (CampaignExpand).
+export function sliceEq(a: RecordSlice | null, b: RecordSlice | null): boolean {
+  if (!a || !b) return a === b;
+  if (a.kind !== b.kind) return false;
+  return a.kind === "outcome" && b.kind === "outcome" ? a.tag === b.tag : true;
+}

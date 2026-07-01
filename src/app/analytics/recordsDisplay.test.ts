@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { recordToCsv, recordCsvFilename, sliceMatches } from "./recordsDisplay";
+import { recordToCsv, recordCsvFilename, sliceMatches, sliceEq } from "./recordsDisplay";
 import type { CallRecord, AttemptTag, CallAttempt } from "../../lib/dashboardAnalytics";
 
 describe("recordToCsv — per-row CSV export (A1)", () => {
@@ -72,5 +72,21 @@ describe("sliceMatches — records slice filter (campaign expand click-to-filter
     expect(sliceMatches(rec({ smsSent: true }), { kind: "texted" })).toBe(true);
     expect(sliceMatches(rec({ smsSent: false }), { kind: "texted" })).toBe(false);
     expect(sliceMatches(rec({}), { kind: "texted" })).toBe(false);
+  });
+});
+
+describe("sliceEq — slice equality (highlight + toggle-close)", () => {
+  it("same kind (and tag for outcome) → equal", () => {
+    expect(sliceEq({ kind: "all" }, { kind: "all" })).toBe(true);
+    expect(sliceEq({ kind: "reached" }, { kind: "reached" })).toBe(true);
+    expect(sliceEq({ kind: "outcome", tag: "voicemail" }, { kind: "outcome", tag: "voicemail" })).toBe(true);
+  });
+  it("different kind or tag → not equal", () => {
+    expect(sliceEq({ kind: "reached" }, { kind: "all" })).toBe(false);
+    expect(sliceEq({ kind: "outcome", tag: "voicemail" }, { kind: "outcome", tag: "positive" })).toBe(false);
+  });
+  it("null handling", () => {
+    expect(sliceEq(null, null)).toBe(true);
+    expect(sliceEq(null, { kind: "all" })).toBe(false);
   });
 });
