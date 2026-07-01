@@ -7,7 +7,7 @@
 // stay on the per-campaign page because they're campaign-scoped (this view spans all campaigns).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X, FileText, Search } from "lucide-react";
+import { X, FileText, Mic, ScrollText, Search } from "lucide-react";
 import {
   type TodayCallRecord,
   type RecordStatus,
@@ -16,6 +16,8 @@ import {
   recordHasAttemptOutcome,
   recordIsReached,
 } from "@/lib/dashboardAnalytics";
+import { runExport, type ExportMode, type ExportProgress } from "@/lib/recordsExportEngine";
+import type { ExportLead } from "@/lib/exportLeads";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import RecordsTable from "./RecordsTable";
 import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./recordsDisplay";
@@ -39,36 +41,6 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function isoDateTime(ms: number | null): string {
-  if (ms === null) return "";
-  const d = new Date(ms);
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-}
-
-// Client-side CSV from the VISIBLE records (no campaignId needed). Audio/Transcripts are
-// per-campaign exports and intentionally not offered in this cross-campaign drawer.
-function downloadCsv(records: TodayCallRecord[], filename: string) {
-  const header = ["#", "Phone", "Status", "Attempt outcomes", "Texted today", "Last attempted (UTC)"];
-  const lines = records.map((r, i) => [
-    String(i + 1),
-    r.phone ?? "",
-    DISPO_LABEL[r.status],
-    r.attempts.map((a) => ATTEMPT_TAG_LABELS[a.tag]).join(" | "),
-    r.smsSentToday ? "yes" : "no",
-    isoDateTime(r.lastAttemptedMs),
-  ]);
-  const esc = (cell: string) => `"${cell.replace(/"/g, '""')}"`;
-  const csv = [header, ...lines].map((row) => row.map(esc).join(",")).join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function TodayRecordsDrawer({
   day,
   filter,
@@ -82,6 +54,11 @@ export default function TodayRecordsDrawer({
   // Records cached per day-view (and per preview date). Keyed so switching the toggle refetches once.
   const [cache, setCache] = useState<Record<string, TodayCallRecord[]>>({});
   const [error, setError] = useState<string | null>(null);
+  // Export state (CSV/Audio/Transcripts via the shared runExport engine). Day's ExportLeads are
+  // lazily fetched + cached per day, then filtered to the visible set.
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState<ExportProgress>({ current: 0, total: 0, stage: "" });
+  const [leadCache, setLeadCache] = useState<Record<string, Record<string, ExportLead>>>({});
   // The drawer's own refinement controls, seeded from the clicked slice.
   const [dispo, setDispo] = useState<RecordStatus | "all">("all");
   const [outcome, setOutcome] = useState<AttemptTag | "reached" | "all">("all");
@@ -149,10 +126,47 @@ export default function TodayRecordsDrawer({
     });
   }, [records, filter, dispo, outcome, phone]);
 
-  const onExport = useCallback(() => {
-    const slug = (filter?.title ?? "records").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    downloadCsv(visible, `today-${day}-${slug || "records"}.csv`);
-  }, [visible, filter, day]);
+  // CSV / Audio / Transcripts of the VISIBLE set via the shared runExport engine (event handler — not
+  // an effect). Lazily fetch + cache the day's ExportLeads, then map the visible contacts by
+  // campaign_number_id so the export matches exactly what's on screen. Audio inherits the engine's
+  // 500-recording cap (throws → shown as the error).
+  const runDrawerExport = useCallback(
+    async (mode: ExportMode) => {
+      setExporting(true);
+      setError(null);
+      setProgress({ current: 0, total: 0, stage: "Fetching export data…" });
+      const ctrl = new AbortController();
+      try {
+        let leadsByNumber = leadCache[day];
+        if (!leadsByNumber) {
+          const r = await fetch(`/api/dashboard/today/export-metadata?day=${day}`, { cache: "no-store", signal: ctrl.signal });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j = (await r.json()) as { leadsByNumber?: Record<string, ExportLead> };
+          leadsByNumber = j.leadsByNumber ?? {};
+          setLeadCache((c) => ({ ...c, [day]: leadsByNumber }));
+        }
+        const leads = visible.map((rec) => leadsByNumber?.[rec.campaignNumberId]).filter((l): l is ExportLead => !!l);
+        if (!leads.length) throw new Error("No records match this filter.");
+        const slug = (filter?.title ?? "records").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "records";
+        const base = `today-${day}-${slug}`;
+        const includeSmsCols = (filter?.smsOnly ?? false) || outcome === "positive" || outcome === "all";
+        await runExport({
+          leads,
+          mode,
+          includeSmsCols,
+          filename: (m) => (m === "transcripts" ? `${base}_transcripts.zip` : m === "csv" ? `${base}.csv` : `${base}.zip`),
+          signal: ctrl.signal,
+          onProgress: setProgress,
+        });
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Export failed");
+      } finally {
+        setExporting(false);
+      }
+    },
+    [visible, filter, day, outcome, leadCache],
+  );
 
   if (!open) return null;
 
@@ -176,14 +190,22 @@ export default function TodayRecordsDrawer({
 
       {/* Toolbar: CSV export + status/outcome filters + search */}
       <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-[var(--border)]">
-        <button
-          type="button"
-          onClick={onExport}
-          disabled={!records || visible.length === 0}
-          className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <FileText size={13} /> CSV export
-        </button>
+        {[
+          { mode: "csv" as const, label: "CSV", icon: <FileText size={13} /> },
+          { mode: "audio" as const, label: "Audio", icon: <Mic size={13} /> },
+          { mode: "transcripts" as const, label: "Transcripts", icon: <ScrollText size={13} /> },
+        ].map((b) => (
+          <button
+            key={b.mode}
+            type="button"
+            onClick={() => runDrawerExport(b.mode)}
+            disabled={exporting || !records || visible.length === 0}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {b.icon} {b.label}
+          </button>
+        ))}
+        {exporting && <span className="text-[11px] text-[var(--text-3)]">{progress.stage || "Exporting…"}</span>}
         <span className="w-px h-4 bg-[var(--border)] mx-0.5" />
         <div className="w-[160px]">
           <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
