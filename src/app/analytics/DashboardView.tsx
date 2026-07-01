@@ -13,6 +13,7 @@ import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
+import SectionIsland from "./SectionIsland";
 
 const POLL_MS = 30_000;
 
@@ -60,6 +61,8 @@ export default function DashboardView() {
     <>
       {/* Background dot-field is now global (rendered once in the app layout). */}
       <div className="p-6 max-w-[1400px] mx-auto w-full grid gap-5">
+      {/* Today island (emerald) — the always-live snapshot, never affected by the filters. */}
+      <SectionIsland accent="emerald">
       {/* Header */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
@@ -100,11 +103,13 @@ export default function DashboardView() {
       {data && data.runningCampaigns.length === 0 && (
         <p className="text-center text-xs text-[var(--text-3)] py-1">No campaigns are running right now.</p>
       )}
+      </SectionIsland>
 
-      {/* Global Performance — filters + KPI grid → charts → campaign table → heatmap → ranked tables.
-          (Charts/heatmap/ranked tables share GlobalPerformance's fetched data, so the section owns the
-          full ordered flow; the campaign table is self-contained and slotted into that order.) */}
+      {/* Global island (blue) — filtered historical performance: filters + KPI grid → charts →
+          campaign table → heatmap → ranked tables. GlobalPerformance owns its own ordered flow. */}
+      <SectionIsland accent="blue">
       <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
+      </SectionIsland>
       </div>
     </>
   );
