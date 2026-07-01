@@ -269,6 +269,7 @@ export default function CampaignTable() {
                   voiceId: r.voiceId,
                   agentLabel: r.agentLabel,
                   baseAssistantId: r.baseAssistantId,
+                  scheduleType: r.scheduleType,
                   status: r.displayStatus,
                   timeLabel: runWindow(r),
                   players: r.players,

@@ -83,6 +83,7 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
                 voiceId: c.voiceId,
                 agentLabel: c.agentLabel,
                 baseAssistantId: c.baseAssistantId,
+                scheduleType: c.scheduleType,
                 status: "running",
                 timeLabel: fmtRuntime(c.startAt) ?? "",
                 players: c.players,

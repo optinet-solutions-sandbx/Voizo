@@ -1030,6 +1030,20 @@ describe("computeToday — running cards carry per-campaign perf + players", () 
     expect(rc.perf.callAttempts.total).toBe(1);
     expect(rc.perf.callAttempts.deltaPctVsYesterday).toBeNull();
   });
+
+  it("carries scheduleType from campaign_type (recurring vs fixed)", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const campaigns = [
+      camp("rec", { status: "running", campaign_type: "recurring" }),
+      camp("fix", { status: "running", campaign_type: "fixed" }),
+      camp("nul", { status: "running" }), // campaign_type absent → fixed
+    ];
+    const snap = computeToday([], campaigns, [], now);
+    const byId = (id: string) => snap.runningCampaigns.find((c) => c.id === id)!;
+    expect(byId("rec").scheduleType).toBe("recurring");
+    expect(byId("fix").scheduleType).toBe("fixed");
+    expect(byId("nul").scheduleType).toBe("fixed");
+  });
 });
 
 describe("computeWindowPerf — unified no-delta windowed perf (Slice C)", () => {

@@ -150,6 +150,7 @@ export interface RunningCampaignCard {
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
+  scheduleType: "fixed" | "recurring"; // drives the "recurring" marker on the shared camp-row
   today: RateRow;
   startAt: string | null; // run-window start — drives the "running for X" runtime (Slice A)
   players: number; // campaign roster size (route-supplied; 0 when unavailable)
@@ -1437,6 +1438,7 @@ export function computeToday(
       voiceId: c.voice_id ?? null,
       agentLabel: c.vapi_assistant_name ?? null,
       baseAssistantId: c.base_assistant_id ?? null,
+      scheduleType: c.campaign_type === "recurring" ? "recurring" : "fixed",
       today: todayByCampaign.get(c.id) ?? emptyRate(),
       startAt: c.start_at ?? c.created_at ?? null,
       players: rosterByCampaign.get(c.id) ?? 0,

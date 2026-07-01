@@ -6,7 +6,7 @@
 // the parent). `trailing` slots extra row UI (e.g. CampaignTable's "Open in campaign" link).
 
 import type { ReactNode } from "react";
-import { ChevronRight, Flag, Users, Calendar } from "lucide-react";
+import { ChevronRight, Flag, Users, Calendar, Repeat } from "lucide-react";
 import type { PerfMetric } from "@/lib/dashboardAnalytics";
 import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
@@ -49,6 +49,7 @@ export interface CampaignRowData {
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
+  scheduleType?: "fixed" | "recurring"; // "recurring" renders a marker on the agent line
   status: DisplayStatus;
   timeLabel: string; // runtime ("3h 12m") for running, or run-window ("27 Jun → ongoing") for the table
   players: number;
@@ -94,6 +95,14 @@ export default function CampaignRow({
           </button>
           <div className="text-[11px] text-[var(--text-3)] mt-1 flex items-center gap-1.5 flex-wrap">
             <span>{baseAgentName(c.baseAssistantId) ?? voiceName(c.voiceId, { short: true }) ?? "—"}</span>
+            {c.scheduleType === "recurring" && (
+              <>
+                <span className="text-[var(--border-2)]">·</span>
+                <span className="inline-flex items-center gap-1 text-[var(--text-2)]" title="Recurring campaign">
+                  <Repeat size={10} /> recurring
+                </span>
+              </>
+            )}
             <span className="text-[var(--border-2)]">·</span>
             <button type="button" onClick={onViewPrompt} className="text-blue-400 hover:text-blue-300 transition-colors">
               view prompt
