@@ -49,7 +49,8 @@ const VAPI_STORAGE_PREFIX = "https://storage.vapi.ai/";
 
 // Build the same-origin proxy URL for a Vapi recording (CORS workaround +
 // SSRF-guarded in the proxy route). null when there's no usable recording.
-function audioUrlFor(recordingUrl: unknown): string | null {
+// Exported for reuse by /api/dashboard/call-detail (per-contact modal, 2026-07-01).
+export function audioUrlFor(recordingUrl: unknown): string | null {
   if (typeof recordingUrl === "string" && recordingUrl.startsWith(VAPI_STORAGE_PREFIX)) {
     return `/api/recordings/proxy?url=${encodeURIComponent(recordingUrl)}`;
   }
@@ -58,7 +59,8 @@ function audioUrlFor(recordingUrl: unknown): string | null {
 
 // calls_v2.transcript is jsonb written as { text: "<flat string>" } by the
 // end-of-call webhook. Older rows may be a raw string. Normalize both.
-function transcriptText(t: unknown): string {
+// Exported for reuse by /api/dashboard/call-detail (per-contact modal, 2026-07-01).
+export function transcriptText(t: unknown): string {
   if (!t) return "";
   if (typeof t === "string") return t;
   if (typeof t === "object") {

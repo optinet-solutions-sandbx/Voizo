@@ -13,9 +13,11 @@ import {
   ATTEMPT_TAG_COLOR,
   ATTEMPT_TAG_DESC,
 } from "@/lib/dashboardAnalytics";
+import { useState } from "react";
 import { Download } from "lucide-react";
 import { triggerDownload } from "@/lib/download";
 import { DISPO_LABEL, DISPO_COLOR, recordToCsv, recordCsvFilename } from "./recordsDisplay";
+import CallDetailModal from "./CallDetailModal";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -61,6 +63,7 @@ function AttemptCell({ attempt, overflow }: { attempt: CallAttempt | undefined; 
 /** Renders the records it is given. The caller fetches + filters; this is a pure table view.
  *  Dynamic Attempt 1..N columns (widest record, capped at MAX_ATTEMPT_COLS). */
 export default function RecordsTable({ records }: { records: CallRecord[] }) {
+  const [detail, setDetail] = useState<CallRecord | null>(null); // per-contact call-detail modal
   let maxAttempts = 0;
   for (const r of records) if (r.attempts.length > maxAttempts) maxAttempts = r.attempts.length;
   maxAttempts = Math.min(maxAttempts, MAX_ATTEMPT_COLS);
@@ -68,6 +71,7 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
   const colSpan = 4 + maxAttempts; // # · Phone · Status · …attempts… · Last Attempted · Export
 
   return (
+    <>
     <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
       {/* table-fixed: # stays narrow (w-10); remaining columns share width evenly. */}
       <table className="table-fixed w-full text-sm min-w-[640px]">
@@ -96,7 +100,16 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
             records.map((r, i) => (
               <tr key={r.campaignNumberId} className="border-b border-[var(--border)] last:border-b-0 align-top">
                 <td className="px-3 py-2 text-[var(--text-3)] font-mono text-xs">{i + 1}</td>
-                <td className="px-3 py-2 font-mono text-[var(--text-1)] text-xs">{r.phone ?? "—"}</td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setDetail(r)}
+                    title="View call recordings & transcripts"
+                    className="text-left text-[var(--text-1)] hover:text-blue-400 transition-colors"
+                  >
+                    {r.phone ?? "—"}
+                  </button>
+                </td>
                 <td className="px-3 py-2">
                   <Chip label={DISPO_LABEL[r.status]} color={DISPO_COLOR[r.status]} />
                 </td>
@@ -126,5 +139,7 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
         </tbody>
       </table>
     </div>
+    <CallDetailModal record={detail} onClose={() => setDetail(null)} />
+    </>
   );
 }

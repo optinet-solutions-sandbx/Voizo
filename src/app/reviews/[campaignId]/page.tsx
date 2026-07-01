@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { JudgeScorecard, type JudgeCalibration } from "@/components/reviews/JudgeScorecard";
 import { JudgeVerdictChip, type JudgeScore } from "@/components/reviews/JudgeVerdictChip";
+import CallTranscript from "@/components/CallTranscript";
 
 type Verdict = "good" | "bad" | "unsure";
 
@@ -356,7 +357,7 @@ function ReviewCard({
         </div>
       )}
 
-      <TranscriptView text={item.transcript} />
+      <CallTranscript text={item.transcript} />
 
       <div className="flex items-center gap-2 flex-wrap mt-4">
         <VerdictButton active={current === "good"} disabled={saving} tone="good" onClick={() => onLabel(item.callId, "good", reason || null)}>
@@ -415,26 +416,6 @@ function FilterChip({
     >
       {children}
     </button>
-  );
-}
-
-function TranscriptView({ text }: { text: string }) {
-  if (!text || !text.trim()) {
-    return <div className="text-xs text-[var(--text-3)] italic py-3">No transcript captured for this call.</div>;
-  }
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  return (
-    <div className="max-h-[260px] overflow-y-auto rounded-lg bg-[var(--bg-elevated)]/40 border border-[var(--border)] p-3 flex flex-col gap-1.5">
-      {lines.map((line, i) => {
-        const isAI = /^(?:AI|Assistant|Bot)\b/i.test(line);
-        const isUser = /^(?:User|Customer|Caller|Human)\b/i.test(line);
-        return (
-          <div key={i} className="text-xs leading-relaxed">
-            <span className={isAI ? "text-blue-400 font-medium" : isUser ? "text-[var(--text-1)] font-medium" : "text-[var(--text-2)]"}>{line}</span>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 
