@@ -16,6 +16,7 @@
 // component owns fetching, the filter chrome, exports, and the "Showing N" footer.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import {
   type CallRecord,
   type AttemptTag,
@@ -26,7 +27,7 @@ import {
 import ExportMenu from "./ExportMenu";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import RecordsTable from "./RecordsTable";
-import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER } from "./recordsDisplay";
+import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER, sliceMatches, type RecordSlice } from "./recordsDisplay";
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
@@ -40,7 +41,17 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
 const inputCls =
   "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500";
 
-export default function CallRecords({ campaignId }: { campaignId: string }) {
+export default function CallRecords({
+  campaignId,
+  slice,
+  sliceLabel,
+  onClose,
+}: {
+  campaignId: string;
+  slice?: RecordSlice; // metric-pick from the expanded row (the primary filter); undefined = no slice
+  sliceLabel?: string;
+  onClose?: () => void;
+}) {
   const [records, setRecords] = useState<CallRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dispo, setDispo] = useState<RecordStatus | "all">("all"); // Status (disposition) filter
@@ -66,6 +77,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
   const filtered = useMemo(() => {
     if (!records) return [];
     return records.filter((r) => {
+      // Metric-pick slice (the clicked metric/row from the expanded row) — the primary filter.
+      if (slice && !sliceMatches(r, slice)) return false;
       if (dispo !== "all" && r.status !== dispo) return false;
       // Attempt-outcome is a PER-ATTEMPT axis: a contact matches if ANY of its attempts carries
       // the tag (orthogonal to the contact-level disposition filter above).
@@ -73,7 +86,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       if (phone.trim() && !(r.phone ?? "").includes(phone.trim())) return false;
       return true;
     });
-  }, [records, dispo, outcome, phone]);
+  }, [records, slice, dispo, outcome, phone]);
 
   const anyFilter = dispo !== "all" || outcome !== "all" || phone;
 
@@ -82,6 +95,19 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       {/* Center the records module and cap its width so rows don't overstretch on wide
           desktops; the inner overflow-x-auto + min-w keeps it scrollable on narrow screens. */}
       <div className="mx-auto w-full max-w-6xl">
+        {/* Active metric-pick slice (from the expanded row) — labels the view; × closes the records. */}
+        {slice && (
+          <div className="mb-3">
+            <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-300">
+              {sliceLabel ?? "Filtered"}
+              {onClose && (
+                <button type="button" onClick={onClose} aria-label="Close records" className="text-blue-300/70 transition hover:text-blue-200">
+                  <X size={12} />
+                </button>
+              )}
+            </span>
+          </div>
+        )}
         {/* Exports (CSV + Audio + Transcripts), by outcome category. */}
         <div className="mb-3">
           <ExportMenu campaignId={campaignId} records={records ?? []} />
