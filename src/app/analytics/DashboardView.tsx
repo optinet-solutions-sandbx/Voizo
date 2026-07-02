@@ -13,7 +13,7 @@ import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
-import SectionIsland from "./SectionIsland";
+import SectionIsland, { SectionTick } from "./SectionIsland";
 
 const POLL_MS = 30_000;
 
@@ -63,13 +63,15 @@ export default function DashboardView() {
       {/* Console-density frame (2026-07-02): fluid width + tighter rhythm — the AWS-style
           "use the screen" layout. Density scale documented in the console-density spec. */}
       <div className="p-4 w-full grid gap-4">
-      {/* Today island (emerald) — the always-live snapshot, never affected by the filters. */}
-      <SectionIsland accent="emerald">
+      {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
+          by the green tick (pattern brief §1), not a background wash. */}
+      <SectionIsland>
       {/* Header */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-lg font-bold tracking-tight">Today&apos;s Performance</h1>
+            <SectionTick color="#3ec08a" />
+            <h1 className="text-lg font-semibold tracking-tight">Today&apos;s Performance</h1>
             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               LIVE{data ? ` · ${fmtDay(data.dayUtc)}` : ""}
@@ -108,11 +110,9 @@ export default function DashboardView() {
       )}
       </SectionIsland>
 
-      {/* Global island (blue) — filtered historical performance: filters + KPI grid → charts →
-          campaign table → heatmap → ranked tables. GlobalPerformance owns its own ordered flow. */}
-      <SectionIsland accent="blue">
+      {/* Global — filtered historical performance. NO panel wrap (reference): tick header +
+          sticky filter bar + free-standing modules on the app background. */}
       <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
-      </SectionIsland>
       </div>
     </>
   );

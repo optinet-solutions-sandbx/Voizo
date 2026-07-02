@@ -1,30 +1,25 @@
-// Presentational section "island" — a rounded, accent-tinted container that visually fences a
-// dashboard group (emerald = Today / blue = Global), per Val's endgame mockup. ADAPTED to our theme:
-// tints/borders use Tailwind accent presets over our token surfaces, NOT the mockup's hardcoded hexes,
-// so the dashboard stays consistent with sibling pages. Pure layout shell — no state, no logic.
+// Neutral section panel + accent tick (pattern brief §1, 2026-07-02): zones are marked by a
+// small colored tick in the heading, NOT a full background wash — every surface sits on the
+// same neutral elevation ladder. SectionIsland is now a plain bordered panel (--bg-panel);
+// SectionTick renders the 9px rounded-square zone marker for section headings.
 
 import type { ReactNode } from "react";
 
-// Accent styling defined once per accent so the two islands stay in lock-step.
-const ACCENT = {
-  emerald: { border: "border-emerald-500/20", fill: "bg-emerald-500/5", glow: "from-emerald-500/10" },
-  blue: { border: "border-primary/20", fill: "bg-primary/5", glow: "from-primary/10" },
-} as const;
-
-export default function SectionIsland({
-  accent,
-  children,
-}: {
-  accent: keyof typeof ACCENT;
-  children: ReactNode;
-}) {
-  const a = ACCENT[accent];
+/** 9px rounded-square zone marker with a soft glow — place before a section heading. */
+export function SectionTick({ color }: { color: string }) {
   return (
-    <section className={`relative overflow-hidden rounded-2xl border ${a.border} ${a.fill} p-4`}>
-      {/* Faint top-edge accent glow — echoes the mockup's colored islands without shouting. Decorative. */}
-      <div className={`pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b ${a.glow} to-transparent`} aria-hidden />
-      {/* Content sits above the glow; console-density rhythm (2026-07-02). */}
-      <div className="relative grid gap-4">{children}</div>
+    <span
+      aria-hidden
+      className="inline-block h-[9px] w-[9px] shrink-0 rounded-[3px]"
+      style={{ background: color, boxShadow: `0 0 10px ${color}99` }}
+    />
+  );
+}
+
+export default function SectionIsland({ children }: { children: ReactNode }) {
+  return (
+    <section className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-panel)] p-4 sm:p-5">
+      <div className="grid gap-4">{children}</div>
     </section>
   );
 }

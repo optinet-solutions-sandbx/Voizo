@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, SlidersHorizontal, PanelRightClose } from "lucide-react";
 import StatBand from "./StatBand";
+import { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
 import { useBaseAgentNames } from "./useBaseAgentNames";
@@ -377,9 +378,10 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
 
         {/* ── Main column ── */}
         <div className="grid gap-3 min-w-0">
-      <div>
-        <h2 className="text-[15px] font-semibold tracking-tight">Global Performance</h2>
-        <p className="text-xs text-[var(--text-3)] mt-0.5">Historical performance across all campaigns.</p>
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <SectionTick color="#5b9bf0" />
+        <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
+        <span className="text-[13px] text-[var(--text-3)]">— historical, across all campaigns</span>
       </div>
 
       {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
