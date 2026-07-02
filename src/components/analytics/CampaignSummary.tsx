@@ -9,7 +9,7 @@
 // (mono, muted) and color is desaturated + used sparingly. Visible one-line descriptions carry the meaning;
 // the fuller, honest caveats live in the hover tooltips. Engineer deep-dive is still behind "Advanced".
 
-import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
+import { smsSentOf, type CampaignAnalytics } from "@/lib/campaignAnalytics";
 import { type RecordSlice, sliceEq } from "@/app/analytics/recordsDisplay";
 
 // Desaturated accents — color guides the eye, never shouts. Shared by the bar segments + legend dots.
@@ -47,7 +47,7 @@ export default function CampaignSummary({
   const attemptsPerPlayer = a.targeted > 0 ? (a.totalCalls / a.targeted).toFixed(1) : null;
   // App-wide "SMS sent" = sent|delivered (2026-07-02) — reconciles with this stat's own
   // click-to-filter "texted" slice and with the dashboard SMS cards/columns.
-  const smsSent = a.sms.delivered + a.sms.sent;
+  const smsSent = smsSentOf(a.sms);
   const smsSub =
     smsSent === 0
       ? "no texts sent"

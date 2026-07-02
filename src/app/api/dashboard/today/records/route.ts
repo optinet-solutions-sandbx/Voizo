@@ -4,6 +4,7 @@ import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import {
   computeCallRecords,
   attachSmsSent,
+  isSmsSent,
   type DashCallRow,
   type DashNumberRow,
 } from "@/lib/dashboardAnalytics";
@@ -99,7 +100,7 @@ export async function GET(request: NextRequest) {
   );
   const sentNumberIds = new Set(
     (smsRows as unknown as SmsRow[])
-      .filter((m) => (m.status === "sent" || m.status === "delivered") && liveIds.has(m.campaign_id) && !!m.campaign_number_id)
+      .filter((m) => isSmsSent(m.status) && liveIds.has(m.campaign_id) && !!m.campaign_number_id)
       .map((m) => m.campaign_number_id as string),
   );
 

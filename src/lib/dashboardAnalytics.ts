@@ -507,7 +507,7 @@ export interface TrendPoint {
 // ONE app-wide definition (2026-07-02) — it matches smsWindowBreakdown (the 3-card SMS metric)
 // and the records-drawer "texted" slices, so every "SMS sent" number reconciles across surfaces.
 const SMS_SENT_STATUSES = new Set(["sent", "delivered"]);
-function isSmsSent(status: string | null | undefined): boolean {
+export function isSmsSent(status: string | null | undefined): boolean {
   return SMS_SENT_STATUSES.has(status ?? "");
 }
 /** Per-campaign count of sent|delivered SMS. Pure; shared by the campaign table, ranked tables, trend. */
@@ -1136,7 +1136,7 @@ export function smsWindowBreakdown(
   for (const c of calls) if (c.id) callById.set(c.id, c);
   const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
   for (const m of sms) {
-    if (m.status !== "sent" && m.status !== "delivered") continue;
+    if (!isSmsSent(m.status)) continue;
     const t = m.created_at ? Date.parse(m.created_at) : NaN;
     if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
     b.total += 1;

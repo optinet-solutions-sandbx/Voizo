@@ -2,7 +2,7 @@
 
 import { useState, Fragment, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import type { CampaignAnalytics, PortfolioRollup } from "@/lib/campaignAnalytics";
+import { smsInFlightOf, type CampaignAnalytics, type PortfolioRollup } from "@/lib/campaignAnalytics";
 import FunnelMiniBar from "./FunnelMiniBar";
 import GoalSparkline from "./GoalSparkline";
 import ConfidenceValue from "./ConfidenceValue";
@@ -82,13 +82,13 @@ export default function AnalyticsTable({ records, portfolio }: AnalyticsTablePro
                   <td className="px-3 py-3"><GoalSparkline series={a.sparkline} /></td>
                   <td
                     className="px-3 py-3 text-right text-xs tabular-nums"
-                    title={`Delivered ${a.sms.delivered} · Failed ${a.sms.failed} · In-flight (sent/queued) ${a.sms.sent + a.sms.queued}\nDelivered/failed need the Mobivate delivery-receipt webhook; until it posts, sends sit in-flight.`}
+                    title={`Delivered ${a.sms.delivered} · Failed ${a.sms.failed} · In-flight (sent/queued) ${smsInFlightOf(a.sms)}\nDelivered/failed need the Mobivate delivery-receipt webhook; until it posts, sends sit in-flight.`}
                   >
                     <span className="text-emerald-400">{a.sms.delivered}</span>
                     <span className="text-[var(--text-3)]">/</span>
                     <span className="text-red-400">{a.sms.failed}</span>
-                    {a.sms.sent + a.sms.queued > 0 && a.sms.delivered + a.sms.failed === 0 && (
-                      <span className="text-[var(--text-3)] ml-1">·{a.sms.sent + a.sms.queued} sent</span>
+                    {smsInFlightOf(a.sms) > 0 && a.sms.delivered + a.sms.failed === 0 && (
+                      <span className="text-[var(--text-3)] ml-1">·{smsInFlightOf(a.sms)} sent</span>
                     )}
                   </td>
                   <td className="px-3 py-3 text-xs text-[var(--text-2)]">{a.status}</td>

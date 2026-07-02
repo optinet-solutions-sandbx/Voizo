@@ -99,6 +99,18 @@ export interface SmsCounts {
   byProvider: Record<string, { delivered: number; sent: number; queued: number; failed: number }>;
 }
 
+/** The app-wide "SMS sent" metric (2026-07-02): accepted by the provider or confirmed
+ *  delivered. THE single formula — every UI surface derives its number from here. */
+export function smsSentOf(sms: SmsCounts): number {
+  return sms.delivered + sms.sent;
+}
+
+/** DLR-status readout: messages still awaiting a delivery receipt (sent) or the provider call
+ *  (queued). Presentation-only derivation for the in-flight column/tooltip surfaces. */
+export function smsInFlightOf(sms: SmsCounts): number {
+  return sms.sent + sms.queued;
+}
+
 export interface OutcomeBreakdown {
   // Partition of REACHED human calls (connected, not voicemail; count == reach). Sums to reach.
   // ALL FOUR ARE PROXIES (labeled "est." in the UI) over existing fields — NOT a persisted
