@@ -19,6 +19,7 @@ import HeatMap from "./HeatMap";
 import PerformanceCards from "./PerformanceCards";
 import TopPerformers from "./TopPerformers";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
+import { useDrawerClaim } from "./drawerExclusivity";
 import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 
 type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
@@ -179,6 +180,9 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
   const [loading, setLoading] = useState(false);
   // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
   const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
+  // Drawer exclusivity (mockup): opening this drawer closes the Today / Top-performers ones.
+  const closeDrawerSelf = useCallback(() => setDrawerFilter(null), []);
+  useDrawerClaim("global", drawerFilter !== null, closeDrawerSelf);
   // Re-clicking the open slice closes the drawer (toggle); status+outcome+smsOnly identify a slice.
   const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
     !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;

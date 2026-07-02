@@ -5,11 +5,12 @@
 // total + every row drill into an entity-scoped RangedRecordsDrawer (campaign id / base agent / sha).
 // Replaces the static Best cards. Read-only; reuses the Slice-B drawer + Slice-A breakdown column.
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Trophy, Mic, FileText } from "lucide-react";
 import type { PerfRow } from "@/lib/dashboardAnalytics";
 import BreakdownColumn from "./BreakdownColumn";
 import RangedRecordsDrawer, { type DrawerFilter, type DrawerScope, totalFilter, rowFilter } from "./RangedRecordsDrawer";
+import { useDrawerClaim } from "./drawerExclusivity";
 import type { Filters, BestPerformer } from "./GlobalPerformance";
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
@@ -32,6 +33,9 @@ export default function TopPerformers({
   filters: Filters;
 }) {
   const [drawer, setDrawer] = useState<{ scope: DrawerScope; filter: DrawerFilter } | null>(null);
+  // Drawer exclusivity (mockup): opening this drawer closes the Today / Global ones.
+  const closeSelf = useCallback(() => setDrawer(null), []);
+  useDrawerClaim("top-performers", drawer !== null, closeSelf);
 
   // A clicked total/row → the same semantic slice as the Global cards, scoped to the entity and with
   // an entity-prefixed title (e.g. "Best campaign · Reached"). rowFilter ignores the parent key.

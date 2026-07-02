@@ -7,11 +7,12 @@
 // /api/dashboard/today (computeToday). The presentational pieces now live in PerformanceCards (shared
 // with the ranged Global Performance view, Slice B 2026-06-30).
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Radio } from "lucide-react";
 import type { TodaySnapshot, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 import PerformanceCards from "./PerformanceCards";
 import TodayRecordsDrawer, { type DrawerFilter } from "./TodayRecordsDrawer";
+import { useDrawerClaim } from "./drawerExclusivity";
 
 // Map a clicked total/row to the semantic drawer filter (spec §6 — NOT the mockup's loose args).
 function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
@@ -29,6 +30,10 @@ function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: string, lab
 export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | null }) {
   const [day, setDay] = useState<"today" | "yesterday">("today");
   const [filter, setFilter] = useState<DrawerFilter | null>(null);
+
+  // Drawer exclusivity (mockup): opening this drawer closes the Global / Top-performers ones.
+  const closeSelf = useCallback(() => setFilter(null), []);
+  useDrawerClaim("today", filter !== null, closeSelf);
 
   const perf: TodayPerfDay | null = data ? data[day] : null;
   const ops = data?.ops;
