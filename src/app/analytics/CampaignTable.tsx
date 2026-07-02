@@ -16,7 +16,7 @@ import { formatCampaign } from "@/lib/campaignDisplay";
 import PromptModal from "./PromptModal";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
-import { SortControl, type SortKey } from "./RankedTables";
+import { SortControl, type SortKey } from "./SortControl";
 import { useExpandSlices } from "./useExpandSlices";
 import { CampaignRowsSkeleton } from "./loadingSkeletons";
 import WidgetCard from "./WidgetCard";

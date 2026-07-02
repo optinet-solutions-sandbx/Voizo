@@ -32,11 +32,6 @@ export default function DashboardView() {
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
 
-  const focusCampaign = useCallback((id: string) => {
-    setFilters((f) => ({ ...f, campaignIds: [id] }));
-    document.getElementById("global-performance")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
-
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -112,7 +107,7 @@ export default function DashboardView() {
 
       {/* Global — filtered historical performance. NO panel wrap (reference): tick header +
           sticky filter bar + free-standing modules on the app background. */}
-      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} />
+      <GlobalPerformance filters={filters} onChange={setFilters} />
       </div>
     </>
   );

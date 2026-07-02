@@ -13,13 +13,12 @@ import { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
 import { useBaseAgentNames } from "./useBaseAgentNames";
-import RankedTables, { type AgentRow, type CampaignLbRow, type PromptRow } from "./RankedTables";
+import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
 import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import HeatMap from "./HeatMap";
 import PerformanceCards, { EstBadge } from "./PerformanceCards";
-import TopPerformers from "./TopPerformers";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
 import { useDrawerClaim } from "./drawerExclusivity";
 import { CardGridSkeleton } from "./loadingSkeletons";
@@ -84,7 +83,6 @@ interface GlobalPerformanceProps {
   // can drive "Filter to this campaign" through the same filter state.
   filters: Filters;
   onChange: (next: Filters) => void;
-  onFocusCampaign: (id: string) => void; // set campaignIds=[id] + scroll to this section
 }
 
 function buildQuery(f: Filters): string {
@@ -167,7 +165,7 @@ function MultiSelect({
 // The "estimated" pill on reach-derived sections is the shared EstBadge (PerformanceCards)
 // with tone="warn" — unified 2026-07-02 so the disclosure styling/tooltip can't drift.
 
-export default function GlobalPerformance({ filters, onChange, onFocusCampaign }: GlobalPerformanceProps) {
+export default function GlobalPerformance({ filters, onChange }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -395,9 +393,15 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
         <CardGridSkeleton />
       )}
 
-      {/* Top Performers — per-entity breakdown cards with per-row drill-down (Val's mockup, Slice E).
-          Labels resolved here (campaign/agent/prompt) so the card uses the same friendly text as before. */}
-      <TopPerformers best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }} filters={filters} />
+      {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
+          switch + best-in-view highlight + ranked table; rows drill into the scoped drawer. */}
+      <Leaderboards
+        campaigns={data?.campaigns ?? []}
+        agents={data?.agents ?? []}
+        prompts={data?.prompts ?? []}
+        best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }}
+        filters={filters}
+      />
 
       {/* Trend + Daily Volume side-by-side (compact); they stack on narrow screens. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -411,15 +415,6 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
       <HeatMap
         cells={data?.heatmap?.cells ?? []}
         utcFallbackCalls={data?.heatmap?.utcFallbackCalls ?? 0}
-      />
-
-      {/* Voice Agent / Prompt performance + Top campaigns leaderboard. */}
-      <RankedTables
-        agents={data?.agents ?? []}
-        campaigns={data?.campaigns ?? []}
-        prompts={data?.prompts ?? []}
-        rangeDays={data?.rangeDays ?? 30}
-        onFocusCampaign={onFocusCampaign}
       />
       </div>
     </section>
