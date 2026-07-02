@@ -16,13 +16,15 @@ function shortDay(iso: string): string {
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : (iso ?? "");
 }
 
-// Deterministic per-campaign color (matches CampaignTable). "other" is neutral gray.
-function campaignColor(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 68% 55%)`;
+// Restrained ordered palette (pattern brief §2 — never a rainbow): campaigns take colors by
+// series order (top volume first); "other" is the dimmest neutral.
+const VOLUME_PALETTE = ["#4d90f0", "#3ec08a", "#8f86e6", "#e0a53c", "#e46664", "#e0814a", "#5b9bf0", "#c98a4a", "#3a6fd0", "#7d828c"];
+function buildColors(series: VolumeSeries[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  let i = 0;
+  for (const s of series) out[s.key] = s.key === "other" ? "#565b64" : VOLUME_PALETTE[i++ % VOLUME_PALETTE.length];
+  return out;
 }
-const seriesColor = (key: string) => (key === "other" ? "#6b7280" : campaignColor(key));
 const seriesLabel = (s: VolumeSeries) => (s.key === "other" ? s.name : campaignShortLabel(s.name));
 const seriesFull = (s: VolumeSeries) => (s.key === "other" ? s.name : formatCampaign(s.name).display);
 
