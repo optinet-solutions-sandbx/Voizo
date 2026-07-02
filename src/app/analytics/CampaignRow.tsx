@@ -13,7 +13,7 @@ import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { useBaseAgentNames } from "./useBaseAgentNames";
-import BreakdownColumn from "./BreakdownColumn";
+import { SegBar, MetricRow } from "./PerformanceCards";
 import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { metricPickSlice, type RecordSlice } from "./recordsDisplay";
 import Hint from "@/components/Hint";
@@ -64,6 +64,31 @@ export interface CampaignRowData {
 // Shared grid template — header row + every campaign row align to it.
 export const CAMPAIGN_ROW_GRID = "grid grid-cols-[minmax(220px,1.6fr)_minmax(110px,auto)_repeat(3,minmax(150px,1fr))] gap-4";
 
+type MetricKey = "callAttempts" | "reached" | "sms";
+const METRIC_TITLE: Record<MetricKey, string> = { callAttempts: "Call attempts", reached: "Reached", sms: "SMS sent" };
+
+// Collapsed metric cell (scan mode, pattern brief §7): 21px tabular total + 5px proportion
+// bar — the split shown once. Clickable when the parent wires slices (drill pre-filtered).
+function MetricCell({ metric, onClick }: { metric: PerfMetric; onClick?: () => void }) {
+  const inner = (
+    <>
+      <div className="text-[21px] leading-none font-semibold font-mono tracking-[-0.02em] text-[var(--text-1)] group-hover:text-primary transition-colors">
+        {metric.total.toLocaleString()}
+      </div>
+      <div className="mt-2">
+        <SegBar rows={metric.rows} height={5} />
+      </div>
+    </>
+  );
+  return onClick ? (
+    <button type="button" onClick={onClick} className="min-w-0 text-left group">
+      {inner}
+    </button>
+  ) : (
+    <div className="min-w-0">{inner}</div>
+  );
+}
+
 export default function CampaignRow({
   c,
   expanded,
@@ -87,21 +112,22 @@ export default function CampaignRow({
 }) {
   const baseAgentName = useBaseAgentNames();
   const fmt = formatCampaign(c.name);
-  // Breakdown click → slice handlers (only when the parent opted in). onRow also covers the
-  // SMS "By response" sub-rows — BreakdownColumn passes them through the same callback.
-  const pick = (metric: "callAttempts" | "reached" | "sms") =>
+  // Breakdown click → slice handlers (only when the parent opted in). Rows also cover the
+  // SMS "By response" sub-rows — same callback, same slice machinery.
+  const pickTotal = (metric: MetricKey) =>
     onMetricPick
-      ? {
-          onTotal: () => {
-            const p = metricPickSlice(metric);
-            onMetricPick(p.slice, p.label);
-          },
-          onRow: (row: PerfRow) => {
-            const p = metricPickSlice(metric, row.key, row.label);
-            onMetricPick(p.slice, p.label);
-          },
+      ? () => {
+          const p = metricPickSlice(metric);
+          onMetricPick(p.slice, p.label);
         }
-      : {};
+      : undefined;
+  const pickRow = (metric: MetricKey) =>
+    onMetricPick
+      ? (row: PerfRow) => {
+          const p = metricPickSlice(metric, row.key, row.label);
+          onMetricPick(p.slice, p.label);
+        }
+      : undefined;
   return (
     <div className="border-b border-[var(--border)] last:border-b-0">
       <div className={`${CAMPAIGN_ROW_GRID} px-3.5 py-2.5 items-start hover:bg-[var(--bg-hover)]/40 transition-colors`}>
@@ -159,10 +185,10 @@ export default function CampaignRow({
           {c.timeLabel && <span className="text-[10px] font-mono text-[var(--text-3)]">{c.timeLabel}</span>}
         </div>
 
-        {/* Breakdown columns — clickable when the parent wires onMetricPick (straight-to-records). */}
-        <BreakdownColumn metric={c.perf.callAttempts} {...pick("callAttempts")} />
-        <BreakdownColumn metric={c.perf.reached} {...pick("reached")} />
-        <BreakdownColumn metric={c.perf.sms} {...pick("sms")} />
+        {/* Scan mode (§7): totals + proportion bars only — the full breakdown lives in the expand. */}
+        <MetricCell metric={c.perf.callAttempts} onClick={pickTotal("callAttempts")} />
+        <MetricCell metric={c.perf.reached} onClick={pickTotal("reached")} />
+        <MetricCell metric={c.perf.sms} onClick={pickTotal("sms")} />
       </div>
 
       {/* Height-animated expand (the mockup's 0.3s rp transition). initial={false} so rows
@@ -177,6 +203,29 @@ export default function CampaignRow({
             transition={{ duration: 0.3, ease: "easeInOut" }}
             className="overflow-hidden bg-[var(--bg-app)]"
           >
+            {/* Drill mode (§7): the full per-metric breakdown; rows re-slice the records below. */}
+            <div className="border-t border-[var(--border)] bg-[var(--bg-panel)] px-4 py-4 grid gap-x-7 gap-y-4 md:grid-cols-3">
+              {(["callAttempts", "reached", "sms"] as const).map((mk) => {
+                const metric = c.perf[mk];
+                const onRow = pickRow(mk);
+                return (
+                  <div key={mk} className="min-w-0">
+                    <div className="text-[10.5px] font-semibold uppercase tracking-[0.07em] text-[var(--text-4)] mb-1.5">
+                      {METRIC_TITLE[mk]} · <span className="font-mono">{metric.total.toLocaleString()}</span>
+                    </div>
+                    {metric.rows.map((row) => (
+                      <div key={row.key}>
+                        <MetricRow row={row} showDelta={false} onOpen={() => onRow?.(row)} />
+                        {mk === "sms" &&
+                          row.subRows?.map((sub) => (
+                            <MetricRow key={sub.key} row={sub} indent showDelta={false} onOpen={() => onRow?.(sub)} />
+                          ))}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
             <CampaignExpand
               campaignId={c.id}
               name={c.name}

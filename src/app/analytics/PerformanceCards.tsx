@@ -79,8 +79,9 @@ export function SegBar({ rows, height = 6 }: { rows: PerfRow[]; height?: number 
 }
 
 // One breakdown row: dot · label · [EST] · count · % · [one pp-delta] — clickable → drawer.
+// Exported for the campaign-row expand panels (drill mode, pattern brief §7).
 // `indent` renders the SMS by-response sub-rows (smaller dot, no delta column).
-function Row({ row, onOpen, showDelta, indent = false }: { row: PerfRow; onOpen: () => void; showDelta: boolean; indent?: boolean }) {
+export function MetricRow({ row, onOpen, showDelta, indent = false }: { row: PerfRow; onOpen: () => void; showDelta: boolean; indent?: boolean }) {
   const color = ROW_COLOR[row.key] ?? "#7d828c";
   return (
     <button
@@ -155,11 +156,11 @@ function MetricCard({
       <div className="flex flex-col">
         {metric.rows.map((row) => (
           <div key={row.key} className="flex flex-col">
-            <Row row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} />
+            <MetricRow row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} />
             {/* SMS "by response" sub-rows live under the Reached row. */}
             {isSms &&
               row.subRows?.map((sub) => (
-                <Row key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
+                <MetricRow key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
               ))}
           </div>
         ))}
