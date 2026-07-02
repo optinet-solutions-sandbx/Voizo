@@ -11,6 +11,7 @@ import type { PerfRow } from "@/lib/dashboardAnalytics";
 import BreakdownColumn from "./BreakdownColumn";
 import RangedRecordsDrawer, { type DrawerFilter, type DrawerScope, totalFilter, rowFilter } from "./RangedRecordsDrawer";
 import { useDrawerClaim } from "./drawerExclusivity";
+import WidgetCard from "./WidgetCard";
 import type { Filters, BestPerformer } from "./GlobalPerformance";
 
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
@@ -76,10 +77,14 @@ export default function TopPerformers({
   }
 
   return (
-    <div className="grid gap-2">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-start">
+    <WidgetCard
+      title="Top performers"
+      icon={<Trophy size={14} className="text-[var(--text-3)]" />}
+      context="best campaign, voice agent & prompt in this window · every number drills into records"
+    >
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
         {cards.map((c) => (
-          <div key={c.label} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 flex flex-col gap-3">
+          <div key={c.label} className="bg-[var(--bg-elevated)]/40 border border-[var(--border)] rounded-lg p-3.5 flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{c.label}</span>
               <span className="text-[var(--text-3)]">{c.icon}</span>
@@ -103,6 +108,6 @@ export default function TopPerformers({
         ))}
       </div>
       <RangedRecordsDrawer filters={filters} filter={drawer?.filter ?? null} scope={drawer?.scope} onClose={() => setDrawer(null)} />
-    </div>
+    </WidgetCard>
   );
 }

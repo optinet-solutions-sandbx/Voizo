@@ -19,6 +19,7 @@ import Pagination from "@/components/Pagination";
 import { SortControl, type SortKey } from "./RankedTables";
 import { useExpandSlices } from "./useExpandSlices";
 import { CampaignRowsSkeleton } from "./loadingSkeletons";
+import WidgetCard from "./WidgetCard";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
 
 interface Row {
@@ -175,22 +176,31 @@ export default function CampaignTable() {
   const pageRows = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return (
-    <section className="grid gap-3">
-      <div className="flex items-end justify-between gap-4 flex-wrap pt-2">
-        <div>
-          <h2 className="text-[20px] font-bold tracking-tight">Campaign Performance</h2>
-          <p className="text-sm text-[var(--text-3)] mt-1">Status, run window &amp; full call records · its own date range.</p>
-        </div>
+    <>
+    <WidgetCard
+      title="Campaign Performance"
+      context="status, run window & full call records · its own date range"
+      actions={
         <SortControl
           sort={sort}
           setSort={(s) => { setSort(s); setPage(1); }}
           keys={["newest", "calls", "reached", "sms"]}
           labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
         />
-      </div>
-
+      }
+      bodyClassName="p-0"
+      footer={
+        <Pagination
+          currentPage={safePage}
+          totalPages={totalPages}
+          totalItems={visible.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
+        />
+      }
+    >
       {/* Table-level filters (independent of the global bar). */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b border-[var(--border)]">
         {STATUS_ORDER.map((s) => {
           const on = !hidden.has(s);
           const m = STATUS_META[s];
@@ -220,10 +230,9 @@ export default function CampaignTable() {
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
 
-      {/* Rows (shared camp-row, same as Today's campaigns). */}
-      <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <div className="min-w-[920px]">
+      {/* Rows (shared camp-row, same as Today's campaigns). WidgetCard is the frame. */}
+      <div className="overflow-x-auto">
+        <div className="min-w-[920px]">
             {/* Header */}
             <div className={`${CAMPAIGN_ROW_GRID} px-4 py-3 border-b border-[var(--border)] text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]`}>
               <div>Campaign</div>
@@ -281,21 +290,13 @@ export default function CampaignTable() {
                 );
               })
             )}
-          </div>
         </div>
       </div>
+    </WidgetCard>
 
-      <Pagination
-        currentPage={safePage}
-        totalPages={totalPages}
-        totalItems={visible.length}
-        pageSize={PAGE_SIZE}
-        onPageChange={setPage}
-      />
-
-      {promptFor && (
-        <PromptModal campaignId={promptFor.id} title={promptFor.title} onClose={() => setPromptFor(null)} />
-      )}
-    </section>
+    {promptFor && (
+      <PromptModal campaignId={promptFor.id} title={promptFor.title} onClose={() => setPromptFor(null)} />
+    )}
+    </>
   );
 }

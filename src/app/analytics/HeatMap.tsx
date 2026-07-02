@@ -10,6 +10,7 @@ import { useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { campaignShortLabel } from "@/lib/campaignDisplay";
 import type { HeatCell } from "@/lib/dashboardAnalytics";
+import WidgetCard from "./WidgetCard";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -33,12 +34,11 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
   const hours = Array.from({ length: 24 }, (_, h) => h);
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
-        <div className="flex items-center gap-2">
-          <LayoutGrid size={15} className="text-[var(--text-3)]" />
-          <h3 className="text-[15px] font-semibold">Daily &amp; Hourly Heat Map</h3>
-        </div>
+    <WidgetCard
+      title="Daily & Hourly Heat Map"
+      icon={<LayoutGrid size={14} className="text-[var(--text-3)]" />}
+      context="attempts by hour in each campaign's local time · hover a cell for the breakdown"
+      actions={
         <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-3)]">
           Fewer
           <span className="flex gap-0.5">
@@ -48,15 +48,13 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           </span>
           More
         </div>
-      </div>
-      <p className="text-[11px] text-[var(--text-3)] mb-3">
-        Call attempts by hour in each campaign&apos;s local time · hover any cell for the full breakdown.
-        {utcFallbackCalls > 0 && (
-          <span className="text-amber-400/80">
-            {" "}· {utcFallbackCalls.toLocaleString()} call{utcFallbackCalls === 1 ? "" : "s"} from campaigns without a set timezone shown in UTC.
-          </span>
-        )}
-      </p>
+      }
+    >
+      {utcFallbackCalls > 0 && (
+        <p className="text-[11px] text-amber-400/80 mb-2">
+          {utcFallbackCalls.toLocaleString()} call{utcFallbackCalls === 1 ? "" : "s"} from campaigns without a set timezone shown in UTC.
+        </p>
+      )}
 
       {days.length === 0 ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No calls in this window.</p>
@@ -125,6 +123,6 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           </div>
         </div>
       )}
-    </section>
+    </WidgetCard>
   );
 }
