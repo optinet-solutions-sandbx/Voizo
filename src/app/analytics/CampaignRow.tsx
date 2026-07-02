@@ -2,18 +2,19 @@
 
 // Shared expandable campaign row (Slice C) — the mockup's camp-row, used by BOTH Today's-campaigns and
 // Campaign Performance. Chips (country/players/date) + a status pill + a time label + three compact
-// BreakdownColumns; chevron/row click → the reused CampaignExpand (lazy per-campaign analytics, owned by
-// the parent). `trailing` slots extra row UI (e.g. CampaignTable's "Open in campaign" link).
+// BreakdownColumns. Straight-to-records (Val's mockup, 2026-07-02): chevron/name → records unfiltered;
+// clicking a breakdown total/row (when the parent passes onMetricPick) → records pre-filtered to that
+// slice. `trailing` slots extra row UI (e.g. CampaignTable's "Open in campaign" link).
 
 import type { ReactNode } from "react";
 import { ChevronRight, Flag, Users, Calendar, Repeat } from "lucide-react";
-import type { PerfMetric } from "@/lib/dashboardAnalytics";
-import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
+import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import BreakdownColumn from "./BreakdownColumn";
 import CampaignExpand from "@/components/analytics/CampaignExpand";
+import { metricPickSlice, type RecordSlice } from "./recordsDisplay";
 
 // Derived display status (shared with CampaignTable's status filter).
 export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
@@ -64,19 +65,40 @@ export default function CampaignRow({
   c,
   expanded,
   onToggle,
-  analytics,
   onViewPrompt,
   trailing,
+  slice,
+  sliceLabel,
+  onMetricPick,
+  onClearSlice,
 }: {
   c: CampaignRowData;
   expanded: boolean;
   onToggle: () => void;
-  analytics: CampaignAnalytics | null | undefined;
   onViewPrompt: () => void;
   trailing?: ReactNode;
+  slice?: RecordSlice; // active records slice for THIS row's expand (parent-owned)
+  sliceLabel?: string;
+  onMetricPick?: (slice: RecordSlice, label: string) => void; // breakdown total/row click → expand pre-filtered
+  onClearSlice?: () => void; // slice badge × — clear filter, keep records open
 }) {
   const baseAgentName = useBaseAgentNames();
   const fmt = formatCampaign(c.name);
+  // Breakdown click → slice handlers (only when the parent opted in). onRow also covers the
+  // SMS "By response" sub-rows — BreakdownColumn passes them through the same callback.
+  const pick = (metric: "callAttempts" | "reached" | "sms") =>
+    onMetricPick
+      ? {
+          onTotal: () => {
+            const p = metricPickSlice(metric);
+            onMetricPick(p.slice, p.label);
+          },
+          onRow: (row: PerfRow) => {
+            const p = metricPickSlice(metric, row.key, row.label);
+            onMetricPick(p.slice, p.label);
+          },
+        }
+      : {};
   return (
     <div className="border-b border-[var(--border)] last:border-b-0">
       <div className={`${CAMPAIGN_ROW_GRID} px-4 py-3 items-start hover:bg-[var(--bg-hover)]/40 transition-colors`}>
@@ -130,21 +152,21 @@ export default function CampaignRow({
           {c.timeLabel && <span className="text-[10px] font-mono text-[var(--text-3)]">{c.timeLabel}</span>}
         </div>
 
-        {/* Breakdown columns */}
-        <BreakdownColumn metric={c.perf.callAttempts} />
-        <BreakdownColumn metric={c.perf.reached} />
-        <BreakdownColumn metric={c.perf.sms} />
+        {/* Breakdown columns — clickable when the parent wires onMetricPick (straight-to-records). */}
+        <BreakdownColumn metric={c.perf.callAttempts} {...pick("callAttempts")} />
+        <BreakdownColumn metric={c.perf.reached} {...pick("reached")} />
+        <BreakdownColumn metric={c.perf.sms} {...pick("sms")} />
       </div>
 
       {expanded && (
-        <div className="px-4 py-4 bg-[var(--bg-app)] border-t border-[var(--border)]">
-          {analytics === undefined ? (
-            <p className="text-xs text-[var(--text-3)] py-2">Loading campaign analytics…</p>
-          ) : analytics === null ? (
-            <p className="text-xs text-[var(--text-3)] py-2">No analytics available for this campaign.</p>
-          ) : (
-            <CampaignExpand a={analytics} />
-          )}
+        <div className="bg-[var(--bg-app)]">
+          <CampaignExpand
+            campaignId={c.id}
+            name={c.name}
+            slice={slice}
+            sliceLabel={sliceLabel}
+            onClearSlice={onClearSlice}
+          />
         </div>
       )}
     </div>

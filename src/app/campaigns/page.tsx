@@ -497,7 +497,7 @@ function CampaignsPageInner() {
                   </div>
                   {isOpen && a && (
                     <div className="px-4 pb-4 bg-[var(--bg-app)]">
-                      <CampaignExpand a={a} />
+                      <CampaignExpand campaignId={id} name={c.name as string} a={a} viewPrompt />
                     </div>
                   )}
                   </React.Fragment>
@@ -626,7 +626,7 @@ function CampaignsPageInner() {
                       {expanded.has(id) && a && (
                         <tr className="bg-[var(--bg-app)]">
                           <td colSpan={8} className="px-4 py-4 border-b border-[var(--border)]">
-                            <CampaignExpand a={a} />
+                            <CampaignExpand campaignId={id} name={c.name as string} a={a} viewPrompt />
                           </td>
                         </tr>
                       )}

@@ -3,13 +3,14 @@
 // Today's campaigns (Val's mockup, Slice A) — expandable per-campaign rows for today's running campaigns,
 // rendered via the shared CampaignRow (Slice C). Each row: campaign + agent + view-prompt + chips
 // (country/players/date), a Running badge + runtime, and three compact BreakdownColumns (per-campaign
-// TODAY). Expanding reuses the shipped CampaignExpand (records + CSV/Audio/Transcripts + view-prompt).
+// TODAY). Straight-to-records (2026-07-02): expanding goes directly to the records; clicking a
+// breakdown number opens them pre-filtered to that slice (mockup handleRowClick semantics).
 // Rendered only when campaigns are running. Data: TodaySnapshot.runningCampaigns.
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import type { RunningCampaignCard } from "@/lib/dashboardAnalytics";
-import type { CampaignAnalytics } from "@/lib/campaignAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
+import { sliceEq, type RecordSlice } from "./recordsDisplay";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData } from "./CampaignRow";
 import PromptModal from "./PromptModal";
 
@@ -31,29 +32,43 @@ function fmtRuntime(startIso: string | null): string | null {
 
 export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampaignCard[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [analytics, setAnalytics] = useState<Record<string, CampaignAnalytics | null>>({});
+  // Active records slice per expanded row (straight-to-records): absent = unfiltered.
+  const [slices, setSlices] = useState<Record<string, { slice: RecordSlice; label: string }>>({});
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
 
-  const fetchAnalytics = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/dashboard/campaigns/${id}/analytics`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { analytics: CampaignAnalytics | null };
-      setAnalytics((prev) => ({ ...prev, [id]: body.analytics }));
-    } catch {
-      setAnalytics((prev) => ({ ...prev, [id]: null })); // degrade loudly in the UI, not silently
-    }
-  }, []);
-
+  // Chevron/name toggle — expand unfiltered; collapsing clears the row's slice (mockup closePanel).
+  const clearSlice = (id: string) =>
+    setSlices((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   const toggleExpand = (id: string) => {
-    const willExpand = !expanded.has(id);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-    if (willExpand && analytics[id] === undefined) fetchAnalytics(id);
+    if (expanded.has(id)) clearSlice(id);
+  };
+
+  // Breakdown number click (mockup handleRowClick): same number while open → collapse; a
+  // different number → re-slice in place (stays open); closed row → expand pre-filtered.
+  const pickMetric = (id: string, slice: RecordSlice, label: string) => {
+    const isOpen = expanded.has(id);
+    if (isOpen && sliceEq(slices[id]?.slice ?? null, slice)) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      clearSlice(id);
+      return;
+    }
+    setSlices((prev) => ({ ...prev, [id]: { slice, label } }));
+    if (!isOpen) setExpanded((prev) => new Set(prev).add(id));
   };
 
   if (campaigns.length === 0) return null;
@@ -96,7 +111,10 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
                   c={data}
                   expanded={expanded.has(c.id)}
                   onToggle={() => toggleExpand(c.id)}
-                  analytics={analytics[c.id]}
+                  slice={slices[c.id]?.slice}
+                  sliceLabel={slices[c.id]?.label}
+                  onMetricPick={(s, l) => pickMetric(c.id, s, l)}
+                  onClearSlice={() => clearSlice(c.id)}
                   onViewPrompt={() => setPromptFor({ id: c.id, title: formatCampaign(c.name).display })}
                 />
               );

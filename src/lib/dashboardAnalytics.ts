@@ -897,7 +897,7 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
 // Honest, plain-English definitions for each tag — surfaced as hover tooltips on the records
 // outcome chips. These are PROXY classifications (best-effort, derived from call data), not
 // verified labels; the wording discloses that without renaming the categories. Mirrors the
-// "estimated" hint treatment on CampaignSummary's breakdown bars.
+// "Estimated" hint treatment on the records filters + BreakdownColumn "est" chips.
 export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
   neutral: "Connected to a person, but no clear positive or negative outcome was detected.",
@@ -909,7 +909,7 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   wrong_number: "Marked as a wrong or invalid number.",
 };
 
-// Muted accents — MATCH src/components/analytics/CampaignSummary.tsx (calm palette, low chroma).
+// Muted accents (calm palette, low chroma) — shared by the records outcome chips.
 export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
   positive: "#5fb39a",
   neutral: "#8b939c",
