@@ -226,7 +226,7 @@ export default function TodayRecordsDrawer({
             onChange={(e) => setPhone(e.target.value)}
             placeholder="Search number…"
             aria-label="Search by phone number"
-            className="pl-8 pr-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500 w-[150px]"
+            className="pl-8 pr-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary w-[150px]"
           />
         </div>
       </div>

@@ -25,7 +25,7 @@ const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}
 const STATUS_PILL: Record<string, { label: string; cls: string }> = {
   running: { label: "Running", cls: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" },
   paused: { label: "Paused", cls: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
-  completed: { label: "Completed", cls: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
+  completed: { label: "Completed", cls: "text-primary bg-primary/10 border-primary/20" },
   inactive: { label: "Inactive", cls: "text-[var(--text-3)] bg-[var(--bg-elevated)] border-[var(--border)]" },
   draft: { label: "Draft", cls: "text-[var(--text-3)] bg-[var(--bg-elevated)] border-[var(--border)]" },
 };
@@ -129,7 +129,7 @@ export default function CampaignDetailsModal({
           </Meta>
           {metrics.smsSent != null && (
             <Meta label="SMS sent">
-              <span className="font-mono text-sky-400">{metrics.smsSent.toLocaleString()}</span>
+              <span className="font-mono text-primary">{metrics.smsSent.toLocaleString()}</span>
             </Meta>
           )}
           <Meta label="Positive response">
@@ -157,7 +157,7 @@ export default function CampaignDetailsModal({
                 onFilter();
                 onClose();
               }}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition shadow-sm shadow-blue-600/20"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-white px-3 py-1.5 rounded-lg bg-primary hover:bg-primary transition shadow-sm shadow-primary/20"
             >
               <Filter size={12} /> Filter dashboard to this campaign
             </button>

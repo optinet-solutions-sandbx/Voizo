@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
@@ -8,6 +8,12 @@ import DotField from "@/components/DotField";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+// All figures render in Geist Mono (+ tabular-nums via body) — pattern brief §3.
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
@@ -24,7 +30,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} antialiased bg-[var(--bg-app)]`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[var(--bg-app)]`}>
         {/* Global interactive dot-field — ONE fixed layer behind the whole app. -z-10 paints it
             above the body bg but below all content, so no page needs a z-wrapper (keeps full-height
             pages like Workers intact) and no stacking context is introduced (modals stay on top).

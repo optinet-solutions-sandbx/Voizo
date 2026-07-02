@@ -133,7 +133,7 @@ export function SortControl({
             type="button"
             onClick={() => setSort(k)}
             className={`px-2.5 py-1 text-xs font-medium capitalize transition ${
-              sort === k ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+              sort === k ? "bg-primary text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
             }`}
           >
             {labels?.[k] ?? RANKED_SORT_LABELS[k] ?? k}
@@ -191,7 +191,7 @@ function AgentTable({ agents }: { agents: AgentRow[] }) {
                 <div className="font-mono text-xs text-[var(--text-2)] w-14 text-right">{a.calls.toLocaleString()}</div>
                 <div className="font-mono text-xs text-emerald-400 w-14 text-right">{pct(a.connectRate)}</div>
                 <div className="font-mono text-xs text-teal-400 w-14 text-right">{a.reach.toLocaleString()}</div>
-                <div className="font-mono text-xs text-sky-400 w-14 text-right">{a.smsSent.toLocaleString()}</div>
+                <div className="font-mono text-xs text-primary w-14 text-right">{a.smsSent.toLocaleString()}</div>
                 <div className="font-mono text-xs text-amber-400 w-16 text-right">{pct(a.positiveResponseRate)}</div>
               </div>
             );
@@ -258,7 +258,7 @@ function Leaderboard({
               >
                 <RankBadge rank={rank} medal={!isThin} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-[var(--text-1)] truncate group-hover:text-blue-400 transition-colors" title={c.name}>{fmt.display}</div>
+                  <div className="text-sm font-medium text-[var(--text-1)] truncate group-hover:text-primary transition-colors" title={c.name}>{fmt.display}</div>
                   <div className="text-[10px] text-[var(--text-3)] truncate">
                     {baseAgentName(c.baseAssistantId) ?? "—"} · {c.calls.toLocaleString()} calls
                   </div>
@@ -347,7 +347,7 @@ function PromptTable({ prompts }: { prompts: PromptRow[] }) {
                       type="button"
                       onClick={() => setPromptFor({ campaignId: p.campaignId!, title: `${baseAgentName(p.baseAssistantId) ?? "Prompt"} · ${sha4}` })}
                       title="View full prompt"
-                      className="block w-full text-left text-xs font-medium text-[var(--text-1)] hover:text-blue-400 transition-colors font-mono break-words line-clamp-2 cursor-pointer"
+                      className="block w-full text-left text-xs font-medium text-[var(--text-1)] hover:text-primary transition-colors font-mono break-words line-clamp-2 cursor-pointer"
                     >
                       {main}
                     </button>
@@ -361,7 +361,7 @@ function PromptTable({ prompts }: { prompts: PromptRow[] }) {
                 <div className="font-mono text-xs text-[var(--text-2)] w-14 text-right">{p.calls.toLocaleString()}</div>
                 <div className="font-mono text-xs text-emerald-400 w-14 text-right">{pct(p.connectRate)}</div>
                 <div className="font-mono text-xs text-teal-400 w-14 text-right">{p.reach.toLocaleString()}</div>
-                <div className="font-mono text-xs text-sky-400 w-14 text-right">{p.smsSent.toLocaleString()}</div>
+                <div className="font-mono text-xs text-primary w-14 text-right">{p.smsSent.toLocaleString()}</div>
                 <div className="font-mono text-xs text-amber-400 w-16 text-right">{pct(p.positiveResponseRate)}</div>
               </div>
             );

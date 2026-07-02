@@ -108,7 +108,7 @@ function NavRow({ item, isActive, collapsed }: { item: NavItem; isActive: boolea
         onMouseLeave={() => iconRef.current?.stopAnimation()}
         className={`flex items-center ${collapsed ? "justify-center px-1.5" : "gap-2.5 px-2.5"} py-1.5 rounded-lg text-[13px] font-medium transition-all ${
           isActive
-            ? "bg-blue-600 text-white shadow-md shadow-blue-600/25"
+            ? "bg-primary text-white shadow-md shadow-primary/25"
             : "text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
         }`}
       >
@@ -127,7 +127,7 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
     <div className="flex flex-col h-full">
       <div className={`flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
         <Link href="/dashboard" className={`flex items-center group ${collapsed ? "flex-col gap-1" : "gap-3"}`}>
-          <div className="w-11 h-11 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:bg-blue-500 group-hover:shadow-blue-500/30 transition-all flex-shrink-0">
+          <div className="w-11 h-11 bg-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20 group-hover:bg-primary group-hover:shadow-primary/30 transition-all flex-shrink-0">
             <span className="text-white text-base font-bold">V</span>
           </div>
           {!collapsed && (
@@ -183,7 +183,7 @@ function MobileTopBar() {
   return (
     <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3 bg-[var(--bg-sidebar)] border-b border-[var(--border)]">
       <div className="flex items-center gap-2">
-        <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
+        <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center">
           <span className="text-white text-xs font-bold">V</span>
         </div>
         <span className="font-semibold text-[var(--text-1)] text-sm">{pageTitle}</span>
@@ -193,7 +193,7 @@ function MobileTopBar() {
           {isDark ? <Sun size={18} /> : <Moon size={18} />}
         </button>
         <NotificationBell size={20} align="right" />
-        <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center">
+        <div className="w-7 h-7 bg-gradient-to-br from-primary to-primary rounded-full flex items-center justify-center">
           <span className="text-white text-[10px] font-bold">V</span>
         </div>
       </div>
@@ -209,7 +209,7 @@ function MobileBottomNav() {
         const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
         const Icon = item.animatedIcon;
         // P2 Option C: active mobile-tab is blue by default, red for DNC.
-        const activeColor = item.href === "/do-not-call" ? "text-red-400" : "text-blue-400";
+        const activeColor = item.href === "/do-not-call" ? "text-red-400" : "text-primary";
         return (
           <Link key={item.href} href={item.href}
             className={`flex-1 flex flex-col items-center justify-center py-2.5 gap-0.5 transition-colors ${isActive ? activeColor : "text-[var(--text-3)] hover:text-[var(--text-2)]"}`}>

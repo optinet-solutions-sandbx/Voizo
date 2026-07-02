@@ -41,7 +41,7 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
 ];
 
 const inputCls =
-  "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500";
+  "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary";
 
 export default function CallRecords({
   campaignId,
@@ -100,10 +100,10 @@ export default function CallRecords({
         {/* Active metric-pick slice (from the expanded row) — labels the view; × closes the records. */}
         {slice && (
           <div className="mb-3">
-            <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-300">
+            <span className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
               {sliceLabel ?? "Filtered"}
               {onClose && (
-                <button type="button" onClick={onClose} aria-label="Close records" className="text-blue-300/70 transition hover:text-blue-200">
+                <button type="button" onClick={onClose} aria-label="Close records" className="text-primary/70 transition hover:text-primary">
                   <X size={12} />
                 </button>
               )}

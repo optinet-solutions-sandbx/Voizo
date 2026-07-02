@@ -280,7 +280,7 @@ export default function CampaignTable() {
                         <span className="text-[var(--border-2)]">·</span>
                         <Link
                           href={`/campaigns/v2/${r.id}`}
-                          className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-blue-400 transition-colors"
+                          className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-primary transition-colors"
                         >
                           open in campaign <ArrowRight size={10} />
                         </Link>

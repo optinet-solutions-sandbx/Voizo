@@ -62,7 +62,7 @@ export default function TopPerformers({
     cards.push({ icon: <Trophy size={14} />, label: "Best campaign", accent: "text-[var(--text-1)]", name: best.campaign.label, best: best.campaign, scope: { campaignIds: [best.campaign.key] } });
   }
   if (best.agent) {
-    cards.push({ icon: <Mic size={14} />, label: "Best voice agent", accent: "text-blue-400", name: best.agent.label, best: best.agent, scope: { baseAgent: best.agent.key } });
+    cards.push({ icon: <Mic size={14} />, label: "Best voice agent", accent: "text-primary", name: best.agent.label, best: best.agent, scope: { baseAgent: best.agent.key } });
   }
   if (best.prompt) {
     cards.push({ icon: <FileText size={14} />, label: "Best prompt", accent: "text-amber-300", name: best.prompt.label, best: best.prompt, scope: { prompt: best.prompt.key } });

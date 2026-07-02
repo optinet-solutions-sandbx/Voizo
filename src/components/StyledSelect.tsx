@@ -57,8 +57,8 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
           disabled
             ? "border-[var(--border)] opacity-60 cursor-not-allowed"
             : open
-              ? "border-blue-500 ring-1 ring-blue-500 cursor-pointer"
-              : "border-[var(--border)] hover:border-blue-500/40 cursor-pointer"
+              ? "border-primary ring-1 ring-primary cursor-pointer"
+              : "border-[var(--border)] hover:border-primary/40 cursor-pointer"
         }`}
       >
         {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}
@@ -90,7 +90,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
                   }}
                   className={`w-full text-left ${sm ? "px-3 py-2 text-sm" : "px-3.5 py-2.5 text-sm"} transition-colors ${
                     o.value === value
-                      ? "bg-blue-600/20 text-blue-400"
+                      ? "bg-primary/20 text-primary"
                       : "text-[var(--text-1)] hover:bg-[var(--bg-hover)]"
                   }`}
                 >

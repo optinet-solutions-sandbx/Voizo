@@ -106,7 +106,7 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
                     <button
                       type="button"
                       onClick={() => setDetail(r)}
-                      className="text-left text-[var(--text-1)] hover:text-blue-400 transition-colors"
+                      className="text-left text-[var(--text-1)] hover:text-primary transition-colors"
                     >
                       {r.phone ?? "—"}
                     </button>

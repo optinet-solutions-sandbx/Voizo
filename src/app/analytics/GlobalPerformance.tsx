@@ -98,7 +98,7 @@ function buildQuery(f: Filters): string {
 
 // Trigger/panel styling mirrors StyledSelect so the bar is visually uniform.
 const TRIGGER_CLS =
-  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-blue-500/40 transition-all cursor-pointer";
+  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
 
 function MultiSelect({
   label,
@@ -145,7 +145,7 @@ function MultiSelect({
                   onClick={() => toggle(o.value)}
                   className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
                 >
-                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-blue-600 border-blue-600 text-white" : "border-[var(--border-2)]"}`}>
+                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-primary border-primary text-white" : "border-[var(--border-2)]"}`}>
                     {on && (
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 6 9 17l-5-5" />
@@ -281,7 +281,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
                   <SlidersHorizontal size={13} className="text-[var(--text-3)]" />
                   <h3 className="text-[13px] font-semibold">Filters</h3>
                   {chips.length > 0 && (
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/25">{chips.length}</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/25">{chips.length}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2.5">
@@ -304,7 +304,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
                         key={r}
                         onClick={() => set({ range: r })}
                         className={`px-2.5 py-1.5 text-xs font-medium transition ${
-                          filters.range === r ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+                          filters.range === r ? "bg-primary text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
                         }`}
                       >
                         {r}
@@ -337,7 +337,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
                       value={filters.phone}
                       onChange={(e) => set({ phone: e.target.value })}
                       placeholder="Search any called number…"
-                      className="pl-8 pr-3 py-1.5 w-full text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                      className="pl-8 pr-3 py-1.5 w-full text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
                     />
                   </div>
                 </div>
@@ -369,7 +369,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
               <SlidersHorizontal size={13} />
               Filters
               {chips.length > 0 && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/25">{chips.length}</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/25">{chips.length}</span>
               )}
             </button>
           )}

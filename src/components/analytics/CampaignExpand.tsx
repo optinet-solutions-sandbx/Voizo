@@ -81,7 +81,7 @@ export default function CampaignExpand({
               </button>
             </PromptHoverCard>
           )}
-          <Link href={`/campaigns/v2/${campaignId}`} className="text-[11px] text-blue-400 transition hover:text-blue-300">
+          <Link href={`/campaigns/v2/${campaignId}`} className="text-[11px] text-primary transition hover:text-primary">
             Open campaign →
           </Link>
         </div>

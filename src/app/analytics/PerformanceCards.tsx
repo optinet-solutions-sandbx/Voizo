@@ -11,16 +11,16 @@ import type { PerfMetric, PerfRow, TodayPerfDay } from "@/lib/dashboardAnalytics
 import Hint from "@/components/Hint";
 import CountUp from "@/components/CountUp";
 
-// Row accent colors — match Val's mockup (vivid bars/dots, distinct from the muted records chips).
-// Exported so the shared BreakdownColumn (Today's-campaigns rows, Slice A) uses the same palette.
+// Semantic palette (pattern brief §2 — desaturated, meaning-only). Exported as the single
+// source for every breakdown dot/segment (BreakdownColumn, campaign rows, charts).
 export const ROW_COLOR: Record<string, string> = {
-  reached: "#1baf7a",
-  voicemail: "#9085e9",
-  unreachable: "#eda100",
-  positive: "#1baf7a",
-  neutral: "#4a9eed",
-  declined: "#e34948",
-  early_hangup: "#e06530",
+  reached: "#3ec08a",
+  voicemail: "#8f86e6",
+  unreachable: "#e0a53c",
+  positive: "#3ec08a",
+  neutral: "#5b9bf0",
+  declined: "#e46664",
+  early_hangup: "#e0814a",
 };
 
 /** The "est" honesty badge + its disclosure tooltip — shared by every proxy-outcome row
@@ -138,7 +138,7 @@ function MetricCard({
       <button type="button" onClick={onOpenTotal} className="flex items-baseline gap-2 text-left group w-fit">
         <CountUp
           value={metric.total}
-          className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-blue-400 transition-colors"
+          className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-primary transition-colors"
         />
         {showDeltas && <DeltaChips a={metric.deltaPctVsYesterday} b={metric.deltaPctVsSevenDayAvg} fmt={pctText} />}
       </button>

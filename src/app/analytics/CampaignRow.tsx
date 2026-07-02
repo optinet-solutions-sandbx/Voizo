@@ -23,7 +23,7 @@ import PromptHoverCard from "./PromptHoverCard";
 export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
 export const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: boolean }> = {
   running: { label: "Running", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", pulse: true },
-  completed: { label: "Completed", cls: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
+  completed: { label: "Completed", cls: "bg-primary/10 text-primary border-primary/20" },
   ended: { label: "Ended", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
   paused: { label: "Paused", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
   inactive: { label: "Inactive", cls: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]" },
@@ -114,7 +114,7 @@ export default function CampaignRow({
             aria-label={expanded ? "Collapse call records" : "Expand call records"}
           >
             <ChevronRight size={14} className={`text-[var(--text-3)] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-            <span className="text-sm font-semibold text-[var(--text-1)] truncate group-hover:text-blue-400 transition-colors" title={c.name}>
+            <span className="text-sm font-semibold text-[var(--text-1)] truncate group-hover:text-primary transition-colors" title={c.name}>
               {fmt.offer || fmt.display}
             </span>
           </button>
@@ -132,7 +132,7 @@ export default function CampaignRow({
             )}
             <span className="text-[var(--border-2)]">·</span>
             <PromptHoverCard campaignId={c.id}>
-              <button type="button" onClick={onViewPrompt} className="text-blue-400 hover:text-blue-300 transition-colors">
+              <button type="button" onClick={onViewPrompt} className="text-primary hover:text-primary transition-colors">
                 view prompt
               </button>
             </PromptHoverCard>

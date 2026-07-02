@@ -75,7 +75,7 @@ export default function BreakdownColumn({
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] mb-1">{label}</div>
         )}
         {onTotal ? (
-          <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-blue-400 transition-colors cursor-pointer">
+          <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-primary transition-colors cursor-pointer">
             <CountUp value={metric.total} />
           </button>
         ) : (
@@ -107,7 +107,7 @@ export default function BreakdownColumn({
           <ChevronRight size={12} className="text-[var(--text-3)] rotate-90 transition-transform group-hover:text-[var(--text-2)]" />
         </button>
         {onTotal ? (
-          <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-blue-400 transition-colors cursor-pointer">
+          <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-primary transition-colors cursor-pointer">
             <CountUp value={metric.total} />
           </button>
         ) : (

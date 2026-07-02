@@ -139,7 +139,7 @@ export default function DatePickerField({
         aria-label={ariaLabel ?? "Pick a date"}
         className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--bg-app)] border-[1.5px] text-sm font-mono transition ${
           open
-            ? "border-blue-500 ring-[3px] ring-blue-500/20 text-[var(--text-1)]"
+            ? "border-primary ring-[3px] ring-primary/20 text-[var(--text-1)]"
             : "border-[var(--border)] hover:border-[var(--border-2)]"
         } ${parsed ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}`}
       >
@@ -147,7 +147,7 @@ export default function DatePickerField({
         <span>{parsed ? fmtYmd(parsed) : placeholder}</span>
         <ChevronDown
           size={11}
-          className={`text-[var(--text-3)] transition ${open ? "rotate-180 text-blue-400" : ""}`}
+          className={`text-[var(--text-3)] transition ${open ? "rotate-180 text-primary" : ""}`}
         />
       </button>
 
@@ -226,15 +226,15 @@ export default function DatePickerField({
                       : c.out
                         ? "opacity-30 text-[var(--text-2)] hover:bg-[var(--bg-elevated)]"
                         : isSelected
-                          ? "bg-blue-500 text-white font-semibold"
+                          ? "bg-primary text-white font-semibold"
                           : isToday
-                            ? "text-blue-400 font-bold hover:bg-[var(--bg-elevated)]"
+                            ? "text-primary font-bold hover:bg-[var(--bg-elevated)]"
                             : "text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)]"
                   }`}
                 >
                   {c.d}
                   {isToday && !isSelected && !disabled && (
-                    <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-[3px] h-[3px] rounded-full bg-blue-400" />
+                    <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-[3px] h-[3px] rounded-full bg-primary" />
                   )}
                 </button>
               );
@@ -259,7 +259,7 @@ export default function DatePickerField({
               <button
                 type="button"
                 onClick={() => setView(new Date(today.getFullYear(), today.getMonth(), 1))}
-                className="text-xs text-[var(--text-3)] hover:text-blue-400 font-medium"
+                className="text-xs text-[var(--text-3)] hover:text-primary font-medium"
               >
                 Today
               </button>
@@ -276,7 +276,7 @@ export default function DatePickerField({
                 type="button"
                 onClick={commit}
                 disabled={!selected}
-                className="px-4 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-semibold hover:bg-blue-400 transition shadow-md shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-blue-500 disabled:shadow-none"
+                className="px-4 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary transition shadow-md shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-primary disabled:shadow-none"
               >
                 Select
               </button>

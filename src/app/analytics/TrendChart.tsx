@@ -21,7 +21,7 @@ const fmtCount = (v: number) => v.toLocaleString();
 const SERIES = [
   ["calls", "Call attempts", "#94a3b8", "bg-slate-400"],
   ["reached", "Reached", "#34d399", "bg-emerald-400"],
-  ["smsSent", "SMS sent", "#38bdf8", "bg-sky-400"],
+  ["smsSent", "SMS sent", "#38bdf8", "bg-primary"],
 ] as const;
 
 function TrendTooltip({
@@ -40,7 +40,7 @@ function TrendTooltip({
       <div className="text-[var(--text-2)] font-medium mb-1">{shortDay(label ?? p.day)}</div>
       <div className="text-slate-300">{p.calls.toLocaleString()} attempts</div>
       <div className="text-emerald-400">{p.reached.toLocaleString()} reached</div>
-      <div className="text-sky-400">{p.smsSent.toLocaleString()} SMS sent</div>
+      <div className="text-primary">{p.smsSent.toLocaleString()} SMS sent</div>
     </div>
   );
 }

@@ -34,7 +34,7 @@ export default function PortfolioKpiStrip({ portfolio }: PortfolioKpiStripProps)
         <Card
           label="Est. Spend"
           value={money(portfolio.estSpend)}
-          accent="text-blue-400"
+          accent="text-primary"
           sub={<span>est. · {portfolio.costPerGoal === null ? "—" : `${money(portfolio.costPerGoal)}/goal`}</span>}
         />
         <Card

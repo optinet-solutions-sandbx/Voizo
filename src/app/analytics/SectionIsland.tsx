@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 // Accent styling defined once per accent so the two islands stay in lock-step.
 const ACCENT = {
   emerald: { border: "border-emerald-500/20", fill: "bg-emerald-500/5", glow: "from-emerald-500/10" },
-  blue: { border: "border-blue-500/20", fill: "bg-blue-500/5", glow: "from-blue-500/10" },
+  blue: { border: "border-primary/20", fill: "bg-primary/5", glow: "from-primary/10" },
 } as const;
 
 export default function SectionIsland({

@@ -915,16 +915,17 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   wrong_number: "Marked as a wrong or invalid number.",
 };
 
-// Muted accents (calm palette, low chroma) — shared by the records outcome chips.
+// Semantic palette (pattern brief §2) — the SAME meaning-hues as ROW_COLOR so a tag reads
+// identically in chips, dots, and segments. awaiting_retry/wrong_number stay neutral greys.
 export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
-  positive: "#5fb39a",
-  neutral: "#8b939c",
-  declined: "#cf8a8a",
-  early_hangup: "#c9a86a",
-  voicemail: "#9f90c9",
-  unreachable: "#c98a8a",
-  awaiting_retry: "#7fa8d0",
-  wrong_number: "#8b939c",
+  positive: "#3ec08a",
+  neutral: "#5b9bf0",
+  declined: "#e46664",
+  early_hangup: "#e0814a",
+  voicemail: "#8f86e6",
+  unreachable: "#e0a53c",
+  awaiting_retry: "#7d828c",
+  wrong_number: "#565b64",
 };
 
 // Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
