@@ -18,6 +18,7 @@ import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
 import { SortControl, type SortKey } from "./RankedTables";
 import { useExpandSlices } from "./useExpandSlices";
+import { CampaignRowsSkeleton } from "./loadingSkeletons";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
 
 interface Row {
@@ -233,9 +234,11 @@ export default function CampaignTable() {
             </div>
 
             {visible.length === 0 ? (
-              <div className="px-4 py-10 text-center text-xs text-[var(--text-3)]">
-                {data ? "No campaigns match these filters." : "Loading campaigns…"}
-              </div>
+              data ? (
+                <div className="px-4 py-10 text-center text-xs text-[var(--text-3)]">No campaigns match these filters.</div>
+              ) : (
+                <CampaignRowsSkeleton rows={PAGE_SIZE} />
+              )
             ) : (
               pageRows.map((r) => {
                 const rowData: CampaignRowData = {

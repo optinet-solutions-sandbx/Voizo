@@ -13,6 +13,7 @@ import type { TodaySnapshot, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalyt
 import PerformanceCards from "./PerformanceCards";
 import TodayRecordsDrawer, { type DrawerFilter } from "./TodayRecordsDrawer";
 import { useDrawerClaim } from "./drawerExclusivity";
+import { CardGridSkeleton } from "./loadingSkeletons";
 
 // Map a clicked total/row to the semantic drawer filter (spec §6 — NOT the mockup's loose args).
 function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
@@ -84,7 +85,7 @@ export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | 
       </div>
 
       {!perf ? (
-        <p className="text-center text-xs text-[var(--text-3)] py-8">Loading today&apos;s performance…</p>
+        <CardGridSkeleton />
       ) : (
         <>
           <PerformanceCards perf={perf} showDeltas onOpenTotal={openTotal} onOpenRow={openRow} />

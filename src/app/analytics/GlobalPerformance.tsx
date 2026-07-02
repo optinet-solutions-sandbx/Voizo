@@ -20,6 +20,7 @@ import PerformanceCards from "./PerformanceCards";
 import TopPerformers from "./TopPerformers";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
 import { useDrawerClaim } from "./drawerExclusivity";
+import { CardGridSkeleton } from "./loadingSkeletons";
 import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 
 type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
@@ -385,7 +386,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
       ) : data ? (
         <p className="text-center text-xs text-[var(--text-3)] py-8">Performance breakdown unavailable for this filter.</p>
       ) : (
-        <p className="text-center text-xs text-[var(--text-3)] py-8">Loading…</p>
+        <CardGridSkeleton />
       )}
 
       {/* Top Performers — per-entity breakdown cards with per-row drill-down (Val's mockup, Slice E).

@@ -13,6 +13,7 @@ import { X, Download, VolumeX, Target, Phone } from "lucide-react";
 import type { CallRecord } from "@/lib/dashboardAnalytics";
 import CallTranscript from "@/components/CallTranscript";
 import Hint from "@/components/Hint";
+import { BlockSkeleton } from "./loadingSkeletons";
 
 interface Attempt {
   callId: string;
@@ -97,7 +98,7 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
 
         <div className="px-5 py-4 overflow-y-auto grid gap-4">
           {loading ? (
-            <p className="text-xs text-[var(--text-3)] py-6 text-center">Loading call detail…</p>
+            <BlockSkeleton lines={5} />
           ) : errMsg ? (
             <p className="text-xs text-amber-400 font-mono py-6 text-center">{errMsg}</p>
           ) : !attempts || attempts.length === 0 ? (

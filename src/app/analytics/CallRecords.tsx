@@ -29,6 +29,7 @@ import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import RecordsTable from "./RecordsTable";
 import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER, sliceMatches, type RecordSlice } from "./recordsDisplay";
 import Hint from "@/components/Hint";
+import { RecordsSkeleton } from "./loadingSkeletons";
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
@@ -147,7 +148,7 @@ export default function CallRecords({
         {error ? (
           <p className="text-xs text-amber-400 font-mono py-3">{error}</p>
         ) : !records ? (
-          <p className="text-xs text-[var(--text-3)] py-3">Loading call records…</p>
+          <RecordsSkeleton />
         ) : (
           <>
             <RecordsTable records={filtered} />

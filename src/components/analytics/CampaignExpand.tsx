@@ -17,6 +17,7 @@ import AnalyticsRowExpand from "./AnalyticsRowExpand";
 import CallRecords from "@/app/analytics/CallRecords";
 import PromptModal from "@/app/analytics/PromptModal";
 import { type RecordSlice } from "@/app/analytics/recordsDisplay";
+import { BlockSkeleton } from "@/app/analytics/loadingSkeletons";
 
 const quietCls =
   "inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] transition hover:text-[var(--text-2)]";
@@ -86,7 +87,7 @@ export default function CampaignExpand({
       {advanced && (
         <div className="border-t border-[var(--border)] px-5 py-4">
           {analytics === undefined ? (
-            <p className="text-xs text-[var(--text-3)] py-2">Loading campaign analytics…</p>
+            <BlockSkeleton lines={4} />
           ) : analytics === null ? (
             <p className="text-xs text-[var(--text-3)] py-2">No analytics available for this campaign.</p>
           ) : (
