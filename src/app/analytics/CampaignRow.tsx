@@ -158,7 +158,7 @@ export default function CampaignRow({
             )}
             <span className="text-[var(--border-2)]">·</span>
             <PromptHoverCard campaignId={c.id}>
-              <button type="button" onClick={onViewPrompt} className="text-primary hover:text-primary transition-colors">
+              <button type="button" onClick={onViewPrompt} className="text-primary hover:text-primary/80 transition-colors">
                 view prompt
               </button>
             </PromptHoverCard>

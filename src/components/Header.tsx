@@ -52,7 +52,7 @@ export default function Header() {
         {action && (
           <Link
             href={action.href}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary text-white text-xs font-medium transition-colors shadow-sm shadow-primary/20"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-medium transition-colors shadow-sm shadow-primary/20"
           >
             <Plus size={14} /> {action.label}
           </Link>

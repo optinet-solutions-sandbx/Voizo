@@ -106,14 +106,16 @@ function NavRow({ item, isActive, collapsed }: { item: NavItem; isActive: boolea
         title={collapsed ? item.label : undefined}
         onMouseEnter={() => { if (!reduce) iconRef.current?.startAnimation(); }}
         onMouseLeave={() => iconRef.current?.stopAnimation()}
-        className={`flex items-center ${collapsed ? "justify-center px-1.5" : "gap-2.5 px-2.5"} py-1.5 rounded-lg text-[13px] font-medium transition-all ${
+        className={`relative flex items-center ${collapsed ? "justify-center px-1.5" : "gap-2.5 px-2.5"} py-1.5 rounded-lg text-[13px] font-medium transition-all ${
           isActive
-            ? "bg-primary text-white shadow-md shadow-primary/25"
+            ? "bg-[var(--bg-hover)] text-[var(--text-1)]"
             : "text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
         }`}
       >
-        <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-white/15" : item.bg}`}>
-          <Icon ref={iconRef} size={13} className={isActive ? "text-white" : item.color} />
+        {/* Active marker (pattern brief frame): 3px primary bar, not a solid pill. */}
+        {isActive && <span aria-hidden className="absolute left-0 top-[7px] bottom-[7px] w-[3px] rounded-[3px] bg-primary" />}
+        <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isActive ? "bg-primary/15" : item.bg}`}>
+          <Icon ref={iconRef} size={13} className={isActive ? "text-primary" : item.color} />
         </div>
         {!collapsed && item.label}
       </Link>
@@ -127,7 +129,10 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
     <div className="flex flex-col h-full">
       <div className={`flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
         <Link href="/dashboard" className={`flex items-center group ${collapsed ? "flex-col gap-1" : "gap-3"}`}>
-          <div className="w-11 h-11 bg-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20 group-hover:bg-primary group-hover:shadow-primary/30 transition-all flex-shrink-0">
+          <div
+            className="w-11 h-11 rounded-xl flex items-center justify-center transition-all flex-shrink-0"
+            style={{ background: "linear-gradient(145deg,#4d90f0,#3a6fd0)", boxShadow: "0 2px 10px rgba(77,144,240,.35)" }}
+          >
             <span className="text-white text-base font-bold">V</span>
           </div>
           {!collapsed && (
