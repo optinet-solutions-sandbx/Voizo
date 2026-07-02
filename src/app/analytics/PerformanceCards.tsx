@@ -1,10 +1,11 @@
 "use client";
 
-// Shared presentational 3-card Performance grid (Call attempts / Reached / SMS sent) with breakdown
-// rows, bars, pct pills, and OPTIONAL delta chips. Extracted from TodayPerformanceCards (2026-06-30,
-// Slice B) so both the always-live Today view (showDeltas=true) and the ranged Global view
-// (showDeltas=false — Val's mockup shows no deltas on Global) render identically. Purely
-// presentational: the parent supplies the click handlers (→ its own records drawer).
+// The metric-card pattern (pattern brief §4 — the core reusable unit): label → hero total
+// (tabular mono, CountUp) → ONE delta chip vs a single named baseline (7-day avg) → ONE
+// segmented proportion bar (the split shown once) → clean breakdown rows (dot · label ·
+// count · % · [Today only] one pp-delta). Shared by the always-live Today view
+// (showDeltas=true) and the ranged Global view (showDeltas=false). Purely presentational:
+// the parent supplies the click handlers (→ its own records drawer).
 
 import { motion } from "motion/react";
 import type { PerfMetric, PerfRow, TodayPerfDay } from "@/lib/dashboardAnalytics";
@@ -12,7 +13,7 @@ import Hint from "@/components/Hint";
 import CountUp from "@/components/CountUp";
 
 // Semantic palette (pattern brief §2 — desaturated, meaning-only). Exported as the single
-// source for every breakdown dot/segment (BreakdownColumn, campaign rows, charts).
+// source for every breakdown dot/segment (campaign rows, charts, heatmap accents).
 export const ROW_COLOR: Record<string, string> = {
   reached: "#3ec08a",
   voicemail: "#8f86e6",
@@ -23,9 +24,12 @@ export const ROW_COLOR: Record<string, string> = {
   early_hangup: "#e0814a",
 };
 
+// Delta colors from the same semantic set (green up, red down, neutral flat).
+const DELTA_UP = "text-[#3ec08a]";
+const DELTA_DOWN = "text-[#e46664]";
+
 /** The "est" honesty badge + its disclosure tooltip — shared by every proxy-outcome row
- *  (here, BreakdownColumn, and GlobalPerformance's coverage note) so wording/styling can't
- *  drift. `tone="warn"` = the amber coverage-warning variant. */
+ *  so wording/styling can't drift. `tone="warn"` = the amber coverage-warning variant. */
 export function EstBadge({
   content = "Best-effort estimate from call data, not a verified label.",
   tone = "muted",
@@ -34,10 +38,10 @@ export function EstBadge({
   tone?: "muted" | "warn";
 }) {
   const toneCls =
-    tone === "warn" ? "text-amber-400/90 border-amber-400/30" : "text-[var(--text-3)] border-[var(--border-2)]";
+    tone === "warn" ? "text-amber-400/90 border-amber-400/30" : "text-[var(--text-4)] border-[var(--border-2)]";
   return (
     <Hint content={content}>
-      <span className={`cursor-help text-[8.5px] uppercase tracking-wider border rounded px-1 ${toneCls}`}>est</span>
+      <span className={`cursor-help text-[9px] font-semibold uppercase tracking-[0.06em] border rounded px-1 ${toneCls}`}>est</span>
     </Hint>
   );
 }
@@ -47,70 +51,61 @@ const ppText = (v: number | null) => (v === null ? null : `${v >= 0 ? "+" : ""}$
 
 function deltaCls(v: number | null): string {
   if (v === null || Math.abs(v) < 0.0005) return "text-[var(--text-3)]";
-  return v > 0 ? "text-emerald-400" : "text-red-400";
+  return v > 0 ? DELTA_UP : DELTA_DOWN;
 }
+const deltaArrow = (v: number | null) => (v === null || Math.abs(v) < 0.0005 ? "" : v > 0 ? "▲" : "▼");
 
-// Two small delta chips (vs yesterday, vs 7-day avg). `fmt` = pctText (totals) or ppText (rows).
-function DeltaChips({ a, b, fmt }: { a: number | null; b: number | null; fmt: (v: number | null) => string | null }) {
-  const ta = fmt(a);
-  const tb = fmt(b);
+/** ONE segmented proportion bar — the split shown once, not repeated as N half-empty bars
+ *  (pattern brief §4). Segments are flex-weighted by count; zero rows vanish (min-w keeps
+ *  slivers visible). Exported for the campaign rows (5px variant). */
+export function SegBar({ rows, height = 6 }: { rows: PerfRow[]; height?: number }) {
+  const total = rows.reduce((s, r) => s + r.count, 0);
   return (
-    <span className="inline-flex items-center gap-1.5 text-[10px] font-medium">
-      <Hint content="vs yesterday">
-        <span className={deltaCls(a)}>{ta ?? "—"}</span>
-      </Hint>
-      <span className="text-[var(--border-2)]">·</span>
-      <Hint content="vs last 7-day average">
-        <span className={deltaCls(b)}>{tb ?? "—"}</span>
-      </Hint>
-    </span>
+    <div className="flex gap-[2px] rounded overflow-hidden bg-[#0c0e11]" style={{ height }}>
+      {total === 0 ? (
+        <div className="flex-1" />
+      ) : (
+        rows
+          .filter((r) => r.count > 0)
+          .map((r) => (
+            <div
+              key={r.key}
+              style={{ flex: r.count, background: ROW_COLOR[r.key] ?? "#7d828c", minWidth: 2 }}
+            />
+          ))
+      )}
+    </div>
   );
 }
 
-function Pill({ pct, color }: { pct: number | null; color: string }) {
-  return (
-    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: `${color}1f`, color }}>
-      {pct === null ? "—" : `${(pct * 100).toFixed(1)}%`}
-    </span>
-  );
-}
-
-function Bar({ pct, color }: { pct: number | null; color: string }) {
-  const w = pct === null ? 0 : Math.max(pct * 100, pct > 0 ? 2 : 0);
-  return (
-    <span className="block h-[2px] rounded-full bg-[var(--bg-elevated)] overflow-hidden">
-      <motion.span
-        className="block h-full rounded-full"
-        style={{ background: color }}
-        initial={{ width: 0 }}
-        animate={{ width: `${w}%` }}
-        transition={{ duration: 0.6, ease: "easeOut" }}
-      />
-    </span>
-  );
-}
-
-// One breakdown row: label + count + pct pill + (optional) dual pp-deltas, a mini-bar, clickable → drawer.
-// `indent` renders the SMS by-response sub-rows under Reached.
-function Row({ row, onOpen, showDeltas, indent = false }: { row: PerfRow; onOpen: () => void; showDeltas: boolean; indent?: boolean }) {
-  const color = ROW_COLOR[row.key] ?? "#8b939c";
+// One breakdown row: dot · label · [EST] · count · % · [one pp-delta] — clickable → drawer.
+// `indent` renders the SMS by-response sub-rows (smaller dot, no delta column).
+function Row({ row, onOpen, showDelta, indent = false }: { row: PerfRow; onOpen: () => void; showDelta: boolean; indent?: boolean }) {
+  const color = ROW_COLOR[row.key] ?? "#7d828c";
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={`w-full text-left rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-[var(--bg-hover)] transition-colors ${indent ? "pl-4" : ""}`}
+      className={`w-full flex items-center gap-2 text-left rounded-md px-1.5 py-[5px] -mx-1.5 hover:bg-[var(--bg-hover)] transition-colors ${indent ? "pl-[18px]" : ""}`}
     >
-      <div className="flex items-center gap-2">
-        <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color }} />
-        <span className="text-[11px] text-[var(--text-2)] flex items-center gap-1">
-          {row.label}
-          {row.isEstimated && <EstBadge />}
-        </span>
-        <span className="ml-auto text-[11px] font-medium font-mono text-[var(--text-1)]">{row.count.toLocaleString()}</span>
-        <Pill pct={row.pct} color={color} />
-        {showDeltas && <DeltaChips a={row.deltaPpVsYesterday} b={row.deltaPpVsSevenDayAvg} fmt={ppText} />}
-      </div>
-      <div className="mt-0.5"><Bar pct={row.pct} color={color} /></div>
+      <span className={`rounded-full shrink-0 ${indent ? "h-[5px] w-[5px] opacity-80" : "h-2 w-2"}`} style={{ background: color }} />
+      <span className={`flex items-center gap-1.5 ${indent ? "text-xs text-[var(--text-3)]" : "text-[13px] text-[var(--text-2)]"}`}>
+        {row.label}
+        {row.isEstimated && <EstBadge />}
+      </span>
+      <span className="flex-1" />
+      <span className={`font-mono ${indent ? "text-xs text-[var(--text-2)]" : "text-[13px] text-[var(--text-1)]"}`}>{row.count.toLocaleString()}</span>
+      <span className={`font-mono w-[50px] text-right ${indent ? "text-[11px] text-[var(--text-4)]" : "text-xs text-[var(--text-3)]"}`}>
+        {row.pct === null ? "—" : `${(row.pct * 100).toFixed(1)}%`}
+      </span>
+      {showDelta && !indent && (
+        <Hint content="percentage-point change vs the prior 7-day average">
+          <span className={`font-mono text-[11px] w-[56px] text-right ${deltaCls(row.deltaPpVsSevenDayAvg)}`}>
+            {ppText(row.deltaPpVsSevenDayAvg) ?? "—"}
+          </span>
+        </Hint>
+      )}
+      {showDelta && indent && <span className="w-[56px]" />}
     </button>
   );
 }
@@ -132,31 +127,40 @@ function MetricCard({
   onOpenTotal: () => void;
   onOpenRow: (row: PerfRow, parentKey?: string) => void;
 }) {
+  const delta = metric.deltaPctVsSevenDayAvg;
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-3 flex flex-col gap-2.5">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</div>
-      <button type="button" onClick={onOpenTotal} className="flex items-baseline gap-2 text-left group w-fit">
-        <CountUp
-          value={metric.total}
-          className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-primary transition-colors"
-        />
-        {showDeltas && <DeltaChips a={metric.deltaPctVsYesterday} b={metric.deltaPctVsSevenDayAvg} fmt={pctText} />}
-      </button>
+    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] px-5 py-4 flex flex-col">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.09em] text-[var(--text-3)] mb-3">{label}</div>
+      <div className="flex items-baseline gap-2.5">
+        <button type="button" onClick={onOpenTotal} className="group text-left">
+          <CountUp
+            value={metric.total}
+            className="text-[34px] leading-none font-semibold font-mono tracking-[-0.025em] text-[var(--text-1)] group-hover:text-primary transition-colors"
+          />
+        </button>
+        {showDeltas && (
+          <span className={`inline-flex items-center gap-0.5 font-mono text-[12.5px] font-medium ${deltaCls(delta)}`}>
+            {deltaArrow(delta)}
+            {pctText(delta) ?? "—"}
+          </span>
+        )}
+        {showDeltas && <span className="ml-auto text-[11px] text-[var(--text-4)]">vs 7-day avg</span>}
+      </div>
       {inFlight !== undefined && inFlight > 0 && (
-        <div className="text-[10px] text-[var(--text-3)]">+{inFlight.toLocaleString()} in progress</div>
+        <div className="text-[10px] text-[var(--text-3)] mt-1.5">+{inFlight.toLocaleString()} in progress</div>
       )}
-      <div className="flex flex-col gap-1">
+      <div className="my-4">
+        <SegBar rows={metric.rows} />
+      </div>
+      <div className="flex flex-col">
         {metric.rows.map((row) => (
-          <div key={row.key} className="flex flex-col gap-1">
-            <Row row={row} showDeltas={showDeltas} onOpen={() => onOpenRow(row)} />
+          <div key={row.key} className="flex flex-col">
+            <Row row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} />
             {/* SMS "by response" sub-rows live under the Reached row. */}
-            {isSms && row.subRows && row.subRows.length > 0 && (
-              <div className="flex flex-col gap-0.5 border-l border-[var(--border)] ml-1.5">
-                {row.subRows.map((sub) => (
-                  <Row key={sub.key} row={sub} indent showDeltas={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
-                ))}
-              </div>
-            )}
+            {isSms &&
+              row.subRows?.map((sub) => (
+                <Row key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
+              ))}
           </div>
         ))}
       </div>
@@ -176,8 +180,6 @@ export default function PerformanceCards({
   onOpenRow: (card: "callAttempts" | "reached" | "sms", row: PerfRow, parentKey?: string) => void;
 }) {
   // "In progress" (inFlight) is a LIVE concept — only meaningful on the always-live Today view.
-  // The ranged Global view is historical (older non-terminal-status calls aren't dialing now), so
-  // suppress it there. This matches Val's mockup, which shows no "in progress" on the Global cards.
   const callInFlight = showDeltas ? perf.inFlight : undefined;
   // Staggered entrance (0 / 70 / 140ms) — the cards "arrive" left-to-right on first paint.
   const entrance = (i: number) => ({
@@ -186,7 +188,7 @@ export default function PerformanceCards({
     transition: { duration: 0.35, delay: i * 0.07, ease: "easeOut" as const },
   });
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch">
       <motion.div {...entrance(0)}>
         <MetricCard
           label="Call attempts"
