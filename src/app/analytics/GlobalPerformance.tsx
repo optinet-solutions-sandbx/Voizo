@@ -7,7 +7,7 @@
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Search, X, SlidersHorizontal, PanelRightClose } from "lucide-react";
+import { Search, X, SlidersHorizontal } from "lucide-react";
 import StatBand from "./StatBand";
 import { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
@@ -173,8 +173,6 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
   const [loading, setLoading] = useState(false);
   // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
   const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
-  // Right filter rail (console layout, 2026-07-02) — collapsible; sticky at xl.
-  const [railOpen, setRailOpen] = useState(true);
   // Drawer exclusivity (mockup): opening this drawer closes the Today / Top-performers ones.
   const closeDrawerSelf = useCallback(() => setDrawerFilter(null), []);
   useDrawerClaim("global", drawerFilter !== null, closeDrawerSelf);
@@ -270,118 +268,77 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
 
   return (
     <section id="global-performance" className="scroll-mt-4">
-      {/* Console layout (2026-07-02): main column + sticky right filter rail at xl (AWS
-          "Report parameters" pattern). Below xl the rail flows above the content, full width. */}
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_270px] xl:items-start">
-        {/* ── Filter rail ── */}
-        <aside className="order-first xl:order-last xl:sticky xl:top-4">
-          {railOpen ? (
-            <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl overflow-hidden">
-              <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30">
-                <div className="flex items-center gap-2">
-                  <SlidersHorizontal size={13} className="text-[var(--text-3)]" />
-                  <h3 className="text-[13px] font-semibold">Filters</h3>
-                  {chips.length > 0 && (
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/25">{chips.length}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2.5">
-                  {!isDefault && (
-                    <button onClick={() => onChange(DEFAULTS)} className="text-[11px] text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors">
-                      Clear all
-                    </button>
-                  )}
-                  <button onClick={() => setRailOpen(false)} aria-label="Collapse filters" className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors">
-                    <PanelRightClose size={14} />
-                  </button>
-                </div>
-              </div>
-              <div className="p-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mb-1.5">Date range</div>
-                  <div className="inline-flex rounded-lg border border-[var(--border)] overflow-hidden">
-                    {RANGES.map((r) => (
-                      <button
-                        key={r}
-                        onClick={() => set({ range: r })}
-                        className={`px-2.5 py-1.5 text-xs font-medium transition ${
-                          filters.range === r ? "bg-primary text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
-                        }`}
-                      >
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mb-1.5">Campaigns</div>
-                  <MultiSelect
-                    label="All campaigns"
-                    options={campaignOptions}
-                    selected={filters.campaignIds}
-                    onChange={(ids) => set({ campaignIds: ids })}
-                  />
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mb-1.5">Voice agent</div>
-                  <StyledSelect options={agentOptions} value={filters.agent} onChange={(v) => set({ agent: v })} placeholder="All agents" />
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mb-1.5">Prompt</div>
-                  <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mb-1.5">Called number</div>
-                  <div className="relative">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
-                    <input
-                      value={filters.phone}
-                      onChange={(e) => set({ phone: e.target.value })}
-                      placeholder="Search any called number…"
-                      className="pl-8 pr-3 py-1.5 w-full text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                    />
-                  </div>
-                </div>
-                {chips.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap sm:col-span-2 xl:col-span-1">
-                    {chips.map((c) => (
-                      <span key={c.key} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-full pl-2.5 pr-1.5 py-1">
-                        <span className="truncate max-w-[170px]">{c.label}</span>
-                        <button onClick={c.onRemove} className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors" aria-label={`Remove ${c.label}`}>
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {(loading || error) && (
-                  <div className="text-[11px] sm:col-span-2 xl:col-span-1">
-                    {loading && <span className="text-[var(--text-3)]">Updating…</span>}
-                    {error && <span className="text-amber-400 font-mono">{error}</span>}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setRailOpen(true)}
-              className="w-full xl:w-auto inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] text-xs text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
-            >
-              <SlidersHorizontal size={13} />
-              Filters
-              {chips.length > 0 && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/25">{chips.length}</span>
-              )}
-            </button>
-          )}
-        </aside>
-
-        {/* ── Main column ── */}
-        <div className="grid gap-3 min-w-0">
+      <div className="grid gap-4 min-w-0">
       <div className="flex items-center gap-2.5 flex-wrap">
         <SectionTick color="#5b9bf0" />
         <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
         <span className="text-[13px] text-[var(--text-3)]">— historical, across all campaigns</span>
+      </div>
+
+      {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll
+          without orphaning layout. Same state/handlers as ever, re-housed. */}
+      <div className="sticky top-0 z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
+        <div className="flex items-center gap-2.5">
+          <SlidersHorizontal size={15} className="text-[var(--text-3)]" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-4)]">Range</span>
+          <div className="inline-flex p-[3px] gap-0.5 rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)]">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => set({ range: r })}
+                className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
+                  filters.range === r ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="w-px h-6 bg-[var(--border)]" />
+        <MultiSelect
+          label="All campaigns"
+          options={campaignOptions}
+          selected={filters.campaignIds}
+          onChange={(ids) => set({ campaignIds: ids })}
+        />
+        <div className="min-w-[150px]">
+          <StyledSelect options={agentOptions} value={filters.agent} onChange={(v) => set({ agent: v })} placeholder="All agents" />
+        </div>
+        <div className="min-w-[150px]">
+          <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
+        </div>
+        <div className="relative flex-1 min-w-[170px]">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
+          <input
+            value={filters.phone}
+            onChange={(e) => set({ phone: e.target.value })}
+            placeholder="Search any called number…"
+            className="pl-8 pr-3 py-1.5 w-full text-[13px] rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary transition-all"
+          />
+        </div>
+        {!isDefault && (
+          <button
+            onClick={() => onChange(DEFAULTS)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition-colors"
+          >
+            <X size={13} /> Clear
+          </button>
+        )}
+        {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
+        {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+        {chips.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap w-full">
+            {chips.map((c) => (
+              <span key={c.key} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-full pl-2.5 pr-1.5 py-0.5">
+                <span className="truncate max-w-[200px]">{c.label}</span>
+                <button onClick={c.onRemove} className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors" aria-label={`Remove ${c.label}`}>
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
@@ -391,7 +348,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
             { label: "Call attempts", value: data.perf.callAttempts.total },
             { label: "Reached", value: data.perf.reached.total },
             { label: "SMS sent", value: data.perf.sms.total },
-            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached" },
+            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached", accent: "#3ec08a" },
             { label: "Campaigns", value: data.campaignCount },
           ]}
         />
@@ -464,7 +421,6 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
         rangeDays={data?.rangeDays ?? 30}
         onFocusCampaign={onFocusCampaign}
       />
-        </div>
       </div>
     </section>
   );
