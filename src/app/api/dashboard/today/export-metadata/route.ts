@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { buildExportLeads, type ExportCallRow, type ExportSmsRow, type ExportNumberRow } from "@/lib/exportLeads";
 
 /**
@@ -33,32 +34,39 @@ export async function GET(request: NextRequest) {
   const startIso = new Date(dayStart).toISOString();
   const endIso = new Date(dayStart + MS_PER_DAY).toISOString();
 
-  const [campaignsRes, callsRes, smsRes] = await Promise.all([
-    supabaseAdmin.from("campaigns_v2").select("id, source, is_test"),
-    supabaseAdmin
-      .from("calls_v2")
-      .select("campaign_id, campaign_number_id, status, goal_reached, duration_seconds, transcript, recording_url, created_at")
-      .gte("created_at", startIso)
-      .lt("created_at", endIso),
-    supabaseAdmin
-      .from("sms_messages_v2")
-      .select("campaign_id, campaign_number_id, body, status, provider_message_id, error_message, created_at, updated_at")
-      .gte("created_at", startIso)
-      .lt("created_at", endIso),
+  // fetchAllRows pages past PostgREST's 1000-row cap (one busy day exceeds it at 1000+
+  // calls/day) and degrades-to-partial with a loud server log — same contract as the
+  // ranged /export-metadata route.
+  const [campaignRows, callRows, smsRows] = await Promise.all([
+    fetchAllRows(supabaseAdmin, "campaigns_v2", "id, source, is_test", "id"),
+    fetchAllRows(
+      supabaseAdmin,
+      "calls_v2",
+      "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, transcript, recording_url, created_at",
+      "id",
+      undefined,
+      { column: "created_at", value: startIso },
+      { column: "created_at", value: endIso },
+    ),
+    fetchAllRows(
+      supabaseAdmin,
+      "sms_messages_v2",
+      "campaign_id, campaign_number_id, body, status, provider_message_id, error_message, created_at, updated_at",
+      "id",
+      undefined,
+      { column: "created_at", value: startIso },
+      { column: "created_at", value: endIso },
+    ),
   ]);
-  if (campaignsRes.error || callsRes.error || smsRes.error) {
-    console.error("[today/export-metadata] query failed:", campaignsRes.error ?? callsRes.error ?? smsRes.error);
-    return NextResponse.json({ error: "Failed to read export data" }, { status: 500 });
-  }
 
   const liveIds = new Set(
-    ((campaignsRes.data ?? []) as Array<{ id: string; source: string | null; is_test: boolean | null }>)
+    (campaignRows as unknown as Array<{ id: string; source: string | null; is_test: boolean | null }>)
       .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
       .map((c) => c.id),
   );
 
-  const calls = ((callsRes.data ?? []) as Array<ExportCallRow & { campaign_id: string }>).filter((c) => liveIds.has(c.campaign_id));
-  const sms = ((smsRes.data ?? []) as Array<ExportSmsRow & { campaign_id: string }>).filter((m) => liveIds.has(m.campaign_id));
+  const calls = (callRows as unknown as Array<ExportCallRow & { campaign_id: string }>).filter((c) => liveIds.has(c.campaign_id));
+  const sms = (smsRows as unknown as Array<ExportSmsRow & { campaign_id: string }>).filter((m) => liveIds.has(m.campaign_id));
 
   // Numbers dialed that day → their detail (chunked .in() at 150, same URL-limit guard as today/records).
   const numIds = [...new Set(calls.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];

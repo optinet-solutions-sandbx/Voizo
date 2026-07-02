@@ -30,6 +30,7 @@ export async function fetchAllRows(
   orderColumn = "id",
   eq?: { column: string; value: string },
   gte?: { column: string; value: string },
+  lt?: { column: string; value: string },
 ): Promise<Row[]> {
   const all: Row[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -37,6 +38,7 @@ export async function fetchAllRows(
     let query = client.from(table).select(columns);
     if (eq) query = query.eq(eq.column, eq.value);
     if (gte) query = query.gte(gte.column, gte.value);
+    if (lt) query = query.lt(lt.column, lt.value);
     const { data, error } = await query
       .order(orderColumn, { ascending: true })
       .range(from, from + PAGE_SIZE - 1);

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import {
   computeCallRecords,
   attachSmsSent,
@@ -46,25 +47,28 @@ export async function GET(request: NextRequest) {
   const startIso = new Date(dayStart).toISOString();
   const endIso = new Date(dayStart + MS_PER_DAY).toISOString();
 
-  const [campaignsRes, callsRes] = await Promise.all([
-    supabaseAdmin.from("campaigns_v2").select("id, source, is_test"),
-    supabaseAdmin
-      .from("calls_v2")
-      .select("id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds, transcript")
-      .gte("created_at", startIso)
-      .lt("created_at", endIso),
+  // fetchAllRows pages past PostgREST's 1000-row cap (one busy day exceeds it at 1000+
+  // calls/day) and degrades-to-partial with a loud server log — same contract as
+  // /api/dashboard/analytics and the ranged /records route.
+  const [campaignRows, callRows] = await Promise.all([
+    fetchAllRows(supabaseAdmin, "campaigns_v2", "id, source, is_test", "id"),
+    fetchAllRows(
+      supabaseAdmin,
+      "calls_v2",
+      "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds, transcript",
+      "id",
+      undefined,
+      { column: "created_at", value: startIso },
+      { column: "created_at", value: endIso },
+    ),
   ]);
-  if (campaignsRes.error || callsRes.error) {
-    console.error("[dashboard/today/records] query failed:", campaignsRes.error ?? callsRes.error);
-    return NextResponse.json({ error: "Failed to read today's records" }, { status: 500 });
-  }
 
   const liveIds = new Set(
-    ((campaignsRes.data ?? []) as unknown as LiveCampaignRow[])
+    (campaignRows as unknown as LiveCampaignRow[])
       .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
       .map((c) => c.id),
   );
-  const calls = ((callsRes.data ?? []) as unknown as DashCallRow[]).filter((c) => liveIds.has(c.campaign_id));
+  const calls = (callRows as unknown as DashCallRow[]).filter((c) => liveIds.has(c.campaign_id));
 
   // Contacts dialed that day → fetch their campaign_numbers_v2 rows (chunked).
   const numIds = [...new Set(calls.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
@@ -83,18 +87,18 @@ export async function GET(request: NextRequest) {
     numbers = numbers.concat((data ?? []) as unknown as DashNumberRow[]);
   }
 
-  // Contacts that got a sent|delivered text that day (live campaigns only).
-  const smsRes = await supabaseAdmin
-    .from("sms_messages_v2")
-    .select("campaign_id, campaign_number_id, status, created_at")
-    .gte("created_at", startIso)
-    .lt("created_at", endIso);
-  if (smsRes.error) {
-    console.error("[dashboard/today/records] sms query failed:", smsRes.error);
-    return NextResponse.json({ error: "Failed to read today's records" }, { status: 500 });
-  }
+  // Contacts that got a sent|delivered text that day (live campaigns only). Paged.
+  const smsRows = await fetchAllRows(
+    supabaseAdmin,
+    "sms_messages_v2",
+    "campaign_id, campaign_number_id, status, created_at",
+    "id",
+    undefined,
+    { column: "created_at", value: startIso },
+    { column: "created_at", value: endIso },
+  );
   const sentNumberIds = new Set(
-    ((smsRes.data ?? []) as unknown as SmsRow[])
+    (smsRows as unknown as SmsRow[])
       .filter((m) => (m.status === "sent" || m.status === "delivered") && liveIds.has(m.campaign_id) && !!m.campaign_number_id)
       .map((m) => m.campaign_number_id as string),
   );
