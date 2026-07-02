@@ -567,7 +567,7 @@ describe("computeCampaignTable", () => {
     expect(rows.find((r) => r.id === "c1")!.smsSent).toBe(0);
   });
 
-  it("counts players (roster), reach (human connects), SMS sent (all dispatched incl. failed)", () => {
+  it("counts players (roster), reach (human connects), SMS sent (sent|delivered only)", () => {
     const c = [
       call("p1", "completed", true, iso(now - 1 * day), "n1", false), // reached human
       call("p1", "completed", false, iso(now - 1 * day), "n2", true), // voicemail → not reach
@@ -577,15 +577,15 @@ describe("computeCampaignTable", () => {
     const sms = [
       { campaign_id: "p1", status: "delivered" },
       { campaign_id: "p1", status: "sent" },
-      { campaign_id: "p1", status: "queued" },
-      { campaign_id: "p1", status: "failed" }, // dispatched → counted
-      { campaign_id: "p1", status: "undelivered" }, // dispatched → counted
+      { campaign_id: "p1", status: "queued" }, // not yet handed to the provider → excluded
+      { campaign_id: "p1", status: "failed" }, // never arrived → excluded
+      { campaign_id: "p1", status: "undelivered" }, // never arrived → excluded
     ];
     const r = computeCampaignTable(c, camps, now, 7, numbers, sms).find((x) => x.id === "p1")!;
     expect(r.players).toBe(3);
     expect(r.connected).toBe(2);
     expect(r.reach).toBe(1); // 2 connected − 1 voicemail
-    expect(r.smsSent).toBe(5); // every dispatched message (delivered + in-flight + failed/undelivered)
+    expect(r.smsSent).toBe(2); // sent|delivered only — the app-wide "SMS sent" definition (2026-07-02)
   });
 });
 
@@ -788,15 +788,17 @@ describe("prompt rollups", () => {
 });
 
 describe("smsSentByCampaign", () => {
-  it("counts dispatched rows per campaign; excludes non-sent statuses", () => {
+  it("counts sent|delivered rows per campaign; queued/failed/undelivered excluded", () => {
     const m = smsSentByCampaign([
       { campaign_id: "a", status: "delivered" },
-      { campaign_id: "a", status: "queued" },
-      { campaign_id: "a", status: "rejected" }, // excluded
-      { campaign_id: "b", status: "failed" },
+      { campaign_id: "a", status: "queued" }, // excluded — not yet handed to the provider
+      { campaign_id: "a", status: "rejected" }, // excluded — unknown status
+      { campaign_id: "b", status: "failed" }, // excluded — never arrived
+      { campaign_id: "c", status: "sent" },
     ]);
-    expect(m.get("a")).toBe(2);
-    expect(m.get("b")).toBe(1);
+    expect(m.get("a")).toBe(1);
+    expect(m.get("b")).toBeUndefined();
+    expect(m.get("c")).toBe(1);
   });
 });
 
@@ -821,18 +823,18 @@ describe("computeTrend", () => {
     expect(t[1].reached).toBe(2); // 2 connected − 0 voicemail
   });
 
-  it("counts dispatched SMS per day (smsSent series)", () => {
+  it("counts sent|delivered SMS per day (smsSent series)", () => {
     const start = Date.parse("2026-06-10T00:00:00Z");
     const end = Date.parse("2026-06-11T12:00:00Z");
     const sms: DashSmsRow[] = [
       { campaign_id: "c", created_at: "2026-06-11T09:00:00Z", status: "delivered" },
       { campaign_id: "c", created_at: "2026-06-11T10:00:00Z", status: "sent" },
-      { campaign_id: "c", created_at: "2026-06-11T11:00:00Z", status: "failed" },
-      { campaign_id: "c", created_at: "2026-06-11T11:30:00Z", status: "rejected" }, // not a "sent" status → excluded
+      { campaign_id: "c", created_at: "2026-06-11T11:00:00Z", status: "failed" }, // never arrived → excluded
+      { campaign_id: "c", created_at: "2026-06-11T11:30:00Z", status: "rejected" }, // unknown status → excluded
     ];
     const t = computeTrend([], start, end, sms);
     expect(t.find((p) => p.day === "2026-06-10")!.smsSent).toBe(0);
-    expect(t.find((p) => p.day === "2026-06-11")!.smsSent).toBe(3); // delivered+sent+failed; rejected excluded
+    expect(t.find((p) => p.day === "2026-06-11")!.smsSent).toBe(2); // sent|delivered; failed+rejected excluded
   });
 });
 

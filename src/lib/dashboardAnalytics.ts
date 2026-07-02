@@ -499,16 +499,18 @@ export interface TrendPoint {
   successRate: number | null;
   calls: number; // = call attempts that day
   reached: number; // human-only connects that day (connected − voicemail)
-  smsSent: number; // offer texts dispatched that day
+  smsSent: number; // offer texts sent|delivered that day
 }
 
-// "SMS sent" = a message handed to the provider, regardless of receipt — every dispatched row
-// (delivered / in-flight / failed / undelivered / queued / sent). Matches the report's SMS total.
-const SMS_SENT_STATUSES = new Set(["delivered", "queued", "sent", "failed", "undelivered"]);
+// "SMS sent" = accepted by the provider ('sent') or confirmed on the handset ('delivered').
+// Excludes 'queued' (never handed off) and 'failed'/'undelivered' (never arrived). This is the
+// ONE app-wide definition (2026-07-02) — it matches smsWindowBreakdown (the 3-card SMS metric)
+// and the records-drawer "texted" slices, so every "SMS sent" number reconciles across surfaces.
+const SMS_SENT_STATUSES = new Set(["sent", "delivered"]);
 function isSmsSent(status: string | null | undefined): boolean {
   return SMS_SENT_STATUSES.has(status ?? "");
 }
-/** Per-campaign count of dispatched SMS. Pure; shared by the campaign table, ranked tables, trend. */
+/** Per-campaign count of sent|delivered SMS. Pure; shared by the campaign table, ranked tables, trend. */
 export function smsSentByCampaign(sms: DashSmsRow[]): Map<string, number> {
   const m = new Map<string, number>();
   for (const s of sms) if (isSmsSent(s.status)) m.set(s.campaign_id, (m.get(s.campaign_id) ?? 0) + 1);
@@ -737,7 +739,7 @@ export interface CampaignTableRow {
   successRate: number | null;
   players: number; // campaign roster size (campaign_numbers_v2 count) — lifetime, NOT windowed
   reach: number; // human-only connects in window = connected − voicemailConnected
-  smsSent: number; // texts dispatched (delivered + in-flight) for this campaign
+  smsSent: number; // texts sent|delivered for this campaign (== perf.sms.total over the lifetime window)
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
@@ -758,9 +760,8 @@ export function computeCampaignTable(
 ): CampaignTableRow[] {
   const index = buildCampaignIndex(campaigns);
   const rollupMap = new Map(computeCampaignRollups(calls, index).map((r) => [r.id, r]));
-  // Players = full roster (lifetime; numbers are NOT windowed by the caller). SMS sent = every
-  // message dispatched for the campaign (delivered + in-flight + failed/undelivered) — "sent" =
-  // handed to the provider regardless of receipt, matching the report's "SMS sent" total.
+  // Players = full roster (lifetime; numbers are NOT windowed by the caller). SMS sent =
+  // sent|delivered (the app-wide definition) — reconciles with the row's perf.sms breakdown.
   const playersByCampaign = new Map<string, number>();
   for (const n of numbers) playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
   const smsByCampaign = smsSentByCampaign(sms);

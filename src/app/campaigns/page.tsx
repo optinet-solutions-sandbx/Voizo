@@ -244,7 +244,8 @@ function CampaignsPageInner() {
     const connectCount = analyticsRecords.reduce((s, v) => s + v.connected, 0);
     const goalCount = analyticsRecords.reduce((s, v) => s + v.goalCalls, 0);
     const totalReach = analyticsRecords.reduce((s, v) => s + v.reach, 0);
-    const totalSms = analyticsRecords.reduce((s, v) => s + v.sms.delivered + v.sms.inFlight + v.sms.failed, 0);
+    // App-wide "SMS sent" = sent|delivered (2026-07-02) — queued/failed excluded.
+    const totalSms = analyticsRecords.reduce((s, v) => s + v.sms.delivered + v.sms.sent, 0);
     const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
     // Success = goal-based Conversion (goal ÷ connected) — app-wide canon.
     const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
@@ -447,7 +448,7 @@ function CampaignsPageInner() {
                 const totalContacts = a?.targeted ?? 0;
                 const totalCalls = a?.totalCalls ?? 0;
                 const reach = a?.reach ?? 0;
-                const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
+                const smsSent = a ? a.sms.delivered + a.sms.sent : 0; // app-wide "SMS sent" = sent|delivered
                 const hasActivity = totalCalls > 0;
                 const when = formatWhen(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
@@ -530,7 +531,7 @@ function CampaignsPageInner() {
                     const totalContacts = a?.targeted ?? 0;
                     const totalCalls = a?.totalCalls ?? 0;
                     const reach = a?.reach ?? 0;
-                    const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
+                    const smsSent = a ? a.sms.delivered + a.sms.sent : 0; // app-wide "SMS sent" = sent|delivered
                     const hasActivity = totalCalls > 0;
                     const when = formatWhen(c);
                     const status = (c.status as string) || "draft";

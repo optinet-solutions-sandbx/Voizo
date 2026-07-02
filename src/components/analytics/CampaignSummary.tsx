@@ -45,7 +45,9 @@ export default function CampaignSummary({
 }) {
   // Overview
   const attemptsPerPlayer = a.targeted > 0 ? (a.totalCalls / a.targeted).toFixed(1) : null;
-  const smsSent = a.sms.delivered + a.sms.inFlight + a.sms.failed; // all dispatched (matches the row)
+  // App-wide "SMS sent" = sent|delivered (2026-07-02) — reconciles with this stat's own
+  // click-to-filter "texted" slice and with the dashboard SMS cards/columns.
+  const smsSent = a.sms.delivered + a.sms.sent;
   const smsSub =
     smsSent === 0
       ? "no texts sent"
@@ -78,7 +80,7 @@ export default function CampaignSummary({
           <OverStat value={a.targeted.toLocaleString()} label="Players in campaign" sub="loaded at campaign start" hint="Players loaded into this campaign (the full contact roster) — a campaign property, not affected by the date range." />
           <OverStat value={a.totalCalls.toLocaleString()} label="Call attempts" sub={attemptsPerPlayer ? `avg ${attemptsPerPlayer}× per player` : "—"} hint="Calls placed — a player can be dialed more than once (retries). Lifetime total for this campaign." pick={{ slice: { kind: "all" }, label: "Call attempts" }} onPick={onPick} active={active} />
           <OverStat value={a.reach.toLocaleString()} label="Reached player" sub={`live humans · ${sharePct(a.reach, a.totalCalls)} of attempts`} hint="Live humans = connected − detected voicemails. Unevaluated connects count as reached, so on older data this can equal connected." pick={{ slice: { kind: "reached" }, label: "Reached" }} onPick={onPick} active={active} />
-          <OverStat value={smsSent.toLocaleString()} label="SMS sent" sub={smsSub} hint="Offer texts dispatched (every message handed to the provider, regardless of delivery receipt). Lifetime total, not date-scoped." pick={{ slice: { kind: "texted" }, label: "SMS sent" }} onPick={onPick} active={active} />
+          <OverStat value={smsSent.toLocaleString()} label="SMS sent" sub={smsSub} hint="Offer texts accepted by the provider (sent) or confirmed delivered. Queued and failed sends are excluded. Lifetime total, not date-scoped." pick={{ slice: { kind: "texted" }, label: "SMS sent" }} onPick={onPick} active={active} />
         </div>
       </section>
 

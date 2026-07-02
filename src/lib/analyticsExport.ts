@@ -66,7 +66,9 @@ const COLUMNS: Array<[string, (a: CampaignAnalytics) => string | number | null]>
   ["includedInPortfolio", (a) => String(a.includedInPortfolio)],
   ["smsDelivered", (a) => a.sms.delivered],
   ["smsFailed", (a) => a.sms.failed],
-  ["smsInFlight", (a) => a.sms.inFlight],
+  // Column name kept for CSV-schema stability; in-flight = sent + queued (SmsCounts
+  // carries raw per-status buckets since the 2026-07-02 "SMS sent" unification).
+  ["smsInFlight", (a) => a.sms.sent + a.sms.queued],
 ];
 
 /** Aggregation-only CSV (counts + rates + a definitions comment header). Excel-safe + Claude-readable. */

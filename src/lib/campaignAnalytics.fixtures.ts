@@ -50,6 +50,7 @@ const calls: CallRow[] = [
 
 const sms: SmsRow[] = [
   { campaign_id: "big", status: "delivered", provider: "mobivate" },
+  { campaign_id: "big", status: "sent", provider: "mobivate" },
   { campaign_id: "big", status: "failed", provider: "mobivate" },
   { campaign_id: "big", status: "undelivered", provider: "mobivate" },
   { campaign_id: "big", status: "queued", provider: "mobivate" },

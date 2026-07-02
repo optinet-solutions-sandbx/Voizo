@@ -174,11 +174,12 @@ describe("computeCampaignAnalytics — duration/density/retry/velocity/sparkline
     const may30 = r["big"].sparkline.find((p) => p.date === "2026-05-30")!;
     expect(may30.goals).toBe(2); // n1 + n2 goal calls on 05-30
   });
-  it("sms delivered/failed/inFlight + provider breakdown (big: delivered1, failed=failed+undelivered=2, inFlight=1)", () => {
+  it("sms delivered/sent/queued/failed + provider breakdown (big: delivered1, sent1, queued1, failed=failed+undelivered=2)", () => {
     expect(r["big"].sms.delivered).toBe(1);
+    expect(r["big"].sms.sent).toBe(1);
+    expect(r["big"].sms.queued).toBe(1);
     expect(r["big"].sms.failed).toBe(2);
-    expect(r["big"].sms.inFlight).toBe(1);
-    expect(r["big"].sms.byProvider["mobivate"]).toEqual({ delivered: 1, failed: 2, inFlight: 1 });
+    expect(r["big"].sms.byProvider["mobivate"]).toEqual({ delivered: 1, sent: 1, queued: 1, failed: 2 });
   });
 });
 

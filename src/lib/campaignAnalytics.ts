@@ -88,11 +88,15 @@ export interface DurationBucket {
   upperSec: number | null; // null = open-ended top bucket; avoids Infinity-in-JSON
   count: number;
 }
+// Raw per-status buckets. "SMS sent" (app-wide, 2026-07-02) = delivered + sent —
+// accepted by the provider or confirmed on the handset; queued/failed excluded.
+// Surfaces needing an in-flight readout derive it as sent + queued explicitly.
 export interface SmsCounts {
   delivered: number;
+  sent: number; // accepted by the provider (no delivery receipt yet)
+  queued: number; // row created, provider not yet called
   failed: number; // failed + undelivered
-  inFlight: number; // queued + sent
-  byProvider: Record<string, { delivered: number; failed: number; inFlight: number }>;
+  byProvider: Record<string, { delivered: number; sent: number; queued: number; failed: number }>;
 }
 
 export interface OutcomeBreakdown {
@@ -433,21 +437,24 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   }
   const sparkline: SparklinePoint[] = dayKeys.map((d) => ({ date: d, goals: goalsByDay[d] ?? 0, connected: connByDay[d] ?? 0 }));
 
-  // ── SMS (delivered = 'delivered'; failed = failed+undelivered; inFlight = queued+sent) ──
-  const sms: SmsCounts = { delivered: 0, failed: 0, inFlight: 0, byProvider: {} };
+  // ── SMS (raw buckets: delivered / sent / queued / failed = failed+undelivered) ──
+  const sms: SmsCounts = { delivered: 0, sent: 0, queued: 0, failed: 0, byProvider: {} };
   for (const m of acc.sms) {
     const provider = m.provider ?? "unknown";
-    const bucket = (sms.byProvider[provider] ??= { delivered: 0, failed: 0, inFlight: 0 });
+    const bucket = (sms.byProvider[provider] ??= { delivered: 0, sent: 0, queued: 0, failed: 0 });
     const st = m.status ?? "";
     if (st === "delivered") {
       sms.delivered++;
       bucket.delivered++;
+    } else if (st === "sent") {
+      sms.sent++;
+      bucket.sent++;
+    } else if (st === "queued") {
+      sms.queued++;
+      bucket.queued++;
     } else if (st === "failed" || st === "undelivered") {
       sms.failed++;
       bucket.failed++;
-    } else if (st === "queued" || st === "sent") {
-      sms.inFlight++;
-      bucket.inFlight++;
     }
   }
 
