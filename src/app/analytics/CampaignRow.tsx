@@ -15,6 +15,7 @@ import { useBaseAgentNames } from "./useBaseAgentNames";
 import BreakdownColumn from "./BreakdownColumn";
 import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { metricPickSlice, type RecordSlice } from "./recordsDisplay";
+import Hint from "@/components/Hint";
 
 // Derived display status (shared with CampaignTable's status filter).
 export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
@@ -120,9 +121,11 @@ export default function CampaignRow({
             {c.scheduleType === "recurring" && (
               <>
                 <span className="text-[var(--border-2)]">·</span>
-                <span className="inline-flex items-center gap-1 text-[var(--text-2)]" title="Recurring campaign">
-                  <Repeat size={10} /> recurring
-                </span>
+                <Hint content="Recurring campaign — spawns a fresh run on its cadence.">
+                  <span className="inline-flex items-center gap-1 text-[var(--text-2)]">
+                    <Repeat size={10} /> recurring
+                  </span>
+                </Hint>
               </>
             )}
             <span className="text-[var(--border-2)]">·</span>

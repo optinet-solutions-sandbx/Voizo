@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { X, Download, VolumeX, Target, Phone } from "lucide-react";
 import type { CallRecord } from "@/lib/dashboardAnalytics";
 import CallTranscript from "@/components/CallTranscript";
+import Hint from "@/components/Hint";
 
 interface Attempt {
   callId: string;
@@ -111,14 +112,15 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
                     <span>{a.status.replace(/_/g, " ") || "—"}</span>
                     {a.durationSeconds != null && (<><span>·</span><span>{a.durationSeconds}s</span></>)}
                   </div>
-                  <span
-                    className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
-                      a.goalReached ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
-                    }`}
-                    title="The system's success flag (goal_reached)"
-                  >
-                    <Target size={9} /> goal {a.goalReached ? "true" : "false"}
-                  </span>
+                  <Hint content="The system's success flag (goal_reached)">
+                    <span
+                      className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
+                        a.goalReached ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
+                      }`}
+                    >
+                      <Target size={9} /> goal {a.goalReached ? "true" : "false"}
+                    </span>
+                  </Hint>
                 </div>
 
                 {a.audioUrl ? (
@@ -126,15 +128,16 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
                     <audio controls preload="none" src={a.audioUrl} className="w-full" style={{ height: 38 }}>
                       Your browser does not support audio playback.
                     </audio>
-                    <a
-                      href={a.audioUrl}
-                      download={`voizo_call_${safeId}_${i + 1}.${audioExt(a.audioUrl)}`}
-                      title="Download audio"
-                      aria-label="Download audio"
-                      className="shrink-0 inline-flex items-center justify-center rounded-lg p-2 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
-                    >
-                      <Download size={14} />
-                    </a>
+                    <Hint content="Download audio">
+                      <a
+                        href={a.audioUrl}
+                        download={`voizo_call_${safeId}_${i + 1}.${audioExt(a.audioUrl)}`}
+                        aria-label="Download audio"
+                        className="shrink-0 inline-flex items-center justify-center rounded-lg p-2 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
+                      >
+                        <Download size={14} />
+                      </a>
+                    </Hint>
                   </div>
                 ) : (
                   <div className="text-[11px] text-[var(--text-3)] mb-3 inline-flex items-center gap-1.5"><VolumeX size={12} /> no recording for this attempt</div>

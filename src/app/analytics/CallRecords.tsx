@@ -28,6 +28,7 @@ import ExportMenu from "./ExportMenu";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import RecordsTable from "./RecordsTable";
 import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER, sliceMatches, type RecordSlice } from "./recordsDisplay";
+import Hint from "@/components/Hint";
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
@@ -121,12 +122,11 @@ export default function CallRecords({
             <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "all")} options={OUTCOME_DROPDOWN} />
           </div>
           {/* Honesty signal: the attempt-outcome categories are best-effort proxies (see per-chip tooltips). */}
-          <span
-            title="Attempt outcomes are best-effort classifications from call data, not verified labels."
-            className="cursor-help rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]"
-          >
-            Estimated
-          </span>
+          <Hint content="Attempt outcomes are best-effort classifications from call data, not verified labels.">
+            <span className="cursor-help rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]">
+              Estimated
+            </span>
+          </Hint>
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}

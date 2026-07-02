@@ -7,6 +7,7 @@
 // presentational: the parent supplies the click handlers (→ its own records drawer).
 
 import type { PerfMetric, PerfRow, TodayPerfDay } from "@/lib/dashboardAnalytics";
+import Hint from "@/components/Hint";
 
 // Row accent colors — match Val's mockup (vivid bars/dots, distinct from the muted records chips).
 // Exported so the shared BreakdownColumn (Today's-campaigns rows, Slice A) uses the same palette.
@@ -34,9 +35,13 @@ function DeltaChips({ a, b, fmt }: { a: number | null; b: number | null; fmt: (v
   const tb = fmt(b);
   return (
     <span className="inline-flex items-center gap-1.5 text-[10px] font-medium">
-      <span className={deltaCls(a)} title="vs yesterday">{ta ?? "—"}</span>
+      <Hint content="vs yesterday">
+        <span className={deltaCls(a)}>{ta ?? "—"}</span>
+      </Hint>
       <span className="text-[var(--border-2)]">·</span>
-      <span className={deltaCls(b)} title="vs last 7-day average">{tb ?? "—"}</span>
+      <Hint content="vs last 7-day average">
+        <span className={deltaCls(b)}>{tb ?? "—"}</span>
+      </Hint>
     </span>
   );
 }
@@ -73,7 +78,9 @@ function Row({ row, onOpen, showDeltas, indent = false }: { row: PerfRow; onOpen
         <span className="text-[11px] text-[var(--text-2)] flex items-center gap-1">
           {row.label}
           {row.isEstimated && (
-            <span title="Best-effort estimate from call data, not a verified label." className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
+            <Hint content="Best-effort estimate from call data, not a verified label.">
+              <span className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
+            </Hint>
           )}
         </span>
         <span className="ml-auto text-[11px] font-medium font-mono text-[var(--text-1)]">{row.count.toLocaleString()}</span>

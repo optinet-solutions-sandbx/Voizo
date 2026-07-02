@@ -18,6 +18,7 @@ import { Download } from "lucide-react";
 import { triggerDownload } from "@/lib/download";
 import { DISPO_LABEL, DISPO_COLOR, recordToCsv, recordCsvFilename } from "./recordsDisplay";
 import CallDetailModal from "./CallDetailModal";
+import Hint from "@/components/Hint";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -33,18 +34,18 @@ function fmtDateTime(ms: number | null): string {
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} · ${hh}:${mm}`;
 }
 
-// Calm muted chip — colored dot + label. `title` adds a native hover tooltip (used to disclose
-// the honest meaning of the proxy outcome tags).
+// Calm muted chip — colored dot + label. `title` wraps the chip in a styled Hint tooltip
+// (used to disclose the honest meaning of the proxy outcome tags).
 function Chip({ label, color, title }: { label: string; color: string; title?: string }) {
-  return (
+  const chip = (
     <span
-      title={title}
       className={`inline-flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]${title ? " cursor-help" : ""}`}
     >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full opacity-90" style={{ background: color }} />
       {label}
     </span>
   );
+  return title ? <Hint content={title}>{chip}</Hint> : chip;
 }
 
 // One attempt cell: outcome chip + the "+N more" overflow hint on the last visible column.
@@ -101,14 +102,15 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
               <tr key={r.campaignNumberId} className="border-b border-[var(--border)] last:border-b-0 align-top">
                 <td className="px-3 py-2 text-[var(--text-3)] font-mono text-xs">{i + 1}</td>
                 <td className="px-3 py-2 font-mono text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setDetail(r)}
-                    title="View call recordings & transcripts"
-                    className="text-left text-[var(--text-1)] hover:text-blue-400 transition-colors"
-                  >
-                    {r.phone ?? "—"}
-                  </button>
+                  <Hint content="View call recordings & transcripts">
+                    <button
+                      type="button"
+                      onClick={() => setDetail(r)}
+                      className="text-left text-[var(--text-1)] hover:text-blue-400 transition-colors"
+                    >
+                      {r.phone ?? "—"}
+                    </button>
+                  </Hint>
                 </td>
                 <td className="px-3 py-2">
                   <Chip label={DISPO_LABEL[r.status]} color={DISPO_COLOR[r.status]} />
@@ -123,15 +125,16 @@ export default function RecordsTable({ records }: { records: CallRecord[] }) {
                 })}
                 <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
                 <td className="px-3 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => triggerDownload(new Blob([recordToCsv(r)], { type: "text/csv;charset=utf-8" }), recordCsvFilename(r))}
-                    title="Export this contact as CSV"
-                    aria-label={`Export ${r.phone ?? "contact"} as CSV`}
-                    className="inline-flex items-center justify-center rounded-md p-1 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
-                  >
-                    <Download size={13} />
-                  </button>
+                  <Hint content="Export this contact as CSV">
+                    <button
+                      type="button"
+                      onClick={() => triggerDownload(new Blob([recordToCsv(r)], { type: "text/csv;charset=utf-8" }), recordCsvFilename(r))}
+                      aria-label={`Export ${r.phone ?? "contact"} as CSV`}
+                      className="inline-flex items-center justify-center rounded-md p-1 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                    >
+                      <Download size={13} />
+                    </button>
+                  </Hint>
                 </td>
               </tr>
             ))
