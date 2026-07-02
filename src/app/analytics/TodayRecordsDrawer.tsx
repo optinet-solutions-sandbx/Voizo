@@ -7,6 +7,7 @@
 // stay on the per-campaign page because they're campaign-scoped (this view spans all campaigns).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "motion/react";
 import { X, FileText, Mic, ScrollText, Search } from "lucide-react";
 import {
   type TodayCallRecord,
@@ -171,7 +172,12 @@ export default function TodayRecordsDrawer({
   if (!open) return null;
 
   return (
-    <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
+      className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden"
+    >
       {/* Header: title + slice badge + close */}
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]/40">
         <div className="flex items-center gap-2 min-w-0">
@@ -240,6 +246,6 @@ export default function TodayRecordsDrawer({
           </>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }

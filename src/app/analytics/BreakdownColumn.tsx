@@ -10,6 +10,7 @@ import { ChevronRight } from "lucide-react";
 import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
 import { ROW_COLOR } from "./PerformanceCards";
 import Hint from "@/components/Hint";
+import CountUp from "@/components/CountUp";
 
 function SubRow({ row, indent = false, onClick }: { row: PerfRow; indent?: boolean; onClick?: () => void }) {
   const color = ROW_COLOR[row.key] ?? "#8b939c";
@@ -56,7 +57,6 @@ export default function BreakdownColumn({
   collapsible?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const total = metric.total.toLocaleString();
 
   // The detailed rows — identical between the non-collapsible path and the expanded-collapsible path.
   const rows = (
@@ -81,10 +81,10 @@ export default function BreakdownColumn({
         )}
         {onTotal ? (
           <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-blue-400 transition-colors cursor-pointer">
-            {total}
+            <CountUp value={metric.total} />
           </button>
         ) : (
-          <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1">{total}</div>
+          <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1"><CountUp value={metric.total} /></div>
         )}
         {rows}
       </div>
@@ -113,10 +113,10 @@ export default function BreakdownColumn({
         </button>
         {onTotal ? (
           <button type="button" onClick={onTotal} className="text-xl font-bold font-mono text-[var(--text-1)] mb-1 hover:text-blue-400 transition-colors cursor-pointer">
-            {total}
+            <CountUp value={metric.total} />
           </button>
         ) : (
-          <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1">{total}</div>
+          <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1"><CountUp value={metric.total} /></div>
         )}
         {rows}
       </div>
@@ -136,7 +136,7 @@ export default function BreakdownColumn({
           {labelHead}
           <ChevronRight size={12} className="text-[var(--text-3)] transition-transform group-hover:text-[var(--text-2)]" />
         </div>
-        <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1">{total}</div>
+        <div className="text-xl font-bold font-mono text-[var(--text-1)] mb-1"><CountUp value={metric.total} /></div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--text-3)]">
           {metric.rows.map((row) => (
             <span key={row.key} className="inline-flex items-center gap-1">

@@ -6,8 +6,10 @@
 // (showDeltas=false — Val's mockup shows no deltas on Global) render identically. Purely
 // presentational: the parent supplies the click handlers (→ its own records drawer).
 
+import { motion } from "motion/react";
 import type { PerfMetric, PerfRow, TodayPerfDay } from "@/lib/dashboardAnalytics";
 import Hint from "@/components/Hint";
+import CountUp from "@/components/CountUp";
 
 // Row accent colors — match Val's mockup (vivid bars/dots, distinct from the muted records chips).
 // Exported so the shared BreakdownColumn (Today's-campaigns rows, Slice A) uses the same palette.
@@ -58,7 +60,13 @@ function Bar({ pct, color }: { pct: number | null; color: string }) {
   const w = pct === null ? 0 : Math.max(pct * 100, pct > 0 ? 2 : 0);
   return (
     <span className="block h-[2px] rounded-full bg-[var(--bg-elevated)] overflow-hidden">
-      <span className="block h-full rounded-full" style={{ width: `${w}%`, background: color }} />
+      <motion.span
+        className="block h-full rounded-full"
+        style={{ background: color }}
+        initial={{ width: 0 }}
+        animate={{ width: `${w}%` }}
+        transition={{ duration: 0.6, ease: "easeOut" }}
+      />
     </span>
   );
 }
@@ -113,9 +121,10 @@ function MetricCard({
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-3 flex flex-col gap-2.5">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</div>
       <button type="button" onClick={onOpenTotal} className="flex items-baseline gap-2 text-left group w-fit">
-        <span className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-blue-400 transition-colors">
-          {metric.total.toLocaleString()}
-        </span>
+        <CountUp
+          value={metric.total}
+          className="text-3xl font-bold font-mono text-[var(--text-1)] group-hover:text-blue-400 transition-colors"
+        />
         {showDeltas && <DeltaChips a={metric.deltaPctVsYesterday} b={metric.deltaPctVsSevenDayAvg} fmt={pctText} />}
       </button>
       {inFlight !== undefined && inFlight > 0 && (
@@ -155,31 +164,43 @@ export default function PerformanceCards({
   // The ranged Global view is historical (older non-terminal-status calls aren't dialing now), so
   // suppress it there. This matches Val's mockup, which shows no "in progress" on the Global cards.
   const callInFlight = showDeltas ? perf.inFlight : undefined;
+  // Staggered entrance (0 / 70 / 140ms) — the cards "arrive" left-to-right on first paint.
+  const entrance = (i: number) => ({
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.35, delay: i * 0.07, ease: "easeOut" as const },
+  });
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
-      <MetricCard
-        label="Call attempts"
-        metric={perf.callAttempts}
-        inFlight={callInFlight}
-        showDeltas={showDeltas}
-        onOpenTotal={() => onOpenTotal("callAttempts")}
-        onOpenRow={(row) => onOpenRow("callAttempts", row)}
-      />
-      <MetricCard
-        label="Reached"
-        metric={perf.reached}
-        showDeltas={showDeltas}
-        onOpenTotal={() => onOpenTotal("reached")}
-        onOpenRow={(row) => onOpenRow("reached", row)}
-      />
-      <MetricCard
-        label="SMS sent"
-        metric={perf.sms}
-        isSms
-        showDeltas={showDeltas}
-        onOpenTotal={() => onOpenTotal("sms")}
-        onOpenRow={(row, parentKey) => onOpenRow("sms", row, parentKey)}
-      />
+      <motion.div {...entrance(0)}>
+        <MetricCard
+          label="Call attempts"
+          metric={perf.callAttempts}
+          inFlight={callInFlight}
+          showDeltas={showDeltas}
+          onOpenTotal={() => onOpenTotal("callAttempts")}
+          onOpenRow={(row) => onOpenRow("callAttempts", row)}
+        />
+      </motion.div>
+      <motion.div {...entrance(1)}>
+        <MetricCard
+          label="Reached"
+          metric={perf.reached}
+          showDeltas={showDeltas}
+          onOpenTotal={() => onOpenTotal("reached")}
+          onOpenRow={(row) => onOpenRow("reached", row)}
+        />
+      </motion.div>
+      <motion.div {...entrance(2)}>
+        <MetricCard
+          label="SMS sent"
+          metric={perf.sms}
+          isSms
+          showDeltas={showDeltas}
+          onOpenTotal={() => onOpenTotal("sms")}
+          onOpenRow={(row, parentKey) => onOpenRow("sms", row, parentKey)}
+        />
+      </motion.div>
     </div>
   );
 }

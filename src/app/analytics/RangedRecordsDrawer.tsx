@@ -10,6 +10,7 @@
 // fetch effect — loading is derived from the cache) + prev-prop seeding + AbortController + Escape.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "motion/react";
 import { X, FileText, Mic, ScrollText, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   type CallRecord,
@@ -237,7 +238,12 @@ export default function RangedRecordsDrawer({
   const canNext = (page + 1) * PAGE_SIZE < total;
 
   return (
-    <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
+      className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden"
+    >
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]/40">
         <div className="flex items-center gap-2 min-w-0">
@@ -317,6 +323,6 @@ export default function RangedRecordsDrawer({
           </>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }

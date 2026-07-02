@@ -7,6 +7,7 @@
 // slice. `trailing` slots extra row UI (e.g. CampaignTable's "Open in campaign" link).
 
 import type { ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, Flag, Users, Calendar, Repeat } from "lucide-react";
 import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
@@ -164,17 +165,28 @@ export default function CampaignRow({
         <BreakdownColumn metric={c.perf.sms} {...pick("sms")} />
       </div>
 
-      {expanded && (
-        <div className="bg-[var(--bg-app)]">
-          <CampaignExpand
-            campaignId={c.id}
-            name={c.name}
-            slice={slice}
-            sliceLabel={sliceLabel}
-            onClearSlice={onClearSlice}
-          />
-        </div>
-      )}
+      {/* Height-animated expand (the mockup's 0.3s rp transition). initial={false} so rows
+          already expanded on mount don't replay the animation. */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="expand"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="overflow-hidden bg-[var(--bg-app)]"
+          >
+            <CampaignExpand
+              campaignId={c.id}
+              name={c.name}
+              slice={slice}
+              sliceLabel={sliceLabel}
+              onClearSlice={onClearSlice}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
