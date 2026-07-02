@@ -18,6 +18,7 @@ import CallRecords from "@/app/analytics/CallRecords";
 import PromptModal from "@/app/analytics/PromptModal";
 import { type RecordSlice } from "@/app/analytics/recordsDisplay";
 import { BlockSkeleton } from "@/app/analytics/loadingSkeletons";
+import PromptHoverCard from "@/app/analytics/PromptHoverCard";
 
 const quietCls =
   "inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] transition hover:text-[var(--text-2)]";
@@ -74,9 +75,11 @@ export default function CampaignExpand({
         </button>
         <div className="ml-auto flex items-center gap-3">
           {viewPrompt && (
-            <button type="button" onClick={() => setPromptOpen(true)} className={quietCls}>
-              <FileText size={11} /> View prompt
-            </button>
+            <PromptHoverCard campaignId={campaignId}>
+              <button type="button" onClick={() => setPromptOpen(true)} className={quietCls}>
+                <FileText size={11} /> View prompt
+              </button>
+            </PromptHoverCard>
           )}
           <Link href={`/campaigns/v2/${campaignId}`} className="text-[11px] text-blue-400 transition hover:text-blue-300">
             Open campaign →

@@ -430,15 +430,21 @@ const SYSTEM_INSTRUCTIONS_END = "[End System Instructions]";
 // the distinguishing sha separately (it would otherwise be the first thing a CSS-truncate hides).
 const PROMPT_SNIPPET_MAX = 200;
 
-/** Short, human-ish label for a prompt: a snippet of its OPERATOR text + the first 4 sha chars.
- *  De-boilerplates by stripping everything up to and including SYSTEM_INSTRUCTIONS_END (the operator
- *  prompt follows it); prefix-less prompts (no marker) are snippeted from the start unchanged. The UI
- *  prepends the base-agent name (resolved client-side) for the full "Tom · snippet · sha" label. */
-export function promptLabel(systemPrompt: string, sha: string): string {
-  let text = systemPrompt ?? "";
+/** The OPERATOR portion of a system prompt: everything after the platform prefix's stable end
+ *  marker, trimmed. Prefix-less prompts pass through unchanged. Shared by promptLabel (snippets)
+ *  and the prompt hover-preview (first lines). */
+export function operatorPromptText(systemPrompt: string): string {
+  const text = systemPrompt ?? "";
   const endIdx = text.indexOf(SYSTEM_INSTRUCTIONS_END);
-  if (endIdx >= 0) text = text.slice(endIdx + SYSTEM_INSTRUCTIONS_END.length);
-  const cleaned = text.replace(/\s+/g, " ").trim();
+  return (endIdx >= 0 ? text.slice(endIdx + SYSTEM_INSTRUCTIONS_END.length) : text).trim();
+}
+
+/** Short, human-ish label for a prompt: a snippet of its OPERATOR text + the first 4 sha chars.
+ *  De-boilerplates via operatorPromptText; prefix-less prompts (no marker) are snippeted from the
+ *  start unchanged. The UI prepends the base-agent name (resolved client-side) for the full
+ *  "Tom · snippet · sha" label. */
+export function promptLabel(systemPrompt: string, sha: string): string {
+  const cleaned = operatorPromptText(systemPrompt).replace(/\s+/g, " ").trim();
   const snippet = cleaned.slice(0, PROMPT_SNIPPET_MAX);
   return `${snippet}${cleaned.length > PROMPT_SNIPPET_MAX ? "…" : ""} · ${(sha ?? "").slice(0, 4)}`;
 }

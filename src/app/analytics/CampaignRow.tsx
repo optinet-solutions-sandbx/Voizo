@@ -16,6 +16,7 @@ import BreakdownColumn from "./BreakdownColumn";
 import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { metricPickSlice, type RecordSlice } from "./recordsDisplay";
 import Hint from "@/components/Hint";
+import PromptHoverCard from "./PromptHoverCard";
 
 // Derived display status (shared with CampaignTable's status filter).
 export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
@@ -129,9 +130,11 @@ export default function CampaignRow({
               </>
             )}
             <span className="text-[var(--border-2)]">·</span>
-            <button type="button" onClick={onViewPrompt} className="text-blue-400 hover:text-blue-300 transition-colors">
-              view prompt
-            </button>
+            <PromptHoverCard campaignId={c.id}>
+              <button type="button" onClick={onViewPrompt} className="text-blue-400 hover:text-blue-300 transition-colors">
+                view prompt
+              </button>
+            </PromptHoverCard>
             {trailing}
           </div>
           <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[10px] text-[var(--text-3)]">

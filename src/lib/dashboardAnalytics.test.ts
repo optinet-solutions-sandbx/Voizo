@@ -17,6 +17,7 @@ import {
   deriveAttemptTag,
   bestByPositiveResponse,
   promptLabel,
+  operatorPromptText,
   representativeBaseBySha,
   computePromptRollups,
   computeTrend,
@@ -784,6 +785,19 @@ describe("prompt rollups", () => {
     expect(x.campaignCount).toBe(2);
     const y = rows.find((r) => r.sha === "shaY")!;
     expect(y.connected).toBe(0); // no_answer
+  });
+});
+
+describe("operatorPromptText", () => {
+  it("strips the platform prefix up to the end marker", () => {
+    const p = "PLATFORM RULES blah blah [End System Instructions]\n\nYou are Victor, an account manager.";
+    expect(operatorPromptText(p)).toBe("You are Victor, an account manager.");
+  });
+  it("returns the trimmed text unchanged when no marker exists", () => {
+    expect(operatorPromptText("  Plain operator prompt.  ")).toBe("Plain operator prompt.");
+  });
+  it("handles null/empty", () => {
+    expect(operatorPromptText("")).toBe("");
   });
 });
 
