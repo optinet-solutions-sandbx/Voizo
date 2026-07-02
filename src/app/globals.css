@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css"; /* animate-in/out utilities used by components/ui/* (shadcn, 2026-07-02) */
 /* voizo */
 
 /* ── Dark theme (default) ──────────────────────────────────────────────────── */
@@ -48,6 +49,24 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
+
+  /* shadcn semantic tokens — ALIASES of the Voizo palette above (2026-07-02).
+     Generated components/ui/* render in our visual language, and both themes
+     inherit automatically (the underlying vars flip with [data-theme]). Keep
+     this the ONLY bridge — components must not hardcode raw colors. */
+  --color-card: var(--bg-card);
+  --color-card-foreground: var(--text-1);
+  --color-popover: var(--bg-elevated);
+  --color-popover-foreground: var(--text-1);
+  --color-muted: var(--bg-hover);
+  --color-muted-foreground: var(--text-3);
+  --color-accent: var(--bg-elevated);
+  --color-accent-foreground: var(--text-1);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: #4a9eed; /* the mockup's accent blue (focus rings) */
+  --color-primary: #4a9eed;
+  --color-primary-foreground: #ffffff;
 }
 
 body {
