@@ -10,7 +10,7 @@
 import { useState } from "react";
 import type { RunningCampaignCard } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
-import { sliceEq, type RecordSlice } from "./recordsDisplay";
+import { useExpandSlices } from "./useExpandSlices";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData } from "./CampaignRow";
 import PromptModal from "./PromptModal";
 
@@ -31,45 +31,9 @@ function fmtRuntime(startIso: string | null): string | null {
 }
 
 export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampaignCard[] }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Active records slice per expanded row (straight-to-records): absent = unfiltered.
-  const [slices, setSlices] = useState<Record<string, { slice: RecordSlice; label: string }>>({});
+  // Expand + per-row slice state (straight-to-records) — shared hook (mockup semantics).
+  const { expanded, slices, toggleExpand, pickMetric, clearSlice } = useExpandSlices();
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
-
-  // Chevron/name toggle — expand unfiltered; collapsing clears the row's slice (mockup closePanel).
-  const clearSlice = (id: string) =>
-    setSlices((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    if (expanded.has(id)) clearSlice(id);
-  };
-
-  // Breakdown number click (mockup handleRowClick): same number while open → collapse; a
-  // different number → re-slice in place (stays open); closed row → expand pre-filtered.
-  const pickMetric = (id: string, slice: RecordSlice, label: string) => {
-    const isOpen = expanded.has(id);
-    if (isOpen && sliceEq(slices[id]?.slice ?? null, slice)) {
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      clearSlice(id);
-      return;
-    }
-    setSlices((prev) => ({ ...prev, [id]: { slice, label } }));
-    if (!isOpen) setExpanded((prev) => new Set(prev).add(id));
-  };
 
   if (campaigns.length === 0) return null;
 

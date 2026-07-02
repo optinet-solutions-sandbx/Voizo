@@ -17,7 +17,7 @@ import PromptModal from "./PromptModal";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
 import { SortControl, type SortKey } from "./RankedTables";
-import { sliceEq, type RecordSlice } from "./recordsDisplay";
+import { useExpandSlices } from "./useExpandSlices";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
 
 interface Row {
@@ -120,10 +120,9 @@ export default function CampaignTable() {
   const [loading, setLoading] = useState(false);
   const [hidden, setHidden] = useState<Set<DisplayStatus>>(new Set());
   const [sort, setSort] = useState<SortKey>("newest");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Expand + per-row slice state (straight-to-records, Val's mockup) — shared hook.
+  const { expanded, slices, toggleExpand, pickMetric, clearSlice } = useExpandSlices();
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
-  // Active records slice per expanded row (straight-to-records, Val's mockup): absent = unfiltered.
-  const [slices, setSlices] = useState<Record<string, { slice: RecordSlice; label: string }>>({});
   const [page, setPage] = useState(1);
 
   // The server returns ALL live campaigns with LIFETIME metrics regardless of from/to (it does not
@@ -159,41 +158,6 @@ export default function CampaignTable() {
       else next.add(s);
       return next;
     });
-  };
-
-  // Chevron/name toggle — expand unfiltered; collapsing clears the row's slice (mockup closePanel).
-  const clearSlice = (id: string) =>
-    setSlices((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    if (expanded.has(id)) clearSlice(id);
-  };
-
-  // Breakdown number click (mockup handleRowClick): same number while open → collapse; a
-  // different number → re-slice in place (stays open); closed row → expand pre-filtered.
-  const pickMetric = (id: string, slice: RecordSlice, label: string) => {
-    const isOpen = expanded.has(id);
-    if (isOpen && sliceEq(slices[id]?.slice ?? null, slice)) {
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      clearSlice(id);
-      return;
-    }
-    setSlices((prev) => ({ ...prev, [id]: { slice, label } }));
-    if (!isOpen) setExpanded((prev) => new Set(prev).add(id));
   };
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
