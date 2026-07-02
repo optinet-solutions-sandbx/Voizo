@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { recordToCsv, recordCsvFilename, sliceMatches, sliceEq } from "./recordsDisplay";
+import { recordToCsv, recordCsvFilename, sliceMatches, sliceEq, metricPickSlice } from "./recordsDisplay";
 import type { CallRecord, AttemptTag, CallAttempt } from "../../lib/dashboardAnalytics";
 
 describe("recordToCsv — per-row CSV export (A1)", () => {
@@ -73,6 +73,16 @@ describe("sliceMatches — records slice filter (campaign expand click-to-filter
     expect(sliceMatches(rec({ smsSent: false }), { kind: "texted" })).toBe(false);
     expect(sliceMatches(rec({}), { kind: "texted" })).toBe(false);
   });
+  it("texted+refine 'reached' → texted AND human-answered (both required)", () => {
+    expect(sliceMatches(rec({ smsSent: true, attempts: [att("neutral")] }), { kind: "texted", refine: "reached" })).toBe(true);
+    expect(sliceMatches(rec({ smsSent: true, attempts: [att("voicemail")] }), { kind: "texted", refine: "reached" })).toBe(false);
+    expect(sliceMatches(rec({ smsSent: false, attempts: [att("neutral")] }), { kind: "texted", refine: "reached" })).toBe(false);
+  });
+  it("texted+refine outcome tag → texted AND any attempt carries the tag", () => {
+    expect(sliceMatches(rec({ smsSent: true, attempts: [att("voicemail")] }), { kind: "texted", refine: "voicemail" })).toBe(true);
+    expect(sliceMatches(rec({ smsSent: true, attempts: [att("positive")] }), { kind: "texted", refine: "voicemail" })).toBe(false);
+    expect(sliceMatches(rec({ smsSent: false, attempts: [att("voicemail")] }), { kind: "texted", refine: "voicemail" })).toBe(false);
+  });
 });
 
 describe("sliceEq — slice equality (highlight + toggle-close)", () => {
@@ -88,5 +98,33 @@ describe("sliceEq — slice equality (highlight + toggle-close)", () => {
   it("null handling", () => {
     expect(sliceEq(null, null)).toBe(true);
     expect(sliceEq(null, { kind: "all" })).toBe(false);
+  });
+  it("texted refine participates in equality", () => {
+    expect(sliceEq({ kind: "texted" }, { kind: "texted" })).toBe(true);
+    expect(sliceEq({ kind: "texted", refine: "reached" }, { kind: "texted", refine: "reached" })).toBe(true);
+    expect(sliceEq({ kind: "texted", refine: "reached" }, { kind: "texted" })).toBe(false);
+    expect(sliceEq({ kind: "texted", refine: "positive" }, { kind: "texted", refine: "neutral" })).toBe(false);
+  });
+});
+
+describe("metricPickSlice — camp-row metric click → slice + badge label (mockup handleRowClick parity)", () => {
+  it("column totals: attempts→all, reached→reached, sms→texted", () => {
+    expect(metricPickSlice("callAttempts")).toEqual({ slice: { kind: "all" }, label: "All call records" });
+    expect(metricPickSlice("reached")).toEqual({ slice: { kind: "reached" }, label: "Reached" });
+    expect(metricPickSlice("sms")).toEqual({ slice: { kind: "texted" }, label: "SMS sent" });
+  });
+  it("call-attempts rows: Reached→reached slice (honest, not the mockup's outcome=positive); voicemail/unreachable→outcome", () => {
+    expect(metricPickSlice("callAttempts", "reached", "Reached")).toEqual({ slice: { kind: "reached" }, label: "Reached" });
+    expect(metricPickSlice("callAttempts", "voicemail", "Voicemail")).toEqual({ slice: { kind: "outcome", tag: "voicemail" }, label: "Voicemail" });
+    expect(metricPickSlice("callAttempts", "unreachable", "Unreachable")).toEqual({ slice: { kind: "outcome", tag: "unreachable" }, label: "Unreachable" });
+  });
+  it("reached rows → outcome slices", () => {
+    expect(metricPickSlice("reached", "positive", "Positive")).toEqual({ slice: { kind: "outcome", tag: "positive" }, label: "Positive" });
+    expect(metricPickSlice("reached", "early_hangup", "Early hang-up")).toEqual({ slice: { kind: "outcome", tag: "early_hangup" }, label: "Early hang-up" });
+  });
+  it("sms rows + sub-rows → texted+refine composites so counts reconcile with the column", () => {
+    expect(metricPickSlice("sms", "reached", "Reached")).toEqual({ slice: { kind: "texted", refine: "reached" }, label: "SMS · Reached" });
+    expect(metricPickSlice("sms", "voicemail", "Voicemail")).toEqual({ slice: { kind: "texted", refine: "voicemail" }, label: "SMS · Voicemail" });
+    expect(metricPickSlice("sms", "positive", "Positive")).toEqual({ slice: { kind: "texted", refine: "positive" }, label: "SMS · Positive" });
   });
 });
