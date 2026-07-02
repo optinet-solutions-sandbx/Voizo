@@ -43,7 +43,7 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           Fewer
           <span className="flex gap-0.5">
             {[0.15, 0.35, 0.55, 0.75, 0.95].map((a) => (
-              <span key={a} className="w-3 h-3 rounded-sm" style={{ background: `rgba(52,211,153,${a})` }} />
+              <span key={a} className="w-3 h-3 rounded-sm" style={{ background: `rgba(62,192,138,${a})` }} />
             ))}
           </span>
           More
@@ -84,7 +84,7 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
                         onMouseLeave={() => setHover(null)}
                         className="h-8 text-center align-middle text-[10px] font-mono rounded-sm"
                         style={{
-                          background: cell ? `rgba(52,211,153,${alpha})` : "var(--bg-elevated)",
+                          background: cell ? `rgba(62,192,138,${alpha})` : "var(--bg-elevated)",
                           color: cell && alpha > 0.55 ? "#06281c" : "var(--text-3)",
                         }}
                       >
@@ -109,8 +109,8 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 mb-1.5 text-[11px]">
             <span className="text-[var(--text-3)]">Attempts <span className="text-[var(--text-1)] font-mono">{hover.cell.calls}</span></span>
-            <span className="text-[var(--text-3)]">Reached <span className="text-emerald-400 font-mono">{reachedOf(hover.cell)} · {pctOf(reachedOf(hover.cell), hover.cell.calls)}</span></span>
-            <span className="text-[var(--text-3)]">Voicemail <span className="font-mono" style={{ color: "#9085e9" }}>{hover.cell.voicemailConnected}</span></span>
+            <span className="text-[var(--text-3)]">Reached <span className="font-mono" style={{ color: "#3ec08a" }}>{reachedOf(hover.cell)} · {pctOf(reachedOf(hover.cell), hover.cell.calls)}</span></span>
+            <span className="text-[var(--text-3)]">Voicemail <span className="font-mono" style={{ color: "#8f86e6" }}>{hover.cell.voicemailConnected}</span></span>
             <span className="text-[var(--text-3)]">Positive <span className="text-amber-400 font-mono">{hover.cell.successful} · {pctOf(hover.cell.successful, reachedOf(hover.cell))}</span></span>
           </div>
           <div className="grid gap-0.5 border-t border-[var(--border)] pt-1.5">

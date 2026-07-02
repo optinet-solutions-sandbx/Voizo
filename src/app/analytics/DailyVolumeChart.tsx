@@ -31,11 +31,13 @@ function VolumeTooltip({
   payload,
   label,
   series,
+  colors,
 }: {
   active?: boolean;
   payload?: { dataKey: string; value: number }[];
   label?: string;
   series: VolumeSeries[];
+  colors: Record<string, string>;
 }) {
   if (!active || !payload?.length) return null;
   const labelFor = (key: string) => {
@@ -52,7 +54,7 @@ function VolumeTooltip({
       <div className="grid gap-0.5">
         {rows.map((p) => (
           <div key={p.dataKey} className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: seriesColor(p.dataKey) }} />
+            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: colors[p.dataKey] ?? "#565b64" }} />
             <span className="truncate text-[var(--text-2)]">{labelFor(p.dataKey)}</span>
             <span className="ml-auto font-mono text-[var(--text-1)]">{p.value}</span>
           </div>
@@ -67,13 +69,14 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
   // Interactive legend: clicking a campaign hides/shows its bars (stack re-totals accordingly).
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const visible = series.filter((s) => !hidden.has(s.key));
+  const colors = buildColors(series);
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5">
+    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] p-5">
       <div className="flex items-center gap-2 mb-1">
-        <BarChart3 size={15} className="text-[var(--text-3)]" />
+        <BarChart3 size={16} style={{ color: "#3ec08a" }} />
         <h3 className="text-[15px] font-semibold">Daily Call Volume</h3>
       </div>
-      <p className="text-[11px] text-[var(--text-3)] mb-3">Calls per day, stacked by campaign (top 10 + other).</p>
+      <p className="text-[12.5px] text-[var(--text-3)] mb-3">Calls per day, stacked by campaign (top 10 + other).</p>
       {series.length === 0 ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No call volume in this window.</p>
       ) : (
@@ -83,13 +86,13 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="day" tickFormatter={shortDay} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} minTickGap={24} />
               <YAxis stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-              <Tooltip content={<VolumeTooltip series={series} />} cursor={{ fill: "var(--bg-hover)", opacity: 0.4 }} />
+              <Tooltip content={<VolumeTooltip series={series} colors={colors} />} cursor={{ fill: "var(--bg-hover)", opacity: 0.4 }} />
               {visible.map((s) => (
-                <Bar key={s.key} dataKey={s.key} stackId="v" fill={seriesColor(s.key)} maxBarSize={48} />
+                <Bar key={s.key} dataKey={s.key} stackId="v" fill={colors[s.key]} maxBarSize={48} />
               ))}
             </BarChart>
           </ResponsiveContainer>
-          <div className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3">
+          <div className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3.5 pt-3 border-t border-[var(--border)]">
             {series.map((s) => {
               const off = hidden.has(s.key);
               return (
@@ -101,7 +104,7 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
                   aria-pressed={!off}
                   className={`inline-flex items-center gap-1.5 text-[11px] transition ${off ? "text-[var(--text-3)] opacity-40 line-through" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
                 >
-                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: seriesColor(s.key) }} />
+                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: colors[s.key] }} />
                   <span className="truncate max-w-[200px]">{seriesLabel(s)}</span>
                 </button>
               );
