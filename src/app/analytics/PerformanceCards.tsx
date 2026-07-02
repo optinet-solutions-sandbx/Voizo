@@ -23,6 +23,16 @@ export const ROW_COLOR: Record<string, string> = {
   early_hangup: "#e06530",
 };
 
+/** The "est" honesty badge + its disclosure tooltip — shared by every proxy-outcome row
+ *  (here and in BreakdownColumn) so the wording/styling can't drift. */
+export function EstBadge() {
+  return (
+    <Hint content="Best-effort estimate from call data, not a verified label.">
+      <span className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
+    </Hint>
+  );
+}
+
 const pctText = (v: number | null) => (v === null ? null : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const ppText = (v: number | null) => (v === null ? null : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}pp`);
 
@@ -85,11 +95,7 @@ function Row({ row, onOpen, showDeltas, indent = false }: { row: PerfRow; onOpen
         <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color }} />
         <span className="text-[11px] text-[var(--text-2)] flex items-center gap-1">
           {row.label}
-          {row.isEstimated && (
-            <Hint content="Best-effort estimate from call data, not a verified label.">
-              <span className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
-            </Hint>
-          )}
+          {row.isEstimated && <EstBadge />}
         </span>
         <span className="ml-auto text-[11px] font-medium font-mono text-[var(--text-1)]">{row.count.toLocaleString()}</span>
         <Pill pct={row.pct} color={color} />

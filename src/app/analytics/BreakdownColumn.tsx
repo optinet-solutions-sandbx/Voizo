@@ -8,8 +8,7 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
-import { ROW_COLOR } from "./PerformanceCards";
-import Hint from "@/components/Hint";
+import { ROW_COLOR, EstBadge } from "./PerformanceCards";
 import CountUp from "@/components/CountUp";
 
 function SubRow({ row, indent = false, onClick }: { row: PerfRow; indent?: boolean; onClick?: () => void }) {
@@ -19,11 +18,7 @@ function SubRow({ row, indent = false, onClick }: { row: PerfRow; indent?: boole
       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color }} />
       <span className="text-[11px] text-[var(--text-2)] flex items-center gap-1">
         {row.label}
-        {row.isEstimated && (
-          <Hint content="Best-effort estimate from call data, not a verified label.">
-            <span className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
-          </Hint>
-        )}
+        {row.isEstimated && <EstBadge />}
       </span>
       <span className="ml-auto text-[11px] font-medium font-mono text-[var(--text-1)]">{row.count.toLocaleString()}</span>
       <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: `${color}1f`, color }}>
