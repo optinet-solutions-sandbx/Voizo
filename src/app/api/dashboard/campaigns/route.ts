@@ -45,14 +45,18 @@ export async function GET(request: NextRequest) {
     // expanded breakdown. fetchAllRows pages past PostgREST's 1000-row cap (lifetime calls exceed
     // it). The from/to params are NOT applied here — they only echo in the response + the date
     // picker filters WHICH campaigns are listed (client-side, by activity), not the per-row numbers.
-    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds", "id"),
+    // `id` is required: smsWindowBreakdown joins sms.call_id → call.id for the per-row
+    // SMS reached/voicemail/unreachable split — without it every SMS is "unmatched".
+    fetchAllRows(supabaseAdmin, "calls_v2", "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds", "id"),
     supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
     // Players (full roster) + SMS sent are also campaign-LIFETIME totals: the roster has no "last
     // 30 days", and texts-sent reads as a campaign total. fetchAllRows pages past the 1000-row cap.
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id, id, outcome", "id"),
-    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, call_id, campaign_number_id", "id"),
+    // `created_at` is required: smsWindowBreakdown window-checks it — absent, every SMS
+    // row is dropped and the row's SMS breakdown column reads 0 (bug found 2026-07-02).
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, created_at, status, call_id, campaign_number_id", "id"),
   ]);
 
   if (campaignsRes.error) {
