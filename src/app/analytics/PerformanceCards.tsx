@@ -24,11 +24,20 @@ export const ROW_COLOR: Record<string, string> = {
 };
 
 /** The "est" honesty badge + its disclosure tooltip — shared by every proxy-outcome row
- *  (here and in BreakdownColumn) so the wording/styling can't drift. */
-export function EstBadge() {
+ *  (here, BreakdownColumn, and GlobalPerformance's coverage note) so wording/styling can't
+ *  drift. `tone="warn"` = the amber coverage-warning variant. */
+export function EstBadge({
+  content = "Best-effort estimate from call data, not a verified label.",
+  tone = "muted",
+}: {
+  content?: string;
+  tone?: "muted" | "warn";
+}) {
+  const toneCls =
+    tone === "warn" ? "text-amber-400/90 border-amber-400/30" : "text-[var(--text-3)] border-[var(--border-2)]";
   return (
-    <Hint content="Best-effort estimate from call data, not a verified label.">
-      <span className="cursor-help text-[8.5px] uppercase tracking-wider text-[var(--text-3)] border border-[var(--border-2)] rounded px-1">est</span>
+    <Hint content={content}>
+      <span className={`cursor-help text-[8.5px] uppercase tracking-wider border rounded px-1 ${toneCls}`}>est</span>
     </Hint>
   );
 }

@@ -17,7 +17,7 @@ import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import HeatMap from "./HeatMap";
-import PerformanceCards from "./PerformanceCards";
+import PerformanceCards, { EstBadge } from "./PerformanceCards";
 import TopPerformers from "./TopPerformers";
 import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
 import { useDrawerClaim } from "./drawerExclusivity";
@@ -163,18 +163,8 @@ function MultiSelect({
   );
 }
 
-// Compact "estimated" pill — shown on reach-derived cards when the window includes connects
-// not yet evaluated for voicemail (those count as reached, inflating reach / diluting positive rate).
-function EstBadge({ title }: { title: string }) {
-  return (
-    <span
-      title={title}
-      className="text-[8.5px] font-semibold uppercase tracking-wider text-amber-400/90 border border-amber-400/30 rounded px-1 py-px leading-none cursor-help"
-    >
-      est
-    </span>
-  );
-}
+// The "estimated" pill on reach-derived sections is the shared EstBadge (PerformanceCards)
+// with tone="warn" — unified 2026-07-02 so the disclosure styling/tooltip can't drift.
 
 export default function GlobalPerformance({ filters, onChange, onFocusCampaign }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
@@ -433,7 +423,7 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
         <div className="grid gap-2">
           {reachEstimated && (
             <p className="text-[11px] text-[var(--text-3)] flex items-center gap-1.5">
-              <EstBadge title="Estimated — long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
+              <EstBadge tone="warn" content="Estimated — long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
               Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
             </p>
           )}
