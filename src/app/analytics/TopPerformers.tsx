@@ -79,7 +79,7 @@ export default function TopPerformers({
     <div className="grid gap-2">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-start">
         {cards.map((c) => (
-          <div key={c.label} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 flex flex-col gap-3">
+          <div key={c.label} className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{c.label}</span>
               <span className="text-[var(--text-3)]">{c.icon}</span>

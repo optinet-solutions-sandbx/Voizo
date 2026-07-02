@@ -276,9 +276,9 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign }
 
   return (
     <section id="global-performance" className="grid gap-4 scroll-mt-4">
-      <div className="pt-2">
-        <h2 className="text-[20px] font-bold tracking-tight">Global Performance</h2>
-        <p className="text-sm text-[var(--text-3)] mt-1">Historical performance across all campaigns.</p>
+      <div>
+        <h2 className="text-[15px] font-semibold tracking-tight">Global Performance</h2>
+        <p className="text-xs text-[var(--text-3)] mt-0.5">Historical performance across all campaigns.</p>
       </div>
 
       {/* Filter bar. */}

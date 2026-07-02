@@ -60,20 +60,22 @@ export default function DashboardView() {
   return (
     <>
       {/* Background dot-field is now global (rendered once in the app layout). */}
-      <div className="p-6 max-w-[1400px] mx-auto w-full grid gap-5">
+      {/* Console-density frame (2026-07-02): fluid width + tighter rhythm — the AWS-style
+          "use the screen" layout. Density scale documented in the console-density spec. */}
+      <div className="p-4 w-full grid gap-4">
       {/* Today island (emerald) — the always-live snapshot, never affected by the filters. */}
       <SectionIsland accent="emerald">
       {/* Header */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-[26px] font-bold tracking-tight">Today&apos;s Performance</h1>
+            <h1 className="text-lg font-bold tracking-tight">Today&apos;s Performance</h1>
             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               LIVE{data ? ` · ${fmtDay(data.dayUtc)}` : ""}
             </span>
           </div>
-          <p className="text-sm text-[var(--text-3)] mt-1">
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             Live operational snapshot — never affected by the filters below.
           </p>
         </div>

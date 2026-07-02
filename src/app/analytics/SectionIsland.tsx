@@ -20,11 +20,11 @@ export default function SectionIsland({
 }) {
   const a = ACCENT[accent];
   return (
-    <section className={`relative overflow-hidden rounded-3xl border ${a.border} ${a.fill} p-5 sm:p-6`}>
+    <section className={`relative overflow-hidden rounded-2xl border ${a.border} ${a.fill} p-4`}>
       {/* Faint top-edge accent glow — echoes the mockup's colored islands without shouting. Decorative. */}
       <div className={`pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b ${a.glow} to-transparent`} aria-hidden />
-      {/* Content sits above the glow; inherits the dashboard's 20px vertical rhythm. */}
-      <div className="relative grid gap-5">{children}</div>
+      {/* Content sits above the glow; console-density rhythm (2026-07-02). */}
+      <div className="relative grid gap-4">{children}</div>
     </section>
   );
 }

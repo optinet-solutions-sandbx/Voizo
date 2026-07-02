@@ -104,7 +104,7 @@ export default function CampaignRow({
       : {};
   return (
     <div className="border-b border-[var(--border)] last:border-b-0">
-      <div className={`${CAMPAIGN_ROW_GRID} px-4 py-3 items-start hover:bg-[var(--bg-hover)]/40 transition-colors`}>
+      <div className={`${CAMPAIGN_ROW_GRID} px-3.5 py-2.5 items-start hover:bg-[var(--bg-hover)]/40 transition-colors`}>
         {/* Campaign */}
         <div className="min-w-0">
           <button
