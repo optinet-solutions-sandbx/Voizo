@@ -35,12 +35,15 @@ function TrendTooltip({
 }) {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
+  // % of attempts on the Reached + SMS-sent lines (Val's Asana request 2026-07-03). Guarded on a
+  // zero-attempt day so we never render NaN%/Infinity%.
+  const pctOfAttempts = (n: number) => (p.calls > 0 ? ` (${((n / p.calls) * 100).toFixed(1)}%)` : "");
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs shadow-xl">
       <div className="text-[var(--text-2)] font-medium mb-1">{shortDay(label ?? p.day)}</div>
       <div style={{ color: "#5b9bf0" }}>{p.calls.toLocaleString()} attempts</div>
-      <div style={{ color: "#3ec08a" }}>{p.reached.toLocaleString()} reached</div>
-      <div style={{ color: "#8f86e6" }}>{p.smsSent.toLocaleString()} SMS sent</div>
+      <div style={{ color: "#3ec08a" }}>{p.reached.toLocaleString()} reached{pctOfAttempts(p.reached)}</div>
+      <div style={{ color: "#8f86e6" }}>{p.smsSent.toLocaleString()} SMS sent{pctOfAttempts(p.smsSent)}</div>
     </div>
   );
 }
