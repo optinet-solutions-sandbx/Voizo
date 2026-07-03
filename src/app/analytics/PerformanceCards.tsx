@@ -130,13 +130,13 @@ function MetricCard({
 }) {
   const delta = metric.deltaPctVsSevenDayAvg;
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] px-5 py-4 flex flex-col">
+    <div className="h-full bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] px-5 py-[18px] flex flex-col">
       <div className="text-[11px] font-semibold uppercase tracking-[0.09em] text-[var(--text-3)] mb-3">{label}</div>
       <div className="flex items-baseline gap-2.5">
         <button type="button" onClick={onOpenTotal} className="group text-left">
           <CountUp
             value={metric.total}
-            className="text-[34px] leading-none font-semibold font-mono tracking-[-0.025em] text-[var(--text-1)] group-hover:text-primary transition-colors"
+            className="text-[38px] leading-none font-semibold font-mono tracking-[-0.025em] text-[var(--text-1)] group-hover:text-primary transition-colors"
           />
         </button>
         {showDeltas && (
@@ -189,8 +189,8 @@ export default function PerformanceCards({
     transition: { duration: 0.35, delay: i * 0.07, ease: "easeOut" as const },
   });
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch">
-      <motion.div {...entrance(0)}>
+    <div className="flex flex-wrap gap-4 items-stretch">
+      <motion.div {...entrance(0)} className="flex-1 min-w-[260px]">
         <MetricCard
           label="Call attempts"
           metric={perf.callAttempts}
@@ -200,7 +200,7 @@ export default function PerformanceCards({
           onOpenRow={(row) => onOpenRow("callAttempts", row)}
         />
       </motion.div>
-      <motion.div {...entrance(1)}>
+      <motion.div {...entrance(1)} className="flex-1 min-w-[260px]">
         <MetricCard
           label="Reached"
           metric={perf.reached}
@@ -209,7 +209,7 @@ export default function PerformanceCards({
           onOpenRow={(row) => onOpenRow("reached", row)}
         />
       </motion.div>
-      <motion.div {...entrance(2)}>
+      <motion.div {...entrance(2)} className="flex-1 min-w-[260px]">
         <MetricCard
           label="SMS sent"
           metric={perf.sms}

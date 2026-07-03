@@ -8,7 +8,6 @@
 // with the ranged Global Performance view, Slice B 2026-06-30).
 
 import { useCallback, useMemo, useState } from "react";
-import { Radio } from "lucide-react";
 import type { TodaySnapshot, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 import PerformanceCards from "./PerformanceCards";
 import TodayRecordsDrawer, { type DrawerFilter } from "./TodayRecordsDrawer";
@@ -37,7 +36,6 @@ export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | 
   useDrawerClaim("today", filter !== null, closeSelf);
 
   const perf: TodayPerfDay | null = data ? data[day] : null;
-  const ops = data?.ops;
 
   // Close the drawer when switching the day (its records are day-scoped).
   const switchDay = (d: "today" | "yesterday") => { setDay(d); setFilter(null); };
@@ -73,15 +71,10 @@ export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | 
 
   return (
     <section className="grid gap-3">
-      {/* Control row: Today/Yesterday toggle + Active AI Agents chip */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      {/* Control row: Today/Yesterday toggle. The agents-active chip now lives in the section
+          header (next to Refresh) for mockup parity (Jasiel 2026-07-03). */}
+      <div className="flex items-center gap-3 flex-wrap">
         {toggle}
-        {ops && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-3)] px-2 py-1 rounded-lg border border-[var(--border)]">
-            <Radio size={12} className="text-[var(--text-2)]" />
-            <span className="font-mono text-[var(--text-1)]">{ops.activeAgents}</span>/<span className="font-mono">{ops.totalAgents}</span> agents active
-          </span>
-        )}
       </div>
 
       {!perf ? (

@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, SlidersHorizontal } from "lucide-react";
 import StatBand from "./StatBand";
-import { SectionTick } from "./SectionIsland";
+import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
 import { useBaseAgentNames } from "./useBaseAgentNames";
@@ -339,20 +339,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         )}
       </div>
 
-      {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
-      {data?.perf && k && (
-        <StatBand
-          stats={[
-            { label: "Call attempts", value: data.perf.callAttempts.total },
-            { label: "Reached", value: data.perf.reached.total },
-            { label: "SMS sent", value: data.perf.sms.total },
-            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached", accent: "#3ec08a" },
-            { label: "Campaigns", value: data.campaignCount },
-          ]}
-        />
-      )}
-
-      {/* Phone-lookup match banner. */}
+      {/* Phone-lookup match banner (search feedback — sits with the filter bar, above the panel). */}
       {phoneMatch && (
         <div className="text-[12px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-xl px-3.5 py-2.5">
           {phoneMatch.matchedCampaigns.length > 0 ? (
@@ -370,6 +357,23 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
             </>
           )}
         </div>
+      )}
+
+      {/* Overview panel — the window's headline KPIs + the 3-card performance breakdown grouped
+          into one island, mirroring Today's Performance (Jasiel 2026-07-03). The filter bar,
+          leaderboards, charts, table and heatmap stay free-standing on the app background. */}
+      <SectionIsland>
+      {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
+      {data?.perf && k && (
+        <StatBand
+          stats={[
+            { label: "Call attempts", value: data.perf.callAttempts.total },
+            { label: "Reached", value: data.perf.reached.total },
+            { label: "SMS sent", value: data.perf.sms.total },
+            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached", accent: "#3ec08a" },
+            { label: "Campaigns", value: data.campaignCount },
+          ]}
+        />
       )}
 
       {/* Ranged 3-card Performance (Val's mockup, Slice B) — replaces the old 5-card KPI strip.
@@ -392,6 +396,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       ) : (
         <CardGridSkeleton />
       )}
+      </SectionIsland>
 
       {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
           switch + best-in-view highlight + ranked table; rows drill into the scoped drawer. */}

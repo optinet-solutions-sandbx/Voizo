@@ -7,6 +7,7 @@
 // Today's Performance is the 3-card redesign (Val's mockup 2026-06-29) — see TodayPerformanceCards.
 
 import { useCallback, useEffect, useState } from "react";
+import { Radio } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
@@ -61,8 +62,10 @@ export default function DashboardView() {
       {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
           by the green tick (pattern brief §1), not a background wash. */}
       <SectionIsland>
-      {/* Header */}
-      <div className="flex items-end justify-between gap-4 flex-wrap">
+      {/* Header — title/LIVE on the left; agents-active chip grouped with Refresh top-right
+          (mockup parity, Jasiel 2026-07-03). The Today/Yesterday toggle sits alone below (in
+          TodayPerformanceCards). items-start so the right group aligns with the title row. */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
             <SectionTick color="#3ec08a" />
@@ -78,6 +81,12 @@ export default function DashboardView() {
         </div>
         <div className="flex items-center gap-2">
           {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+          {data?.ops && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-3)] px-2 py-1 rounded-lg border border-[var(--border)]">
+              <Radio size={12} className="text-[var(--text-2)]" />
+              <span className="font-mono text-[var(--text-1)]">{data.ops.activeAgents}</span>/<span className="font-mono">{data.ops.totalAgents}</span> agents active
+            </span>
+          )}
           <button
             onClick={load}
             disabled={refreshing}
