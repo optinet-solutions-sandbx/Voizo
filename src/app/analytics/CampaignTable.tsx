@@ -66,7 +66,7 @@ function runWindow(r: Row): string {
   const start = fmtShort(r.startAt);
   if (!start) return "—";
   if (r.displayStatus === "running" || r.displayStatus === "paused") return `${start} → ongoing`;
-  return `${start} → ${fmtShort(r.endAt ?? r.lastCallAt) ?? "ended"}`;
+  return `${start} → ${fmtShort(r.endAt ?? r.lastCallAt) ?? "—"}`;
 }
 
 const DAY_MS = 86_400_000;

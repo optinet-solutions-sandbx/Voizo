@@ -9,6 +9,7 @@ import {
   computeGlobalKpis,
   deriveDisplayStatus,
   computeCampaignTable,
+  FINISHED_IDLE_DAYS,
   deriveRecordStatus,
   computeCallRecords,
   recordHasAttemptOutcome,
@@ -525,8 +526,9 @@ describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   it("paused with recent activity (< 2 days) → paused", () => {
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 1 * day, nowMs: now })).toBe("paused");
   });
-  it("raw completed / inactive / draft all → finished (Inactive folded in 2026-07-03)", () => {
+  it("raw completed / archived / inactive / draft all → finished", () => {
     expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "archived", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
     expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
     expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
@@ -585,7 +587,7 @@ describe("computeCampaignTable", () => {
       { campaign_id: "p1", status: "failed" }, // never arrived → excluded
       { campaign_id: "p1", status: "undelivered" }, // never arrived → excluded
     ];
-    const r = computeCampaignTable(c, camps, now, 7, numbers, sms).find((x) => x.id === "p1")!;
+    const r = computeCampaignTable(c, camps, now, FINISHED_IDLE_DAYS, numbers, sms).find((x) => x.id === "p1")!;
     expect(r.players).toBe(3);
     expect(r.connected).toBe(2);
     expect(r.reach).toBe(1); // 2 connected − 1 voicemail
@@ -1087,7 +1089,7 @@ describe("computeCampaignTable — per-campaign lifetime perf (Slice C)", () => 
       call("X", "completed", false, "2026-06-11T00:00:00Z", undefined, true), // voicemail
     ];
     const campaigns = [camp("X", { status: "running" })];
-    const rows = computeCampaignTable(calls, campaigns, now, 7, [{ campaign_id: "X", id: "n1", outcome: "sent_sms" }], []);
+    const rows = computeCampaignTable(calls, campaigns, now, FINISHED_IDLE_DAYS, [{ campaign_id: "X", id: "n1", outcome: "sent_sms" }], []);
     const row = rows.find((r) => r.id === "X")!;
     expect(row.perf.callAttempts.total).toBe(2);
     expect(row.perf.callAttempts.rows.find((r) => r.key === "voicemail")?.count).toBe(1);

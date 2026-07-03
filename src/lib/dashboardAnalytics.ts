@@ -127,7 +127,7 @@ export function deriveDisplayStatus(opts: {
   const s = (rawStatus ?? "").toLowerCase();
   if (s === "running") return "running"; // trust a live status
   if (s === "inactive" || s === "draft") return "finished"; // never-ran folded into Finished (2026-07-03)
-  if (s === "completed") return "finished";
+  if (s === "completed" || s === "archived") return "finished";
   if (endAtMs !== null && endAtMs <= nowMs) return "finished"; // reached its scheduled end
   if (s === "paused") {
     const idleMs = idleDays * MS_PER_DAY;
