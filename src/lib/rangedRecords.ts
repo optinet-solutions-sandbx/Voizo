@@ -16,7 +16,7 @@ export const MAX_PAGE = 200;
 export const MAX_CAMPAIGNS = 500;
 
 // Whitelists — reuse the shared contracts so a schema change to the taxonomy propagates here.
-const STATUSES: readonly RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
+const STATUSES: readonly RecordStatus[] = ["successful", "offer_delivered", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
 const OUTCOMES: readonly (AttemptTag | "reached")[] = ["reached", "unreachable", "voicemail", "positive", "declined", "early_hangup", "neutral"];
 
 export interface RecordsParams {

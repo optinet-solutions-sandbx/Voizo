@@ -238,7 +238,7 @@ function accumulate(row: RateRow, c: DashCallRow): void {
     row.connected += 1;
     // Voicemail/reach: only CONNECTED ('completed') calls can be a voicemail. NULL = not
     // evaluated (historical/pre-deploy) → excluded from the rate denominator.
-    if (c.voicemail === true) row.voicemailConnected += 1;
+    if (c.voicemail === true && c.goal_reached !== true) row.voicemailConnected += 1; // goal_reached overrides the voicemail flag (Val 2026-07-03)
     if (c.voicemail != null) row.voicemailEvaluated += 1;
   }
   if (isTerminal(c.status)) row.terminal += 1;
@@ -706,7 +706,7 @@ export function computeHeatmap(calls: DashCallRow[], campaigns: DashCampaignRow[
       cells.set(key, cell);
     }
     const conn = isConnected(c.status);
-    const vm = conn && c.voicemail === true; // only a connected call can be a voicemail
+    const vm = conn && c.voicemail === true && c.goal_reached !== true; // voicemail — unless the call reached the goal (goal overrides, Val 2026-07-03)
     const succ = c.goal_reached === true;
     cell.calls++;
     if (conn) cell.connected++;
@@ -840,6 +840,7 @@ export interface DashNumberRow {
 // stay at 0 until the voicemail-persistence slice. The rest derive from outcome.
 export type RecordStatus =
   | "successful"
+  | "offer_delivered"
   | "not_interested"
   | "awaiting_retry"
   | "voicemail"
@@ -850,8 +851,11 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
   if (anyGoal) return "successful"; // a goal on any attempt wins
   switch ((outcome ?? "").toLowerCase()) {
     case "sent_sms":
-    case "sms_delivered": // offer delivered by SMS (registered_optin voicemail follow-up) — retired from retries
-      return "successful";
+    case "sms_delivered": // offer SMS sent/delivered (registered_optin voicemail follow-up) — retired from retries
+      // Split from "successful" (Val 2026-07-03, ticket 1216090162016320): a delivered offer SMS is a
+      // WIN but NOT a human "Positive response" — the contact may never have engaged (voicemail → auto
+      // follow-up). Only a goal (handled above) reads "Positive response"; delivery reads "Offer delivered".
+      return "offer_delivered";
     case "not_interested":
     case "declined_offer":
       return "not_interested";
@@ -975,8 +979,8 @@ export function deriveAttemptTag(
   opts: { useTranscript?: boolean } = {},
 ): AttemptTag {
   if (!isConnected(call.status)) return "unreachable";
+  if (call.goal_reached === true) return "positive"; // goal_reached overrides the voicemail flag (Val 2026-07-03) — a call that reached the goal reads Positive, not Voicemail
   if (call.voicemail === true) return "voicemail";
-  if (call.goal_reached === true) return "positive";
   if (declinedContact) return "declined";
   return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
 }
@@ -1111,7 +1115,7 @@ export function callWindowBreakdown(
     if (isTerminal(c.status)) b.terminal += 1;
     if (!isConnected(c.status)) continue;
     b.connected += 1;
-    if (c.voicemail === true) { b.voicemail += 1; continue; }
+    if (c.voicemail === true && c.goal_reached !== true) { b.voicemail += 1; continue; } // goal_reached overrides voicemail (Val 2026-07-03)
     // Reached human → outcome split (mirror deriveAttemptTag priority verbatim via the shared seam).
     b.reach += 1;
     if (c.goal_reached === true) { b.positive += 1; continue; }

@@ -337,6 +337,22 @@ describe("computeCampaignAnalytics — voicemail / reach (call-observability sli
     expect(g["g"].voicemailEvaluated).toBe(1);
     expect(g["g"].reach).toBe(0); // 1 connected − 1 voicemail
   });
+
+  it("goal_reached beats the voicemail flag: a goal-reached VM counts as reach + positive, not voicemail (Val 2026-07-03)", () => {
+    const gvm = computeCampaignAnalytics({
+      campaigns: [{ id: "gvm", name: "GVM", created_at: "2026-06-01T00:00:00Z" }],
+      numbers: [{ id: "gv1", campaign_id: "gvm", outcome: "sent_sms" }],
+      calls: [
+        { campaign_id: "gvm", campaign_number_id: "gv1", status: "completed", goal_reached: true, voicemail: true, duration_seconds: 80 }, // goal-VM → reach
+        { campaign_id: "gvm", campaign_number_id: "gv1", status: "completed", goal_reached: false, voicemail: true, duration_seconds: 3 }, // pure VM
+      ],
+      sms: [], now: FIXTURE_INPUT.now,
+    });
+    expect(gvm["gvm"].connected).toBe(2);
+    expect(gvm["gvm"].voicemailConnected).toBe(1); // only the non-goal VM
+    expect(gvm["gvm"].reach).toBe(1); // 2 connected − 1 voicemail; the goal-VM is reached
+    expect(gvm["gvm"].outcomeBreakdown.positive).toBe(1); // goal-VM partitions as positive, not excluded
+  });
 });
 
 describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy) + goal target", () => {

@@ -6,9 +6,10 @@ import type { RecordStatus, AttemptTag, CallRecord } from "../../lib/dashboardAn
 import { ATTEMPT_TAG_LABELS, recordHasAttemptOutcome } from "../../lib/dashboardAnalytics";
 import { csvCell, CSV_BOM } from "../../lib/download";
 
-export const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
+export const DISPO_ORDER: RecordStatus[] = ["successful", "offer_delivered", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
 export const DISPO_LABEL: Record<RecordStatus, string> = {
   successful: "Positive response", // "Success" retired (Val 2026-06-26) — goal = agreed to the offer SMS, not a sale
+  offer_delivered: "Offer delivered", // offer SMS delivered without a human positive (Val 2026-07-03) — delivered ≠ engaged
   not_interested: "Not Interested",
   awaiting_retry: "Awaiting Retry",
   voicemail: "Voicemail",
@@ -17,6 +18,7 @@ export const DISPO_LABEL: Record<RecordStatus, string> = {
 };
 export const DISPO_COLOR: Record<RecordStatus, string> = {
   successful: "#5fb39a",
+  offer_delivered: "#6aa3c4", // success-family, distinct blue: SMS delivery ≠ a human response
   not_interested: "#cf8a8a",
   awaiting_retry: "#c9a86a",
   voicemail: "#9f90c9",

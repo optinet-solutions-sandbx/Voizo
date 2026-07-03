@@ -302,7 +302,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
       if (numId) connectedNums.add(numId);
       // Voicemail/reach (call-observability slice): only CONNECTED ('completed') calls can be a
       // voicemail. NULL = not evaluated (historical/pre-deploy) → excluded from the rate denom.
-      if (c.voicemail === true) voicemailConnected++;
+      if (c.voicemail === true && c.goal_reached !== true) voicemailConnected++; // goal_reached overrides the voicemail flag (Val 2026-07-03)
       if (c.voicemail != null) voicemailEvaluated++;
       // goalNumbers is gated to connected calls so connectedNums ⊇ goalNums by construction
       // (keeps the conversion-leak drop in Task 7 non-negative). goal on a non-connected
@@ -366,7 +366,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   const outcomeBreakdown: OutcomeBreakdown = { positive: 0, declined: 0, earlyHangup: 0, neutral: 0 };
   for (const c of calls) {
     if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
-    if (c.voicemail === true) continue; // voicemail is not a reached human (keeps the sum == reach)
+    if (c.voicemail === true && c.goal_reached !== true) continue; // voicemail (unless goal reached) is not a reached human — keeps sum == reach (Val 2026-07-03)
     if (c.goal_reached === true) { outcomeBreakdown.positive++; continue; }
     if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) { outcomeBreakdown.declined++; continue; }
     // Engagement-based early-hangup — MIRRORS dashboardAnalytics.deriveAttemptTag (2026-06-26).

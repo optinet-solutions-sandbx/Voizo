@@ -237,7 +237,7 @@ describe("computeKpis — rate definitions", () => {
 
   it("voicemail/reach: connected-gated, null-safe over evaluated; reach counts unevaluated as reached", () => {
     const calls: DashCallRow[] = [
-      call("c", "completed", true, "2026-06-10T00:00:00Z", "n1", true), // voicemail
+      call("c", "completed", false, "2026-06-10T00:00:00Z", "n1", true), // voicemail (pure — goal not reached)
       call("c", "completed", false, "2026-06-10T00:00:00Z", "n2", true), // voicemail
       call("c", "completed", true, "2026-06-10T00:00:00Z", "n3", false), // human
       call("c", "completed", null, "2026-06-10T00:00:00Z", "n4", null), // connected, NOT evaluated
@@ -408,7 +408,7 @@ describe("computeToday — always-live snapshot", () => {
     camp("cT", { status: "running", voice_id: "vT", is_test: true }),
   ];
   const calls: DashCallRow[] = [
-    // today (>= 06-15T00Z) — voicemail flags: c1=VM, c2=human, c3=unevaluated(null)
+    // today (>= 06-15T00Z) — voicemail flags: c1=goal-reached VM (goal>VM → reach), c2=human, c3=unevaluated(null)
     call("c1", "completed", true, "2026-06-15T09:00:00Z", "n1", true),
     call("c1", "no_answer", false, "2026-06-15T09:05:00Z"),
     call("c2", "completed", false, "2026-06-15T10:00:00Z", "n2", false),
@@ -449,11 +449,11 @@ describe("computeToday — always-live snapshot", () => {
     expect(snap.ops.connectRateToday).toBeCloseTo(3 / 4, 6);
   });
   it("today reach + voicemail-rate (connected-gated, null-safe)", () => {
-    // 3 connected today: c1(VM), c2(human), c3(unevaluated)
-    expect(snap.ops.voicemailConnectedToday).toBe(1); // c1
+    // 3 connected today: c1(goal-reached VM → reach), c2(human), c3(unevaluated)
+    expect(snap.ops.voicemailConnectedToday).toBe(0); // c1 reached its goal → goal>VM, not counted voicemail
     expect(snap.ops.voicemailEvaluatedToday).toBe(2); // c1(true) + c2(false); c3(null) excluded
-    expect(snap.ops.voicemailRateToday).toBeCloseTo(1 / 2, 6);
-    expect(snap.ops.reachToday).toBe(2); // connected(3) − voicemail(1); c3 unevaluated counts as reached
+    expect(snap.ops.voicemailRateToday).toBe(0); // 0 voicemail / 2 evaluated
+    expect(snap.ops.reachToday).toBe(3); // connected(3) − voicemail(0); c1 goal-VM + c3 unevaluated both reached
   });
   it("messages sent today + shares (sent/delivered only, ghost excluded)", () => {
     expect(snap.ops.messagesSentToday).toBe(2);
@@ -485,6 +485,15 @@ describe("computeGlobalKpis", () => {
   // A: 12 connected / 6 goal (0.50); B: 11 / 1 (~0.09); C: 10 / 0 (0.00). All above the floor (10).
   const calls = [...many("A", 12, 6), ...many("B", 11, 1), ...many("C", 10, 0)];
   const g = computeGlobalKpis(calls, index);
+
+  // goal_reached beats the voicemail flag (Val 2026-07-03): a goal-reached voicemail call counts as
+  // reach + successful, NOT voicemailConnected — keeps positiveResponseRate (goal/reach) consistent.
+  it("goal_reached overrides voicemail: goal-VM call → reach + successful, not voicemailConnected", () => {
+    const gvm = computeGlobalKpis([call("A", "completed", true, "2026-06-10T00:00:00Z", "nvm", true)], index);
+    expect(gvm.kpis.voicemailConnected).toBe(0);
+    expect(gvm.kpis.reach).toBe(1);
+    expect(gvm.kpis.successful).toBe(1);
+  });
 
   it("KPIs off connected + distinct campaign count", () => {
     expect(g.kpis.calls).toBe(33);
@@ -601,8 +610,9 @@ describe("call records", () => {
     expect(deriveRecordStatus("declined_offer", false)).toBe("not_interested");
     expect(deriveRecordStatus("pending_retry", false)).toBe("awaiting_retry");
     expect(deriveRecordStatus("unreached", false)).toBe("unreached");
-    expect(deriveRecordStatus("sent_sms", false)).toBe("successful");
-    expect(deriveRecordStatus("sms_delivered", false)).toBe("successful"); // offer delivered by SMS (voicemail follow-up) = success
+    expect(deriveRecordStatus("sent_sms", false)).toBe("offer_delivered"); // delivered ≠ human positive (Val 2026-07-03, ticket 1216090162016320)
+    expect(deriveRecordStatus("sms_delivered", false)).toBe("offer_delivered");
+    expect(deriveRecordStatus("sent_sms", true)).toBe("successful"); // …but a goal on any attempt still wins → "Positive response"
     expect(deriveRecordStatus("wrong_number", false)).toBe("wrong_number");
     expect(deriveRecordStatus("not_interested", true)).toBe("successful"); // a goal overrides
     expect(deriveRecordStatus(null, false)).toBe("unreached");
@@ -685,6 +695,14 @@ describe("call records", () => {
 });
 
 describe("deriveAttemptTag — engagement rules (validated against 14d of prod)", () => {
+  // goal_reached beats the voicemail flag (Val's accuracy ticket, 2026-07-03): a call that reached
+  // the goal reads Positive, not Voicemail — so the contact STATUS and its attempts agree.
+  it("tags a goal-reached call Positive even when voicemail===true (goal overrides)", () => {
+    expect(deriveAttemptTag(call("x", "completed", true, "2026-06-26T10:00:00Z", "n0", true), false)).toBe("positive");
+  });
+  it("still tags a non-goal voicemail as voicemail (unchanged)", () => {
+    expect(deriveAttemptTag(call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", true), false)).toBe("voicemail");
+  });
   // silence-timed-out: connected but the customer never spoke → early hangup
   it("tags silence-timed-out as early_hangup", () => {
     const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", false, 32, "silence-timed-out", "");
