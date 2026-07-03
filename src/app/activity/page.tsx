@@ -22,6 +22,10 @@ import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import Pagination from "@/components/Pagination";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
+import Hint from "@/components/Hint";
+import { Skeleton } from "@/components/ui/skeleton";
+import WidgetCard from "../analytics/WidgetCard";
+import { SectionTick } from "../analytics/SectionIsland";
 
 interface CallEvent {
   id: string;
@@ -173,18 +177,16 @@ export default function ActivityPage() {
   const filtersActive = campaignFilter !== "all" || statusFilter.size > 0;
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto w-full grid gap-5">
-      {/* Header */}
-      <div className="flex items-end justify-between gap-4 flex-wrap">
+    <div className="p-4 w-full grid gap-4">
+      {/* Header — SectionTick + 18px title, matching the dashboard's section-header pattern
+          (design-system rollout, Jasiel 2026-07-03). Fluid p-4 console density. */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[26px] font-bold tracking-tight flex items-center gap-2.5">
-            <span className="relative inline-flex w-2.5 h-2.5">
-              <span className="absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-60" />
-              <span className="relative w-2.5 h-2.5 rounded-full bg-emerald-500" />
-            </span>
-            Live Activity
-          </h1>
-          <p className="text-sm text-[var(--text-3)] mt-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <SectionTick color="#3ec08a" />
+            <h1 className="text-lg font-semibold tracking-tight">Live Activity</h1>
+          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             Everything happening across all campaigns · last 24 hours
           </p>
         </div>
@@ -252,50 +254,50 @@ export default function ActivityPage() {
       </div>
 
       {/* Row 1: Call feed (large) + SMS feed */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr] gap-5">
-        <Card
+      <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr] gap-4">
+        <WidgetCard
           title="Call Activity"
           icon={<PhoneCall size={14} className="text-blue-400" />}
-          sub={data ? `${filteredCalls.length} of ${data.outcomes24h.total} calls (24h)` : "Loading…"}
+          context={data ? `${filteredCalls.length} of ${data.outcomes24h.total} calls (24h)` : "Loading…"}
+          footer={callsPaged.total > PAGE_SIZE ? (
+            <Pagination currentPage={callsPaged.page} totalPages={callsPaged.totalPages} totalItems={callsPaged.total} pageSize={PAGE_SIZE} onPageChange={callsPaged.setPage} />
+          ) : undefined}
         >
           <CallFeed calls={callsPaged.pageItems} now={now} loading={!data} />
-          {callsPaged.total > PAGE_SIZE && (
-            <Pagination currentPage={callsPaged.page} totalPages={callsPaged.totalPages} totalItems={callsPaged.total} pageSize={PAGE_SIZE} onPageChange={callsPaged.setPage} />
-          )}
-        </Card>
+        </WidgetCard>
 
-        <Card
+        <WidgetCard
           title="SMS Activity"
           icon={<MessageSquare size={14} className="text-violet-400" />}
-          sub={data ? `${filteredSms.length} most recent` : "Loading…"}
+          context={data ? `${filteredSms.length} most recent` : "Loading…"}
+          footer={smsPaged.total > PAGE_SIZE ? (
+            <Pagination currentPage={smsPaged.page} totalPages={smsPaged.totalPages} totalItems={smsPaged.total} pageSize={PAGE_SIZE} onPageChange={smsPaged.setPage} />
+          ) : undefined}
         >
           <SmsFeed sms={smsPaged.pageItems} now={now} loading={!data} />
-          {smsPaged.total > PAGE_SIZE && (
-            <Pagination currentPage={smsPaged.page} totalPages={smsPaged.totalPages} totalItems={smsPaged.total} pageSize={PAGE_SIZE} onPageChange={smsPaged.setPage} />
-          )}
-        </Card>
+        </WidgetCard>
       </div>
 
       {/* Row 2: Outcome distribution + Per-number (large) */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.4fr] gap-5">
-        <Card
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.4fr] gap-4">
+        <WidgetCard
           title="Outcomes · last 24h"
           icon={<Target size={14} className="text-amber-400" />}
-          sub={data ? `${data.outcomes24h.total} total · ${data.outcomes24h.goalReachedCount} goal-reached` : "Loading…"}
+          context={data ? `${data.outcomes24h.total} total · ${data.outcomes24h.goalReachedCount} goal-reached` : "Loading…"}
         >
           <OutcomeBar outcomes={data?.outcomes24h ?? null} loading={!data} />
-        </Card>
+        </WidgetCard>
 
-        <Card
+        <WidgetCard
           title="Recent Numbers"
           icon={<Hash size={14} className="text-cyan-400" />}
-          sub={data ? `${filteredNumbers.length} most recently attempted` : "Loading…"}
+          context={data ? `${filteredNumbers.length} most recently attempted` : "Loading…"}
+          footer={numbersPaged.total > PAGE_SIZE ? (
+            <Pagination currentPage={numbersPaged.page} totalPages={numbersPaged.totalPages} totalItems={numbersPaged.total} pageSize={PAGE_SIZE} onPageChange={numbersPaged.setPage} />
+          ) : undefined}
         >
           <PerNumberTable rows={numbersPaged.pageItems} now={now} loading={!data} />
-          {numbersPaged.total > PAGE_SIZE && (
-            <Pagination currentPage={numbersPaged.page} totalPages={numbersPaged.totalPages} totalItems={numbersPaged.total} pageSize={PAGE_SIZE} onPageChange={numbersPaged.setPage} />
-          )}
-        </Card>
+        </WidgetCard>
       </div>
     </div>
   );
@@ -304,25 +306,6 @@ export default function ActivityPage() {
 // ─────────────────────────────────────────────────────────────────────────
 // Cards / panels
 // ─────────────────────────────────────────────────────────────────────────
-
-function Card({
-  title, icon, sub, children,
-}: { title: string; icon: React.ReactNode; sub: string; children: React.ReactNode }) {
-  return (
-    <section className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6">
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          {icon}
-          <div>
-            <div className="text-[15px] font-semibold">{title}</div>
-            <div className="text-xs text-[var(--text-3)] mt-0.5">{sub}</div>
-          </div>
-        </div>
-      </div>
-      {children}
-    </section>
-  );
-}
 
 function CallFeed({ calls, now, loading }: { calls: CallEvent[]; now: Date; loading: boolean }) {
   if (loading) return <SkeletonRows count={6} />;
@@ -517,9 +500,11 @@ function PerNumberTable({ rows, now, loading }: { rows: PerNumberRow[]; now: Dat
                 </td>
                 <td className="py-2.5 px-2 text-right font-mono text-xs text-[var(--text-2)] tabular-nums">{r.attemptCount}</td>
                 <td className="py-2.5 px-2">
-                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono border ${outcomeTone.bg} ${outcomeTone.text} ${outcomeTone.border}`}>
-                    {r.outcome.replace(/_/g, " ")}
-                  </span>
+                  <Hint content={outcomeHint(r.outcome)}>
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono border cursor-help ${outcomeTone.bg} ${outcomeTone.text} ${outcomeTone.border}`}>
+                      {r.outcome.replace(/_/g, " ")}
+                    </span>
+                  </Hint>
                 </td>
                 <td className="py-2.5 px-2 text-right font-mono text-xs text-[var(--text-2)] tabular-nums">
                   {r.lastDurationSeconds != null ? formatDur(r.lastDurationSeconds) : "—"}
@@ -643,6 +628,25 @@ function numberOutcomeTone(outcome: string): Tone {
   }
 }
 
+// Plain-English meaning for the dialer's campaign_numbers_v2.outcome values (design-system
+// rollout, Jasiel 2026-07-03) — surfaced as a Hint on the outcome chip so operators don't have to
+// memorize the raw enum. Mirrors the campaign-detail OUTCOME_LABEL vocabulary.
+function outcomeHint(outcome: string): string {
+  switch (outcome) {
+    case "pending": return "Not yet dialed.";
+    case "in_progress": return "Currently being dialed.";
+    case "unreached": return "Attempted — no live contact yet.";
+    case "pending_retry": return "Awaiting a retry attempt.";
+    case "sent_sms": return "Offer SMS sent during the call.";
+    case "sms_delivered": return "Reached via SMS — delivery confirmed (DLR); dialing stops.";
+    case "not_interested": return "Contact wasn't interested.";
+    case "declined_offer": return "Contact declined the offer.";
+    case "wrong_number": return "Wrong / not the intended contact.";
+    case "suppressed": return "Suppressed — on the do-not-call list.";
+    default: return outcome.replace(/_/g, " ");
+  }
+}
+
 function Th({ children, alignRight }: { children: React.ReactNode; alignRight?: boolean }) {
   return (
     <th className={`pb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] border-b border-[var(--border)] ${alignRight ? "text-right" : "text-left"}`}>
@@ -656,10 +660,10 @@ function SkeletonRows({ count }: { count: number }) {
     <div className="flex flex-col gap-2">
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg">
-          <div className="w-8 h-8 rounded-lg bg-[var(--bg-elevated)] animate-pulse" />
+          <Skeleton className="w-8 h-8 rounded-lg" />
           <div className="flex-1 space-y-1.5">
-            <div className="h-3 w-3/5 rounded bg-[var(--bg-elevated)] animate-pulse" />
-            <div className="h-2.5 w-2/5 rounded bg-[var(--bg-elevated)] animate-pulse" />
+            <Skeleton className="h-3 w-3/5" />
+            <Skeleton className="h-2.5 w-2/5" />
           </div>
         </div>
       ))}
