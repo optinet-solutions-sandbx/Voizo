@@ -17,6 +17,7 @@ import { useMagnetic } from "@/components/useMagnetic";
 import {
   computeCampaignAnalytics,
   computePortfolio,
+  smsSentOf,
   type CampaignAnalytics,
   type PortfolioRollup,
   type CampaignRow as AnalyticsCampaignRow,
@@ -244,7 +245,7 @@ function CampaignsPageInner() {
     const connectCount = analyticsRecords.reduce((s, v) => s + v.connected, 0);
     const goalCount = analyticsRecords.reduce((s, v) => s + v.goalCalls, 0);
     const totalReach = analyticsRecords.reduce((s, v) => s + v.reach, 0);
-    const totalSms = analyticsRecords.reduce((s, v) => s + v.sms.delivered + v.sms.inFlight + v.sms.failed, 0);
+    const totalSms = analyticsRecords.reduce((s, v) => s + smsSentOf(v.sms), 0);
     const connectRate = totalCalls > 0 ? ((connectCount / totalCalls) * 100).toFixed(1) : "0.0";
     // Success = goal-based Conversion (goal ÷ connected) — app-wide canon.
     const successRate = connectCount > 0 ? ((goalCount / connectCount) * 100).toFixed(1) : "0.0";
@@ -309,7 +310,7 @@ function CampaignsPageInner() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 gap-2">
-        <Loader2 size={20} className="animate-spin text-blue-500" />
+        <Loader2 size={20} className="animate-spin text-primary" />
         <span className="text-sm text-[var(--text-3)]">Loading campaigns...</span>
       </div>
     );
@@ -336,7 +337,7 @@ function CampaignsPageInner() {
         </div>
         <Link
           href="/campaigns/v2/new"
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold shadow-md shadow-blue-500/20 transition hover:bg-blue-400 hover:-translate-y-px flex-shrink-0"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-md shadow-primary/20 transition hover:bg-primary hover:-translate-y-px flex-shrink-0"
         >
           <HoverIcon icon={PlusIcon} size={14} />
           New Campaign
@@ -346,14 +347,14 @@ function CampaignsPageInner() {
       {/* KPI strip — reflects the current search / filters / date window. */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
         <StatCard label="Players"       value={totals.totalContacts.toLocaleString()} />
-        <StatCard label="Call attempts" value={totals.totalCalls.toLocaleString()}    accent="text-blue-400" />
+        <StatCard label="Call attempts" value={totals.totalCalls.toLocaleString()}    accent="text-primary" />
         <StatCard label="Reached"       value={totals.totalReach.toLocaleString()}    accent="text-teal-400" hint="live humans = connected − detected voicemails (unevaluated connects count as reached)" />
-        <StatCard label="SMS sent"      value={totals.totalSms.toLocaleString()}      accent="text-sky-400" hint="offer texts dispatched (delivered + in-flight + failed)" />
+        <StatCard label="SMS sent"      value={totals.totalSms.toLocaleString()}      accent="text-primary" hint="offer texts dispatched (delivered + in-flight + failed)" />
       </section>
 
       {/* Toolbar */}
       <div className="flex items-center gap-2.5 flex-wrap mb-4">
-        <div className="flex-1 min-w-[240px] flex items-center gap-2 px-3.5 py-2.5 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl focus-within:border-blue-500 transition">
+        <div className="flex-1 min-w-[240px] flex items-center gap-2 px-3.5 py-2.5 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl focus-within:border-primary transition">
           <Search size={14} className="text-[var(--text-3)]" />
           <input
             value={searchQuery}
@@ -424,12 +425,12 @@ function CampaignsPageInner() {
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
         {campaigns.length === 0 ? (
           <div className="px-6 py-20 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-4">
-              <Plus size={22} className="text-blue-400" />
+            <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
+              <Plus size={22} className="text-primary" />
             </div>
             <p className="text-sm font-medium text-[var(--text-1)] mb-1">No campaigns yet</p>
             <p className="text-xs text-[var(--text-3)] mb-4">Create your first AI-powered outbound campaign</p>
-            <Link href="/campaigns/v2/new" className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors">
+            <Link href="/campaigns/v2/new" className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary text-white text-sm font-medium rounded-lg transition-colors">
               <HoverIcon icon={PlusIcon} size={14} /> New Campaign
             </Link>
           </div>
@@ -447,7 +448,7 @@ function CampaignsPageInner() {
                 const totalContacts = a?.targeted ?? 0;
                 const totalCalls = a?.totalCalls ?? 0;
                 const reach = a?.reach ?? 0;
-                const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
+                const smsSent = a ? smsSentOf(a.sms) : 0;
                 const hasActivity = totalCalls > 0;
                 const when = formatWhen(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
@@ -490,13 +491,13 @@ function CampaignsPageInner() {
                       </div>
                       <div>
                         <p className="text-[10px] text-[var(--text-3)] mb-0.5">SMS</p>
-                        <p className="text-xs font-semibold text-sky-400">{smsSent.toLocaleString()}</p>
+                        <p className="text-xs font-semibold text-primary">{smsSent.toLocaleString()}</p>
                       </div>
                     </div>
                   </div>
                   {isOpen && a && (
                     <div className="px-4 pb-4 bg-[var(--bg-app)]">
-                      <CampaignExpand a={a} />
+                      <CampaignExpand campaignId={id} name={c.name as string} a={a} viewPrompt />
                     </div>
                   )}
                   </React.Fragment>
@@ -530,7 +531,7 @@ function CampaignsPageInner() {
                     const totalContacts = a?.targeted ?? 0;
                     const totalCalls = a?.totalCalls ?? 0;
                     const reach = a?.reach ?? 0;
-                    const smsSent = a ? a.sms.delivered + a.sms.inFlight + a.sms.failed : 0;
+                    const smsSent = a ? smsSentOf(a.sms) : 0;
                     const hasActivity = totalCalls > 0;
                     const when = formatWhen(c);
                     const status = (c.status as string) || "draft";
@@ -551,14 +552,14 @@ function CampaignsPageInner() {
                             >
                               <ChevronRight size={15} className={`transition-transform ${expanded.has(id) ? "rotate-90" : ""}`} />
                             </button>
-                            <div className="w-9 h-9 rounded-xl bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] transition group-hover:scale-110 group-hover:-rotate-3 group-hover:bg-blue-500/15 group-hover:text-blue-400 flex-shrink-0">
+                            <div className="w-9 h-9 rounded-xl bg-[var(--bg-elevated)] grid place-items-center text-[var(--text-3)] transition group-hover:scale-110 group-hover:-rotate-3 group-hover:bg-primary/15 group-hover:text-primary flex-shrink-0">
                               {isRecurring ? <Repeat size={15} /> : <Megaphone size={15} />}
                             </div>
                             <div className="min-w-0">
                               <Link
                                 href={`/campaigns/v2/${id}`}
                                 onClick={(e) => e.stopPropagation()}
-                                className="font-semibold text-[var(--text-1)] hover:text-blue-400 transition-colors truncate block"
+                                className="font-semibold text-[var(--text-1)] hover:text-primary transition-colors truncate block"
                               >
                                 {name}
                               </Link>
@@ -579,13 +580,13 @@ function CampaignsPageInner() {
                         </td>
                         <td className="px-4 py-4 text-right text-[var(--text-2)] font-mono tabular-nums">{totalContacts.toLocaleString()}</td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
-                          <span className={hasActivity ? "text-blue-400 font-semibold" : "text-[var(--text-3)]"}>{totalCalls.toLocaleString()}</span>
+                          <span className={hasActivity ? "text-primary font-semibold" : "text-[var(--text-3)]"}>{totalCalls.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
                           <span className={reach > 0 ? "text-teal-400" : "text-[var(--text-3)]"}>{reach.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
-                          <span className={smsSent > 0 ? "text-sky-400" : "text-[var(--text-3)]"}>{smsSent.toLocaleString()}</span>
+                          <span className={smsSent > 0 ? "text-primary" : "text-[var(--text-3)]"}>{smsSent.toLocaleString()}</span>
                         </td>
                         <td className="px-4 py-4"><StatusBadge status={status} /></td>
                         <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
@@ -625,7 +626,7 @@ function CampaignsPageInner() {
                       {expanded.has(id) && a && (
                         <tr className="bg-[var(--bg-app)]">
                           <td colSpan={8} className="px-4 py-4 border-b border-[var(--border)]">
-                            <CampaignExpand a={a} />
+                            <CampaignExpand campaignId={id} name={c.name as string} a={a} viewPrompt />
                           </td>
                         </tr>
                       )}
@@ -660,7 +661,7 @@ export default function CampaignsPage() {
     <Suspense
       fallback={
         <div className="flex items-center justify-center h-64 gap-2">
-          <Loader2 size={20} className="animate-spin text-blue-500" />
+          <Loader2 size={20} className="animate-spin text-primary" />
           <span className="text-sm text-[var(--text-3)]">Loading campaigns...</span>
         </div>
       }
@@ -714,7 +715,7 @@ function StatusDot({ status }: { status: string }) {
   const color = {
     running: "bg-emerald-500",
     paused: "bg-amber-500",
-    completed: "bg-blue-500",
+    completed: "bg-primary",
     scheduled: "bg-cyan-500",
   }[status] ?? "bg-[var(--text-3)]";
   return <span className={`w-1.5 h-1.5 rounded-full ${color} ${status === "running" ? "animate-pulse" : ""}`} />;
@@ -726,7 +727,7 @@ function StatusBadge({ status }: { status: string }) {
     scheduled: "bg-cyan-500/12 text-cyan-400 border-cyan-500/30",
     running:   "bg-emerald-500/12 text-emerald-400 border-emerald-500/30",
     paused:    "bg-amber-500/12 text-amber-400 border-amber-500/30",
-    completed: "bg-blue-500/12 text-blue-400 border-blue-500/30",
+    completed: "bg-primary/12 text-primary border-primary/30",
     archived:  "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
     inactive:  "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",
     skipped:   "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]",

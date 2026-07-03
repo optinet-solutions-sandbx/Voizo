@@ -9,12 +9,16 @@ import {
   computeGlobalKpis,
   deriveDisplayStatus,
   computeCampaignTable,
+  FINISHED_IDLE_DAYS,
   deriveRecordStatus,
   computeCallRecords,
   recordHasAttemptOutcome,
+  recordIsReached,
+  attachSmsSent,
   deriveAttemptTag,
   bestByPositiveResponse,
   promptLabel,
+  operatorPromptText,
   representativeBaseBySha,
   computePromptRollups,
   computeTrend,
@@ -23,10 +27,20 @@ import {
   computeHeatmap,
   localDayHourInTimezone,
   computeToday,
+  callWindowBreakdown,
+  smsWindowBreakdown,
+  computeRangedPerf,
+  computeCampaignTodayPerf,
+  computeWindowPerf,
+  perfForCampaignScope,
+  pctDelta,
+  ppDelta,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
   type RateRow,
+  type CallRecord,
+  type AttemptTag,
 } from "./dashboardAnalytics";
 
 function call(
@@ -54,6 +68,152 @@ function many(campaign_id: string, total: number, goals: number): DashCallRow[] 
   );
 }
 
+describe("callWindowBreakdown — per-window call partition (Today cards)", () => {
+  const T = Date.UTC(2026, 5, 27); // window [T, T+1d)
+  const inW = new Date(T + 3_600_000).toISOString();
+  const outW = new Date(T - 3_600_000).toISOString();
+  it("partitions attempts into reach/voicemail/unreachable + in-flight, and reach into outcomes", () => {
+    const calls: DashCallRow[] = [
+      call("c", "completed", true, inW), // positive (reach)
+      call("c", "completed", false, inW, "d"), // declined contact (reach)
+      call("c", "completed", false, inW, undefined, false, 5), // early hangup (<15s, reach)
+      call("c", "completed", false, inW, undefined, false, 60), // neutral (reach)
+      call("c", "completed", false, inW, undefined, true), // voicemail (connected)
+      call("c", "no_answer", false, inW), // unreachable (terminal non-connect)
+      call("c", "initiated", null, inW), // in-flight (not terminal)
+      call("c", "completed", true, outW), // OUT of window — excluded
+    ];
+    const b = callWindowBreakdown(calls, new Set(["d"]), T, T + 86_400_000);
+    expect(b.total).toBe(7);
+    expect(b.connected).toBe(5);
+    expect(b.terminal).toBe(6);
+    expect(b.inFlight).toBe(1);
+    expect(b.reach).toBe(4);
+    expect(b.voicemail).toBe(1);
+    expect(b.unreachable).toBe(1);
+    expect(b.positive + b.declined + b.earlyHangup + b.neutral).toBe(b.reach);
+    expect({ positive: b.positive, declined: b.declined, earlyHangup: b.earlyHangup, neutral: b.neutral }).toEqual({
+      positive: 1,
+      declined: 1,
+      earlyHangup: 1,
+      neutral: 1,
+    });
+  });
+});
+
+describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => {
+  const T = Date.UTC(2026, 5, 27);
+  const c = (id: string, over: Partial<DashCallRow> = {}) => ({
+    id,
+    campaign_id: "x",
+    campaign_number_id: id,
+    status: "completed",
+    goal_reached: false,
+    voicemail: false,
+    created_at: new Date(T + 1000).toISOString(),
+    ...over,
+  });
+  const s = (call_id: string | null, status = "delivered") => ({
+    campaign_id: "x",
+    call_id,
+    campaign_number_id: call_id,
+    status,
+    created_at: new Date(T + 2000).toISOString(),
+  });
+  it("buckets sent/delivered SMS by call outcome; unmatched counted in total only", () => {
+    const calls = [c("p", { goal_reached: true }), c("v", { voicemail: true }), c("u", { status: "no_answer" }), c("d")];
+    const messages = [s("p"), s("v"), s("u"), s("d"), s(null), s("p", "failed")];
+    const b = smsWindowBreakdown(messages, calls, new Set(["d"]), T, T + 86_400_000);
+    expect(b.total).toBe(5); // failed excluded; null-call_id included in total only
+    expect(b.reached).toBe(2); // p (positive) + d (declined)
+    expect(b.positive).toBe(1);
+    expect(b.declined).toBe(1);
+    expect(b.voicemail).toBe(1);
+    expect(b.unreachable).toBe(1);
+    expect(b.positive + b.neutral + b.declined).toBeLessThanOrEqual(b.reached); // reached ⊇ named sub-rows
+  });
+});
+
+describe("computeToday — today/yesterday performance blocks (3-card redesign)", () => {
+  const NOON = Date.UTC(2026, 5, 27, 12); // June 27 2026, noon UTC
+  it("emits today + yesterday TodayPerfDay with breakdowns and dual deltas", () => {
+    const campaigns = [camp("c", { status: "running" })];
+    const numbers = [{ id: "d", phone_e164: "+1", outcome: "declined_offer" }];
+    const calls: DashCallRow[] = [
+      // today (June 27)
+      { id: "t1", campaign_id: "c", campaign_number_id: "a", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-27T10:00:00Z" },
+      { id: "t2", campaign_id: "c", campaign_number_id: "b", status: "completed", goal_reached: false, voicemail: true, created_at: "2026-06-27T10:05:00Z" },
+      { id: "t3", campaign_id: "c", campaign_number_id: "d", status: "completed", goal_reached: false, voicemail: false, created_at: "2026-06-27T10:10:00Z" }, // declined contact
+      // yesterday (June 26)
+      { id: "y1", campaign_id: "c", campaign_number_id: "e", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-26T10:00:00Z" },
+      { id: "y2", campaign_id: "c", campaign_number_id: "f", status: "no_answer", goal_reached: false, created_at: "2026-06-26T11:00:00Z" },
+    ];
+    const sms: DashSmsRow[] = [
+      { campaign_id: "c", call_id: "t1", campaign_number_id: "a", status: "delivered", created_at: "2026-06-27T10:30:00Z" },
+    ];
+    const snap = computeToday(calls, campaigns, sms, NOON, numbers);
+
+    expect(snap.today.callAttempts.total).toBe(3);
+    expect(snap.today.inFlight).toBe(0);
+    expect(snap.today.reached.total).toBe(2); // t1 positive + t3 declined (t2 is voicemail)
+    expect(snap.today.reached.rows.find((r) => r.key === "positive")!.count).toBe(1);
+    expect(snap.today.reached.rows.find((r) => r.key === "declined")!.count).toBe(1);
+    expect(snap.today.reached.rows.find((r) => r.key === "positive")!.isEstimated).toBe(true);
+    expect(snap.today.callAttempts.rows.find((r) => r.key === "voicemail")!.count).toBe(1);
+    expect(snap.today.sms.total).toBe(1);
+    expect(snap.today.sms.rows.find((r) => r.key === "reached")!.count).toBe(1);
+    expect(snap.today.callAttempts.deltaPctVsYesterday).toBeCloseTo(0.5, 3); // (3-2)/2
+    expect(snap.yesterday.callAttempts.total).toBe(2);
+  });
+});
+
+describe("recordIsReached — human-conversation group predicate (Today drawer)", () => {
+  const rec = (tags: AttemptTag[]): CallRecord => ({
+    campaignNumberId: "n",
+    phone: null,
+    status: "unreached",
+    tag: "unreachable",
+    attempts: tags.map((t, i) => ({ index: i + 1, tag: t, atMs: null })),
+    lastAttemptedMs: null,
+  });
+  it("true iff any attempt is a human-conversation tag (positive/neutral/declined/early_hangup)", () => {
+    expect(recordIsReached(rec(["voicemail", "positive"]))).toBe(true);
+    expect(recordIsReached(rec(["neutral"]))).toBe(true);
+    expect(recordIsReached(rec(["early_hangup"]))).toBe(true);
+    expect(recordIsReached(rec(["voicemail", "unreachable"]))).toBe(false);
+    expect(recordIsReached(rec([]))).toBe(false);
+  });
+});
+
+describe("attachSmsSent — flags records texted today (Today drawer)", () => {
+  const rec = (id: string): CallRecord => ({
+    campaignNumberId: id,
+    phone: null,
+    status: "unreached",
+    tag: "unreachable",
+    attempts: [],
+    lastAttemptedMs: null,
+  });
+  it("sets smsSentToday true for campaignNumberIds in the sent set, false otherwise", () => {
+    const out = attachSmsSent([rec("n1"), rec("n2")], new Set(["n1"]));
+    expect(out.find((r) => r.campaignNumberId === "n1")!.smsSentToday).toBe(true);
+    expect(out.find((r) => r.campaignNumberId === "n2")!.smsSentToday).toBe(false);
+  });
+});
+
+describe("pctDelta / ppDelta — Today card delta math", () => {
+  it("pctDelta: fractional change of a total, null-safe", () => {
+    expect(pctDelta(338, 290)).toBeCloseTo(0.1655, 3);
+    expect(pctDelta(5, 0)).toBeNull(); // no baseline
+    expect(pctDelta(5, null)).toBeNull();
+  });
+  it("ppDelta: percentage-point change of a rate, null-safe", () => {
+    expect(ppDelta(0.331, 0.343)).toBeCloseTo(-0.012, 3);
+    expect(ppDelta(null, 0.3)).toBeNull();
+    expect(ppDelta(0.3, null)).toBeNull();
+  });
+});
+
 describe("computeKpis — rate definitions", () => {
   it("Success% is off CONNECTED (not calls); connectRate denominator excludes in-flight", () => {
     const calls: DashCallRow[] = [
@@ -77,7 +237,7 @@ describe("computeKpis — rate definitions", () => {
 
   it("voicemail/reach: connected-gated, null-safe over evaluated; reach counts unevaluated as reached", () => {
     const calls: DashCallRow[] = [
-      call("c", "completed", true, "2026-06-10T00:00:00Z", "n1", true), // voicemail
+      call("c", "completed", false, "2026-06-10T00:00:00Z", "n1", true), // voicemail (pure — goal not reached)
       call("c", "completed", false, "2026-06-10T00:00:00Z", "n2", true), // voicemail
       call("c", "completed", true, "2026-06-10T00:00:00Z", "n3", false), // human
       call("c", "completed", null, "2026-06-10T00:00:00Z", "n4", null), // connected, NOT evaluated
@@ -248,7 +408,7 @@ describe("computeToday — always-live snapshot", () => {
     camp("cT", { status: "running", voice_id: "vT", is_test: true }),
   ];
   const calls: DashCallRow[] = [
-    // today (>= 06-15T00Z) — voicemail flags: c1=VM, c2=human, c3=unevaluated(null)
+    // today (>= 06-15T00Z) — voicemail flags: c1=goal-reached VM (goal>VM → reach), c2=human, c3=unevaluated(null)
     call("c1", "completed", true, "2026-06-15T09:00:00Z", "n1", true),
     call("c1", "no_answer", false, "2026-06-15T09:05:00Z"),
     call("c2", "completed", false, "2026-06-15T10:00:00Z", "n2", false),
@@ -289,11 +449,11 @@ describe("computeToday — always-live snapshot", () => {
     expect(snap.ops.connectRateToday).toBeCloseTo(3 / 4, 6);
   });
   it("today reach + voicemail-rate (connected-gated, null-safe)", () => {
-    // 3 connected today: c1(VM), c2(human), c3(unevaluated)
-    expect(snap.ops.voicemailConnectedToday).toBe(1); // c1
+    // 3 connected today: c1(goal-reached VM → reach), c2(human), c3(unevaluated)
+    expect(snap.ops.voicemailConnectedToday).toBe(0); // c1 reached its goal → goal>VM, not counted voicemail
     expect(snap.ops.voicemailEvaluatedToday).toBe(2); // c1(true) + c2(false); c3(null) excluded
-    expect(snap.ops.voicemailRateToday).toBeCloseTo(1 / 2, 6);
-    expect(snap.ops.reachToday).toBe(2); // connected(3) − voicemail(1); c3 unevaluated counts as reached
+    expect(snap.ops.voicemailRateToday).toBe(0); // 0 voicemail / 2 evaluated
+    expect(snap.ops.reachToday).toBe(3); // connected(3) − voicemail(0); c1 goal-VM + c3 unevaluated both reached
   });
   it("messages sent today + shares (sent/delivered only, ghost excluded)", () => {
     expect(snap.ops.messagesSentToday).toBe(2);
@@ -326,6 +486,15 @@ describe("computeGlobalKpis", () => {
   const calls = [...many("A", 12, 6), ...many("B", 11, 1), ...many("C", 10, 0)];
   const g = computeGlobalKpis(calls, index);
 
+  // goal_reached beats the voicemail flag (Val 2026-07-03): a goal-reached voicemail call counts as
+  // reach + successful, NOT voicemailConnected — keeps positiveResponseRate (goal/reach) consistent.
+  it("goal_reached overrides voicemail: goal-VM call → reach + successful, not voicemailConnected", () => {
+    const gvm = computeGlobalKpis([call("A", "completed", true, "2026-06-10T00:00:00Z", "nvm", true)], index);
+    expect(gvm.kpis.voicemailConnected).toBe(0);
+    expect(gvm.kpis.reach).toBe(1);
+    expect(gvm.kpis.successful).toBe(1);
+  });
+
   it("KPIs off connected + distinct campaign count", () => {
     expect(g.kpis.calls).toBe(33);
     expect(g.kpis.connected).toBe(33);
@@ -345,28 +514,32 @@ describe("computeGlobalKpis", () => {
   });
 });
 
-describe("deriveDisplayStatus (the 'Ended' rule)", () => {
+describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   const now = Date.parse("2026-06-15T00:00:00Z");
   const day = 86_400_000;
   it("trusts a live running status (even past end_at)", () => {
     expect(deriveDisplayStatus({ rawStatus: "running", endAtMs: now - day, lastCallMs: now, nowMs: now })).toBe("running");
   });
-  it("paused past its scheduled end_at → completed", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: now - day, lastCallMs: now - 2 * day, nowMs: now })).toBe("completed");
+  // Completed + Ended folded into one "Finished" state (Jasiel 2026-07-03, Phase 1 vocab trim):
+  // both mean "ran, now done" — the completed-vs-ended split wasn't operationally useful.
+  it("paused past its scheduled end_at → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: now - day, lastCallMs: now - 2 * day, nowMs: now })).toBe("finished");
   });
-  it("paused & idle ≥ 7 days → ended", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 10 * day, nowMs: now })).toBe("ended");
+  it("paused & idle ≥ 2 days → finished (idle window tightened 7→2, 2026-07-03)", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 3 * day, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 10 * day, nowMs: now })).toBe("finished");
   });
-  it("paused & never dialed → ended", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("ended");
+  it("paused & never dialed → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
-  it("paused with recent activity → paused", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 2 * day, nowMs: now })).toBe("paused");
+  it("paused with recent activity (< 2 days) → paused", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 1 * day, nowMs: now })).toBe("paused");
   });
-  it("completed / inactive / draft pass through", () => {
-    expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("completed");
-    expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
-    expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
+  it("raw completed / archived / inactive / draft all → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "archived", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
 });
 
@@ -385,7 +558,7 @@ describe("computeCampaignTable", () => {
   const calls = [
     call("c1", "completed", true, iso(now - 1 * day)),
     call("c2", "completed", false, iso(now - 10 * day)),
-    call("c3", "completed", false, iso(now - 2 * day)),
+    call("c3", "completed", false, iso(now - 1 * day)),
     call("cG", "completed", true, iso(now - 1 * day)), // ghost — excluded
     call("cT", "completed", true, iso(now - 1 * day)), // test — excluded
   ];
@@ -396,12 +569,12 @@ describe("computeCampaignTable", () => {
     expect(rows.find((r) => r.id === "c4")!.calls).toBe(0);
   });
 
-  it("derives display status per row (running / ended / paused)", () => {
+  it("derives display status per row (running / finished / paused)", () => {
     const by = Object.fromEntries(rows.map((r) => [r.id, r.displayStatus]));
     expect(by.c1).toBe("running");
-    expect(by.c2).toBe("ended"); // paused, idle 10d
-    expect(by.c3).toBe("paused"); // paused, idle 2d
-    expect(by.c4).toBe("ended"); // paused, no calls
+    expect(by.c2).toBe("finished"); // paused, idle 10d (Completed+Ended folded → Finished)
+    expect(by.c3).toBe("paused"); // paused, idle 1d (< 2-day window)
+    expect(by.c4).toBe("finished"); // paused, no calls
   });
 
   it("players/smsSent default to 0 when no numbers/sms passed", () => {
@@ -409,7 +582,7 @@ describe("computeCampaignTable", () => {
     expect(rows.find((r) => r.id === "c1")!.smsSent).toBe(0);
   });
 
-  it("counts players (roster), reach (human connects), SMS sent (all dispatched incl. failed)", () => {
+  it("counts players (roster), reach (human connects), SMS sent (sent|delivered only)", () => {
     const c = [
       call("p1", "completed", true, iso(now - 1 * day), "n1", false), // reached human
       call("p1", "completed", false, iso(now - 1 * day), "n2", true), // voicemail → not reach
@@ -419,15 +592,15 @@ describe("computeCampaignTable", () => {
     const sms = [
       { campaign_id: "p1", status: "delivered" },
       { campaign_id: "p1", status: "sent" },
-      { campaign_id: "p1", status: "queued" },
-      { campaign_id: "p1", status: "failed" }, // dispatched → counted
-      { campaign_id: "p1", status: "undelivered" }, // dispatched → counted
+      { campaign_id: "p1", status: "queued" }, // not yet handed to the provider → excluded
+      { campaign_id: "p1", status: "failed" }, // never arrived → excluded
+      { campaign_id: "p1", status: "undelivered" }, // never arrived → excluded
     ];
-    const r = computeCampaignTable(c, camps, now, 7, numbers, sms).find((x) => x.id === "p1")!;
+    const r = computeCampaignTable(c, camps, now, FINISHED_IDLE_DAYS, numbers, sms).find((x) => x.id === "p1")!;
     expect(r.players).toBe(3);
     expect(r.connected).toBe(2);
     expect(r.reach).toBe(1); // 2 connected − 1 voicemail
-    expect(r.smsSent).toBe(5); // every dispatched message (delivered + in-flight + failed/undelivered)
+    expect(r.smsSent).toBe(2); // sent|delivered only — the app-wide "SMS sent" definition (2026-07-02)
   });
 });
 
@@ -437,8 +610,9 @@ describe("call records", () => {
     expect(deriveRecordStatus("declined_offer", false)).toBe("not_interested");
     expect(deriveRecordStatus("pending_retry", false)).toBe("awaiting_retry");
     expect(deriveRecordStatus("unreached", false)).toBe("unreached");
-    expect(deriveRecordStatus("sent_sms", false)).toBe("successful");
-    expect(deriveRecordStatus("sms_delivered", false)).toBe("successful"); // offer delivered by SMS (voicemail follow-up) = success
+    expect(deriveRecordStatus("sent_sms", false)).toBe("offer_delivered"); // delivered ≠ human positive (Val 2026-07-03, ticket 1216090162016320)
+    expect(deriveRecordStatus("sms_delivered", false)).toBe("offer_delivered");
+    expect(deriveRecordStatus("sent_sms", true)).toBe("successful"); // …but a goal on any attempt still wins → "Positive response"
     expect(deriveRecordStatus("wrong_number", false)).toBe("wrong_number");
     expect(deriveRecordStatus("not_interested", true)).toBe("successful"); // a goal overrides
     expect(deriveRecordStatus(null, false)).toBe("unreached");
@@ -521,6 +695,14 @@ describe("call records", () => {
 });
 
 describe("deriveAttemptTag — engagement rules (validated against 14d of prod)", () => {
+  // goal_reached beats the voicemail flag (Val's accuracy ticket, 2026-07-03): a call that reached
+  // the goal reads Positive, not Voicemail — so the contact STATUS and its attempts agree.
+  it("tags a goal-reached call Positive even when voicemail===true (goal overrides)", () => {
+    expect(deriveAttemptTag(call("x", "completed", true, "2026-06-26T10:00:00Z", "n0", true), false)).toBe("positive");
+  });
+  it("still tags a non-goal voicemail as voicemail (unchanged)", () => {
+    expect(deriveAttemptTag(call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", true), false)).toBe("voicemail");
+  });
   // silence-timed-out: connected but the customer never spoke → early hangup
   it("tags silence-timed-out as early_hangup", () => {
     const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", false, 32, "silence-timed-out", "");
@@ -629,16 +811,31 @@ describe("prompt rollups", () => {
   });
 });
 
+describe("operatorPromptText", () => {
+  it("strips the platform prefix up to the end marker", () => {
+    const p = "PLATFORM RULES blah blah [End System Instructions]\n\nYou are Victor, an account manager.";
+    expect(operatorPromptText(p)).toBe("You are Victor, an account manager.");
+  });
+  it("returns the trimmed text unchanged when no marker exists", () => {
+    expect(operatorPromptText("  Plain operator prompt.  ")).toBe("Plain operator prompt.");
+  });
+  it("handles null/empty", () => {
+    expect(operatorPromptText("")).toBe("");
+  });
+});
+
 describe("smsSentByCampaign", () => {
-  it("counts dispatched rows per campaign; excludes non-sent statuses", () => {
+  it("counts sent|delivered rows per campaign; queued/failed/undelivered excluded", () => {
     const m = smsSentByCampaign([
       { campaign_id: "a", status: "delivered" },
-      { campaign_id: "a", status: "queued" },
-      { campaign_id: "a", status: "rejected" }, // excluded
-      { campaign_id: "b", status: "failed" },
+      { campaign_id: "a", status: "queued" }, // excluded — not yet handed to the provider
+      { campaign_id: "a", status: "rejected" }, // excluded — unknown status
+      { campaign_id: "b", status: "failed" }, // excluded — never arrived
+      { campaign_id: "c", status: "sent" },
     ]);
-    expect(m.get("a")).toBe(2);
-    expect(m.get("b")).toBe(1);
+    expect(m.get("a")).toBe(1);
+    expect(m.get("b")).toBeUndefined();
+    expect(m.get("c")).toBe(1);
   });
 });
 
@@ -663,18 +860,18 @@ describe("computeTrend", () => {
     expect(t[1].reached).toBe(2); // 2 connected − 0 voicemail
   });
 
-  it("counts dispatched SMS per day (smsSent series)", () => {
+  it("counts sent|delivered SMS per day (smsSent series)", () => {
     const start = Date.parse("2026-06-10T00:00:00Z");
     const end = Date.parse("2026-06-11T12:00:00Z");
     const sms: DashSmsRow[] = [
       { campaign_id: "c", created_at: "2026-06-11T09:00:00Z", status: "delivered" },
       { campaign_id: "c", created_at: "2026-06-11T10:00:00Z", status: "sent" },
-      { campaign_id: "c", created_at: "2026-06-11T11:00:00Z", status: "failed" },
-      { campaign_id: "c", created_at: "2026-06-11T11:30:00Z", status: "rejected" }, // not a "sent" status → excluded
+      { campaign_id: "c", created_at: "2026-06-11T11:00:00Z", status: "failed" }, // never arrived → excluded
+      { campaign_id: "c", created_at: "2026-06-11T11:30:00Z", status: "rejected" }, // unknown status → excluded
     ];
     const t = computeTrend([], start, end, sms);
     expect(t.find((p) => p.day === "2026-06-10")!.smsSent).toBe(0);
-    expect(t.find((p) => p.day === "2026-06-11")!.smsSent).toBe(3); // delivered+sent+failed; rejected excluded
+    expect(t.find((p) => p.day === "2026-06-11")!.smsSent).toBe(2); // sent|delivered; failed+rejected excluded
   });
 });
 
@@ -744,5 +941,203 @@ describe("computeHeatmap", () => {
     expect(cells.find((x) => x.day === "2026-06-10" && x.hour === 23)?.calls).toBe(1); // UTC B
     expect(localizedCalls).toBe(1);
     expect(utcFallbackCalls).toBe(1);
+  });
+
+  it("splits voicemail out of connected so Reached is human-only (per-slot + per-campaign)", () => {
+    const campaigns = [camp("A"), camp("B")]; // no tz → UTC
+    const calls = [
+      call("A", "completed", true, "2026-06-10T09:10:00Z", undefined, false), // human, goal
+      call("A", "completed", false, "2026-06-10T09:20:00Z", undefined, true), // voicemail
+      call("A", "completed", false, "2026-06-10T09:30:00Z", undefined, null), // unevaluated → reached
+      call("A", "no_answer", false, "2026-06-10T09:40:00Z"), // not connected
+      call("B", "completed", false, "2026-06-10T09:50:00Z", undefined, true), // voicemail (other campaign)
+    ];
+    const { cells } = computeHeatmap(calls, campaigns);
+    const c9 = cells.find((x) => x.day === "2026-06-10" && x.hour === 9)!;
+    expect(c9.calls).toBe(5);
+    expect(c9.connected).toBe(4); // 3 A-completed + 1 B-completed
+    expect(c9.voicemailConnected).toBe(2); // A vm + B vm
+    expect(c9.successful).toBe(1); // A goal
+    // Reached (derived) = connected − voicemailConnected; invariant: reached + vm === connected
+    expect(c9.connected - c9.voicemailConnected).toBe(2);
+    // Per-campaign breakdown carries the same split
+    const a = c9.breakdown.find((b) => b.name.includes("_A_"))!;
+    expect(a.connected).toBe(3);
+    expect(a.voicemailConnected).toBe(1);
+    expect(a.connected - a.voicemailConnected).toBe(2);
+  });
+});
+
+describe("isEarlyHangup / useTranscript seam — lean (transcript-less) classifier", () => {
+  // The ONLY transcript-dependent branch: customer-ended-call with <=1 substantive turn,
+  // duration >= EARLY_HANGUP_SEC. Lean mode must omit it (→ neutral), default keeps it (→ early_hangup).
+  const bail = call("x", "completed", false, "2026-06-26T10:15:20Z", "n2", false, 30, "customer-ended-call", "User: Hello?\nAI: Hey, Victor from Lucky Seven.");
+
+  it("default (useTranscript:true) keeps the pickup-and-bail as early_hangup", () => {
+    expect(deriveAttemptTag(bail, false)).toBe("early_hangup");
+  });
+  it("lean (useTranscript:false) reclassifies the pickup-and-bail as neutral", () => {
+    expect(deriveAttemptTag(bail, false, { useTranscript: false })).toBe("neutral");
+  });
+  it("lean still tags silence-timed-out and sub-threshold duration as early_hangup", () => {
+    const silence = call("x", "completed", false, "2026-06-26T10:00:00Z", "nS", false, 32, "silence-timed-out", "");
+    const short = call("x", "completed", false, "2026-06-26T10:00:00Z", "nD", false, 8, "customer-ended-call", "User: hi");
+    expect(deriveAttemptTag(silence, false, { useTranscript: false })).toBe("early_hangup");
+    expect(deriveAttemptTag(short, false, { useTranscript: false })).toBe("early_hangup");
+  });
+  it("callWindowBreakdown reclassifies that bail from earlyHangup to neutral in lean mode", () => {
+    const T = Date.UTC(2026, 5, 27);
+    const inW = new Date(T + 3_600_000).toISOString();
+    const calls = [call("c", "completed", false, inW, undefined, false, 30, "customer-ended-call", "User: Hello?")];
+    const full = callWindowBreakdown(calls, new Set(), T, T + 86_400_000);
+    const lean = callWindowBreakdown(calls, new Set(), T, T + 86_400_000, { useTranscript: false });
+    expect(full.earlyHangup).toBe(1);
+    expect(full.neutral).toBe(0);
+    expect(lean.earlyHangup).toBe(0);
+    expect(lean.neutral).toBe(1);
+    expect(lean.reach).toBe(1); // reach unchanged either way
+  });
+});
+
+describe("computeRangedPerf — ranged 3-card block (no deltas, lean classifier)", () => {
+  const T = Date.UTC(2026, 5, 1);
+  const end = T + 30 * 86_400_000;
+  const at = (d: number) => new Date(T + d * 86_400_000 + 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, at(1), "p"),                                              // positive
+    call("c", "completed", false, at(2), "d"),                                             // declined
+    call("c", "completed", false, at(3), undefined, false, 30, "customer-ended-call", "User: Hi?"), // lean → neutral
+    call("c", "completed", false, at(4), undefined, true),                                 // voicemail
+    call("c", "no_answer", false, at(5)),                                                  // unreachable
+  ];
+  const sms: DashSmsRow[] = [];
+
+  it("totals + rows match a lean callWindowBreakdown over the same window", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    const b = callWindowBreakdown(calls, new Set(["d"]), T, end, { useTranscript: false });
+    expect(perf.callAttempts.total).toBe(b.total);
+    const reachedRow = perf.callAttempts.rows.find((r) => r.key === "reached");
+    expect(reachedRow?.count).toBe(b.reach);
+    const neutralRow = perf.reached.rows.find((r) => r.key === "neutral");
+    expect(neutralRow?.count).toBe(b.neutral); // the bail counts as neutral (lean)
+    expect(neutralRow?.count).toBe(1);
+  });
+  it("emits null deltas on totals and rows", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    expect(perf.callAttempts.deltaPctVsYesterday).toBeNull();
+    expect(perf.callAttempts.deltaPctVsSevenDayAvg).toBeNull();
+    for (const r of perf.reached.rows) {
+      expect(r.deltaPpVsYesterday).toBeNull();
+      expect(r.deltaPpVsSevenDayAvg).toBeNull();
+    }
+  });
+  it("keeps the est marker on the Reached outcome rows", () => {
+    const perf = computeRangedPerf(calls, sms, new Set(["d"]), T, end);
+    expect(perf.reached.rows.every((r) => r.isEstimated)).toBe(true);
+  });
+});
+
+describe("computeCampaignTodayPerf — per-campaign today breakdown (no deltas, transcript-based)", () => {
+  const T = Date.UTC(2026, 5, 27);
+  const inW = (h: number) => new Date(T + h * 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, inW(1), "p"),                                                          // positive (reach)
+    call("c", "completed", false, inW(2), undefined, false, 30, "customer-ended-call", "User: Hello?"), // transcript → early_hangup
+    call("c", "completed", false, inW(3), undefined, true),                                             // voicemail
+    call("c", "no_answer", false, inW(4)),                                                              // unreachable
+  ];
+  it("totals + rows match a transcript-based callWindowBreakdown; deltas null", () => {
+    const perf = computeCampaignTodayPerf(calls, [], new Set(), T, T + 86_400_000);
+    const b = callWindowBreakdown(calls, new Set(), T, T + 86_400_000); // default = transcript
+    expect(perf.callAttempts.total).toBe(b.total);
+    expect(perf.callAttempts.rows.find((r) => r.key === "reached")?.count).toBe(b.reach);
+    expect(perf.reached.rows.find((r) => r.key === "early_hangup")?.count).toBe(b.earlyHangup); // 1 (transcript)
+    expect(perf.callAttempts.deltaPctVsYesterday).toBeNull();
+    expect(perf.reached.rows.every((r) => r.deltaPpVsYesterday === null)).toBe(true);
+  });
+});
+
+describe("computeToday — running cards carry per-campaign perf + players", () => {
+  it("attaches perf + route-supplied roster to each running card", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const day = Date.UTC(2026, 5, 27);
+    const calls = [call("L7", "completed", true, new Date(day + 3_600_000).toISOString(), "n1")];
+    const campaigns = [camp("L7", { status: "running" })];
+    const snap = computeToday(calls, campaigns, [], now, [], new Map([["L7", 61]]));
+    const rc = snap.runningCampaigns.find((c) => c.id === "L7")!;
+    expect(rc.players).toBe(61);
+    expect(rc.perf.callAttempts.total).toBe(1);
+    expect(rc.perf.callAttempts.deltaPctVsYesterday).toBeNull();
+  });
+
+  it("carries scheduleType from campaign_type (recurring vs fixed)", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const campaigns = [
+      camp("rec", { status: "running", campaign_type: "recurring" }),
+      camp("fix", { status: "running", campaign_type: "fixed" }),
+      camp("nul", { status: "running" }), // campaign_type absent → fixed
+    ];
+    const snap = computeToday([], campaigns, [], now);
+    const byId = (id: string) => snap.runningCampaigns.find((c) => c.id === id)!;
+    expect(byId("rec").scheduleType).toBe("recurring");
+    expect(byId("fix").scheduleType).toBe("fixed");
+    expect(byId("nul").scheduleType).toBe("fixed");
+  });
+});
+
+describe("computeWindowPerf — unified no-delta windowed perf (Slice C)", () => {
+  const T = Date.UTC(2026, 5, 1);
+  const end = T + 30 * 86_400_000;
+  const at = (d: number) => new Date(T + d * 86_400_000 + 3_600_000).toISOString();
+  const calls: DashCallRow[] = [
+    call("c", "completed", true, at(1), "p"),
+    call("c", "completed", false, at(2), undefined, false, 30, "customer-ended-call", "User: Hi?"),
+  ];
+  it("useTranscript:true matches computeCampaignTodayPerf; false matches computeRangedPerf (parity)", () => {
+    expect(computeWindowPerf(calls, [], new Set(), T, end)).toEqual(computeCampaignTodayPerf(calls, [], new Set(), T, end));
+    expect(computeWindowPerf(calls, [], new Set(), T, end, { useTranscript: false })).toEqual(computeRangedPerf(calls, [], new Set(), T, end));
+  });
+});
+
+describe("computeCampaignTable — per-campaign lifetime perf (Slice C)", () => {
+  it("emits a lean per-campaign breakdown; reached card total == rollup reach", () => {
+    const now = Date.UTC(2026, 5, 27, 12);
+    const calls = [
+      call("X", "completed", true, "2026-06-10T00:00:00Z", "n1"),
+      call("X", "completed", false, "2026-06-11T00:00:00Z", undefined, true), // voicemail
+    ];
+    const campaigns = [camp("X", { status: "running" })];
+    const rows = computeCampaignTable(calls, campaigns, now, FINISHED_IDLE_DAYS, [{ campaign_id: "X", id: "n1", outcome: "sent_sms" }], []);
+    const row = rows.find((r) => r.id === "X")!;
+    expect(row.perf.callAttempts.total).toBe(2);
+    expect(row.perf.callAttempts.rows.find((r) => r.key === "voicemail")?.count).toBe(1);
+    expect(row.perf.reached.total).toBe(row.reach);
+  });
+});
+
+describe("perfForCampaignScope — per-entity ranged perf (Slice E)", () => {
+  it("scopes ranged perf to the campaign-id set; empty set → empty", () => {
+    const calls = [...many("A", 5, 2), ...many("B", 3, 0)]; // A:5 calls, B:3
+    const s = Date.UTC(2026, 5, 1);
+    const e = Date.UTC(2026, 5, 30);
+    const a = perfForCampaignScope(calls, [], new Set(), s, e, new Set(["A"]));
+    expect(a.callAttempts.total).toBe(5);
+    expect(perfForCampaignScope(calls, [], new Set(), s, e, new Set()).callAttempts.total).toBe(0);
+  });
+});
+
+describe("filterCalls — base-agent dimension (Slice E)", () => {
+  it("keeps only calls whose campaign's base_assistant_id matches; null = no constraint", () => {
+    const campaigns = [camp("A", { base_assistant_id: "agent-1" }), camp("B", { base_assistant_id: "agent-2" })];
+    const index = buildCampaignIndex(campaigns);
+    const calls = [
+      call("A", "completed", true, "2026-06-10T10:00:00Z"),
+      call("B", "completed", true, "2026-06-10T10:00:00Z"),
+    ];
+    const win = { startMs: Date.UTC(2026, 5, 1), endMs: Date.UTC(2026, 5, 30) };
+    const only1 = filterCalls(calls, { ...win, baseAssistantId: "agent-1" }, index);
+    expect(only1.length).toBe(1);
+    expect(only1[0].campaign_id).toBe("A");
+    expect(filterCalls(calls, { ...win }, index).length).toBe(2); // no constraint
   });
 });

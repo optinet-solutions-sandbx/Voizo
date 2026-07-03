@@ -12,48 +12,24 @@
 // carries the tag, via recordHasAttemptOutcome). The outcome categories are best-effort PROXY
 // classifications (flagged "estimated" in the UI, defined in ATTEMPT_TAG_DESC tooltips), and the
 // export categories use the same taxonomy. Data: /api/dashboard/campaigns/[id]/records.
+// The table view lives in RecordsTable.tsx (shared with the Today's Performance drawer); this
+// component owns fetching, the filter chrome, exports, and the "Showing N" footer.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import {
   type CallRecord,
-  type CallAttempt,
-  type ContactTag,
   type AttemptTag,
   type RecordStatus,
   ATTEMPT_TAG_LABELS,
-  ATTEMPT_TAG_COLOR,
-  ATTEMPT_TAG_DESC,
   recordHasAttemptOutcome,
 } from "@/lib/dashboardAnalytics";
 import ExportMenu from "./ExportMenu";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-// Status column = contact DISPOSITION (lifecycle). Calm muted chips (matches CampaignSummary).
-const DISPO_ORDER: RecordStatus[] = ["successful", "not_interested", "awaiting_retry", "voicemail", "unreached", "wrong_number"];
-const DISPO_LABEL: Record<RecordStatus, string> = {
-  successful: "Positive response", // "Success" retired (Val 2026-06-26) — goal = agreed to the offer SMS, not a sale
-  not_interested: "Not Interested",
-  awaiting_retry: "Awaiting Retry",
-  voicemail: "Voicemail",
-  unreached: "Unreached",
-  wrong_number: "Wrong Number",
-};
-const DISPO_COLOR: Record<RecordStatus, string> = {
-  successful: "#5fb39a",
-  not_interested: "#cf8a8a",
-  awaiting_retry: "#c9a86a",
-  voicemail: "#9f90c9",
-  unreached: "#8b939c",
-  wrong_number: "#8b939c",
-};
-// Attempt columns + the outcome filter = per-call OUTCOME categories (the AttemptTag set).
-const OUTCOME_ORDER: AttemptTag[] = ["positive", "neutral", "declined", "early_hangup", "voicemail", "unreachable"];
-
-// Cap attempt columns; a contact with more attempts than this folds the overflow into the last
-// visible column ("+N more"). Keeps the table from sprawling on heavy-retry rosters.
-const MAX_ATTEMPT_COLS = 5;
+import RecordsTable from "./RecordsTable";
+import { DISPO_ORDER, DISPO_LABEL, OUTCOME_ORDER, sliceMatches, type RecordSlice } from "./recordsDisplay";
+import Hint from "@/components/Hint";
+import { RecordsSkeleton } from "./loadingSkeletons";
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
@@ -63,48 +39,21 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All attempt outcomes" },
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
-function fmtDateTime(ms: number | null): string {
-  if (ms === null) return "—";
-  const d = new Date(ms);
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} · ${hh}:${mm}`;
-}
 
 const inputCls =
-  "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-blue-500";
+  "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary";
 
-// Calm muted chip — colored dot + label, matching CampaignSummary's legend treatment.
-// `title` adds a native hover tooltip (used to disclose the honest meaning of outcome tags).
-function Chip({ label, color, title }: { label: string; color: string; title?: string }) {
-  return (
-    <span
-      title={title}
-      className={`inline-flex w-fit max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-1)]${title ? " cursor-help" : ""}`}
-    >
-      <span className="h-1.5 w-1.5 shrink-0 rounded-full opacity-90" style={{ background: color }} />
-      {label}
-    </span>
-  );
-}
-
-// One attempt cell: outcome chip + the attempt time below it. `overflow` renders the
-// "+N more" hint stacked beneath when this is the last visible column and the contact
-// has additional attempts past the cap.
-function AttemptCell({ attempt, overflow }: { attempt: CallAttempt | undefined; overflow: number }) {
-  if (!attempt) return <td className="px-3 py-2 text-center text-[var(--text-3)] text-xs">—</td>;
-  return (
-    <td className="px-3 py-2 align-top">
-      <div className="flex flex-col items-start gap-1">
-        <Chip label={ATTEMPT_TAG_LABELS[attempt.tag]} color={ATTEMPT_TAG_COLOR[attempt.tag]} title={ATTEMPT_TAG_DESC[attempt.tag]} />
-        {/* Per-attempt time intentionally omitted — the timestamp lives once, in Last Attempted. */}
-        {overflow > 0 && <span className="text-[10.5px] text-[var(--text-3)]">+{overflow} more</span>}
-      </div>
-    </td>
-  );
-}
-
-export default function CallRecords({ campaignId }: { campaignId: string }) {
+export default function CallRecords({
+  campaignId,
+  slice,
+  sliceLabel,
+  onClose,
+}: {
+  campaignId: string;
+  slice?: RecordSlice; // metric-pick from the expanded row (the primary filter); undefined = no slice
+  sliceLabel?: string;
+  onClose?: () => void;
+}) {
   const [records, setRecords] = useState<CallRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dispo, setDispo] = useState<RecordStatus | "all">("all"); // Status (disposition) filter
@@ -130,6 +79,8 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
   const filtered = useMemo(() => {
     if (!records) return [];
     return records.filter((r) => {
+      // Metric-pick slice (the clicked metric/row from the expanded row) — the primary filter.
+      if (slice && !sliceMatches(r, slice)) return false;
       if (dispo !== "all" && r.status !== dispo) return false;
       // Attempt-outcome is a PER-ATTEMPT axis: a contact matches if ANY of its attempts carries
       // the tag (orthogonal to the contact-level disposition filter above).
@@ -137,17 +88,7 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       if (phone.trim() && !(r.phone ?? "").includes(phone.trim())) return false;
       return true;
     });
-  }, [records, dispo, outcome, phone]);
-
-  // Dynamic attempt-column count: widest filtered contact, capped at MAX_ATTEMPT_COLS.
-  const maxAttempts = useMemo(() => {
-    let n = 0;
-    for (const r of filtered) if (r.attempts.length > n) n = r.attempts.length;
-    return Math.min(n, MAX_ATTEMPT_COLS);
-  }, [filtered]);
-
-  const attemptCols = Array.from({ length: maxAttempts }, (_, i) => i); // 0-based attempt indices
-  const colSpan = 3 + maxAttempts; // # · Phone · Status · …attempts… · Last Attempted
+  }, [records, slice, dispo, outcome, phone]);
 
   const anyFilter = dispo !== "all" || outcome !== "all" || phone;
 
@@ -156,100 +97,66 @@ export default function CallRecords({ campaignId }: { campaignId: string }) {
       {/* Center the records module and cap its width so rows don't overstretch on wide
           desktops; the inner overflow-x-auto + min-w keeps it scrollable on narrow screens. */}
       <div className="mx-auto w-full max-w-6xl">
-      {/* Exports (CSV + Audio + Transcripts), by outcome category. */}
-      <div className="mb-3">
-        <ExportMenu campaignId={campaignId} records={records ?? []} />
-      </div>
-      {/* Filters (orthogonal): Status = contact disposition · Attempt outcome = per-attempt (estimated) · phone search.
-          Date/hour filters removed 2026-06-25: the panel is per-campaign (usually a single day), so they were noise. */}
-      <div className="flex items-center gap-2 flex-wrap mb-3">
-        <div className="w-[160px]">
-          <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
-        </div>
-        <div className="w-[200px]">
-          <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "all")} options={OUTCOME_DROPDOWN} />
-        </div>
-        {/* Honesty signal: the attempt-outcome categories are best-effort proxies (see per-chip tooltips). */}
-        <span
-          title="Attempt outcomes are best-effort classifications from call data, not verified labels."
-          className="cursor-help rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]"
-        >
-          Estimated
-        </span>
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="Search number…"
-          className={`${inputCls} w-[160px]`}
-        />
-        {anyFilter && (
-          <button
-            onClick={() => { setDispo("all"); setOutcome("all"); setPhone(""); }}
-            className="text-sm text-[var(--text-2)] hover:text-[var(--text-1)] px-2.5 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
-          >
-            Reset
-          </button>
-        )}
-      </div>
-
-      {/* Records. */}
-      {error ? (
-        <p className="text-xs text-amber-400 font-mono py-3">{error}</p>
-      ) : !records ? (
-        <p className="text-xs text-[var(--text-3)] py-3">Loading call records…</p>
-      ) : (
-        <>
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            {/* table-fixed: the # index stays narrow (w-10); the remaining columns share the width evenly. */}
-            <table className="table-fixed w-full text-sm min-w-[640px]">
-              <thead>
-                <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
-                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2 w-10">#</th>
-                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Phone Number</th>
-                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Status</th>
-                  {attemptCols.map((i) => (
-                    <th key={i} className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">
-                      Attempt {i + 1}
-                    </th>
-                  ))}
-                  <th className="text-left text-[10px] uppercase tracking-wider text-[var(--text-3)] font-medium px-3 py-2">Last Attempted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={colSpan} className="px-3 py-8 text-center text-xs text-[var(--text-3)]">
-                      No matching call records.
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((r, i) => (
-                    <tr key={r.campaignNumberId} className="border-b border-[var(--border)] last:border-b-0 align-top">
-                      <td className="px-3 py-2 text-[var(--text-3)] font-mono text-xs">{i + 1}</td>
-                      <td className="px-3 py-2 font-mono text-[var(--text-1)] text-xs">{r.phone ?? "—"}</td>
-                      <td className="px-3 py-2">
-                        <Chip label={DISPO_LABEL[r.status]} color={DISPO_COLOR[r.status]} />
-                      </td>
-                      {/* Fixed positional columns (Attempt 1..N) — they never reorder, so the column
-                          index IS the stable key here. (react-doctor's no-index-key rule targets
-                          reorderable item lists; the rows are keyed by campaignNumberId above.) */}
-                      {attemptCols.map((idx) => {
-                        const isLastCol = idx === maxAttempts - 1;
-                        const overflow = isLastCol ? Math.max(0, r.attempts.length - maxAttempts) : 0;
-                        return <AttemptCell key={`attempt-${idx}`} attempt={r.attempts[idx]} overflow={overflow} />;
-                      })}
-                      <td className="px-3 py-2 whitespace-nowrap font-mono text-[var(--text-2)] text-xs">{fmtDateTime(r.lastAttemptedMs)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+        {/* Active metric-pick slice (from the expanded row) — labels the view; × closes the records. */}
+        {slice && (
+          <div className="mb-3">
+            <span className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+              {sliceLabel ?? "Filtered"}
+              {onClose && (
+                <button type="button" onClick={onClose} aria-label="Close records" className="text-primary/70 transition hover:text-primary">
+                  <X size={12} />
+                </button>
+              )}
+            </span>
           </div>
-          <p className="text-[11px] text-[var(--text-3)] mt-2">
-            Showing {filtered.length.toLocaleString()} of {records.length.toLocaleString()} contacts.
-          </p>
-        </>
-      )}
+        )}
+        {/* Exports (CSV + Audio + Transcripts), by outcome category. */}
+        <div className="mb-3">
+          <ExportMenu campaignId={campaignId} records={records ?? []} />
+        </div>
+        {/* Filters (orthogonal): Status = contact disposition · Attempt outcome = per-attempt (estimated) · phone search. */}
+        <div className="flex items-center gap-2 flex-wrap mb-3">
+          <div className="w-[160px]">
+            <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
+          </div>
+          <div className="w-[200px]">
+            <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "all")} options={OUTCOME_DROPDOWN} />
+          </div>
+          {/* Honesty signal: the attempt-outcome categories are best-effort proxies (see per-chip tooltips). */}
+          <Hint content="Attempt outcomes are best-effort classifications from call data, not verified labels.">
+            <span className="cursor-help rounded border border-[var(--border-2)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-2)]">
+              Estimated
+            </span>
+          </Hint>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Search number…"
+            className={`${inputCls} w-[160px]`}
+          />
+          {anyFilter && (
+            <button
+              onClick={() => { setDispo("all"); setOutcome("all"); setPhone(""); }}
+              className="text-sm text-[var(--text-2)] hover:text-[var(--text-1)] px-2.5 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+
+        {/* Records. */}
+        {error ? (
+          <p className="text-xs text-amber-400 font-mono py-3">{error}</p>
+        ) : !records ? (
+          <RecordsSkeleton />
+        ) : (
+          <>
+            <RecordsTable records={filtered} />
+            <p className="text-[11px] text-[var(--text-3)] mt-2">
+              Showing {filtered.length.toLocaleString()} of {records.length.toLocaleString()} contacts.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

@@ -6,29 +6,34 @@
 // until the prompt-attribution slice. Data: /api/dashboard/analytics.
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Phone, Zap, CheckCircle2, Trophy, Mic, FileText, Search, X, UserCheck, Voicemail } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Search, X, SlidersHorizontal } from "lucide-react";
+import StatBand from "./StatBand";
+import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
-import { useMagnetic } from "@/components/useMagnetic";
 import { useBaseAgentNames } from "./useBaseAgentNames";
-import RankedTables, { type AgentRow, type CampaignLbRow, type PromptRow } from "./RankedTables";
+import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
 import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
-import { type MetricKey } from "./MetricDrawer";
 import HeatMap from "./HeatMap";
-import type { TrendPoint, VolumeResult, HeatmapResult } from "@/lib/dashboardAnalytics";
+import PerformanceCards, { EstBadge } from "./PerformanceCards";
+import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
+import { useDrawerClaim } from "./drawerExclusivity";
+import { CardGridSkeleton } from "./loadingSkeletons";
+import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
 
 type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d"];
 const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days" };
 
-interface BestPerformer {
+export interface BestPerformer {
   key: string;
   label: string;
   positiveResponseRate: number;
   calls: number;
+  perf?: TodayPerfDay | null; // per-entity ranged breakdown for the Top Performers cards (Slice E)
 }
 interface AnalyticsResponse {
   rangeDays: number;
@@ -45,6 +50,7 @@ interface AnalyticsResponse {
     voicemailRate: number | null;
     positiveResponseRate: number | null; // goal_reached / reach (the renamed "success" metric)
   };
+  perf: TodayPerfDay | null; // ranged 3-card Performance block (Slice B)
   campaignCount: number;
   best: { campaign: BestPerformer | null; agent: BestPerformer | null; prompt: BestPerformer | null };
   campaigns: CampaignLbRow[];
@@ -77,11 +83,7 @@ interface GlobalPerformanceProps {
   // can drive "Filter to this campaign" through the same filter state.
   filters: Filters;
   onChange: (next: Filters) => void;
-  onFocusCampaign: (id: string) => void; // set campaignIds=[id] + scroll to this section
-  onMetricClick?: (m: MetricKey) => void; // open the metric drill-down drawer (state lifted to DashboardView)
 }
-
-const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 function buildQuery(f: Filters): string {
   const p = new URLSearchParams();
@@ -95,7 +97,7 @@ function buildQuery(f: Filters): string {
 
 // Trigger/panel styling mirrors StyledSelect so the bar is visually uniform.
 const TRIGGER_CLS =
-  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-blue-500/40 transition-all cursor-pointer";
+  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
 
 function MultiSelect({
   label,
@@ -142,7 +144,7 @@ function MultiSelect({
                   onClick={() => toggle(o.value)}
                   className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
                 >
-                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-blue-600 border-blue-600 text-white" : "border-[var(--border-2)]"}`}>
+                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-primary border-primary text-white" : "border-[var(--border-2)]"}`}>
                     {on && (
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 6 9 17l-5-5" />
@@ -160,110 +162,25 @@ function MultiSelect({
   );
 }
 
-// Compact "estimated" pill — shown on reach-derived cards when the window includes connects
-// not yet evaluated for voicemail (those count as reached, inflating reach / diluting positive rate).
-function EstBadge({ title }: { title: string }) {
-  return (
-    <span
-      title={title}
-      className="text-[8.5px] font-semibold uppercase tracking-wider text-amber-400/90 border border-amber-400/30 rounded px-1 py-px leading-none cursor-help"
-    >
-      est
-    </span>
-  );
-}
+// The "estimated" pill on reach-derived sections is the shared EstBadge (PerformanceCards)
+// with tone="warn" — unified 2026-07-02 so the disclosure styling/tooltip can't drift.
 
-function KpiCard({
-  icon,
-  label,
-  value,
-  valueColor = "text-[var(--text-1)]",
-  sub,
-  onClick,
-  badge,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  valueColor?: string;
-  sub: ReactNode;
-  onClick?: () => void;
-  badge?: ReactNode;
-}) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  // Interactive props spread only when clickable (correct ARIA button pattern; inert div otherwise).
-  const interactive = onClick
-    ? {
-        onClick,
-        role: "button" as const,
-        tabIndex: 0,
-        title: "Click for the full breakdown",
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
-        },
-      }
-    : {};
-  return (
-    <div
-      ref={magnetRef}
-      {...interactive}
-      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] truncate">{label}</span>
-          {badge}
-        </span>
-        <span className="text-[var(--text-3)] shrink-0">{icon}</span>
-      </div>
-      <div className={`text-[34px] leading-none font-bold font-mono mt-3 ${valueColor}`}>{value}</div>
-      <div className="text-[11px] text-[var(--text-3)] mt-2">{sub}</div>
-    </div>
-  );
-}
-
-function BestCard({
-  icon,
-  label,
-  best,
-  accent,
-}: {
-  icon: ReactNode;
-  label: string;
-  best: BestPerformer | null;
-  accent: string;
-}) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  return (
-    <div
-      ref={magnetRef}
-      className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5"
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{label}</span>
-        <span className="text-[var(--text-3)]">{icon}</span>
-      </div>
-      {best ? (
-        <>
-          <div className={`text-lg font-semibold mt-3 truncate ${accent}`} title={best.label}>
-            {best.label}
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-1">
-            <span className="text-[var(--text-2)] font-medium">{pct(best.positiveResponseRate)} positive response</span> ·{" "}
-            {best.calls.toLocaleString()} calls
-          </div>
-        </>
-      ) : (
-        <div className="text-sm text-[var(--text-3)] mt-3">Not enough call volume to rank yet</div>
-      )}
-    </div>
-  );
-}
-
-export default function GlobalPerformance({ filters, onChange, onFocusCampaign, onMetricClick }: GlobalPerformanceProps) {
+export default function GlobalPerformance({ filters, onChange }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
+  const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
+  // Drawer exclusivity (mockup): opening this drawer closes the Today / Top-performers ones.
+  const closeDrawerSelf = useCallback(() => setDrawerFilter(null), []);
+  useDrawerClaim("global", drawerFilter !== null, closeDrawerSelf);
+  // Re-clicking the open slice closes the drawer (toggle); status+outcome+smsOnly identify a slice.
+  const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
+    !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
+  const openTotal = (card: "callAttempts" | "reached" | "sms") =>
+    setDrawerFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) =>
+    setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
 
   const load = useCallback(async (query: string) => {
     setLoading(true);
@@ -348,80 +265,81 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
     : null;
 
   return (
-    <section id="global-performance" className="grid gap-4 scroll-mt-4">
-      <div className="pt-2">
-        <h2 className="text-[20px] font-bold tracking-tight">Global Performance</h2>
-        <p className="text-sm text-[var(--text-3)] mt-1">Historical performance across all campaigns.</p>
+    <section id="global-performance" className="scroll-mt-4">
+      <div className="grid gap-4 min-w-0">
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <SectionTick color="#5b9bf0" />
+        <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
+        <span className="text-[13px] text-[var(--text-3)]">— historical, across all campaigns</span>
       </div>
 
-      {/* Filter bar. */}
-      <div className="flex items-center gap-2.5 flex-wrap">
-        <div className="inline-flex rounded-xl border border-[var(--border)] overflow-hidden">
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              onClick={() => set({ range: r })}
-              className={`px-3.5 py-2.5 text-xs font-medium transition ${
-                filters.range === r ? "bg-blue-600 text-white" : "text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
+      {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll
+          without orphaning layout. Same state/handlers as ever, re-housed. */}
+      <div className="sticky top-0 z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
+        <div className="flex items-center gap-2.5">
+          <SlidersHorizontal size={15} className="text-[var(--text-3)]" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-4)]">Range</span>
+          <div className="inline-flex p-[3px] gap-0.5 rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)]">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => set({ range: r })}
+                className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
+                  filters.range === r ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
-
+        <div className="w-px h-6 bg-[var(--border)]" />
         <MultiSelect
           label="All campaigns"
           options={campaignOptions}
           selected={filters.campaignIds}
           onChange={(ids) => set({ campaignIds: ids })}
         />
-
         <div className="min-w-[150px]">
           <StyledSelect options={agentOptions} value={filters.agent} onChange={(v) => set({ agent: v })} placeholder="All agents" />
         </div>
-
         <div className="min-w-[150px]">
           <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
         </div>
-
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
+        <div className="relative flex-1 min-w-[170px]">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
           <input
             value={filters.phone}
             onChange={(e) => set({ phone: e.target.value })}
             placeholder="Search any called number…"
-            className="pl-8 pr-3 py-2.5 w-[210px] text-sm rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+            className="pl-8 pr-3 py-1.5 w-full text-[13px] rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary transition-all"
           />
         </div>
-
         {!isDefault && (
           <button
             onClick={() => onChange(DEFAULTS)}
-            className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-3 py-2.5 rounded-xl border border-[var(--border)] hover:border-[var(--border-2)] hover:bg-[var(--bg-hover)] transition"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition-colors"
           >
-            Clear filters
+            <X size={13} /> Clear
           </button>
         )}
         {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+        {chips.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap w-full">
+            {chips.map((c) => (
+              <span key={c.key} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-full pl-2.5 pr-1.5 py-0.5">
+                <span className="truncate max-w-[200px]">{c.label}</span>
+                <button onClick={c.onRemove} className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors" aria-label={`Remove ${c.label}`}>
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Removable chips. */}
-      {chips.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap -mt-1">
-          {chips.map((c) => (
-            <span key={c.key} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-full pl-2.5 pr-1.5 py-1">
-              <span className="truncate max-w-[200px]">{c.label}</span>
-              <button onClick={c.onRemove} className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors" aria-label={`Remove ${c.label}`}>
-                <X size={11} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Phone-lookup match banner. */}
+      {/* Phone-lookup match banner (search feedback — sits with the filter bar, above the panel). */}
       {phoneMatch && (
         <div className="text-[12px] text-[var(--text-2)] bg-[var(--bg-elevated)] border border-[var(--border)] rounded-xl px-3.5 py-2.5">
           {phoneMatch.matchedCampaigns.length > 0 ? (
@@ -441,71 +359,44 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
         </div>
       )}
 
-      {/* KPI grid — Row 1 totals. Connected vs Reached are now distinct cards (Val 2026-06-26):
-          "connected" = answered (incl. voicemail); "reached" = a live human picked up. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
-        <KpiCard
-          onClick={() => onMetricClick?.("calls")}
-          icon={<Phone size={14} />}
-          label="Total Calls"
-          value={(k?.calls ?? 0).toLocaleString()}
-          sub={data ? `across ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"} · last ${data.rangeDays}d` : "—"}
+      {/* Overview panel — the window's headline KPIs + the 3-card performance breakdown grouped
+          into one island, mirroring Today's Performance (Jasiel 2026-07-03). The filter bar,
+          leaderboards, charts, table and heatmap stay free-standing on the app background. */}
+      <SectionIsland>
+      {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
+      {data?.perf && k && (
+        <StatBand
+          stats={[
+            { label: "Call attempts", value: data.perf.callAttempts.total },
+            { label: "Reached", value: data.perf.reached.total },
+            { label: "SMS sent", value: data.perf.sms.total },
+            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached", accent: "#3ec08a" },
+            { label: "Campaigns", value: data.campaignCount },
+          ]}
         />
-        <KpiCard
-          onClick={() => onMetricClick?.("connect")}
-          icon={<Zap size={14} />}
-          label="Connect Rate"
-          valueColor="text-emerald-400"
-          value={pct(k?.connectRate ?? null)}
-          sub={
-            <span title="Connected = answered, including voicemail. A human pickup is shown separately as Reached.">
-              {k ? `${k.connected.toLocaleString()} of ${k.terminal.toLocaleString()} calls connected` : "—"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<UserCheck size={14} />}
-          label="Reached"
-          valueColor="text-teal-400"
-          badge={reachEstimated ? <EstBadge title="Estimated — includes connects not yet evaluated for voicemail (before ~19 Jun), which count as reached. Accurate on recent windows." /> : undefined}
-          value={(k?.reach ?? 0).toLocaleString()}
-          sub={
-            <span title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data).">
-              {k ? "live humans reached" : "—"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<Voicemail size={14} />}
-          label="Voicemail"
-          valueColor="text-violet-300"
-          value={k && k.voicemailEvaluated > 0 ? pct(k.voicemailRate) : "—"}
-          sub={
-            <span title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy.">
-              {k && k.voicemailEvaluated > 0 ? "of evaluated connects" : "tracking from deploy"}
-            </span>
-          }
-        />
-        <KpiCard
-          icon={<CheckCircle2 size={14} />}
-          label="Positive Response Rate"
-          valueColor="text-amber-400"
-          badge={reachEstimated ? <EstBadge title="Estimated — measured over reached players; on older windows the reached base includes connects not yet evaluated for voicemail, so this can read low." /> : undefined}
-          value={pct(k?.positiveResponseRate ?? null)}
-          sub={
-            <span title="Players who agreed to receive the offer SMS (goal reached) ÷ humans reached. NOT a confirmed sale — real success (deposit/login) isn't visible yet.">
-              {k ? `${k.successful.toLocaleString()} positive of ${k.reach.toLocaleString()} reached` : "—"}
-            </span>
-          }
-        />
-      </div>
+      )}
 
-      {/* KPI grid — Row 2 best performers (min-volume gated). */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-        <BestCard icon={<Trophy size={14} />} label="Best Campaign" best={bestCampaign} accent="text-[var(--text-1)]" />
-        <BestCard icon={<Mic size={14} />} label="Best Voice Agent" best={bestAgent} accent="text-blue-400" />
-        <BestCard icon={<FileText size={14} />} label="Best Prompt" best={bestPrompt} accent="text-amber-300" />
-      </div>
+      {/* Ranged 3-card Performance (Val's mockup, Slice B) — replaces the old 5-card KPI strip.
+          NO deltas (mockup intent for Global). The Connect/Reached/Voicemail/Positive metrics now
+          live as breakdown ROWS inside the cards. `est` note when voicemail coverage is low on long
+          windows (forward-only detection). Drill-down drawer is wired in the next step. */}
+      {data?.perf ? (
+        <div className="grid gap-2">
+          {reachEstimated && (
+            <p className="text-[11px] text-[var(--text-3)] flex items-center gap-1.5">
+              <EstBadge tone="warn" content="Estimated — long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
+              Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
+            </p>
+          )}
+          <PerformanceCards perf={data.perf} showDeltas={false} onOpenTotal={openTotal} onOpenRow={openRow} />
+          <RangedRecordsDrawer filters={filters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
+        </div>
+      ) : data ? (
+        <p className="text-center text-xs text-[var(--text-3)] py-8">Performance breakdown unavailable for this filter.</p>
+      ) : (
+        <CardGridSkeleton />
+      )}
+      </SectionIsland>
 
       {/* Trend + Daily Volume side-by-side (compact); they stack on narrow screens. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -521,14 +412,20 @@ export default function GlobalPerformance({ filters, onChange, onFocusCampaign, 
         utcFallbackCalls={data?.heatmap?.utcFallbackCalls ?? 0}
       />
 
-      {/* Voice Agent / Prompt performance + Top campaigns leaderboard. */}
-      <RankedTables
-        agents={data?.agents ?? []}
-        campaigns={data?.campaigns ?? []}
-        prompts={data?.prompts ?? []}
-        rangeDays={data?.rangeDays ?? 30}
-        onFocusCampaign={onFocusCampaign}
-      />
+      {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
+          switch + best-in-view highlight + ranked table; rows drill into the scoped drawer.
+          Relocated to the bottom of the section + wrapped in a reused SectionIsland overview
+          panel for parity with the rest (Jasiel 2026-07-03). */}
+      <SectionIsland>
+        <Leaderboards
+          campaigns={data?.campaigns ?? []}
+          agents={data?.agents ?? []}
+          prompts={data?.prompts ?? []}
+          best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }}
+          filters={filters}
+        />
+      </SectionIsland>
+      </div>
     </section>
   );
 }

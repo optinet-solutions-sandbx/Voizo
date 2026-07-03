@@ -8,12 +8,13 @@ import { fetchAllRows } from "./supabaseFetchAll";
 type Row = Record<string, unknown>;
 
 function makeClient(pageResults: Array<{ data: Row[] | null; error: unknown }>) {
-  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
-  let current: { table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
+  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
+  let current: { table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
   const builder = {
     select(columns: string) { current.columns = columns; return builder; },
     eq(col: string, val: unknown) { current.eq = [col, val]; return builder; },
     gte(col: string, val: unknown) { current.gte = [col, val]; return builder; },
+    lt(col: string, val: unknown) { current.lt = [col, val]; return builder; },
     order(col: string, opts: unknown) { current.order = [col, opts]; return builder; },
     range(from: number, to: number) {
       current.range = [from, to];
@@ -111,5 +112,24 @@ describe("fetchAllRows", () => {
     expect(out).toHaveLength(1013);
     expect(log[0].gte).toEqual(["created_at", "2026-05-18T00:00:00Z"]);
     expect(log[1].gte).toEqual(["created_at", "2026-05-18T00:00:00Z"]); // re-applied on each paged request
+  });
+
+  it("applies an optional lt filter to every page (day-window upper bound)", async () => {
+    const { client, log } = makeClient([
+      { data: rows(1000), error: null },
+      { data: rows(7), error: null },
+    ]);
+    const out = await fetchAllRows(
+      client,
+      "calls_v2",
+      "campaign_id",
+      "id",
+      undefined,
+      { column: "created_at", value: "2026-07-01T00:00:00Z" },
+      { column: "created_at", value: "2026-07-02T00:00:00Z" },
+    );
+    expect(out).toHaveLength(1007);
+    expect(log[0].lt).toEqual(["created_at", "2026-07-02T00:00:00Z"]);
+    expect(log[1].lt).toEqual(["created_at", "2026-07-02T00:00:00Z"]); // re-applied on each paged request
   });
 });

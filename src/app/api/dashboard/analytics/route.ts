@@ -8,15 +8,17 @@ import {
   computeTrend,
   computeDailyVolume,
   computeHeatmap,
-  promptLabel,
   representativeBaseBySha,
   bestByPositiveResponse,
   smsSentByCampaign,
+  computeRangedPerf,
+  perfForCampaignScope,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
+  type TodayPerfDay,
 } from "@/lib/dashboardAnalytics";
-import { sha256Hex } from "@/lib/promptVersionExtract";
+import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
 
 /**
@@ -84,7 +86,7 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "calls_v2",
-      "campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail",
+      "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds",
       "id",
       undefined,
       { column: "created_at", value: startIso },
@@ -99,7 +101,7 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "sms_messages_v2",
-      "campaign_id, created_at, status",
+      "campaign_id, created_at, status, call_id, campaign_number_id",
       "id",
       undefined,
       { column: "created_at", value: startIso },
@@ -110,33 +112,8 @@ export async function GET(request: NextRequest) {
   const index = buildCampaignIndex(campaigns);
   const live = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
 
-  // Per-campaign prompt identity (sha + label): latest prompt_versions snapshot if any,
-  // else the campaign's stored system_prompt (hashed the same way so identical text groups).
-  const promptByCampaign = new Map<string, { sha: string; label: string; baseAssistantId: string | null }>();
-  const liveIds = live.map((c) => c.id);
-  const latestByCampaign = new Map<string, { system_prompt: string; sha: string }>();
-  if (liveIds.length) {
-    const { data: pv } = await supabaseAdmin
-      .from("prompt_versions")
-      .select("campaign_id, system_prompt, prompt_sha256, created_at")
-      .in("campaign_id", liveIds)
-      .order("created_at", { ascending: false });
-    for (const v of (pv ?? []) as { campaign_id: string; system_prompt: string; prompt_sha256: string }[]) {
-      if (!latestByCampaign.has(v.campaign_id)) {
-        latestByCampaign.set(v.campaign_id, { system_prompt: v.system_prompt, sha: v.prompt_sha256 });
-      }
-    }
-  }
-  for (const c of live) {
-    const baseAssistantId = c.base_assistant_id ?? null;
-    const latest = latestByCampaign.get(c.id);
-    if (latest) {
-      promptByCampaign.set(c.id, { sha: latest.sha, label: promptLabel(latest.system_prompt, latest.sha), baseAssistantId });
-    } else if (c.system_prompt) {
-      const sha = sha256Hex(c.system_prompt);
-      promptByCampaign.set(c.id, { sha, label: promptLabel(c.system_prompt, sha), baseAssistantId });
-    }
-  }
+  // Per-campaign prompt identity (sha + label + base agent) — shared resolver (chunked .in()).
+  const promptByCampaign = await resolvePromptByCampaign(live);
 
   let filtered = filterCalls(
     callRows as unknown as DashCallRow[],
@@ -164,6 +141,37 @@ export async function GET(request: NextRequest) {
     if (sha) smsByPrompt.set(sha, (smsByPrompt.get(sha) ?? 0) + n);
   }
 
+  // Declined contacts for the Reached split (campaign_numbers_v2.outcome='declined_offer'), scoped
+  // to the filtered call set. Chunk .in() at 150 (PostgREST ~16KB URL header guard).
+  const declinedIds = new Set<string>();
+  const declinedNumIds = [...new Set(filtered.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
+  const DECLINED_IN_CHUNK = 150;
+  for (let i = 0; i < declinedNumIds.length; i += DECLINED_IN_CHUNK) {
+    const { data, error } = await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .select("id, outcome")
+      .in("id", declinedNumIds.slice(i, i + DECLINED_IN_CHUNK));
+    if (error) {
+      // Degrade, don't fail: the Reached→Declined split is slightly under-counted; everything else is fine.
+      console.error("[dashboard/analytics] declined-numbers query failed:", error);
+      break;
+    }
+    for (const n of (data ?? []) as { id: string; outcome: string | null }[]) {
+      if ((n.outcome ?? "") === "declined_offer") declinedIds.add(n.id);
+    }
+  }
+
+  // Ranged 3-card Performance (Global Performance, Val's mockup). Reuses the already-filtered in-memory
+  // call set (no extra fetch) + the lean transcript-less classifier. Isolated failure domain: a perf
+  // error must NOT take down the charts/tables/leaderboard, so degrade to perf:null and log with counts.
+  let perf: TodayPerfDay | null = null;
+  try {
+    perf = computeRangedPerf(filtered, scopedSms, declinedIds, startMs, now);
+  } catch (e) {
+    console.error("[dashboard/analytics] computeRangedPerf failed:", e, { calls: filtered.length, sms: scopedSms.length });
+    perf = null;
+  }
+
   // Dropdown options — full live set.
   const campaignOptions = live.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
   const agentMap = new Map<string, string | null>();
@@ -186,11 +194,34 @@ export async function GET(request: NextRequest) {
     ? campaigns.filter((c) => matchedCampaignIds.has(c.id)).map((c) => ({ id: c.id, name: c.name }))
     : [];
 
+  // Per-entity perf for the Top Performers breakdown cards (Slice E). In-memory over the already-
+  // filtered set; each isolated (try/catch → null) so one entity's failure can't drop the section.
+  const bestPerf = (ids: Set<string> | null): TodayPerfDay | null => {
+    if (!ids || ids.size === 0) return null;
+    try {
+      return perfForCampaignScope(filtered, scopedSms, declinedIds, startMs, now, ids);
+    } catch (e) {
+      console.error("[dashboard/analytics] perfForCampaignScope failed:", e, { ids: ids.size });
+      return null;
+    }
+  };
+  const campaignScope = global.bestCampaign ? new Set([global.bestCampaign.key]) : null;
+  const agentScope = global.bestAgent
+    ? new Set(live.filter((c) => (c.base_assistant_id ?? null) === global.bestAgent!.key).map((c) => c.id))
+    : null;
+  const promptScope = bestPrompt
+    ? new Set([...promptByCampaign].filter(([, pp]) => pp.sha === bestPrompt.key).map(([id]) => id))
+    : null;
+
   return NextResponse.json({
     rangeDays,
     kpis: global.kpis,
     campaignCount: global.campaignCount,
-    best: { campaign: global.bestCampaign, agent: global.bestAgent, prompt: bestPrompt },
+    best: {
+      campaign: global.bestCampaign ? { ...global.bestCampaign, perf: bestPerf(campaignScope) } : null,
+      agent: global.bestAgent ? { ...global.bestAgent, perf: bestPerf(agentScope) } : null,
+      prompt: bestPrompt ? { ...bestPrompt, perf: bestPerf(promptScope) } : null,
+    },
     campaigns: global.campaignRollups.map((r) => ({
       id: r.id,
       name: r.name,
@@ -232,6 +263,7 @@ export async function GET(request: NextRequest) {
     trend: computeTrend(filtered, startMs, now, scopedSms),
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, now),
     heatmap: computeHeatmap(filtered, campaigns),
+    perf,
     options: { campaigns: campaignOptions, agents: agentOptions, prompts: promptOptions },
     phone: { query: phone || null, matchedCampaigns },
   });

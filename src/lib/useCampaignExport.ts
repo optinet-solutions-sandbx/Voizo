@@ -1,48 +1,24 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import JSZip from "jszip";
-import { triggerDownload, csvCell, CSV_BOM } from "./download";
+import { runExport, type ExportMode, type ExportProgress } from "./recordsExportEngine";
+import type { ExportLead } from "./exportLeads";
 
 /**
  * useCampaignExport
  *
- * Client-side export engine for campaign V2 reporting. Drives the Export
- * dropdown on the campaign detail page. Three output shapes (mode):
+ * Per-campaign export hook for the campaign detail page. Fetches the campaign's leads from
+ * /api/campaigns-v2/[id]/export-metadata?type=<category>, then delegates the actual CSV / transcript /
+ * audio compilation to the shared `runExport` engine (src/lib/recordsExportEngine.ts) — the same engine
+ * the cross-campaign Global drawer uses. This hook owns only the campaign-scoped metadata source, the
+ * download filenames, and the exporting/progress/error state.
  *
- *   csv            → single .csv with metadata + transcripts
- *   audio          → .zip with summary.csv at root and recordings/<phone>/
- *                    attempt_<N>_<duration>s.<ext> for every call that has a
- *                    recording. Audio is streamed through /api/recordings/proxy
- *                    to bypass the storage.vapi.ai CORS gap.
- *   transcripts    → .zip with one transcripts/<phone>/attempt_<N>.txt per call
- *                    that has transcript text. Reuses the audio-zip skipped.txt
- *                    pattern for calls with no transcript. No network fetch —
- *                    transcripts already arrive in the metadata payload.
- *
- * Category (`type`) and output shape (`mode`) are orthogonal: every category
- * in the unified taxonomy can be exported as csv, audio, or transcripts.
- *
- * Reasoning behind specific quirks:
- *   - UTF-8 BOM at the head of the CSV so Excel decodes Greek/Spanish/German
- *     transcripts correctly. Without it Excel falls back to Windows-1252 and
- *     mangles every non-ASCII character.
- *   - Phone numbers wrapped as ="+44..." (RFC 4180 quoted + Excel formula
- *     escape) so Excel preserves the leading + instead of dropping it.
- *   - File extension derived from Content-Type at fetch time, not assumed
- *     from the URL. Vapi serves .wav by default but the recordingFormat can
- *     be flipped to .mp3 at any time.
- *   - Concurrency capped at 5 to stay friendly to Vapi's CDN and the Vercel
- *     proxy. AbortController lets the operator cancel mid-flight.
- *   - Failed downloads write to skipped.txt inside the zip rather than
- *     silently disappearing — operator sees which calls didn't bundle.
+ * Category (`type`) and output shape (`mode`) are orthogonal: every category can be exported as csv,
+ * audio, or transcripts.
  */
 
-// Unified category taxonomy (mirrors the dashboardAnalytics AttemptTag contract,
-// plus "all"). The export-metadata route tags each call via deriveAttemptTag and
-// filters by the requested category (a contact matches if its tag === the category;
-// "all" = no filter). Old per-bucket names (sms_sent / not_interested_or_declined /
-// unreached_or_retry / wrong_number) are retired.
+// Unified category taxonomy (mirrors the dashboardAnalytics AttemptTag contract, plus "all"). The
+// export-metadata route tags each call via deriveAttemptTag and filters by the requested category.
 export type ExportType =
   | "all"
   | "positive"
@@ -52,167 +28,12 @@ export type ExportType =
   | "voicemail"
   | "unreachable";
 
-// Output shape. `boolean` is accepted for back-compat with the original
-// (type, includeAudio) call sites: false → "csv", true → "audio".
-export type ExportMode = "csv" | "audio" | "transcripts";
-
-export interface ExportAttempt {
-  attemptNumber: number;
-  status: string;
-  durationSeconds: number | null;
-  goalReached: boolean | null;
-  transcript: string | null;
-  recordingUrl: string | null;
-  createdAt: string;
-}
-
-export interface ExportSms {
-  body: string;
-  status: string;
-  providerMessageId: string | null;
-  errorMessage: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ExportLead {
-  phone: string;
-  outcome: string;
-  attemptCount: number;
-  lastAttemptedAt: string | null;
-  attempts: ExportAttempt[];
-  smsMessages: ExportSms[];
-}
-
-export interface ExportProgress {
-  current: number;
-  total: number;
-  stage: string;
-}
-
-const AUDIO_CONCURRENCY = 5;
-const AUDIO_BUNDLE_MAX = 500;
-
-// Prevent CSV formula injection. Cells whose first character is one of
-// = + - @ \t \r are interpreted as a formula by Excel / LibreOffice / Sheets
-// when the operator opens the export. Transcript text and Mobivate
-// error_message values are attacker-influenced (caller speech is STT'd into
-// transcript; Mobivate error strings come from the SMS provider) — both
-// could legitimately start with one of those chars. Prefixing with a single
-// quote disarms the formula without changing the visible value beyond the
-// leading apostrophe. csvPhoneCell intentionally remains a formula and is
-// exempt — it's our own controlled `="+44..."` literal.
-// csvCell now lives in ./download (imported above) — shared with analytics export.
-
-// Excel formula-escape trick: ="+44..." preserves the leading + that Excel
-// would otherwise strip when auto-detecting "looks like a number".
-function csvPhoneCell(phone: string): string {
-  return `"=""${phone.replace(/"/g, '""')}"""`;
-}
-
-function buildCsv(leads: ExportLead[], includeSmsCols: boolean): string {
-  // UTF-8 BOM (U+FEFF). Written as the explicit escape — a literal U+FEFF
-  // is invisible in source, and a formatter or invisible-Unicode lint rule
-  // could silently strip it, breaking Excel's encoding detection.
-  const headers = [
-    "Phone",
-    "Outcome",
-    "Total Attempts",
-    "Last Attempted At",
-    "Attempt #",
-    "Call Status",
-    "Duration (s)",
-    "Goal Reached",
-    "Transcript",
-  ];
-  if (includeSmsCols) {
-    headers.push("SMS Body", "SMS Status", "SMS Provider ID", "SMS Created At");
-  }
-
-  const rows: string[] = [headers.map(csvCell).join(",")];
-
-  for (const lead of leads) {
-    // SMS pick: most recent by createdAt. For the sms_sent filter this is
-    // the SMS that actually went out post-goal-reached.
-    const smsSorted = [...lead.smsMessages].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
-    const sms = smsSorted[0];
-
-    if (lead.attempts.length === 0) {
-      const cells = [
-        csvPhoneCell(lead.phone),
-        csvCell(lead.outcome),
-        csvCell(lead.attemptCount),
-        csvCell(lead.lastAttemptedAt),
-        "",
-        "",
-        "",
-        "",
-        "",
-      ];
-      if (includeSmsCols) {
-        cells.push(
-          csvCell(sms?.body),
-          csvCell(sms?.status),
-          csvCell(sms?.providerMessageId),
-          csvCell(sms?.createdAt),
-        );
-      }
-      rows.push(cells.join(","));
-      continue;
-    }
-
-    for (const att of lead.attempts) {
-      const cells = [
-        csvPhoneCell(lead.phone),
-        csvCell(lead.outcome),
-        csvCell(lead.attemptCount),
-        csvCell(lead.lastAttemptedAt),
-        csvCell(att.attemptNumber),
-        csvCell(att.status),
-        csvCell(att.durationSeconds),
-        csvCell(
-          att.goalReached === null ? "" : att.goalReached ? "Yes" : "No",
-        ),
-        csvCell(att.transcript),
-      ];
-      if (includeSmsCols) {
-        cells.push(
-          csvCell(sms?.body),
-          csvCell(sms?.status),
-          csvCell(sms?.providerMessageId),
-          csvCell(sms?.createdAt),
-        );
-      }
-      rows.push(cells.join(","));
-    }
-  }
-
-  return CSV_BOM + rows.join("\r\n") + "\r\n";
-}
-
-// triggerDownload now lives in ./download (imported above).
-
-function sanitizePhoneForFolder(phone: string): string {
-  return phone.replace(/[^\d+]/g, "");
-}
-
-function extFromContentType(ct: string | null): string {
-  if (!ct) return "wav";
-  const lower = ct.toLowerCase();
-  if (lower.includes("mpeg") || lower.includes("mp3")) return "mp3";
-  if (lower.includes("wav") || lower.includes("wave")) return "wav";
-  return "wav";
-}
+// Re-exported for consumers (ExportMenu) that import the output shape from here.
+export type { ExportMode } from "./recordsExportEngine";
 
 export function useCampaignExport(campaignId: string) {
   const [exporting, setExporting] = useState(false);
-  const [progress, setProgress] = useState<ExportProgress>({
-    current: 0,
-    total: 0,
-    stage: "",
-  });
+  const [progress, setProgress] = useState<ExportProgress>({ current: 0, total: 0, stage: "" });
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -223,8 +44,7 @@ export function useCampaignExport(campaignId: string) {
   const startExport = useCallback(
     async (type: ExportType, mode: ExportMode | boolean) => {
       // Normalize the legacy boolean (false → csv, true → audio) into the mode enum.
-      const resolvedMode: ExportMode =
-        typeof mode === "boolean" ? (mode ? "audio" : "csv") : mode;
+      const resolvedMode: ExportMode = typeof mode === "boolean" ? (mode ? "audio" : "csv") : mode;
 
       setExporting(true);
       setError(null);
@@ -234,193 +54,37 @@ export function useCampaignExport(campaignId: string) {
       abortRef.current = ctrl;
 
       try {
-        const res = await fetch(
-          `/api/campaigns-v2/${campaignId}/export-metadata?type=${type}`,
-          { signal: ctrl.signal },
-        );
-        if (!res.ok) {
-          throw new Error(`Metadata fetch returned HTTP ${res.status}`);
-        }
+        const res = await fetch(`/api/campaigns-v2/${campaignId}/export-metadata?type=${type}`, {
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw new Error(`Metadata fetch returned HTTP ${res.status}`);
         const payload = await res.json();
-        // Defensive: the endpoint could return `{error: "..."}` with HTTP 200
-        // in unexpected paths; Array.isArray guards against `.length` crashing
-        // on a non-array.
-        const leads: ExportLead[] = Array.isArray(payload?.data)
-          ? (payload.data as ExportLead[])
-          : [];
+        // Defensive: the endpoint could return `{error}` with HTTP 200; guard against `.length` on a non-array.
+        const leads: ExportLead[] = Array.isArray(payload?.data) ? (payload.data as ExportLead[]) : [];
+        if (leads.length === 0) throw new Error("No data matches this filter.");
 
-        if (leads.length === 0) {
-          throw new Error("No data matches this filter.");
-        }
-
-        // SMS columns are meaningful where a post-goal offer SMS can exist:
-        // the full export and the positive-response cut (consent-gated SMS).
+        // SMS columns matter where a post-goal offer SMS can exist: the full export + the positive cut.
         const includeSmsCols = type === "all" || type === "positive";
         const safeType = type.replace(/_/g, "-");
         const shortId = campaignId.slice(0, 8);
 
-        if (resolvedMode === "csv") {
-          const csvContent = buildCsv(leads, includeSmsCols);
-          setProgress({ current: 1, total: 1, stage: "Triggering download..." });
-          const blob = new Blob([csvContent], {
-            type: "text/csv;charset=utf-8;",
-          });
-          triggerDownload(blob, `voizo_${safeType}_${shortId}.csv`);
-          return;
-        }
-
-        if (resolvedMode === "transcripts") {
-          // Transcript .txt bundle. No network fetch — transcript text already
-          // arrives in the metadata payload. One transcripts/<phone>/attempt_<N>.txt
-          // per call that has text; calls with no transcript go to skipped.txt
-          // (same loud-skip pattern as the audio bundle).
-          const zip = new JSZip();
-          const transcriptsFolder = zip.folder("transcripts");
-          const skipped: string[] = [];
-
-          let written = 0;
-          let total = 0;
-          for (const lead of leads) {
-            for (const att of lead.attempts) {
-              total++;
-              const text = att.transcript?.trim();
-              if (!text) {
-                skipped.push(
-                  `${lead.phone} attempt #${att.attemptNumber}: no transcript text`,
-                );
-                continue;
-              }
-              const folder = transcriptsFolder?.folder(
-                sanitizePhoneForFolder(lead.phone),
-              );
-              folder?.file(`attempt_${att.attemptNumber}.txt`, text + "\n");
-              written++;
-            }
-          }
-
-          if (total === 0) {
-            throw new Error("No calls exist for this filter.");
-          }
-          if (written === 0) {
-            throw new Error("No call transcripts exist for this filter.");
-          }
-
-          if (skipped.length > 0) {
-            zip.file(
-              "skipped.txt",
-              `The following calls had no transcript text:\n\n${skipped.join("\n")}\n\nThe rest of the bundle is unaffected.\n`,
-            );
-          }
-
-          setProgress({
-            current: written,
-            total: written,
-            stage: "Compiling ZIP archive...",
-          });
-          const zipBlob = await zip.generateAsync({ type: "blob" });
-          triggerDownload(zipBlob, `voizo_${safeType}_transcripts_${shortId}.zip`);
-          return;
-        }
-
-        // resolvedMode === "audio"
-        const csvContent = buildCsv(leads, includeSmsCols);
-        const zip = new JSZip();
-        zip.file("summary.csv", csvContent);
-        const recordingsFolder = zip.folder("recordings");
-        const skipped: string[] = [];
-
-        const queue: { phone: string; attempt: ExportAttempt }[] = [];
-        for (const lead of leads) {
-          for (const att of lead.attempts) {
-            if (att.recordingUrl) {
-              queue.push({ phone: lead.phone, attempt: att });
-            }
-          }
-        }
-
-        const total = queue.length;
-        if (total === 0) {
-          throw new Error("No call recordings exist for this filter.");
-        }
-
-        // Cap audio bundles. JSZip materializes the entire archive in
-        // browser memory before download; 500 recordings × ~2 MB ≈ 1 GB
-        // resident heap, which OOMs Chrome around 2 GB. Refuse rather
-        // than crash the tab. Operators can refine the filter or split
-        // the export by outcome category.
-        if (total > AUDIO_BUNDLE_MAX) {
-          throw new Error(
-            `Audio bundles are limited to ${AUDIO_BUNDLE_MAX} recordings ` +
-              `(this filter has ${total}). Refine the filter or split by ` +
-              `outcome category.`,
-          );
-        }
-
-        setProgress({
-          current: 0,
-          total,
-          stage: `Downloading 0 of ${total} recordings...`,
+        await runExport({
+          leads,
+          mode: resolvedMode,
+          includeSmsCols,
+          // Preserve the exact per-campaign download names (transcripts keeps its mid-name position).
+          filename: (m) =>
+            m === "transcripts"
+              ? `voizo_${safeType}_transcripts_${shortId}.zip`
+              : m === "csv"
+                ? `voizo_${safeType}_${shortId}.csv`
+                : `voizo_${safeType}_${shortId}.zip`,
+          signal: ctrl.signal,
+          onProgress: setProgress,
         });
-
-        let idx = 0;
-        const worker = async () => {
-          while (idx < queue.length) {
-            const myIdx = idx++;
-            const { phone, attempt } = queue[myIdx];
-            const proxyUrl = `/api/recordings/proxy?url=${encodeURIComponent(
-              attempt.recordingUrl as string,
-            )}`;
-            try {
-              const r = await fetch(proxyUrl, { signal: ctrl.signal });
-              if (!r.ok) throw new Error(`HTTP ${r.status}`);
-              const buf = await r.arrayBuffer();
-              const ext = extFromContentType(r.headers.get("content-type"));
-              const folder = recordingsFolder?.folder(
-                sanitizePhoneForFolder(phone),
-              );
-              folder?.file(
-                `attempt_${attempt.attemptNumber}_${attempt.durationSeconds ?? 0}s.${ext}`,
-                buf,
-              );
-            } catch (err) {
-              if ((err as Error).name === "AbortError") throw err;
-              skipped.push(
-                `${phone} attempt #${attempt.attemptNumber}: ${(err as Error).message}`,
-              );
-            }
-            setProgress((prev) => {
-              const next = prev.current + 1;
-              return {
-                current: next,
-                total,
-                stage: `Downloading ${next} of ${total} recordings...`,
-              };
-            });
-          }
-        };
-
-        const workers = Array.from(
-          { length: Math.min(AUDIO_CONCURRENCY, total) },
-          worker,
-        );
-        await Promise.all(workers);
-
-        if (skipped.length > 0) {
-          zip.file(
-            "skipped.txt",
-            `The following recordings failed to download:\n\n${skipped.join("\n")}\n\nThe rest of the bundle is unaffected.\n`,
-          );
-        }
-
-        setProgress({ current: total, total, stage: "Compiling ZIP archive..." });
-        const zipBlob = await zip.generateAsync({ type: "blob" });
-        triggerDownload(zipBlob, `voizo_${safeType}_${shortId}.zip`);
       } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          setError("Export cancelled.");
-        } else {
-          setError(err instanceof Error ? err.message : "Export failed.");
-        }
+        if ((err as Error).name === "AbortError") setError("Export cancelled.");
+        else setError(err instanceof Error ? err.message : "Export failed.");
       } finally {
         setExporting(false);
         abortRef.current = null;

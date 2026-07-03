@@ -1,6 +1,10 @@
-// Minimal className combiner used by the animated icon components.
-// Intentionally dependency-free (no clsx/tailwind-merge) — the icons only ever
-// pass a single className through. Expand later if real shadcn components arrive.
-export function cn(...classes: Array<string | false | null | undefined>): string {
-  return classes.filter(Boolean).join(" ");
+// shadcn's class combiner — clsx for conditionals + tailwind-merge so later classes
+// win over earlier conflicting utilities. Upgraded from the dependency-free join
+// (2026-07-02, shadcn infra): a strict superset — existing icon callers that pass
+// plain strings/falsy values get identical output.
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
 }

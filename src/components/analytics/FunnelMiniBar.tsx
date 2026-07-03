@@ -16,7 +16,7 @@ export default function FunnelMiniBar({ a }: FunnelMiniBarProps) {
       className="w-[120px] h-2.5 rounded-full bg-[var(--bg-elevated)] overflow-hidden relative"
       title={`Targeted ${a.targeted} · Connected (numbers) ${a.connectedNumbers} · Goal (numbers) ${a.goalNumbers}\nConversion ${conv} · Yield ${yld}\nConnected = completed; no min-duration floor (2s answer-drops count)`}
     >
-      <div className="absolute inset-y-0 left-0 bg-blue-500/40" style={{ width: `${connectedPct}%` }} />
+      <div className="absolute inset-y-0 left-0 bg-primary/40" style={{ width: `${connectedPct}%` }} />
       <div className="absolute inset-y-0 left-0 bg-emerald-500/80" style={{ width: `${goalPct}%` }} />
     </div>
   );

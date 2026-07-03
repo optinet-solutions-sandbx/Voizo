@@ -46,7 +46,7 @@ export default function Pagination({ currentPage, totalPages, totalItems, pageSi
               <button key={p} onClick={() => onPageChange(p as number)}
                 className={`w-8 h-8 rounded-md text-xs font-medium transition-colors ${
                   p === currentPage
-                    ? "bg-blue-600 text-white border border-blue-600 shadow-md shadow-blue-600/20"
+                    ? "bg-primary text-white border border-primary shadow-md shadow-primary/20"
                     : "border border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-1)]"
                 }`}>
                 {p}

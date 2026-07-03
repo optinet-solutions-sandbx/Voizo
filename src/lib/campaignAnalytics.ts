@@ -88,11 +88,27 @@ export interface DurationBucket {
   upperSec: number | null; // null = open-ended top bucket; avoids Infinity-in-JSON
   count: number;
 }
+// Raw per-status buckets. "SMS sent" (app-wide, 2026-07-02) = delivered + sent —
+// accepted by the provider or confirmed on the handset; queued/failed excluded.
+// Surfaces needing an in-flight readout derive it as sent + queued explicitly.
 export interface SmsCounts {
   delivered: number;
+  sent: number; // accepted by the provider (no delivery receipt yet)
+  queued: number; // row created, provider not yet called
   failed: number; // failed + undelivered
-  inFlight: number; // queued + sent
-  byProvider: Record<string, { delivered: number; failed: number; inFlight: number }>;
+  byProvider: Record<string, { delivered: number; sent: number; queued: number; failed: number }>;
+}
+
+/** The app-wide "SMS sent" metric (2026-07-02): accepted by the provider or confirmed
+ *  delivered. THE single formula — every UI surface derives its number from here. */
+export function smsSentOf(sms: SmsCounts): number {
+  return sms.delivered + sms.sent;
+}
+
+/** DLR-status readout: messages still awaiting a delivery receipt (sent) or the provider call
+ *  (queued). Presentation-only derivation for the in-flight column/tooltip surfaces. */
+export function smsInFlightOf(sms: SmsCounts): number {
+  return sms.sent + sms.queued;
 }
 
 export interface OutcomeBreakdown {
@@ -286,7 +302,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
       if (numId) connectedNums.add(numId);
       // Voicemail/reach (call-observability slice): only CONNECTED ('completed') calls can be a
       // voicemail. NULL = not evaluated (historical/pre-deploy) → excluded from the rate denom.
-      if (c.voicemail === true) voicemailConnected++;
+      if (c.voicemail === true && c.goal_reached !== true) voicemailConnected++; // goal_reached overrides the voicemail flag (Val 2026-07-03)
       if (c.voicemail != null) voicemailEvaluated++;
       // goalNumbers is gated to connected calls so connectedNums ⊇ goalNums by construction
       // (keeps the conversion-leak drop in Task 7 non-negative). goal on a non-connected
@@ -350,7 +366,7 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   const outcomeBreakdown: OutcomeBreakdown = { positive: 0, declined: 0, earlyHangup: 0, neutral: 0 };
   for (const c of calls) {
     if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
-    if (c.voicemail === true) continue; // voicemail is not a reached human (keeps the sum == reach)
+    if (c.voicemail === true && c.goal_reached !== true) continue; // voicemail (unless goal reached) is not a reached human — keeps sum == reach (Val 2026-07-03)
     if (c.goal_reached === true) { outcomeBreakdown.positive++; continue; }
     if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) { outcomeBreakdown.declined++; continue; }
     // Engagement-based early-hangup — MIRRORS dashboardAnalytics.deriveAttemptTag (2026-06-26).
@@ -433,21 +449,24 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   }
   const sparkline: SparklinePoint[] = dayKeys.map((d) => ({ date: d, goals: goalsByDay[d] ?? 0, connected: connByDay[d] ?? 0 }));
 
-  // ── SMS (delivered = 'delivered'; failed = failed+undelivered; inFlight = queued+sent) ──
-  const sms: SmsCounts = { delivered: 0, failed: 0, inFlight: 0, byProvider: {} };
+  // ── SMS (raw buckets: delivered / sent / queued / failed = failed+undelivered) ──
+  const sms: SmsCounts = { delivered: 0, sent: 0, queued: 0, failed: 0, byProvider: {} };
   for (const m of acc.sms) {
     const provider = m.provider ?? "unknown";
-    const bucket = (sms.byProvider[provider] ??= { delivered: 0, failed: 0, inFlight: 0 });
+    const bucket = (sms.byProvider[provider] ??= { delivered: 0, sent: 0, queued: 0, failed: 0 });
     const st = m.status ?? "";
     if (st === "delivered") {
       sms.delivered++;
       bucket.delivered++;
+    } else if (st === "sent") {
+      sms.sent++;
+      bucket.sent++;
+    } else if (st === "queued") {
+      sms.queued++;
+      bucket.queued++;
     } else if (st === "failed" || st === "undelivered") {
       sms.failed++;
       bucket.failed++;
-    } else if (st === "queued" || st === "sent") {
-      sms.inFlight++;
-      bucket.inFlight++;
     }
   }
 

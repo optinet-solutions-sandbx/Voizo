@@ -4,130 +4,25 @@
 // promoted 2026-06-15) and /analytics — thin page wrappers re-export this component.
 // Always-live "Today's Performance" (NEVER filtered) + Global Performance (filters → KPIs,
 // tables, leaderboard, charts, heatmap). Reuses the app's card/theme/animated-icon language.
-// Connect = ANSWER (incl. voicemail); Success% = goal_reached / connected. Ghost + test excluded.
+// Today's Performance is the 3-card redesign (Val's mockup 2026-06-29) — see TodayPerformanceCards.
 
-import { useCallback, useEffect, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { PhoneCall, Zap, MessageSquare, Radio, UserCheck, Voicemail } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Radio } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import type {
-  TodaySnapshot,
-  RateRow,
-  RunningCampaignCard as RunningCard,
-} from "@/lib/dashboardAnalytics";
+import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
-import MetricDrawer, { type MetricKey } from "./MetricDrawer";
-import CampaignDetailsModal from "./CampaignDetailsModal";
-import { useMagnetic } from "@/components/useMagnetic";
-import { formatCampaign } from "@/lib/campaignDisplay";
-import { voiceName } from "@/lib/voiceOptions";
-import { useBaseAgentNames } from "./useBaseAgentNames";
+import TodayPerformanceCards from "./TodayPerformanceCards";
+import TodaysCampaigns from "./TodaysCampaigns";
+import SectionIsland, { SectionTick } from "./SectionIsland";
 
 const POLL_MS = 30_000;
-
-const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(1)}%`);
-
-function fmtDelta(frac: number | null, suffix: string): { text: string; color: string } {
-  if (frac === null) return { text: `no baseline · ${suffix}`, color: "text-[var(--text-3)]" };
-  const p = frac * 100;
-  const up = p >= 0;
-  return {
-    text: `${up ? "▲" : "▼"} ${Math.abs(p).toFixed(1)}% ${suffix}`,
-    color: up ? "text-emerald-400" : "text-red-400",
-  };
-}
 
 // "2026-06-15" -> "15 Jun 2026" (manual, locale-independent — avoids hydration drift).
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtDay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : iso;
-}
-
-function statCell(value: string, label: string, color: string) {
-  return (
-    <div>
-      <div className={`text-lg font-bold font-mono ${color}`}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] mt-0.5">{label}</div>
-    </div>
-  );
-}
-
-function StatTriple({ rate }: { rate: RateRow }) {
-  return (
-    <div className="grid grid-cols-3 gap-2 mt-3">
-      {statCell(rate.calls.toLocaleString(), "Calls", "text-[var(--text-1)]")}
-      {statCell(pct(rate.connectRate), "Connect", "text-emerald-400")}
-      {statCell(pct(rate.positiveResponseRate), "Positive", "text-amber-400")}
-    </div>
-  );
-}
-
-function RunningCampaignCardView({ c, onOpen }: { c: RunningCard; onOpen: () => void }) {
-  const fmt = formatCampaign(c.name);
-  const baseAgentName = useBaseAgentNames();
-  const magnetRef = useMagnetic<HTMLButtonElement>();
-  return (
-    <button
-      type="button"
-      ref={magnetRef}
-      onClick={onOpen}
-      title="View campaign details & prompt"
-      className="glow-card w-full text-left bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            {c.country !== "UNKNOWN" && (
-              <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-2)] shrink-0">
-                {c.country}
-              </span>
-            )}
-            <span className="text-sm font-semibold text-[var(--text-1)] truncate" title={c.name}>
-              {fmt.offer || fmt.display}
-            </span>
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-1 truncate">
-            {baseAgentName(c.baseAssistantId) ?? voiceName(c.voiceId, { short: true }) ?? "—"}
-          </div>
-        </div>
-        <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400 shrink-0">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> LIVE
-        </span>
-      </div>
-      <StatTriple rate={c.today} />
-    </button>
-  );
-}
-
-function OpsCell({ icon, label, children, onClick }: { icon: ReactNode; label: string; children: ReactNode; onClick?: () => void }) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  // Interactive props spread only when clickable: keeps onClick + role + tabIndex + keydown
-  // together (correct ARIA button pattern); a non-clickable card stays an inert div.
-  const interactive = onClick
-    ? {
-        onClick,
-        role: "button" as const,
-        tabIndex: 0,
-        title: "Click for the full breakdown",
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
-        },
-      }
-    : {};
-  return (
-    <div
-      ref={magnetRef}
-      {...interactive}
-      className={`glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 ${onClick ? "cursor-pointer transition-colors hover:border-[var(--border-2)] focus:outline-none focus:ring-2 focus:ring-blue-500/40" : ""}`}
-    >
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">
-        {icon}
-        {label}
-      </div>
-      {children}
-    </div>
-  );
 }
 
 export default function DashboardView() {
@@ -137,13 +32,6 @@ export default function DashboardView() {
   // Global Performance filters live here (lifted 2026-06-16) so a running card AND the leaderboard
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
-  const [detailFor, setDetailFor] = useState<RunningCard | null>(null);
-  const [drawerMetric, setDrawerMetric] = useState<MetricKey | null>(null);
-
-  const focusCampaign = useCallback((id: string) => {
-    setFilters((f) => ({ ...f, campaignIds: [id] }));
-    document.getElementById("global-performance")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -165,32 +53,40 @@ export default function DashboardView() {
     return () => clearInterval(id);
   }, [load]);
 
-  const ops = data?.ops;
-  const d1 = ops ? fmtDelta(ops.deltaVsYesterday, "vs yesterday") : null;
-  const d2 = ops
-    ? fmtDelta(ops.deltaVsSevenDayAvg, `vs last 7-day avg (${Math.round(ops.sevenDayAvg).toLocaleString()})`)
-    : null;
-
   return (
     <>
       {/* Background dot-field is now global (rendered once in the app layout). */}
-      <div className="p-6 max-w-[1400px] mx-auto w-full grid gap-5">
-      {/* Header */}
-      <div className="flex items-end justify-between gap-4 flex-wrap">
+      {/* Console-density frame (2026-07-02): fluid width + tighter rhythm — the AWS-style
+          "use the screen" layout. Density scale documented in the console-density spec. */}
+      <div className="p-4 w-full grid gap-4">
+      {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
+          by the green tick (pattern brief §1), not a background wash. */}
+      <SectionIsland>
+      {/* Header — title/LIVE on the left; agents-active chip grouped with Refresh top-right
+          (mockup parity, Jasiel 2026-07-03). The Today/Yesterday toggle sits alone below (in
+          TodayPerformanceCards). items-start so the right group aligns with the title row. */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-[26px] font-bold tracking-tight">Today&apos;s Performance</h1>
+            <SectionTick color="#3ec08a" />
+            <h1 className="text-lg font-semibold tracking-tight">Today&apos;s Performance</h1>
             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               LIVE{data ? ` · ${fmtDay(data.dayUtc)}` : ""}
             </span>
           </div>
-          <p className="text-sm text-[var(--text-3)] mt-1">
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             Live operational snapshot — never affected by the filters below.
           </p>
         </div>
         <div className="flex items-center gap-2">
           {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+          {data?.ops && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-3)] px-2 py-1 rounded-lg border border-[var(--border)]">
+              <Radio size={12} className="text-[var(--text-2)]" />
+              <span className="font-mono text-[var(--text-1)]">{data.ops.activeAgents}</span>/<span className="font-mono">{data.ops.totalAgents}</span> agents active
+            </span>
+          )}
           <button
             onClick={load}
             disabled={refreshing}
@@ -203,119 +99,25 @@ export default function DashboardView() {
         </div>
       </div>
 
-      {/* Running campaign cards — hidden entirely when none are running (Val's spec). */}
+      {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
+          SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer.
+          Pinned above the running-campaign rows (Jasiel 2026-07-01) so the headline metrics stay on top. */}
+      <TodayPerformanceCards data={data} />
+
+      {/* Today's campaigns — expandable per-campaign rows (Val's mockup, Slice A). Hidden when none running. */}
       {data && data.runningCampaigns.length > 0 && (
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
-          {data.runningCampaigns.map((c) => (
-            <RunningCampaignCardView key={c.id} c={c} onOpen={() => setDetailFor(c)} />
-          ))}
-        </section>
+        <TodaysCampaigns campaigns={data.runningCampaigns} />
       )}
 
-      {/* Ops strip (6 cells). Reached + Voicemail are now their own cells (Val 2026-06-26):
-          "connected" = answered incl. voicemail; "reached" = a live human picked up. */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-        <OpsCell icon={<PhoneCall size={12} />} label="Calls Today" onClick={() => setDrawerMetric("calls")}>
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {(ops?.callsToday ?? 0).toLocaleString()}
-          </div>
-          {d1 && d2 && (
-            <div className="mt-2 space-y-0.5">
-              <div className={`text-[11px] ${d1.color}`}>{d1.text}</div>
-              <div className={`text-[11px] ${d2.color}`}>{d2.text}</div>
-            </div>
-          )}
-        </OpsCell>
-
-        <OpsCell icon={<Zap size={12} />} label="Connect Rate Today" onClick={() => setDrawerMetric("connect")}>
-          <div className="text-3xl font-bold font-mono text-emerald-400 mt-2">{pct(ops?.connectRateToday ?? null)}</div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Connected = answered, including voicemail. A human pickup is shown separately as Reached."
-          >
-            {ops
-              ? `${ops.connectedToday.toLocaleString()} of ${ops.terminalToday.toLocaleString()} calls connected`
-              : "—"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<UserCheck size={12} />} label="Reached Today">
-          <div className="text-3xl font-bold font-mono text-teal-400 mt-2">{(ops?.reachToday ?? 0).toLocaleString()}</div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Live humans who picked up = connected − detected voicemails. Unevaluated connects count as reached (older data)."
-          >
-            {ops ? "live humans reached" : "—"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<Voicemail size={12} />} label="Voicemail Today">
-          <div className="text-3xl font-bold font-mono text-violet-300 mt-2">
-            {ops && ops.voicemailEvaluatedToday > 0 ? pct(ops.voicemailRateToday) : "—"}
-          </div>
-          <div
-            className="text-[11px] text-[var(--text-3)] mt-2"
-            title="Share of evaluated connects that resolved to the player's voicemail. Fills forward from the call-observability deploy."
-          >
-            {ops && ops.voicemailEvaluatedToday > 0 ? "of evaluated connects" : "tracking from deploy"}
-          </div>
-        </OpsCell>
-
-        <OpsCell icon={<MessageSquare size={12} />} label="Messages Sent Today" onClick={() => setDrawerMetric("messages")}>
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {(ops?.messagesSentToday ?? 0).toLocaleString()}
-          </div>
-          {ops && (
-            <div className="mt-2 space-y-0.5 text-[11px] text-[var(--text-3)]">
-              <div>
-                <span className="text-[var(--text-2)] font-medium">{pct(ops.messagesShareOfCalls)}</span> of today&apos;s calls
-              </div>
-              <div>
-                <span className="text-[var(--text-2)] font-medium">{pct(ops.messagesShareOfConnected)}</span> of connected calls
-              </div>
-            </div>
-          )}
-        </OpsCell>
-
-        <OpsCell icon={<Radio size={12} />} label="Active AI Agents">
-          <div className="text-3xl font-bold font-mono text-[var(--text-1)] mt-2">
-            {ops?.activeAgents ?? 0} <span className="text-[var(--text-3)]">/ {ops?.totalAgents ?? 0}</span>
-          </div>
-          <div className="text-[11px] text-[var(--text-3)] mt-2">
-            {ops
-              ? `${ops.idleAgents} idle · ${ops.runningCampaignCount} campaign${ops.runningCampaignCount === 1 ? "" : "s"} running`
-              : "—"}
-          </div>
-        </OpsCell>
-      </section>
-
-      {/* States */}
-      {!data && !error && <p className="text-center text-xs text-[var(--text-3)] py-8">Loading today&apos;s performance…</p>}
       {data && data.runningCampaigns.length === 0 && (
         <p className="text-center text-xs text-[var(--text-3)] py-1">No campaigns are running right now.</p>
       )}
+      </SectionIsland>
 
-      {/* Global Performance — filters + KPI grid → charts → campaign table → heatmap → ranked tables.
-          (Charts/heatmap/ranked tables share GlobalPerformance's fetched data, so the section owns the
-          full ordered flow; the campaign table is self-contained and slotted into that order.) */}
-      <GlobalPerformance filters={filters} onChange={setFilters} onFocusCampaign={focusCampaign} onMetricClick={setDrawerMetric} />
+      {/* Global — filtered historical performance. NO panel wrap (reference): tick header +
+          sticky filter bar + free-standing modules on the app background. */}
+      <GlobalPerformance filters={filters} onChange={setFilters} />
       </div>
-
-      {detailFor && (
-        <CampaignDetailsModal
-          campaignId={detailFor.id}
-          name={detailFor.name}
-          country={detailFor.country}
-          status="running"
-          baseAssistantId={detailFor.baseAssistantId}
-          metrics={detailFor.today}
-          metricsLabel="Today"
-          onClose={() => setDetailFor(null)}
-          onFilter={() => focusCampaign(detailFor.id)}
-        />
-      )}
-
-      <MetricDrawer metric={drawerMetric} onClose={() => setDrawerMetric(null)} />
     </>
   );
 }

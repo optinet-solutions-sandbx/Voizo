@@ -2,18 +2,22 @@
 
 // Slice 5c — Daily × Hourly heatmap. Rows = dates, cols = hours 00–23 in each campaign's LOCAL
 // time (calls from campaigns with no/invalid timezone fall back to UTC — disclosed in the caption).
-// Cell color intensity ∝ call volume. Hover a cell for the full per-campaign breakdown (calls /
-// connect / success for that slot). CSS grid (no chart lib). Driven by the global filters.
+// Cell color intensity ∝ call volume. Hover a cell for the full per-campaign breakdown (attempts /
+// reached / voicemail / positive for that slot — post-06-26 vocab). CSS grid (no chart lib).
+// Driven by the global filters.
 
 import { useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { campaignShortLabel } from "@/lib/campaignDisplay";
 import type { HeatCell } from "@/lib/dashboardAnalytics";
+import WidgetCard from "./WidgetCard";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (h: number) => String(h).padStart(2, "0");
 const pctOf = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+// Reached (human-only) = connected − voicemail. Works for both HeatCell and HeatBreakdown.
+const reachedOf = (x: { connected: number; voicemailConnected: number }) => x.connected - x.voicemailConnected;
 
 function dayLabel(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -30,30 +34,27 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
   const hours = Array.from({ length: 24 }, (_, h) => h);
 
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
-        <div className="flex items-center gap-2">
-          <LayoutGrid size={15} className="text-[var(--text-3)]" />
-          <h3 className="text-[15px] font-semibold">Daily &amp; Hourly Heat Map</h3>
-        </div>
+    <WidgetCard
+      title="Daily & Hourly Heat Map"
+      icon={<LayoutGrid size={14} className="text-[var(--text-3)]" />}
+      context="attempts by hour in each campaign's local time · hover a cell for the breakdown"
+      actions={
         <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-3)]">
           Fewer
           <span className="flex gap-0.5">
             {[0.15, 0.35, 0.55, 0.75, 0.95].map((a) => (
-              <span key={a} className="w-3 h-3 rounded-sm" style={{ background: `rgba(52,211,153,${a})` }} />
+              <span key={a} className="w-3 h-3 rounded-sm" style={{ background: `rgba(62,192,138,${a})` }} />
             ))}
           </span>
           More
         </div>
-      </div>
-      <p className="text-[11px] text-[var(--text-3)] mb-3">
-        Call attempts by hour in each campaign&apos;s local time · hover any cell for the full breakdown.
-        {utcFallbackCalls > 0 && (
-          <span className="text-amber-400/80">
-            {" "}· {utcFallbackCalls.toLocaleString()} call{utcFallbackCalls === 1 ? "" : "s"} from campaigns without a set timezone shown in UTC.
-          </span>
-        )}
-      </p>
+      }
+    >
+      {utcFallbackCalls > 0 && (
+        <p className="text-[11px] text-amber-400/80 mb-2">
+          {utcFallbackCalls.toLocaleString()} call{utcFallbackCalls === 1 ? "" : "s"} from campaigns without a set timezone shown in UTC.
+        </p>
+      )}
 
       {days.length === 0 ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No calls in this window.</p>
@@ -83,7 +84,7 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
                         onMouseLeave={() => setHover(null)}
                         className="h-8 text-center align-middle text-[10px] font-mono rounded-sm"
                         style={{
-                          background: cell ? `rgba(52,211,153,${alpha})` : "var(--bg-elevated)",
+                          background: cell ? `rgba(62,192,138,${alpha})` : "var(--bg-elevated)",
                           color: cell && alpha > 0.55 ? "#06281c" : "var(--text-3)",
                         }}
                       >
@@ -106,21 +107,22 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
           <div className="text-[var(--text-2)] font-medium">
             {dayLabel(hover.cell.day)} · {pad(hover.cell.hour)}:00
           </div>
-          <div className="flex items-center gap-3 mt-1 mb-1.5 text-[11px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 mb-1.5 text-[11px]">
             <span className="text-[var(--text-3)]">Attempts <span className="text-[var(--text-1)] font-mono">{hover.cell.calls}</span></span>
-            <span className="text-[var(--text-3)]">Connected <span className="text-emerald-400 font-mono">{hover.cell.connected} · {pctOf(hover.cell.connected, hover.cell.calls)}</span></span>
-            <span className="text-[var(--text-3)]">Success <span className="text-amber-400 font-mono">{hover.cell.successful} · {pctOf(hover.cell.successful, hover.cell.connected)}</span></span>
+            <span className="text-[var(--text-3)]">Reached <span className="font-mono" style={{ color: "#3ec08a" }}>{reachedOf(hover.cell)} · {pctOf(reachedOf(hover.cell), hover.cell.calls)}</span></span>
+            <span className="text-[var(--text-3)]">Voicemail <span className="font-mono" style={{ color: "#8f86e6" }}>{hover.cell.voicemailConnected}</span></span>
+            <span className="text-[var(--text-3)]">Positive <span className="text-amber-400 font-mono">{hover.cell.successful} · {pctOf(hover.cell.successful, reachedOf(hover.cell))}</span></span>
           </div>
           <div className="grid gap-0.5 border-t border-[var(--border)] pt-1.5">
             {hover.cell.breakdown.map((b, i) => (
               <div key={i} className="flex items-center gap-2 text-[11px]">
                 <span className="truncate text-[var(--text-2)] flex-1">{campaignShortLabel(b.name)}</span>
-                <span className="font-mono text-[var(--text-3)] shrink-0">{b.calls}c · {b.connected}conn · {b.successful}✓</span>
+                <span className="font-mono text-[var(--text-3)] shrink-0">{b.calls}c · {reachedOf(b)}r · {b.voicemailConnected}vm · {b.successful}✓</span>
               </div>
             ))}
           </div>
         </div>
       )}
-    </section>
+    </WidgetCard>
   );
 }

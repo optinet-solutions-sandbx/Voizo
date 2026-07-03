@@ -30,6 +30,7 @@ const MS_PER_DAY = 86_400_000;
 
 // ── Input row shapes (only the columns the dashboard selects) ────────────────
 export interface DashCallRow {
+  id?: string | null; // calls_v2.id — join key for sms_messages_v2.call_id (Today SMS breakdown)
   campaign_id: string;
   campaign_number_id?: string | null;
   status?: string | null;
@@ -59,6 +60,8 @@ export interface DashSmsRow {
   campaign_id: string;
   created_at?: string | null;
   status?: string | null;
+  call_id?: string | null; // sms_messages_v2.call_id — links the text to the call that triggered it
+  campaign_number_id?: string | null; // fallback contact link
 }
 
 export interface DashFilters {
@@ -66,6 +69,7 @@ export interface DashFilters {
   endMs: number; // window end (inclusive)
   campaignIds?: string[] | null; // null/undefined = all
   voiceId?: string | null; // single agent (campaign.voice_id)
+  baseAssistantId?: string | null; // single BASE agent (campaign.base_assistant_id) — Top Performers drill (Slice E)
   numberIds?: string[] | null; // phone-lookup, pre-resolved to campaign_number_ids
   includeTest?: boolean; // default false (test excluded from the client view)
 }
@@ -98,13 +102,19 @@ export interface CampaignRollup extends RateRow {
   baseAssistantId: string | null;
   startAt: string | null; // COALESCE(start_at, created_at)
   endAt: string | null;
-  lastCallAtMs: number | null; // most recent call created_at in scope (for the Ended derivation)
+  lastCallAtMs: number | null; // most recent call created_at in scope (for the Finished derivation)
 }
 
-// Derived DISPLAY status (Jasiel 2026-06-15): a paused campaign that's past its
-// scheduled end_at, or hasn't dialed in `idleDays`, reads as done. PRESENTATION-ONLY —
-// never mutates campaigns_v2.status or the scheduler.
-export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
+// Derived DISPLAY status (Jasiel 2026-06-15): campaigns collapse to three reporting states —
+// Running (live), Paused (recently active / resumable), Finished (ran-then-done: past-end or
+// idle — AND never-ran draft/inactive, folded in). PRESENTATION-ONLY — never mutates
+// campaigns_v2.status or the scheduler. Completed+Ended→Finished, then Inactive→Finished (2026-07-03).
+export type DisplayStatus = "running" | "paused" | "finished";
+
+// A paused campaign idle (no calls) for this many days reads as "Finished", so paused campaigns
+// don't pile up (Jasiel 2026-07-03; was 7). Single source for the idle window — the API route, the
+// table default, and the derivation all reference this so the policy can't drift across three spots.
+export const FINISHED_IDLE_DAYS = 2;
 
 export function deriveDisplayStatus(opts: {
   rawStatus: string | null;
@@ -113,15 +123,15 @@ export function deriveDisplayStatus(opts: {
   nowMs: number;
   idleDays?: number;
 }): DisplayStatus {
-  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = 7 } = opts;
+  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = FINISHED_IDLE_DAYS } = opts;
   const s = (rawStatus ?? "").toLowerCase();
   if (s === "running") return "running"; // trust a live status
-  if (s === "inactive" || s === "draft") return "inactive";
-  if (s === "completed") return "completed";
-  if (endAtMs !== null && endAtMs <= nowMs) return "completed"; // reached its scheduled end
+  if (s === "inactive" || s === "draft") return "finished"; // never-ran folded into Finished (2026-07-03)
+  if (s === "completed" || s === "archived") return "finished";
+  if (endAtMs !== null && endAtMs <= nowMs) return "finished"; // reached its scheduled end
   if (s === "paused") {
     const idleMs = idleDays * MS_PER_DAY;
-    if (lastCallMs === null || nowMs - lastCallMs >= idleMs) return "ended"; // stale → done
+    if (lastCallMs === null || nowMs - lastCallMs >= idleMs) return "finished"; // stale → done
     return "paused";
   }
   return "paused"; // unknown non-terminal → treat as paused
@@ -146,11 +156,41 @@ export interface RunningCampaignCard {
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
+  scheduleType: "fixed" | "recurring"; // drives the "recurring" marker on the shared camp-row
   today: RateRow;
+  startAt: string | null; // run-window start — drives the "running for X" runtime (Slice A)
+  players: number; // campaign roster size (route-supplied; 0 when unavailable)
+  perf: TodayPerfDay; // per-campaign today breakdown (no deltas) for the Today's-campaigns rows
+}
+
+// ── Today's Performance 3-card model (Val's mockup, 2026-06-29) ──────────────
+export interface PerfRow {
+  key: string;
+  label: string;
+  count: number;
+  pct: number | null; // share of the card denominator (CallAttempts→total; Reached→reach; SMS→total; sub-row→SMS-reached)
+  deltaPpVsYesterday: number | null; // pp change of this row's rate vs the prior day
+  deltaPpVsSevenDayAvg: number | null; // pp change vs the pooled 7-day rate
+  isEstimated?: boolean; // proxy outcome bucket → drives the "Estimated" tooltip
+  subRows?: PerfRow[]; // SMS "by response" sub-breakdown (lives under the Reached row)
+}
+export interface PerfMetric {
+  total: number;
+  deltaPctVsYesterday: number | null; // % change of the total vs the prior day
+  deltaPctVsSevenDayAvg: number | null; // % change vs the mean daily total over the prior 7 days
+  rows: PerfRow[];
+}
+export interface TodayPerfDay {
+  callAttempts: PerfMetric;
+  reached: PerfMetric;
+  sms: PerfMetric;
+  inFlight: number; // calls still dialing (rendered as "+N in progress", never as Unreachable)
 }
 
 export interface TodaySnapshot {
   dayUtc: string; // YYYY-MM-DD (UTC)
+  today: TodayPerfDay; // 3-card block for today (the toggle default)
+  yesterday: TodayPerfDay; // same block for yesterday (toggle)
   runningCampaigns: RunningCampaignCard[];
   ops: {
     callsToday: number;
@@ -198,7 +238,7 @@ function accumulate(row: RateRow, c: DashCallRow): void {
     row.connected += 1;
     // Voicemail/reach: only CONNECTED ('completed') calls can be a voicemail. NULL = not
     // evaluated (historical/pre-deploy) → excluded from the rate denominator.
-    if (c.voicemail === true) row.voicemailConnected += 1;
+    if (c.voicemail === true && c.goal_reached !== true) row.voicemailConnected += 1; // goal_reached overrides the voicemail flag (Val 2026-07-03)
     if (c.voicemail != null) row.voicemailEvaluated += 1;
   }
   if (isTerminal(c.status)) row.terminal += 1;
@@ -264,6 +304,7 @@ export function filterCalls(
     if (camp.is_test === true && !filters.includeTest) continue;
     if (campaignIdSet && !campaignIdSet.has(c.campaign_id)) continue;
     if (filters.voiceId && (camp.voice_id ?? null) !== filters.voiceId) continue;
+    if (filters.baseAssistantId && (camp.base_assistant_id ?? null) !== filters.baseAssistantId) continue;
     if (numberIdSet && !(c.campaign_number_id && numberIdSet.has(c.campaign_number_id))) continue;
     const t = c.created_at ? Date.parse(c.created_at) : NaN;
     if (!Number.isFinite(t) || t < filters.startMs || t > filters.endMs) continue;
@@ -395,15 +436,21 @@ const SYSTEM_INSTRUCTIONS_END = "[End System Instructions]";
 // the distinguishing sha separately (it would otherwise be the first thing a CSS-truncate hides).
 const PROMPT_SNIPPET_MAX = 200;
 
-/** Short, human-ish label for a prompt: a snippet of its OPERATOR text + the first 4 sha chars.
- *  De-boilerplates by stripping everything up to and including SYSTEM_INSTRUCTIONS_END (the operator
- *  prompt follows it); prefix-less prompts (no marker) are snippeted from the start unchanged. The UI
- *  prepends the base-agent name (resolved client-side) for the full "Tom · snippet · sha" label. */
-export function promptLabel(systemPrompt: string, sha: string): string {
-  let text = systemPrompt ?? "";
+/** The OPERATOR portion of a system prompt: everything after the platform prefix's stable end
+ *  marker, trimmed. Prefix-less prompts pass through unchanged. Shared by promptLabel (snippets)
+ *  and the prompt hover-preview (first lines). */
+export function operatorPromptText(systemPrompt: string): string {
+  const text = systemPrompt ?? "";
   const endIdx = text.indexOf(SYSTEM_INSTRUCTIONS_END);
-  if (endIdx >= 0) text = text.slice(endIdx + SYSTEM_INSTRUCTIONS_END.length);
-  const cleaned = text.replace(/\s+/g, " ").trim();
+  return (endIdx >= 0 ? text.slice(endIdx + SYSTEM_INSTRUCTIONS_END.length) : text).trim();
+}
+
+/** Short, human-ish label for a prompt: a snippet of its OPERATOR text + the first 4 sha chars.
+ *  De-boilerplates via operatorPromptText; prefix-less prompts (no marker) are snippeted from the
+ *  start unchanged. The UI prepends the base-agent name (resolved client-side) for the full
+ *  "Tom · snippet · sha" label. */
+export function promptLabel(systemPrompt: string, sha: string): string {
+  const cleaned = operatorPromptText(systemPrompt).replace(/\s+/g, " ").trim();
   const snippet = cleaned.slice(0, PROMPT_SNIPPET_MAX);
   return `${snippet}${cleaned.length > PROMPT_SNIPPET_MAX ? "…" : ""} · ${(sha ?? "").slice(0, 4)}`;
 }
@@ -464,16 +511,18 @@ export interface TrendPoint {
   successRate: number | null;
   calls: number; // = call attempts that day
   reached: number; // human-only connects that day (connected − voicemail)
-  smsSent: number; // offer texts dispatched that day
+  smsSent: number; // offer texts sent|delivered that day
 }
 
-// "SMS sent" = a message handed to the provider, regardless of receipt — every dispatched row
-// (delivered / in-flight / failed / undelivered / queued / sent). Matches the report's SMS total.
-const SMS_SENT_STATUSES = new Set(["delivered", "queued", "sent", "failed", "undelivered"]);
-function isSmsSent(status: string | null | undefined): boolean {
+// "SMS sent" = accepted by the provider ('sent') or confirmed on the handset ('delivered').
+// Excludes 'queued' (never handed off) and 'failed'/'undelivered' (never arrived). This is the
+// ONE app-wide definition (2026-07-02) — it matches smsWindowBreakdown (the 3-card SMS metric)
+// and the records-drawer "texted" slices, so every "SMS sent" number reconciles across surfaces.
+const SMS_SENT_STATUSES = new Set(["sent", "delivered"]);
+export function isSmsSent(status: string | null | undefined): boolean {
   return SMS_SENT_STATUSES.has(status ?? "");
 }
-/** Per-campaign count of dispatched SMS. Pure; shared by the campaign table, ranked tables, trend. */
+/** Per-campaign count of sent|delivered SMS. Pure; shared by the campaign table, ranked tables, trend. */
 export function smsSentByCampaign(sms: DashSmsRow[]): Map<string, number> {
   const m = new Map<string, number>();
   for (const s of sms) if (isSmsSent(s.status)) m.set(s.campaign_id, (m.get(s.campaign_id) ?? 0) + 1);
@@ -567,14 +616,16 @@ export function computeDailyVolume(
 export interface HeatBreakdown {
   name: string; // raw campaign name (UI formats)
   calls: number;
-  connected: number;
+  connected: number; // status ∈ CONNECTED_STATUSES (incl. voicemail)
+  voicemailConnected: number; // connected calls flagged voicemail===true (Reached = connected − this)
   successful: number;
 }
 export interface HeatCell {
   day: string; // YYYY-MM-DD (UTC)
   hour: number; // 0..23 (UTC)
   calls: number;
-  connected: number;
+  connected: number; // status ∈ CONNECTED_STATUSES (incl. voicemail)
+  voicemailConnected: number; // connected calls flagged voicemail===true (Reached = connected − this)
   successful: number;
   breakdown: HeatBreakdown[]; // top campaigns in this slot (for the hover tooltip)
 }
@@ -624,8 +675,9 @@ export function computeHeatmap(calls: DashCallRow[], campaigns: DashCampaignRow[
     hour: number;
     calls: number;
     connected: number;
+    voicemailConnected: number;
     successful: number;
-    byCampaign: Map<string, { calls: number; connected: number; successful: number }>;
+    byCampaign: Map<string, { calls: number; connected: number; voicemailConnected: number; successful: number }>;
   }
   const cells = new Map<string, Agg>();
   let localizedCalls = 0;
@@ -650,30 +702,33 @@ export function computeHeatmap(calls: DashCallRow[], campaigns: DashCampaignRow[
     const key = `${day}|${hour}`;
     let cell = cells.get(key);
     if (!cell) {
-      cell = { day, hour, calls: 0, connected: 0, successful: 0, byCampaign: new Map() };
+      cell = { day, hour, calls: 0, connected: 0, voicemailConnected: 0, successful: 0, byCampaign: new Map() };
       cells.set(key, cell);
     }
     const conn = isConnected(c.status);
+    const vm = conn && c.voicemail === true && c.goal_reached !== true; // voicemail — unless the call reached the goal (goal overrides, Val 2026-07-03)
     const succ = c.goal_reached === true;
     cell.calls++;
     if (conn) cell.connected++;
+    if (vm) cell.voicemailConnected++;
     if (succ) cell.successful++;
     let bc = cell.byCampaign.get(c.campaign_id);
     if (!bc) {
-      bc = { calls: 0, connected: 0, successful: 0 };
+      bc = { calls: 0, connected: 0, voicemailConnected: 0, successful: 0 };
       cell.byCampaign.set(c.campaign_id, bc);
     }
     bc.calls++;
     if (conn) bc.connected++;
+    if (vm) bc.voicemailConnected++;
     if (succ) bc.successful++;
   }
   const out: HeatCell[] = [];
   for (const cell of cells.values()) {
     const breakdown: HeatBreakdown[] = [...cell.byCampaign.entries()]
-      .map(([id, v]) => ({ name: index.get(id)?.name ?? id, calls: v.calls, connected: v.connected, successful: v.successful }))
+      .map(([id, v]) => ({ name: index.get(id)?.name ?? id, calls: v.calls, connected: v.connected, voicemailConnected: v.voicemailConnected, successful: v.successful }))
       .sort((a, b) => b.calls - a.calls)
       .slice(0, 8);
-    out.push({ day: cell.day, hour: cell.hour, calls: cell.calls, connected: cell.connected, successful: cell.successful, breakdown });
+    out.push({ day: cell.day, hour: cell.hour, calls: cell.calls, connected: cell.connected, voicemailConnected: cell.voicemailConnected, successful: cell.successful, breakdown });
   }
   return { cells: out, localizedCalls, utcFallbackCalls };
 }
@@ -696,10 +751,11 @@ export interface CampaignTableRow {
   successRate: number | null;
   players: number; // campaign roster size (campaign_numbers_v2 count) — lifetime, NOT windowed
   reach: number; // human-only connects in window = connected − voicemailConnected
-  smsSent: number; // texts dispatched (delivered + in-flight) for this campaign
+  smsSent: number; // texts sent|delivered for this campaign (== perf.sms.total over the lifetime window)
   startAt: string | null;
   endAt: string | null;
   lastCallAt: string | null;
+  perf: TodayPerfDay; // per-campaign LIFETIME breakdown (lean) for the camp-row columns (Slice C)
 }
 
 /** All live (non-ghost, non-test) campaigns as table rows — INCLUDING zero-call ones
@@ -710,18 +766,24 @@ export function computeCampaignTable(
   calls: DashCallRow[],
   campaigns: DashCampaignRow[],
   nowMs: number,
-  idleDays = 7,
-  numbers: Array<{ campaign_id: string }> = [],
+  idleDays = FINISHED_IDLE_DAYS,
+  numbers: Array<{ campaign_id: string; id?: string; outcome?: string | null }> = [],
   sms: DashSmsRow[] = [],
 ): CampaignTableRow[] {
   const index = buildCampaignIndex(campaigns);
   const rollupMap = new Map(computeCampaignRollups(calls, index).map((r) => [r.id, r]));
-  // Players = full roster (lifetime; numbers are NOT windowed by the caller). SMS sent = every
-  // message dispatched for the campaign (delivered + in-flight + failed/undelivered) — "sent" =
-  // handed to the provider regardless of receipt, matching the report's "SMS sent" total.
+  // Players = full roster (lifetime; numbers are NOT windowed by the caller). SMS sent =
+  // sent|delivered (the app-wide definition) — reconciles with the row's perf.sms breakdown.
   const playersByCampaign = new Map<string, number>();
   for (const n of numbers) playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
   const smsByCampaign = smsSentByCampaign(sms);
+  // Declined contacts (campaign_numbers_v2.outcome === 'declined_offer') for the per-campaign Reached split.
+  const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer" && n.id).map((n) => n.id as string));
+  // Group calls + sms by campaign once (O(n)) so each row's lifetime breakdown is a Map lookup, not a scan.
+  const callsByCampaign = new Map<string, DashCallRow[]>();
+  for (const c of calls) { const g = callsByCampaign.get(c.campaign_id); if (g) g.push(c); else callsByCampaign.set(c.campaign_id, [c]); }
+  const smsRowsByCampaign = new Map<string, DashSmsRow[]>();
+  for (const m of sms) { const g = smsRowsByCampaign.get(m.campaign_id); if (g) g.push(m); else smsRowsByCampaign.set(m.campaign_id, [m]); }
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
@@ -754,6 +816,14 @@ export function computeCampaignTable(
         startAt: (c.start_at ?? c.created_at) ?? null,
         endAt: c.end_at ?? null,
         lastCallAt: lastCallMs ? new Date(lastCallMs).toISOString() : null,
+        perf: computeWindowPerf(
+          callsByCampaign.get(c.id) ?? [],
+          smsRowsByCampaign.get(c.id) ?? [],
+          declinedIds,
+          0,
+          nowMs,
+          { useTranscript: false },
+        ),
       };
     });
 }
@@ -770,6 +840,7 @@ export interface DashNumberRow {
 // stay at 0 until the voicemail-persistence slice. The rest derive from outcome.
 export type RecordStatus =
   | "successful"
+  | "offer_delivered"
   | "not_interested"
   | "awaiting_retry"
   | "voicemail"
@@ -780,8 +851,11 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
   if (anyGoal) return "successful"; // a goal on any attempt wins
   switch ((outcome ?? "").toLowerCase()) {
     case "sent_sms":
-    case "sms_delivered": // offer delivered by SMS (registered_optin voicemail follow-up) — retired from retries
-      return "successful";
+    case "sms_delivered": // offer SMS sent/delivered (registered_optin voicemail follow-up) — retired from retries
+      // Split from "successful" (Val 2026-07-03, ticket 1216090162016320): a delivered offer SMS is a
+      // WIN but NOT a human "Positive response" — the contact may never have engaged (voicemail → auto
+      // follow-up). Only a goal (handled above) reads "Positive response"; delivery reads "Offer delivered".
+      return "offer_delivered";
     case "not_interested":
     case "declined_offer":
       return "not_interested";
@@ -822,6 +896,7 @@ export interface CallRecord {
   tag: ContactTag; // contact-level overall OUTCOME (drives the outcome filter + export)
   attempts: CallAttempt[]; // ordered by created_at asc; attempt 1 first
   lastAttemptedMs: number | null;
+  smsSent?: boolean; // contact was sent an SMS in this campaign (route-supplied) — drives the "SMS sent" slice
 }
 
 export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
@@ -838,7 +913,7 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
 // Honest, plain-English definitions for each tag — surfaced as hover tooltips on the records
 // outcome chips. These are PROXY classifications (best-effort, derived from call data), not
 // verified labels; the wording discloses that without renaming the categories. Mirrors the
-// "estimated" hint treatment on CampaignSummary's breakdown bars.
+// "Estimated" hint treatment on the records filters + breakdown-row "est" chips.
 export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
   neutral: "Connected to a person, but no clear positive or negative outcome was detected.",
@@ -850,16 +925,17 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   wrong_number: "Marked as a wrong or invalid number.",
 };
 
-// Muted accents — MATCH src/components/analytics/CampaignSummary.tsx (calm palette, low chroma).
+// Semantic palette (pattern brief §2) — the SAME meaning-hues as ROW_COLOR so a tag reads
+// identically in chips, dots, and segments. awaiting_retry/wrong_number stay neutral greys.
 export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
-  positive: "#5fb39a",
-  neutral: "#8b939c",
-  declined: "#cf8a8a",
-  early_hangup: "#c9a86a",
-  voicemail: "#9f90c9",
-  unreachable: "#c98a8a",
-  awaiting_retry: "#7fa8d0",
-  wrong_number: "#8b939c",
+  positive: "#3ec08a",
+  neutral: "#5b9bf0",
+  declined: "#e46664",
+  early_hangup: "#e0814a",
+  voicemail: "#8f86e6",
+  unreachable: "#e0a53c",
+  awaiting_retry: "#7d828c",
+  wrong_number: "#565b64",
 };
 
 // Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
@@ -871,31 +947,47 @@ function transcriptText(t: DashCallRow["transcript"]): string {
   return typeof t === "string" ? t : (t.text ?? "");
 }
 
+/** Definitive "no real conversation" signal for a connected, non-voicemail, non-goal call.
+ *  Engagement (2026-06-26): a connected call where no real conversation happened is an early
+ *  hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
+ *  against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
+ *  silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous — stays
+ *  neutral). `opts.useTranscript:false` (lean/ranged path, spec §5.1) drops the transcript-only
+ *  "customer hung up with <=1 substantive turn" branch — passing transcript:null is NOT equivalent
+ *  (userTurns=0 would make it over-fire). Default true preserves today/per-campaign behaviour. */
+export function isEarlyHangup(call: DashCallRow, opts: { useTranscript?: boolean } = {}): boolean {
+  const useTranscript = opts.useTranscript !== false;
+  if (call.ended_reason === "silence-timed-out") return true; // connected, customer never spoke
+  if (
+    useTranscript &&
+    call.ended_reason === "customer-ended-call" &&
+    substantiveUserTurnCount(transcriptText(call.transcript)) <= 1
+  )
+    return true; // pickup-and-bail (transcript-derived)
+  if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    return true;
+  return false;
+}
+
 /** Per-attempt outcome tag for a single call. `declinedContact` = the call's CONTACT has
  *  campaign_numbers_v2.outcome === 'declined_offer'. Mirrors campaignAnalytics' priority
- *  (voicemail===null is NOT voicemail — treated as a human). */
-export function deriveAttemptTag(call: DashCallRow, declinedContact: boolean): AttemptTag {
+ *  (voicemail===null is NOT voicemail — treated as a human). `opts.useTranscript:false` selects the
+ *  lean (transcript-less) early-hangup rule for the ranged dashboard path (spec §5.1). */
+export function deriveAttemptTag(
+  call: DashCallRow,
+  declinedContact: boolean,
+  opts: { useTranscript?: boolean } = {},
+): AttemptTag {
   if (!isConnected(call.status)) return "unreachable";
+  if (call.goal_reached === true) return "positive"; // goal_reached overrides the voicemail flag (Val 2026-07-03) — a call that reached the goal reads Positive, not Voicemail
   if (call.voicemail === true) return "voicemail";
-  if (call.goal_reached === true) return "positive";
   if (declinedContact) return "declined";
-  // Engagement (2026-06-26): a connected call where no real conversation happened is an early
-  // hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
-  // against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
-  // ended_reason silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous).
-  // We reclassify only the DEFINITIVE no-conversation signals; ambiguous null/null connects stay
-  // neutral ("unclear") rather than over-reclassifying calls whose transcript merely wasn't captured.
-  const userTurns = substantiveUserTurnCount(transcriptText(call.transcript));
-  if (call.ended_reason === "silence-timed-out") return "early_hangup"; // connected, customer never spoke
-  if (call.ended_reason === "customer-ended-call" && userTurns <= 1) return "early_hangup"; // pickup-and-bail
-  if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
-    return "early_hangup";
-  return "neutral";
+  return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
 }
 
 /** One record per campaign_number: ordered per-attempt tags + a contact-level tag + last-attempt
  *  time. `calls` should be that campaign's calls. Numbers with no calls still produce a record. */
-export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[]): CallRecord[] {
+export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[], opts: { useTranscript?: boolean } = {}): CallRecord[] {
   // Contacts whose outcome is an explicit decline (drives the per-attempt 'declined' tag).
   const declinedContactIds = new Set(
     numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
@@ -928,7 +1020,7 @@ export function computeCallRecords(numbers: DashNumberRow[], calls: DashCallRow[
     });
     const attempts: CallAttempt[] = sorted.map((c, i) => {
       const t = c.created_at ? Date.parse(c.created_at) : NaN;
-      return { index: i + 1, tag: deriveAttemptTag(c, declined), atMs: Number.isFinite(t) ? t : null };
+      return { index: i + 1, tag: deriveAttemptTag(c, declined, opts), atMs: Number.isFinite(t) ? t : null };
     });
     let lastAttemptedMs: number | null = null;
     for (const a of attempts) {
@@ -965,6 +1057,324 @@ export function recordHasAttemptOutcome(record: CallRecord, tag: AttemptTag): bo
   return record.attempts.some((a) => a.tag === tag);
 }
 
+/** Attempt tags that mean a live human conversation happened (the inverse of voicemail/unreachable).
+ *  Backs the "Reached" drill-down group on the Today cards. */
+export const HUMAN_TAGS: ReadonlySet<AttemptTag> = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup"]);
+
+/** True when the contact was reached by a live human on ANY attempt — the records-side counterpart
+ *  of the Reached card metric. Pure; no classification logic here. */
+export function recordIsReached(record: CallRecord): boolean {
+  return record.attempts.some((a) => HUMAN_TAGS.has(a.tag));
+}
+
+/** A day-scoped record + whether the contact got a sent|delivered SMS that day — lets the Today
+ *  SMS card drill into texted contacts. Returned by /api/dashboard/today/records. */
+export type TodayCallRecord = CallRecord & { smsSentToday: boolean };
+
+/** Attach `smsSentToday` (campaignNumberId ∈ the day's sent/delivered SMS set) to each record. Pure. */
+export function attachSmsSent(records: CallRecord[], sentNumberIds: Set<string>): TodayCallRecord[] {
+  return records.map((r) => ({ ...r, smsSentToday: sentNumberIds.has(r.campaignNumberId) }));
+}
+
+// ── Today's Performance card breakdowns (per-window partitions) ──────────────
+// Powers the 3-card Today's Performance redesign (Val's mockup, 2026-06-29). The Reached
+// split is a PROXY that mirrors campaignAnalytics.outcomeBreakdown EXACTLY (same priority,
+// same EARLY_HANGUP_SEC), so the cards reconcile with the records drawer. "estimated" in UI.
+export interface CallBreakdown {
+  total: number; // all attempts in the window
+  terminal: number; // connected + terminal-nonconnect (excludes in-flight)
+  connected: number; // CONNECTED_STATUSES (incl. voicemail)
+  inFlight: number; // total − terminal (still dialing/ringing)
+  reach: number; // connected − voicemail (live humans)
+  voicemail: number; // connected & voicemail===true
+  unreachable: number; // terminal − connected
+  // Reached split — partitions `reach` (sums to reach).
+  positive: number;
+  neutral: number;
+  declined: number;
+  earlyHangup: number;
+}
+
+/** Partition calls with created_at in [startMs, endMs) into the Call-Attempts + Reached card
+ *  rows. `declinedIds` = campaign_number_ids whose contact outcome is 'declined_offer'. */
+export function callWindowBreakdown(
+  calls: DashCallRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+  opts: { useTranscript?: boolean } = {},
+): CallBreakdown {
+  const b: CallBreakdown = {
+    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
+    positive: 0, neutral: 0, declined: 0, earlyHangup: 0,
+  };
+  for (const c of calls) {
+    const t = c.created_at ? Date.parse(c.created_at) : NaN;
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += 1;
+    if (isTerminal(c.status)) b.terminal += 1;
+    if (!isConnected(c.status)) continue;
+    b.connected += 1;
+    if (c.voicemail === true && c.goal_reached !== true) { b.voicemail += 1; continue; } // goal_reached overrides voicemail (Val 2026-07-03)
+    // Reached human → outcome split (mirror deriveAttemptTag priority verbatim via the shared seam).
+    b.reach += 1;
+    if (c.goal_reached === true) { b.positive += 1; continue; }
+    if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) { b.declined += 1; continue; }
+    if (isEarlyHangup(c, opts)) b.earlyHangup += 1; else b.neutral += 1;
+  }
+  b.unreachable = b.terminal - b.connected;
+  b.inFlight = b.total - b.terminal;
+  return b;
+}
+
+export interface SmsBreakdown {
+  total: number; // sent|delivered SMS in the window
+  reached: number; // SMS to a reached human (positive|neutral|declined|early_hangup)
+  voicemail: number; // SMS to a voicemail pickup (registered_optin follow-up)
+  unreachable: number; // SMS whose call didn't connect
+  // by-response of the reached SMS (early_hangup has no named sub-row; it still counts in `reached`).
+  positive: number;
+  neutral: number;
+  declined: number;
+}
+
+/** Bucket each sent|delivered SMS (created_at in [startMs, endMs)) by its recipient call's
+ *  outcome, joining sms.call_id → calls_v2.id. SMS with no matching call count in `total` only
+ *  (honest — we can't attribute an outcome). Reuses deriveAttemptTag (single source of truth). */
+export function smsWindowBreakdown(
+  sms: DashSmsRow[],
+  calls: DashCallRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+  opts: { useTranscript?: boolean } = {},
+): SmsBreakdown {
+  const callById = new Map<string, DashCallRow>();
+  for (const c of calls) if (c.id) callById.set(c.id, c);
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  for (const m of sms) {
+    if (!isSmsSent(m.status)) continue;
+    const t = m.created_at ? Date.parse(m.created_at) : NaN;
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += 1;
+    const call = m.call_id ? callById.get(m.call_id) : undefined;
+    if (!call) continue; // unmatched → counted in total only
+    const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)), opts);
+    if (tag === "voicemail") { b.voicemail += 1; continue; }
+    if (tag === "unreachable") { b.unreachable += 1; continue; }
+    b.reached += 1; // positive | neutral | declined | early_hangup
+    if (tag === "positive") b.positive += 1;
+    else if (tag === "neutral") b.neutral += 1;
+    else if (tag === "declined") b.declined += 1;
+  }
+  return b;
+}
+
+/** Fractional change of a TOTAL vs a baseline (0.166 ⇒ +16.6%). null when there's no baseline. */
+export function pctDelta(today: number, base: number | null): number | null {
+  if (base === null || base === 0) return null;
+  return (today - base) / base;
+}
+
+/** Percentage-POINT change of a RATE vs a baseline rate (-0.012 ⇒ -1.2pp). null when either is null. */
+export function ppDelta(todayRate: number | null, baseRate: number | null): number | null {
+  if (todayRate === null || baseRate === null) return null;
+  return todayRate - baseRate;
+}
+
+// ── Today's Performance day assembly (3-card model) ──────────────────────────
+function mkRow(
+  key: string,
+  label: string,
+  count: number,
+  denom: number,
+  prevCount: number,
+  prevDenom: number,
+  avgCount: number,
+  avgDenom: number,
+  opts?: { isEstimated?: boolean; subRows?: PerfRow[] },
+): PerfRow {
+  const pct = safeDiv(count, denom);
+  const row: PerfRow = {
+    key,
+    label,
+    count,
+    pct,
+    deltaPpVsYesterday: ppDelta(pct, safeDiv(prevCount, prevDenom)),
+    deltaPpVsSevenDayAvg: ppDelta(pct, safeDiv(avgCount, avgDenom)),
+  };
+  if (opts?.isEstimated) row.isEstimated = true;
+  if (opts?.subRows) row.subRows = opts.subRows;
+  return row;
+}
+
+function mkMetric(total: number, prevTotal: number, avg7Total: number, rows: PerfRow[]): PerfMetric {
+  return {
+    total,
+    deltaPctVsYesterday: pctDelta(total, prevTotal),
+    deltaPctVsSevenDayAvg: pctDelta(total, avg7Total / 7), // 7d-avg of a total = mean daily
+    rows,
+  };
+}
+
+/** Assemble one day's 3-card Today's Performance block (today or yesterday), with vs-prior-day
+ *  and vs-7-day-avg deltas (7d rate = pooled over the prior 7 days). `liveCalls`/`liveSms` must
+ *  already exclude ghost + test. Denominators per spec: Call-Attempts rows % of total; Reached
+ *  rows % of reach; SMS rows % of SMS total; SMS by-response sub-rows % of SMS-reached. */
+export function computeTodayPerf(
+  liveCalls: DashCallRow[],
+  liveSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  dayStartMs: number,
+): TodayPerfDay {
+  const dEnd = dayStartMs + MS_PER_DAY;
+  const cb = callWindowBreakdown(liveCalls, declinedIds, dayStartMs, dEnd);
+  const sb = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs, dEnd);
+  const cbP = callWindowBreakdown(liveCalls, declinedIds, dayStartMs - MS_PER_DAY, dayStartMs);
+  const sbP = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - MS_PER_DAY, dayStartMs);
+  const cb7 = callWindowBreakdown(liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
+  const sb7 = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
+
+  const callAttempts = mkMetric(cb.total, cbP.total, cb7.total, [
+    mkRow("reached", "Reached", cb.reach, cb.total, cbP.reach, cbP.total, cb7.reach, cb7.total),
+    mkRow("voicemail", "Voicemail", cb.voicemail, cb.total, cbP.voicemail, cbP.total, cb7.voicemail, cb7.total),
+    mkRow("unreachable", "Unreachable", cb.unreachable, cb.total, cbP.unreachable, cbP.total, cb7.unreachable, cb7.total),
+  ]);
+
+  const est = { isEstimated: true };
+  const reached = mkMetric(cb.reach, cbP.reach, cb7.reach, [
+    mkRow("positive", "Positive", cb.positive, cb.reach, cbP.positive, cbP.reach, cb7.positive, cb7.reach, est),
+    mkRow("neutral", "Neutral", cb.neutral, cb.reach, cbP.neutral, cbP.reach, cb7.neutral, cb7.reach, est),
+    mkRow("declined", "Declined", cb.declined, cb.reach, cbP.declined, cbP.reach, cb7.declined, cb7.reach, est),
+    mkRow("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, cbP.earlyHangup, cbP.reach, cb7.earlyHangup, cb7.reach, est),
+  ]);
+
+  const smsReachedSub = [
+    mkRow("positive", "Positive", sb.positive, sb.reached, sbP.positive, sbP.reached, sb7.positive, sb7.reached),
+    mkRow("neutral", "Neutral", sb.neutral, sb.reached, sbP.neutral, sbP.reached, sb7.neutral, sb7.reached),
+    mkRow("declined", "Declined", sb.declined, sb.reached, sbP.declined, sbP.reached, sb7.declined, sb7.reached),
+  ];
+  const sms = mkMetric(sb.total, sbP.total, sb7.total, [
+    mkRow("reached", "Reached", sb.reached, sb.total, sbP.reached, sbP.total, sb7.reached, sb7.total, { subRows: smsReachedSub }),
+    mkRow("voicemail", "Voicemail", sb.voicemail, sb.total, sbP.voicemail, sbP.total, sb7.voicemail, sb7.total),
+    mkRow("unreachable", "Unreachable", sb.unreachable, sb.total, sbP.unreachable, sbP.total, sb7.unreachable, sb7.total),
+  ]);
+
+  return { callAttempts, reached, sms, inFlight: cb.inFlight };
+}
+
+// ── Ranged Performance (Global Performance 3-card — Val's mockup) ─────────────
+// Same rows/denominators as computeTodayPerf but over an arbitrary [startMs,endMs) window, with
+// NO deltas (the mockup's Global cards show count + pct + bar only) and the transcript-less lean
+// classifier (spec §5.1 — no PII in the always-on aggregate path).
+function mkRowNoDelta(
+  key: string,
+  label: string,
+  count: number,
+  denom: number,
+  opts?: { isEstimated?: boolean; subRows?: PerfRow[] },
+): PerfRow {
+  const row: PerfRow = {
+    key,
+    label,
+    count,
+    pct: safeDiv(count, denom),
+    deltaPpVsYesterday: null,
+    deltaPpVsSevenDayAvg: null,
+  };
+  if (opts?.isEstimated) row.isEstimated = true;
+  if (opts?.subRows) row.subRows = opts.subRows;
+  return row;
+}
+
+function mkMetricNoDelta(total: number, rows: PerfRow[]): PerfMetric {
+  return { total, deltaPctVsYesterday: null, deltaPctVsSevenDayAvg: null, rows };
+}
+
+/** Unified no-delta windowed perf core (Slice C) — assembles the 3-card breakdown (Call attempts /
+ *  Reached / SMS) over [startMs,endMs) with `opts.useTranscript` (default true). Single source for the
+ *  Global ranged cards (lean), the per-campaign Today rows (transcript), and the Campaign Performance
+ *  rows (lean). `calls`/`sms` must already exclude ghost + test (and be campaign-scoped, where per-campaign). */
+export function computeWindowPerf(
+  calls: DashCallRow[],
+  sms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+  opts: { useTranscript?: boolean } = {},
+): TodayPerfDay {
+  const cb = callWindowBreakdown(calls, declinedIds, startMs, endMs, opts);
+  const sb = smsWindowBreakdown(sms, calls, declinedIds, startMs, endMs, opts);
+
+  const callAttempts = mkMetricNoDelta(cb.total, [
+    mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
+    mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
+    mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
+  ]);
+
+  const est = { isEstimated: true };
+  const reached = mkMetricNoDelta(cb.reach, [
+    mkRowNoDelta("positive", "Positive", cb.positive, cb.reach, est),
+    mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
+    mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
+    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
+  ]);
+
+  const smsReachedSub = [
+    mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
+    mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
+    mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
+  ];
+  const smsMetric = mkMetricNoDelta(sb.total, [
+    mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
+    mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
+    mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
+  ]);
+
+  return { callAttempts, reached, sms: smsMetric, inFlight: cb.inFlight };
+}
+
+/** Ranged 3-card block for Global Performance — lean (transcript-less) windowed perf (spec B §5.1). */
+export function computeRangedPerf(
+  liveCalls: DashCallRow[],
+  liveSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+): TodayPerfDay {
+  return computeWindowPerf(liveCalls, liveSms, declinedIds, startMs, endMs, { useTranscript: false });
+}
+
+/** Per-entity ranged perf (Slice E): scope calls+sms to a campaign-id set, then reuse the lean ranged
+ *  builder. Powers the Top Performers per-entity breakdown cards (Best Campaign/Agent/Prompt). Empty
+ *  set → empty perf. Pure — caller supplies the already-filtered/in-scope call+sms sets. */
+export function perfForCampaignScope(
+  calls: DashCallRow[],
+  sms: DashSmsRow[],
+  declinedIds: Set<string>,
+  startMs: number,
+  endMs: number,
+  campaignIds: ReadonlySet<string>,
+): TodayPerfDay {
+  const c = calls.filter((x) => campaignIds.has(x.campaign_id));
+  const s = sms.filter((m) => campaignIds.has(m.campaign_id));
+  return computeRangedPerf(c, s, declinedIds, startMs, endMs);
+}
+
+/** Per-campaign TODAY breakdown for the Today's-campaigns rows (Slice A). Transcript-based (matches the
+ *  Today's Performance cards), no deltas (mockup campaign rows show none). `campaignCalls`/`campaignSms`
+ *  must already be filtered to ONE campaign (ghost/test excluded). Reuses the windowed breakdown
+ *  primitives + the no-delta assembly. */
+export function computeCampaignTodayPerf(
+  campaignCalls: DashCallRow[],
+  campaignSms: DashSmsRow[],
+  declinedIds: Set<string>,
+  dayStartMs: number,
+  dayEndMs: number,
+): TodayPerfDay {
+  return computeWindowPerf(campaignCalls, campaignSms, declinedIds, dayStartMs, dayEndMs); // default: transcript
+}
+
 // ── Today's Performance (NEVER filtered — always today, UTC) ─────────────────
 function utcDayString(ms: number): string {
   const d = new Date(ms);
@@ -980,6 +1390,8 @@ export function computeToday(
   campaigns: DashCampaignRow[],
   sms: DashSmsRow[],
   now: number,
+  numbers: DashNumberRow[] = [], // campaign_numbers_v2 (id, outcome) for the windowed call set — drives declined detection
+  rosterByCampaign: Map<string, number> = new Map(), // route-supplied per-campaign roster sizes (Slice A)
 ): TodaySnapshot {
   const index = buildCampaignIndex(campaigns);
   const liveCampaigns = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
@@ -993,6 +1405,12 @@ export function computeToday(
     const camp = index.get(c.campaign_id);
     return camp && camp.source !== "ghost_portal" && camp.is_test !== true;
   });
+  // Non-ghost, non-test SMS (mirror the call exclusion) + contacts that explicitly declined the offer.
+  const liveSms = sms.filter((m) => {
+    const camp = index.get(m.campaign_id);
+    return camp && camp.source !== "ghost_portal" && camp.is_test !== true;
+  });
+  const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id));
 
   let callsToday = 0;
   let callsYesterday = 0;
@@ -1039,7 +1457,17 @@ export function computeToday(
       voiceId: c.voice_id ?? null,
       agentLabel: c.vapi_assistant_name ?? null,
       baseAssistantId: c.base_assistant_id ?? null,
+      scheduleType: c.campaign_type === "recurring" ? "recurring" : "fixed",
       today: todayByCampaign.get(c.id) ?? emptyRate(),
+      startAt: c.start_at ?? c.created_at ?? null,
+      players: rosterByCampaign.get(c.id) ?? 0,
+      perf: computeCampaignTodayPerf(
+        liveCalls.filter((x) => x.campaign_id === c.id),
+        liveSms.filter((x) => x.campaign_id === c.id),
+        declinedIds,
+        todayStartMs,
+        todayStartMs + MS_PER_DAY,
+      ),
     }));
 
   const runningVoiceIds = new Set(
@@ -1050,6 +1478,8 @@ export function computeToday(
 
   return {
     dayUtc: utcDayString(todayStartMs),
+    today: computeTodayPerf(liveCalls, liveSms, declinedIds, todayStartMs),
+    yesterday: computeTodayPerf(liveCalls, liveSms, declinedIds, yesterdayStartMs),
     runningCampaigns,
     ops: {
       callsToday,

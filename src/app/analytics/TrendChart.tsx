@@ -17,11 +17,11 @@ function shortDay(iso: string): string {
 }
 const fmtCount = (v: number) => v.toLocaleString();
 
-// dataKey → [label, hex, tailwind dot]. Order = legend + tooltip order.
+// dataKey → [label, hex] — the brief's restrained semantic set. Order = legend + tooltip order.
 const SERIES = [
-  ["calls", "Call attempts", "#94a3b8", "bg-slate-400"],
-  ["reached", "Reached", "#34d399", "bg-emerald-400"],
-  ["smsSent", "SMS sent", "#38bdf8", "bg-sky-400"],
+  ["calls", "Call attempts", "#5b9bf0"],
+  ["reached", "Reached", "#3ec08a"],
+  ["smsSent", "SMS sent", "#8f86e6"],
 ] as const;
 
 function TrendTooltip({
@@ -35,12 +35,15 @@ function TrendTooltip({
 }) {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
+  // % of attempts on the Reached + SMS-sent lines (Val's Asana request 2026-07-03). Guarded on a
+  // zero-attempt day so we never render NaN%/Infinity%.
+  const pctOfAttempts = (n: number) => (p.calls > 0 ? ` (${((n / p.calls) * 100).toFixed(1)}%)` : "");
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs shadow-xl">
       <div className="text-[var(--text-2)] font-medium mb-1">{shortDay(label ?? p.day)}</div>
-      <div className="text-slate-300">{p.calls.toLocaleString()} attempts</div>
-      <div className="text-emerald-400">{p.reached.toLocaleString()} reached</div>
-      <div className="text-sky-400">{p.smsSent.toLocaleString()} SMS sent</div>
+      <div style={{ color: "#5b9bf0" }}>{p.calls.toLocaleString()} attempts</div>
+      <div style={{ color: "#3ec08a" }}>{p.reached.toLocaleString()} reached{pctOfAttempts(p.reached)}</div>
+      <div style={{ color: "#8f86e6" }}>{p.smsSent.toLocaleString()} SMS sent{pctOfAttempts(p.smsSent)}</div>
     </div>
   );
 }
@@ -49,12 +52,12 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
   // Interactive legend: click a series to hide/show its area/line.
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   return (
-    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 flex flex-col">
+    <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] p-5 flex flex-col">
       <div className="flex items-center gap-2 mb-1">
-        <Activity size={15} className="text-[var(--text-3)]" />
+        <Activity size={16} style={{ color: "#5b9bf0" }} />
         <h3 className="text-[15px] font-semibold">Activity Trend</h3>
       </div>
-      <p className="text-[11px] text-[var(--text-3)] mb-3">
+      <p className="text-[12.5px] text-[var(--text-3)] mb-3">
         Daily call attempts, players reached, and offer texts sent.
       </p>
       <div className="flex-1 min-h-[240px]">
@@ -64,14 +67,14 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
           <XAxis dataKey="day" tickFormatter={shortDay} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} minTickGap={24} />
           <YAxis tickFormatter={fmtCount} stroke="var(--text-3)" fontSize={10} tickLine={false} axisLine={false} width={42} domain={[0, "auto"]} allowDecimals={false} />
           <Tooltip content={<TrendTooltip />} />
-          {!hidden.has("calls") && <Area type="monotone" dataKey="calls" stroke="#94a3b8" fill="#94a3b8" fillOpacity={0.1} strokeWidth={2} connectNulls />}
-          {!hidden.has("reached") && <Line type="monotone" dataKey="reached" stroke="#34d399" strokeWidth={2} dot={false} connectNulls />}
-          {!hidden.has("smsSent") && <Line type="monotone" dataKey="smsSent" stroke="#38bdf8" strokeWidth={2} dot={false} connectNulls />}
+          {!hidden.has("calls") && <Area type="monotone" dataKey="calls" stroke="#5b9bf0" fill="#5b9bf0" fillOpacity={0.1} strokeWidth={2} connectNulls />}
+          {!hidden.has("reached") && <Line type="monotone" dataKey="reached" stroke="#3ec08a" strokeWidth={2} dot={false} connectNulls />}
+          {!hidden.has("smsSent") && <Line type="monotone" dataKey="smsSent" stroke="#8f86e6" strokeWidth={2} dot={false} connectNulls />}
         </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="flex items-center gap-4 mt-2 text-[11px]">
-        {SERIES.map(([key, label, , dot]) => {
+      <div className="flex items-center gap-4 flex-wrap mt-3.5 pt-3 border-t border-[var(--border)] text-xs">
+        {SERIES.map(([key, label, hex]) => {
           const off = hidden.has(key);
           return (
             <button
@@ -82,7 +85,7 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
               aria-pressed={!off}
               className={`inline-flex items-center gap-1.5 transition ${off ? "text-[var(--text-3)] opacity-40 line-through" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
             >
-              <span className={`w-2.5 h-2.5 rounded-sm ${dot}`} /> {label}
+              <span className="w-[11px] h-[3px] rounded-sm" style={{ background: hex }} /> {label}
             </button>
           );
         })}

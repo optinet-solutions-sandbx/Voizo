@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css"; /* animate-in/out utilities used by components/ui/* (shadcn, 2026-07-02) */
 /* voizo */
 
 /* ── Dark theme (default) ──────────────────────────────────────────────────── */
@@ -8,21 +9,24 @@
      pickers, time pickers, select dropdowns, scrollbars) in dark mode. */
   color-scheme: dark;
 
-  /* Steel-grey palette (Material Admin reference). Warmer than the prior
-     GitHub-dark navy. Cards lift via a slightly lighter background, not via
-     borders — borders are nearly invisible (white at ~6% opacity). */
-  --bg-app:      #2c3036;
-  --bg-sidebar:  #252830;
-  --bg-card:     #383d44;
-  --bg-elevated: #444a52;
-  --bg-hover:    #3d434b;
-  --border:      rgba(255, 255, 255, 0.06);
-  --border-2:    rgba(255, 255, 255, 0.12);
-  --text-1:      #f1f3f5;
-  --text-2:      #aab1b9;
-  --text-3:      #7b828c;
-  --background:  #2c3036;
-  --foreground:  #f1f3f5;
+  /* Instrument-grade neutral ladder (2026-07-02 pattern brief): near-black app,
+     one elevation step per surface, borders as hairlines. Color is meaning —
+     neutrals carry ALL structure; the single primary + semantic palette live in
+     component constants, not here. */
+  --bg-app:      #0a0b0d;
+  --bg-sidebar:  #0e1014;
+  --bg-panel:    #0e1014; /* primary "island" panels (Today) */
+  --bg-card:     #15171c;
+  --bg-elevated: #131519; /* controls / wells */
+  --bg-hover:    #1a1d23;
+  --border:      #23262e;
+  --border-2:    #2e333c;
+  --text-1:      #eef1f5;
+  --text-2:      #b6bac2;
+  --text-3:      #7d828c;
+  --text-4:      #565b64; /* micro-labels, dimmest legible step */
+  --background:  #0a0b0d;
+  --foreground:  #eef1f5;
 }
 
 /* ── Light theme ───────────────────────────────────────────────────────────── */
@@ -32,6 +36,7 @@
   /* Light side stays clean & neutral, in line with Material conventions. */
   --bg-app:      #ecedef;
   --bg-sidebar:  #ffffff;
+  --bg-panel:    #f7f8fa;
   --bg-card:     #ffffff;
   --bg-elevated: #f4f5f6;
   --bg-hover:    #eef0f2;
@@ -40,6 +45,7 @@
   --text-1:      #1f2328;
   --text-2:      #5b6470;
   --text-3:      #8b939c;
+  --text-4:      #a5abb5;
   --background:  #ecedef;
   --foreground:  #1f2328;
 }
@@ -48,12 +54,33 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
+
+  /* shadcn semantic tokens — ALIASES of the Voizo palette above (2026-07-02).
+     Generated components/ui/* render in our visual language, and both themes
+     inherit automatically (the underlying vars flip with [data-theme]). Keep
+     this the ONLY bridge — components must not hardcode raw colors. */
+  --color-card: var(--bg-card);
+  --color-card-foreground: var(--text-1);
+  --color-popover: var(--bg-elevated);
+  --color-popover-foreground: var(--text-1);
+  --color-muted: var(--bg-hover);
+  --color-muted-foreground: var(--text-3);
+  --color-accent: var(--bg-elevated);
+  --color-accent-foreground: var(--text-1);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: #4d90f0; /* THE primary (pattern brief) — owns every interactive state */
+  --color-primary: #4d90f0;
+  --color-primary-foreground: #ffffff;
+  --font-mono: var(--font-geist-mono); /* all figures render mono + tabular */
 }
 
 body {
   background: var(--bg-app);
   color: var(--text-1);
   font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Instrument typography: digits align in columns everywhere (pattern brief §3). */
+  font-variant-numeric: tabular-nums;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 

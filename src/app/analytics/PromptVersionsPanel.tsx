@@ -87,7 +87,7 @@ export default function PromptVersionsPanel({ campaignId }: { campaignId: string
               key={v.id}
               onClick={() => setIdx(i)}
               className={`px-2.5 py-1 rounded-lg text-xs transition ${
-                i === idx ? "bg-blue-600 text-white" : "border border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
+                i === idx ? "bg-primary text-white" : "border border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-hover)]"
               }`}
             >
               {i === 0 ? "Latest" : `v${versions.length - i}`} · {fmtDate(v.created_at)}
