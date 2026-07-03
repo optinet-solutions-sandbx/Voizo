@@ -111,6 +111,11 @@ export interface CampaignRollup extends RateRow {
 // campaigns_v2.status or the scheduler. Completed+Ended→Finished, then Inactive→Finished (2026-07-03).
 export type DisplayStatus = "running" | "paused" | "finished";
 
+// A paused campaign idle (no calls) for this many days reads as "Finished", so paused campaigns
+// don't pile up (Jasiel 2026-07-03; was 7). Single source for the idle window — the API route, the
+// table default, and the derivation all reference this so the policy can't drift across three spots.
+export const FINISHED_IDLE_DAYS = 2;
+
 export function deriveDisplayStatus(opts: {
   rawStatus: string | null;
   endAtMs: number | null;
@@ -118,7 +123,7 @@ export function deriveDisplayStatus(opts: {
   nowMs: number;
   idleDays?: number;
 }): DisplayStatus {
-  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = 7 } = opts;
+  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = FINISHED_IDLE_DAYS } = opts;
   const s = (rawStatus ?? "").toLowerCase();
   if (s === "running") return "running"; // trust a live status
   if (s === "inactive" || s === "draft") return "finished"; // never-ran folded into Finished (2026-07-03)
@@ -761,7 +766,7 @@ export function computeCampaignTable(
   calls: DashCallRow[],
   campaigns: DashCampaignRow[],
   nowMs: number,
-  idleDays = 7,
+  idleDays = FINISHED_IDLE_DAYS,
   numbers: Array<{ campaign_id: string; id?: string; outcome?: string | null }> = [],
   sms: DashSmsRow[] = [],
 ): CampaignTableRow[] {

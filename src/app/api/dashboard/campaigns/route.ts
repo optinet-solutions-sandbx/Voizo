@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
-import { computeCampaignTable, type DashCallRow, type DashCampaignRow, type DashSmsRow } from "@/lib/dashboardAnalytics";
+import { computeCampaignTable, FINISHED_IDLE_DAYS, type DashCallRow, type DashCampaignRow, type DashSmsRow } from "@/lib/dashboardAnalytics";
 
 /**
  * GET /api/dashboard/campaigns?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -9,11 +9,10 @@ import { computeCampaignTable, type DashCallRow, type DashCampaignRow, type Dash
  * Rows for the Campaign Performance table (Val's spec). This table has its OWN date
  * range — independent of the global filter bar. Returns ALL live (non-ghost, non-test)
  * campaigns, including zero-call ones, each with a derived DISPLAY status
- * (paused-but-stale → "Ended"; past end_at → "Completed"; presentation-only).
- * Read-only; lenient origin.
+ * (running / paused / finished — paused-but-idle, past end_at, or never-run all read as
+ * "Finished"; presentation-only, idle window = FINISHED_IDLE_DAYS). Read-only; lenient origin.
  */
 const MS_PER_DAY = 86_400_000;
-const ENDED_IDLE_DAYS = 7;
 
 function parseDay(value: string | null, fallbackMs: number, endOfDay: boolean): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
@@ -68,7 +67,7 @@ export async function GET(request: NextRequest) {
     calls as unknown as DashCallRow[],
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     now,
-    ENDED_IDLE_DAYS,
+    FINISHED_IDLE_DAYS,
     numbers as unknown as Array<{ campaign_id: string; id: string; outcome: string | null }>,
     sms as unknown as DashSmsRow[],
   );

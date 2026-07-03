@@ -515,14 +515,15 @@ describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   it("paused past its scheduled end_at → finished", () => {
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: now - day, lastCallMs: now - 2 * day, nowMs: now })).toBe("finished");
   });
-  it("paused & idle ≥ 7 days → finished", () => {
+  it("paused & idle ≥ 2 days → finished (idle window tightened 7→2, 2026-07-03)", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 3 * day, nowMs: now })).toBe("finished");
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 10 * day, nowMs: now })).toBe("finished");
   });
   it("paused & never dialed → finished", () => {
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
-  it("paused with recent activity → paused", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 2 * day, nowMs: now })).toBe("paused");
+  it("paused with recent activity (< 2 days) → paused", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 1 * day, nowMs: now })).toBe("paused");
   });
   it("raw completed / inactive / draft all → finished (Inactive folded in 2026-07-03)", () => {
     expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
@@ -546,7 +547,7 @@ describe("computeCampaignTable", () => {
   const calls = [
     call("c1", "completed", true, iso(now - 1 * day)),
     call("c2", "completed", false, iso(now - 10 * day)),
-    call("c3", "completed", false, iso(now - 2 * day)),
+    call("c3", "completed", false, iso(now - 1 * day)),
     call("cG", "completed", true, iso(now - 1 * day)), // ghost — excluded
     call("cT", "completed", true, iso(now - 1 * day)), // test — excluded
   ];
@@ -561,7 +562,7 @@ describe("computeCampaignTable", () => {
     const by = Object.fromEntries(rows.map((r) => [r.id, r.displayStatus]));
     expect(by.c1).toBe("running");
     expect(by.c2).toBe("finished"); // paused, idle 10d (Completed+Ended folded → Finished)
-    expect(by.c3).toBe("paused"); // paused, idle 2d
+    expect(by.c3).toBe("paused"); // paused, idle 1d (< 2-day window)
     expect(by.c4).toBe("finished"); // paused, no calls
   });
 
