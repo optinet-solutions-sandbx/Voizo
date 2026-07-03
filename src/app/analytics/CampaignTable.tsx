@@ -51,7 +51,7 @@ interface Resp {
   rows: Row[];
 }
 
-const STATUS_ORDER: DisplayStatus[] = ["running", "completed", "ended", "paused", "inactive"];
+const STATUS_ORDER: DisplayStatus[] = ["running", "paused", "finished", "inactive"];
 
 const PAGE_SIZE = 5; // rows per page (Jasiel 2026-07-01: 5 → less scrolling, paginate the rest)
 

@@ -102,13 +102,14 @@ export interface CampaignRollup extends RateRow {
   baseAssistantId: string | null;
   startAt: string | null; // COALESCE(start_at, created_at)
   endAt: string | null;
-  lastCallAtMs: number | null; // most recent call created_at in scope (for the Ended derivation)
+  lastCallAtMs: number | null; // most recent call created_at in scope (for the Finished derivation)
 }
 
-// Derived DISPLAY status (Jasiel 2026-06-15): a paused campaign that's past its
-// scheduled end_at, or hasn't dialed in `idleDays`, reads as done. PRESENTATION-ONLY —
-// never mutates campaigns_v2.status or the scheduler.
-export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
+// Derived DISPLAY status (Jasiel 2026-06-15): a paused campaign that's past its scheduled
+// end_at, or hasn't dialed in `idleDays`, reads as done ("finished"). PRESENTATION-ONLY —
+// never mutates campaigns_v2.status or the scheduler. Completed + Ended were folded into one
+// "finished" state 2026-07-03 (vocab trim) — the distinction wasn't operationally useful.
+export type DisplayStatus = "running" | "paused" | "finished" | "inactive";
 
 export function deriveDisplayStatus(opts: {
   rawStatus: string | null;
@@ -121,11 +122,11 @@ export function deriveDisplayStatus(opts: {
   const s = (rawStatus ?? "").toLowerCase();
   if (s === "running") return "running"; // trust a live status
   if (s === "inactive" || s === "draft") return "inactive";
-  if (s === "completed") return "completed";
-  if (endAtMs !== null && endAtMs <= nowMs) return "completed"; // reached its scheduled end
+  if (s === "completed") return "finished";
+  if (endAtMs !== null && endAtMs <= nowMs) return "finished"; // reached its scheduled end
   if (s === "paused") {
     const idleMs = idleDays * MS_PER_DAY;
-    if (lastCallMs === null || nowMs - lastCallMs >= idleMs) return "ended"; // stale → done
+    if (lastCallMs === null || nowMs - lastCallMs >= idleMs) return "finished"; // stale → done
     return "paused";
   }
   return "paused"; // unknown non-terminal → treat as paused

@@ -504,26 +504,28 @@ describe("computeGlobalKpis", () => {
   });
 });
 
-describe("deriveDisplayStatus (the 'Ended' rule)", () => {
+describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   const now = Date.parse("2026-06-15T00:00:00Z");
   const day = 86_400_000;
   it("trusts a live running status (even past end_at)", () => {
     expect(deriveDisplayStatus({ rawStatus: "running", endAtMs: now - day, lastCallMs: now, nowMs: now })).toBe("running");
   });
-  it("paused past its scheduled end_at → completed", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: now - day, lastCallMs: now - 2 * day, nowMs: now })).toBe("completed");
+  // Completed + Ended folded into one "Finished" state (Jasiel 2026-07-03, Phase 1 vocab trim):
+  // both mean "ran, now done" — the completed-vs-ended split wasn't operationally useful.
+  it("paused past its scheduled end_at → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: now - day, lastCallMs: now - 2 * day, nowMs: now })).toBe("finished");
   });
-  it("paused & idle ≥ 7 days → ended", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 10 * day, nowMs: now })).toBe("ended");
+  it("paused & idle ≥ 7 days → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 10 * day, nowMs: now })).toBe("finished");
   });
-  it("paused & never dialed → ended", () => {
-    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("ended");
+  it("paused & never dialed → finished", () => {
+    expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
   it("paused with recent activity → paused", () => {
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 2 * day, nowMs: now })).toBe("paused");
   });
-  it("completed / inactive / draft pass through", () => {
-    expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("completed");
+  it("raw completed → finished; inactive / draft → inactive", () => {
+    expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
     expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
     expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
   });
@@ -555,12 +557,12 @@ describe("computeCampaignTable", () => {
     expect(rows.find((r) => r.id === "c4")!.calls).toBe(0);
   });
 
-  it("derives display status per row (running / ended / paused)", () => {
+  it("derives display status per row (running / finished / paused)", () => {
     const by = Object.fromEntries(rows.map((r) => [r.id, r.displayStatus]));
     expect(by.c1).toBe("running");
-    expect(by.c2).toBe("ended"); // paused, idle 10d
+    expect(by.c2).toBe("finished"); // paused, idle 10d (Completed+Ended folded → Finished)
     expect(by.c3).toBe("paused"); // paused, idle 2d
-    expect(by.c4).toBe("ended"); // paused, no calls
+    expect(by.c4).toBe("finished"); // paused, no calls
   });
 
   it("players/smsSent default to 0 when no numbers/sms passed", () => {

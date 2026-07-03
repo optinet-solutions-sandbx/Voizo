@@ -9,7 +9,7 @@
 import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, Flag, Users, Calendar, Repeat } from "lucide-react";
-import type { PerfMetric, PerfRow } from "@/lib/dashboardAnalytics";
+import type { PerfMetric, PerfRow, DisplayStatus } from "@/lib/dashboardAnalytics";
 import { formatCampaign } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { useBaseAgentNames } from "./useBaseAgentNames";
@@ -19,13 +19,14 @@ import { metricPickSlice, type RecordSlice } from "./recordsDisplay";
 import Hint from "@/components/Hint";
 import PromptHoverCard from "./PromptHoverCard";
 
-// Derived display status (shared with CampaignTable's status filter).
-export type DisplayStatus = "running" | "completed" | "ended" | "paused" | "inactive";
+// Derived display status — single source of truth is deriveDisplayStatus in dashboardAnalytics;
+// re-exported here so CampaignTable keeps importing it from the row component. 4 states after the
+// 2026-07-03 vocab trim (Completed + Ended folded into "Finished").
+export type { DisplayStatus };
 export const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: boolean }> = {
   running: { label: "Running", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", pulse: true },
-  completed: { label: "Completed", cls: "bg-primary/10 text-primary border-primary/20" },
-  ended: { label: "Ended", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
   paused: { label: "Paused", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+  finished: { label: "Finished", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
   inactive: { label: "Inactive", cls: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]" },
 };
 export function StatusPill({ s }: { s: DisplayStatus }) {
