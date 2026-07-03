@@ -105,11 +105,11 @@ export interface CampaignRollup extends RateRow {
   lastCallAtMs: number | null; // most recent call created_at in scope (for the Finished derivation)
 }
 
-// Derived DISPLAY status (Jasiel 2026-06-15): a paused campaign that's past its scheduled
-// end_at, or hasn't dialed in `idleDays`, reads as done ("finished"). PRESENTATION-ONLY —
-// never mutates campaigns_v2.status or the scheduler. Completed + Ended were folded into one
-// "finished" state 2026-07-03 (vocab trim) — the distinction wasn't operationally useful.
-export type DisplayStatus = "running" | "paused" | "finished" | "inactive";
+// Derived DISPLAY status (Jasiel 2026-06-15): campaigns collapse to three reporting states —
+// Running (live), Paused (recently active / resumable), Finished (ran-then-done: past-end or
+// idle — AND never-ran draft/inactive, folded in). PRESENTATION-ONLY — never mutates
+// campaigns_v2.status or the scheduler. Completed+Ended→Finished, then Inactive→Finished (2026-07-03).
+export type DisplayStatus = "running" | "paused" | "finished";
 
 export function deriveDisplayStatus(opts: {
   rawStatus: string | null;
@@ -121,7 +121,7 @@ export function deriveDisplayStatus(opts: {
   const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = 7 } = opts;
   const s = (rawStatus ?? "").toLowerCase();
   if (s === "running") return "running"; // trust a live status
-  if (s === "inactive" || s === "draft") return "inactive";
+  if (s === "inactive" || s === "draft") return "finished"; // never-ran folded into Finished (2026-07-03)
   if (s === "completed") return "finished";
   if (endAtMs !== null && endAtMs <= nowMs) return "finished"; // reached its scheduled end
   if (s === "paused") {

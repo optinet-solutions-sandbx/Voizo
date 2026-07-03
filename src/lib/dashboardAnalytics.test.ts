@@ -524,10 +524,10 @@ describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   it("paused with recent activity → paused", () => {
     expect(deriveDisplayStatus({ rawStatus: "paused", endAtMs: null, lastCallMs: now - 2 * day, nowMs: now })).toBe("paused");
   });
-  it("raw completed → finished; inactive / draft → inactive", () => {
+  it("raw completed / inactive / draft all → finished (Inactive folded in 2026-07-03)", () => {
     expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
-    expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
-    expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("inactive");
+    expect(deriveDisplayStatus({ rawStatus: "inactive", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
+    expect(deriveDisplayStatus({ rawStatus: "draft", endAtMs: null, lastCallMs: null, nowMs: now })).toBe("finished");
   });
 });
 

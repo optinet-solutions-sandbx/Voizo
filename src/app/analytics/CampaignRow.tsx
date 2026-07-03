@@ -20,14 +20,13 @@ import Hint from "@/components/Hint";
 import PromptHoverCard from "./PromptHoverCard";
 
 // Derived display status — single source of truth is deriveDisplayStatus in dashboardAnalytics;
-// re-exported here so CampaignTable keeps importing it from the row component. 4 states after the
-// 2026-07-03 vocab trim (Completed + Ended folded into "Finished").
+// re-exported here so CampaignTable keeps importing it from the row component. 3 states after the
+// 2026-07-03 vocab trim (Completed + Ended + never-ran Inactive all folded into "Finished").
 export type { DisplayStatus };
 export const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: boolean }> = {
   running: { label: "Running", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", pulse: true },
   paused: { label: "Paused", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
   finished: { label: "Finished", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
-  inactive: { label: "Inactive", cls: "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]" },
 };
 export function StatusPill({ s }: { s: DisplayStatus }) {
   const m = STATUS_META[s];
