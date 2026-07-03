@@ -2,7 +2,7 @@
 
 // Today's campaigns (Val's mockup, Slice A) — expandable per-campaign rows for today's running campaigns,
 // rendered via the shared CampaignRow (Slice C). Each row: campaign + agent + view-prompt + chips
-// (country/players/date), a Running badge + runtime, and three compact BreakdownColumns (per-campaign
+// (country/players/date), a Running badge + runtime, and three compact metric cells (per-campaign
 // TODAY). Straight-to-records (2026-07-02): expanding goes directly to the records; clicking a
 // breakdown number opens them pre-filtered to that slice (mockup handleRowClick semantics).
 // Rendered only when campaigns are running. Data: TodaySnapshot.runningCampaigns.

@@ -2,7 +2,7 @@
 
 // Shared expandable campaign row (Slice C) — the mockup's camp-row, used by BOTH Today's-campaigns and
 // Campaign Performance. Chips (country/players/date) + a status pill + a time label + three compact
-// BreakdownColumns. Straight-to-records (Val's mockup, 2026-07-02): chevron/name → records unfiltered;
+// metric cells. Straight-to-records (Val's mockup, 2026-07-02): chevron/name → records unfiltered;
 // clicking a breakdown total/row (when the parent passes onMetricPick) → records pre-filtered to that
 // slice. `trailing` slots extra row UI (e.g. CampaignTable's "Open in campaign" link).
 

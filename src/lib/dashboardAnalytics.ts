@@ -909,7 +909,7 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
 // Honest, plain-English definitions for each tag — surfaced as hover tooltips on the records
 // outcome chips. These are PROXY classifications (best-effort, derived from call data), not
 // verified labels; the wording discloses that without renaming the categories. Mirrors the
-// "Estimated" hint treatment on the records filters + BreakdownColumn "est" chips.
+// "Estimated" hint treatment on the records filters + breakdown-row "est" chips.
 export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
   neutral: "Connected to a person, but no clear positive or negative outcome was detected.",

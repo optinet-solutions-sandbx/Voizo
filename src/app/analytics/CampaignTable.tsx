@@ -4,7 +4,7 @@
 // INDEPENDENT of the global filter bar above. Sort by Newest/Call Attempts/Reached/SMS (default
 // Newest). Each row is the SHARED CampaignRow (the same camp-row as Today's campaigns): chips
 // (country/players/date) + a derived status pill (incl. "Ended") + run window + three compact
-// BreakdownColumns (Attempts/Reached/SMS, campaign-LIFETIME). Expands to the reused CampaignExpand
+// metric cells (Attempts/Reached/SMS, campaign-LIFETIME). Expands to the reused CampaignExpand
 // (records + CSV/Audio/Transcripts); a "trailing" link opens the /campaigns/v2/[id] detail page.
 // Data: /api/dashboard/campaigns?from=&to=.
 

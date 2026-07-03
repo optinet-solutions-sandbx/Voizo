@@ -89,7 +89,7 @@ export function sliceEq(a: RecordSlice | null, b: RecordSlice | null): boolean {
 }
 
 // ── Metric click → slice mapping (mockup handleRowClick parity) ──────────────
-// Maps a BreakdownColumn click (column total or a row/sub-row by its PerfRow key) to the
+// Maps a metric cell / row click (column total or a row/sub-row by its PerfRow key) to the
 // slice + badge label. Row keys come from computeWindowPerf: callAttempts rows are
 // reached|voicemail|unreachable; reached rows are outcome tags; sms rows mirror
 // callAttempts with positive|neutral|declined sub-rows under Reached.
