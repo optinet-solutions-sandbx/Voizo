@@ -398,16 +398,6 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       )}
       </SectionIsland>
 
-      {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
-          switch + best-in-view highlight + ranked table; rows drill into the scoped drawer. */}
-      <Leaderboards
-        campaigns={data?.campaigns ?? []}
-        agents={data?.agents ?? []}
-        prompts={data?.prompts ?? []}
-        best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }}
-        filters={filters}
-      />
-
       {/* Trend + Daily Volume side-by-side (compact); they stack on narrow screens. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <TrendChart data={data?.trend ?? []} />
@@ -421,6 +411,20 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         cells={data?.heatmap?.cells ?? []}
         utcFallbackCalls={data?.heatmap?.utcFallbackCalls ?? 0}
       />
+
+      {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
+          switch + best-in-view highlight + ranked table; rows drill into the scoped drawer.
+          Relocated to the bottom of the section + wrapped in a reused SectionIsland overview
+          panel for parity with the rest (Jasiel 2026-07-03). */}
+      <SectionIsland>
+        <Leaderboards
+          campaigns={data?.campaigns ?? []}
+          agents={data?.agents ?? []}
+          prompts={data?.prompts ?? []}
+          best={{ campaign: bestCampaign, agent: bestAgent, prompt: bestPrompt }}
+          filters={filters}
+        />
+      </SectionIsland>
       </div>
     </section>
   );

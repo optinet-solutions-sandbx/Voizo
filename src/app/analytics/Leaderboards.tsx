@@ -260,7 +260,7 @@ export default function Leaderboards({
           {ranked.length > top.length && (
             <div className="px-4 py-2 text-[11px] text-[var(--text-4)] border-t border-[var(--border)]">
               Top {top.length} of {ranked.length} by positive response · under-{MIN_RANK}-call rows rank last · full list in
-              Campaign Performance below.
+              Campaign Performance above.
             </div>
           )}
         </div>
