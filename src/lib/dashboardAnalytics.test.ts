@@ -744,6 +744,14 @@ describe("deriveAttemptTag — engagement rules (validated against 14d of prod)"
     const c = call("x", "completed", true, "2026-06-26T10:00:00Z", "n5", false, 30, "customer-ended-call", "User: yes");
     expect(deriveAttemptTag(c, false)).toBe("positive");
   });
+  // residual edge (Val ticket, prod: 4 records): goal_reached=true on a NON-connected (status=failed)
+  // call. goal wins over connection too — matching anyGoal in computeCallRecords — so a "Positive
+  // response" STATUS always has a positive attempt (never a stray "unreachable"). 3/4 prod cases had a
+  // real-conversation ended_reason (customer-ended-call / assistant-said-end-call-phrase) yet status=failed.
+  it("tags a goal-reached call Positive even when status is non-connected (goal overrides connection)", () => {
+    const c = call("x", "failed", true, "2026-06-26T10:15:21Z", "n6", false, null, "assistant-said-end-call-phrase");
+    expect(deriveAttemptTag(c, false)).toBe("positive");
+  });
 });
 
 describe("prompt rollups", () => {

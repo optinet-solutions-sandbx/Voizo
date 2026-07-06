@@ -984,8 +984,13 @@ export function deriveAttemptTag(
   declinedContact: boolean,
   opts: { useTranscript?: boolean } = {},
 ): AttemptTag {
+  // goal_reached wins over BOTH connection status and the voicemail flag (Val 2026-07-03 / 07-06): a
+  // call that reached the goal reads Positive, so a contact's "Positive response" STATUS always has a
+  // matching positive attempt. anyGoal (computeCallRecords) counts a goal regardless of connection, so
+  // this ordering keeps STATUS and its attempts consistent. Prod residual: 4 records had goal_reached on
+  // a status=failed call (3/4 with a real-conversation ended_reason) — previously mis-tagged unreachable.
+  if (call.goal_reached === true) return "positive";
   if (!isConnected(call.status)) return "unreachable";
-  if (call.goal_reached === true) return "positive"; // goal_reached overrides the voicemail flag (Val 2026-07-03) — a call that reached the goal reads Positive, not Voicemail
   if (call.voicemail === true) return "voicemail";
   if (declinedContact) return "declined";
   return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
