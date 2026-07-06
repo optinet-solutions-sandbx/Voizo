@@ -9,6 +9,17 @@ import { fetchDncEntries, insertDncEntries, deleteDncEntry, DncEntry } from "@/l
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
 import { useMagnetic } from "@/components/useMagnetic";
+import Hint from "@/components/Hint";
+import WidgetCard from "../analytics/WidgetCard";
+import StatBand from "../analytics/StatBand";
+import { SectionTick } from "../analytics/SectionIsland";
+
+// Plain-English meaning for the DNC reason enum (design-system rollout, Jasiel 2026-07-06) —
+// surfaced as a Hint on the reason chip so operators know how a number landed on the list.
+const REASON_HINT: Record<string, string> = {
+  manual: "Added manually to the suppression list.",
+  "opted out during call": "Contact asked not to be called again during a call.",
+};
 
 function ReasonBadge({ reason }: { reason: string }) {
   const map: Record<string, string> = {
@@ -16,24 +27,11 @@ function ReasonBadge({ reason }: { reason: string }) {
     "opted out during call": "bg-red-500/15 text-red-400 border-red-500/25",
   };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${map[reason] ?? map.manual}`}>
-      {reason}
-    </span>
-  );
-}
-
-function StatTile({ icon: Icon, label, value, accent }: {
-  icon: React.ElementType; label: string; value: number; accent: string;
-}) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  return (
-    <div ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-3">
-      <div className="flex items-center gap-2 mb-1">
-        <Icon size={13} className={accent} />
-        <span className="text-[11px] uppercase tracking-wide font-medium text-[var(--text-3)]">{label}</span>
-      </div>
-      <p className="text-xl font-bold tabular-nums text-[var(--text-1)]">{value}</p>
-    </div>
+    <Hint content={REASON_HINT[reason] ?? reason}>
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border cursor-help ${map[reason] ?? map.manual}`}>
+        {reason}
+      </span>
+    </Hint>
   );
 }
 
@@ -108,19 +106,18 @@ export default function DoNotCallPage() {
   const manualCount = useMemo(() => entries.filter((e) => e.reason === "manual").length, [entries]);
 
   return (
-    <div className="p-4 sm:p-6 w-full">
-      {/* Header */}
-      <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center flex-shrink-0">
-            <PhoneOff size={17} className="text-red-400" />
+    <div className="p-4 w-full grid gap-4">
+      {/* Header — SectionTick + 18px title, matching the dashboard section-header pattern
+          (design-system rollout, Jasiel 2026-07-06). Fluid p-4 console density. */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#f87171" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Do Not Call List</h1>
           </div>
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold text-[var(--text-1)] truncate">Do Not Call List</h1>
-            <p className="text-xs text-[var(--text-3)] mt-0.5">
-              {entries.length} suppressed number{entries.length !== 1 ? "s" : ""}
-            </p>
-          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
+            {entries.length} suppressed number{entries.length !== 1 ? "s" : ""}
+          </p>
         </div>
         <button ref={addRef} type="button" onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
@@ -132,16 +129,16 @@ export default function DoNotCallPage() {
 
       {/* Stat strip */}
       {!loading && entries.length > 0 && (
-        <div className="grid grid-cols-3 gap-3 mb-5">
-          <StatTile icon={PhoneOff} label="Suppressed" value={entries.length} accent="text-red-400" />
-          <StatTile icon={Phone} label="Opted out" value={optedOutCount} accent="text-amber-400" />
-          <StatTile icon={Trash2} label="Manual" value={manualCount} accent="text-[var(--text-3)]" />
-        </div>
+        <StatBand stats={[
+          { label: "Suppressed", value: entries.length },
+          { label: "Opted out", value: optedOutCount, sub: "during a call" },
+          { label: "Manual", value: manualCount, sub: "added by hand" },
+        ]} />
       )}
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 px-4 py-3 mb-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+        <div className="flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
           <AlertCircle size={15} className="flex-shrink-0" />
           <span className="flex-1">{error}</span>
           <button onClick={() => setError(null)} className="text-red-500 hover:text-red-300"><X size={14} /></button>
@@ -185,7 +182,14 @@ export default function DoNotCallPage() {
               </p>
             </div>
           ) : (
-            <div className="glow-frame rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--bg-app)]">
+            <WidgetCard
+              title="Suppressed Numbers"
+              icon={<PhoneOff size={14} className="text-red-400" />}
+              context={filtered.length === entries.length
+                ? `${filtered.length} number${filtered.length !== 1 ? "s" : ""}`
+                : `${filtered.length} of ${entries.length} numbers`}
+              bodyClassName="p-0"
+            >
               <div className="overflow-x-auto">
                 <table className="w-full text-sm min-w-[400px]">
                   <thead>
@@ -239,14 +243,7 @@ export default function DoNotCallPage() {
                   </tbody>
                 </table>
               </div>
-              <div className="px-4 py-2.5 border-t border-[var(--border)] bg-[var(--bg-card)]">
-                <p className="text-xs text-[var(--text-3)]">
-                  {filtered.length === entries.length
-                    ? `${filtered.length} number${filtered.length !== 1 ? "s" : ""}`
-                    : `${filtered.length} of ${entries.length} numbers`}
-                </p>
-              </div>
-            </div>
+            </WidgetCard>
           )}
         </>
       )}
