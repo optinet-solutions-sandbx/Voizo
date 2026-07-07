@@ -60,7 +60,7 @@ interface AnalyticsResponse {
   dailyVolume: VolumeResult;
   heatmap: HeatmapResult;
   options: {
-    campaigns: { id: string; name: string }[];
+    campaigns: { id: string; name: string; startAt: string | null }[];
     agents: { voiceId: string; label: string | null }[];
     prompts: { sha: string; label: string; baseAssistantId: string | null }[];
   };
@@ -224,8 +224,21 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
     { value: "", label: "All prompts" },
     ...(data?.options.prompts ?? []).map((p) => ({ value: p.sha, label: promptDisplay(p.sha, p.label) })),
   ];
-  const campaignOptions = (data?.options.campaigns ?? []).map((c) => ({ value: c.id, label: c.name }));
-  const campaignName = (id: string) => data?.options.campaigns.find((c) => c.id === id)?.name ?? id;
+  // Campaign labels: server lists only in-window campaigns; here we disambiguate same-named ones
+  // with their start date. campaignLabelById is shared by the dropdown options AND the active chips.
+  const rawCampaigns = data?.options.campaigns ?? [];
+  const campaignNameCounts = new Map<string, number>();
+  for (const c of rawCampaigns) campaignNameCounts.set(c.name, (campaignNameCounts.get(c.name) ?? 0) + 1);
+  const fmtShortDate = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+  const campaignLabelById = new Map(
+    rawCampaigns.map((c) => {
+      const d = (campaignNameCounts.get(c.name) ?? 0) > 1 ? fmtShortDate(c.startAt) : "";
+      return [c.id, d ? `${c.name} · ${d}` : c.name] as const;
+    }),
+  );
+  const campaignOptions = rawCampaigns.map((c) => ({ value: c.id, label: campaignLabelById.get(c.id)! }));
+  const campaignName = (id: string) => campaignLabelById.get(id) ?? id;
   const agentLabel = (id: string) => data?.options.agents.find((a) => a.voiceId === id)?.label ?? id;
   const promptLabelFor = (sha: string) => {
     const o = data?.options.prompts.find((p) => p.sha === sha);

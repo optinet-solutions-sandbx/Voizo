@@ -172,8 +172,18 @@ export async function GET(request: NextRequest) {
     perf = null;
   }
 
-  // Dropdown options — full live set.
-  const campaignOptions = live.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
+  // Dropdown options — only campaigns with activity in this window (calls or SMS), so stale/empty
+  // ones stop cluttering the filter. Built from the RAW windowed sets (not `filtered`) so the option
+  // list is stable regardless of what's currently selected. `startAt` lets the client disambiguate
+  // same-named campaigns by date.
+  const windowedCampaignIds = new Set<string>([
+    ...(callRows as unknown as DashCallRow[]).map((c) => c.campaign_id),
+    ...(smsRows as unknown as DashSmsRow[]).map((m) => m.campaign_id),
+  ]);
+  const campaignOptions = live
+    .filter((c) => windowedCampaignIds.has(c.id))
+    .map((c) => ({ id: c.id, name: c.name, startAt: c.start_at ?? c.created_at ?? null }))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const agentMap = new Map<string, string | null>();
   for (const c of live) {
     if (c.voice_id && !agentMap.has(c.voice_id)) agentMap.set(c.voice_id, c.vapi_assistant_name ?? null);
