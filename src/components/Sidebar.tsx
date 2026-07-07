@@ -230,9 +230,12 @@ function MobileBottomNav() {
 export default function Sidebar() {
   // Persisted lock read SSR-safely via useSyncExternalStore (server + first client paint render
   // the collapsed default → no hydration mismatch; React then swaps in the localStorage value).
+  const pathname = usePathname();
   const locked = useSyncExternalStore(subscribeLock, getLockSnapshot, getLockServerSnapshot);
   const [hovered, setHovered] = useState(false);
-  const collapsed = !locked && !hovered;
+  // Dashboard is the home view — always expanded. Other pages keep the compact auto-collapse rail.
+  const onDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
+  const collapsed = !locked && !hovered && !onDashboard;
 
   return (
     <>
