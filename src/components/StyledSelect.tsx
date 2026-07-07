@@ -62,7 +62,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         }`}
       >
         {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}
-        <span className={selected ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}>
+        <span className={`min-w-0 truncate ${selected ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}`}>
           {selected?.label || placeholder || "Select…"}
         </span>
       </button>
@@ -94,7 +94,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
                       : "text-[var(--text-1)] hover:bg-[var(--bg-hover)]"
                   }`}
                 >
-                  {o.label}
+                  <span className="block truncate">{o.label}</span>
                 </button>
               ))}
             </div>
