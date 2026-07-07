@@ -11,6 +11,7 @@ import {
 } from "@/lib/dashboardAnalytics";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { parseRecordsParams, filterRecordsBySlice, FULL_SET_CAP } from "@/lib/rangedRecords";
+import { campaignIdsForCountry } from "@/lib/campaignDisplay";
 import { buildExportLeads, type ExportCallRow, type ExportNumberRow, type ExportSmsRow } from "@/lib/exportLeads";
 
 /**
@@ -86,6 +87,10 @@ export async function GET(request: NextRequest) {
       { startMs, endMs: now, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
       index,
     );
+    if (p.country) {
+      const countryIds = campaignIdsForCountry(live, p.country);
+      filtered = filtered.filter((c) => countryIds.has(c.campaign_id));
+    }
     if (p.promptSha) {
       const promptByCampaign = await resolvePromptByCampaign(live);
       filtered = filtered.filter((c) => promptByCampaign.get(c.campaign_id)?.sha === p.promptSha);
