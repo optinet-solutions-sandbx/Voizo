@@ -94,7 +94,7 @@ function buildRecordsQuery(
     if (scope.prompt) q.set("prompt", scope.prompt);
   } else {
     if (filters.campaignIds.length) q.set("campaigns", filters.campaignIds.join(","));
-    if (filters.agent) q.set("agent", filters.agent);
+    if (filters.country) q.set("country", filters.country);
     if (filters.prompt) q.set("prompt", filters.prompt);
     if (filters.phone.trim()) q.set("phone", filters.phone.trim());
   }

@@ -20,6 +20,7 @@ import {
 } from "@/lib/dashboardAnalytics";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
 
 /**
  * GET /api/dashboard/analytics
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
   const rangeDays = RANGE_DAYS[rangeKey] ?? 30;
   const campaignsParam = searchParams.get("campaigns");
   const campaignIds = campaignsParam ? campaignsParam.split(",").filter(Boolean) : null;
-  const agent = searchParams.get("agent");
+  const country = searchParams.get("country");
   const promptSha = searchParams.get("prompt");
   const phone = (searchParams.get("phone") ?? "").trim();
 
@@ -117,9 +118,14 @@ export async function GET(request: NextRequest) {
 
   let filtered = filterCalls(
     callRows as unknown as DashCallRow[],
-    { startMs, endMs: now, campaignIds, voiceId: agent, numberIds },
+    { startMs, endMs: now, campaignIds, numberIds },
     index,
   );
+  // Country filter (replaces the agent filter): keep calls whose campaign parses to the chosen country.
+  if (country) {
+    const countryIds = campaignIdsForCountry(live, country);
+    filtered = filtered.filter((c) => countryIds.has(c.campaign_id));
+  }
   // Prompt filter (prompt is per-campaign in v1): keep calls whose campaign's prompt hash matches.
   if (promptSha) filtered = filtered.filter((c) => promptByCampaign.get(c.campaign_id)?.sha === promptSha);
 
@@ -180,17 +186,19 @@ export async function GET(request: NextRequest) {
     ...(callRows as unknown as DashCallRow[]).map((c) => c.campaign_id),
     ...(smsRows as unknown as DashSmsRow[]).map((m) => m.campaign_id),
   ]);
-  const campaignOptions = live
-    .filter((c) => windowedCampaignIds.has(c.id))
+  const inWindowLive = live.filter((c) => windowedCampaignIds.has(c.id));
+  const campaignOptions = inWindowLive
     .map((c) => ({ id: c.id, name: c.name, startAt: c.start_at ?? c.created_at ?? null }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const agentMap = new Map<string, string | null>();
-  for (const c of live) {
-    if (c.voice_id && !agentMap.has(c.voice_id)) agentMap.set(c.voice_id, c.vapi_assistant_name ?? null);
+  // Country filter options (replaces the agent filter, Val 2026-07-07): distinct parsed countries
+  // among the in-window campaigns, by the SAME L7_<CC>_ parse used for filter membership. Campaigns
+  // with no parseable country contribute nothing (and can't be reached by the country filter).
+  const countrySet = new Set<string>();
+  for (const c of inWindowLive) {
+    const ctry = formatCampaign(c.name).country;
+    if (ctry) countrySet.add(ctry);
   }
-  const agentOptions = [...agentMap.entries()]
-    .map(([voiceId, label]) => ({ voiceId, label }))
-    .sort((a, b) => (a.label ?? a.voiceId).localeCompare(b.label ?? b.voiceId));
+  const countryOptions = [...countrySet].sort().map((c) => ({ value: c, label: c }));
   const baseBySha = representativeBaseBySha(promptByCampaign);
   // First campaign that ran each prompt sha — lets the UI open the full prompt (PromptModal) for a
   // representative campaign (the per-campaign prompt endpoint is the source of the full text).
@@ -274,7 +282,7 @@ export async function GET(request: NextRequest) {
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, now),
     heatmap: computeHeatmap(filtered, campaigns),
     perf,
-    options: { campaigns: campaignOptions, agents: agentOptions, prompts: promptOptions },
+    options: { campaigns: campaignOptions, countries: countryOptions, prompts: promptOptions },
     phone: { query: phone || null, matchedCampaigns },
   });
 }

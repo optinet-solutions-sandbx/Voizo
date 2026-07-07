@@ -61,7 +61,7 @@ interface AnalyticsResponse {
   heatmap: HeatmapResult;
   options: {
     campaigns: { id: string; name: string; startAt: string | null }[];
-    agents: { voiceId: string; label: string | null }[];
+    countries: { value: string; label: string }[];
     prompts: { sha: string; label: string; baseAssistantId: string | null }[];
   };
   phone: { query: string | null; matchedCampaigns: { id: string; name: string }[] };
@@ -70,13 +70,13 @@ interface AnalyticsResponse {
 export interface Filters {
   range: RangeKey;
   campaignIds: string[];
-  agent: string; // "" = all
+  country: string; // "" = all (friendly country name, e.g. "Australia")
   prompt: string; // "" = all (prompt sha)
   phone: string;
 }
 // Default 7d (Val 2026-06-26): reach-based metrics (Reached, Positive Response) are only
 // fully accurate post voicemail-detection deploy (~19 Jun) — a 7d default keeps them honest.
-export const DEFAULTS: Filters = { range: "7d", campaignIds: [], agent: "", prompt: "", phone: "" };
+export const DEFAULTS: Filters = { range: "7d", campaignIds: [], country: "", prompt: "", phone: "" };
 
 interface GlobalPerformanceProps {
   // Controlled by DashboardView (lifted 2026-06-16) so both the running cards and the leaderboard
@@ -89,7 +89,7 @@ function buildQuery(f: Filters): string {
   const p = new URLSearchParams();
   p.set("range", f.range);
   if (f.campaignIds.length) p.set("campaigns", f.campaignIds.join(","));
-  if (f.agent) p.set("agent", f.agent);
+  if (f.country) p.set("country", f.country);
   if (f.prompt) p.set("prompt", f.prompt);
   if (f.phone.trim()) p.set("phone", f.phone.trim());
   return p.toString();
@@ -212,13 +212,13 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   const isDefault =
     filters.range === "7d" &&
     filters.campaignIds.length === 0 &&
-    !filters.agent &&
+    !filters.country &&
     !filters.prompt &&
     !filters.phone.trim();
 
-  const agentOptions: DropdownOption[] = [
-    { value: "", label: "All agents" },
-    ...(data?.options.agents ?? []).map((a) => ({ value: a.voiceId, label: a.label ?? a.voiceId })),
+  const countryOptions: DropdownOption[] = [
+    { value: "", label: "All countries" },
+    ...(data?.options.countries ?? []).map((c) => ({ value: c.value, label: c.label })),
   ];
   const promptOptions: DropdownOption[] = [
     { value: "", label: "All prompts" },
@@ -239,7 +239,6 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   );
   const campaignOptions = rawCampaigns.map((c) => ({ value: c.id, label: campaignLabelById.get(c.id)! }));
   const campaignName = (id: string) => campaignLabelById.get(id) ?? id;
-  const agentLabel = (id: string) => data?.options.agents.find((a) => a.voiceId === id)?.label ?? id;
   const promptLabelFor = (sha: string) => {
     const o = data?.options.prompts.find((p) => p.sha === sha);
     return o ? promptDisplay(o.sha, o.label) : sha.slice(0, 8);
@@ -253,7 +252,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       label: campaignName(id),
       onRemove: () => set({ campaignIds: filters.campaignIds.filter((x) => x !== id) }),
     })),
-    ...(filters.agent ? [{ key: "agent", label: `Agent: ${agentLabel(filters.agent)}`, onRemove: () => set({ agent: "" }) }] : []),
+    ...(filters.country ? [{ key: "country", label: `Country: ${filters.country}`, onRemove: () => set({ country: "" }) }] : []),
     ...(filters.prompt ? [{ key: "prompt", label: `Prompt: ${promptLabelFor(filters.prompt)}`, onRemove: () => set({ prompt: "" }) }] : []),
     ...(filters.phone.trim() ? [{ key: "phone", label: `Phone: ${filters.phone.trim()}`, onRemove: () => set({ phone: "" }) }] : []),
   ];
@@ -314,7 +313,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
           onChange={(ids) => set({ campaignIds: ids })}
         />
         <div className="min-w-[150px]">
-          <StyledSelect options={agentOptions} value={filters.agent} onChange={(v) => set({ agent: v })} placeholder="All agents" />
+          <StyledSelect options={countryOptions} value={filters.country} onChange={(v) => set({ country: v })} placeholder="All countries" />
         </div>
         <div className="min-w-[150px]">
           <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
