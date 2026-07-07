@@ -6,7 +6,6 @@
 import { useState } from "react";
 import { BarChart3 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { formatCampaign, campaignShortLabel } from "@/lib/campaignDisplay";
 import { toggleKey } from "@/lib/toggleSet";
 import type { VolumeResult, VolumeSeries } from "@/lib/dashboardAnalytics";
 
@@ -16,17 +15,32 @@ function shortDay(iso: string): string {
   return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : (iso ?? "");
 }
 
-// Restrained ordered palette (pattern brief §2 — never a rainbow): campaigns take colors by
-// series order (top volume first); "other" is the dimmest neutral.
-const VOLUME_PALETTE = ["#4d90f0", "#3ec08a", "#8f86e6", "#e0a53c", "#e46664", "#e0814a", "#5b9bf0", "#c98a4a", "#3a6fd0", "#7d828c"];
+// Color per COUNTRY, keyed by the country itself (NOT by volume rank) so a filter that changes the
+// set never repaints the survivors. Australia/Canada keep the blue/green they've always shown; other
+// known countries get fixed hues; anything else gets a deterministic (name-hashed) fallback; the
+// unparseable "other" bucket is the dimmest neutral.
+const COUNTRY_COLORS: Record<string, string> = {
+  Australia: "#4d90f0",
+  Canada: "#3ec08a",
+  "United Kingdom": "#8f86e6",
+  "United States": "#e0a53c",
+  Philippines: "#e46664",
+};
+const COUNTRY_FALLBACK = ["#5b9bf0", "#c98a4a", "#e0814a", "#3a6fd0", "#9b7fe0"];
+function countryColor(name: string): string {
+  if (name === "other") return "#565b64";
+  if (COUNTRY_COLORS[name]) return COUNTRY_COLORS[name];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return COUNTRY_FALLBACK[h % COUNTRY_FALLBACK.length];
+}
 function buildColors(series: VolumeSeries[]): Record<string, string> {
   const out: Record<string, string> = {};
-  let i = 0;
-  for (const s of series) out[s.key] = s.key === "other" ? "#565b64" : VOLUME_PALETTE[i++ % VOLUME_PALETTE.length];
+  for (const s of series) out[s.key] = countryColor(s.key);
   return out;
 }
-const seriesLabel = (s: VolumeSeries) => (s.key === "other" ? s.name : campaignShortLabel(s.name));
-const seriesFull = (s: VolumeSeries) => (s.key === "other" ? s.name : formatCampaign(s.name).display);
+const seriesLabel = (s: VolumeSeries) => s.name;
+const seriesFull = (s: VolumeSeries) => s.name;
 
 function VolumeTooltip({
   active,
@@ -78,7 +92,7 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
         <BarChart3 size={16} style={{ color: "#3ec08a" }} />
         <h3 className="text-[15px] font-semibold">Daily Call Volume</h3>
       </div>
-      <p className="text-[12.5px] text-[var(--text-3)] mb-3">Calls per day, stacked by campaign (top 10 + other).</p>
+      <p className="text-[12.5px] text-[var(--text-3)] mb-3">Calls per day, stacked by country.</p>
       {series.length === 0 ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No call volume in this window.</p>
       ) : (

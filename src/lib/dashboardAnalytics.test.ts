@@ -876,8 +876,12 @@ describe("computeTrend", () => {
 });
 
 describe("computeDailyVolume", () => {
-  it("buckets per day, caps to topN with an Other bucket", () => {
-    const campaigns = [camp("A"), camp("B"), camp("C")];
+  it("buckets per day by campaign country; unparseable names fold into Other", () => {
+    const campaigns = [
+      camp("A", { name: "L7_AU_VOIZO_20NDFS_10/06/2026" }),
+      camp("B", { name: "L7_CA_VOIZO_20NDFS_10/06/2026" }),
+      camp("C", { name: "manual test campaign" }), // no L7_<CC>_ token → Other
+    ];
     const calls = [
       call("A", "completed", true, "2026-06-10T01:00:00Z"),
       call("A", "completed", true, "2026-06-10T02:00:00Z"),
@@ -886,11 +890,11 @@ describe("computeDailyVolume", () => {
       call("B", "completed", true, "2026-06-10T05:00:00Z"),
       call("C", "completed", true, "2026-06-11T01:00:00Z"),
     ];
-    const v = computeDailyVolume(calls, campaigns, Date.parse("2026-06-10T00:00:00Z"), Date.parse("2026-06-11T12:00:00Z"), 2);
-    expect(v.series.map((s) => s.key)).toEqual(["A", "B", "other"]); // C folds into Other
+    const v = computeDailyVolume(calls, campaigns, Date.parse("2026-06-10T00:00:00Z"), Date.parse("2026-06-11T12:00:00Z"));
+    expect(v.series.map((s) => s.key)).toEqual(["Australia", "Canada", "other"]); // by volume desc, Other last
     expect(v.days.map((d) => d.day)).toEqual(["2026-06-10", "2026-06-11"]);
-    expect(v.days[0].A).toBe(3);
-    expect(v.days[0].B).toBe(2);
+    expect(v.days[0].Australia).toBe(3);
+    expect(v.days[0].Canada).toBe(2);
     expect(v.days[1].other).toBe(1);
   });
 });

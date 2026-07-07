@@ -25,6 +25,7 @@ import {
 } from "./campaignAnalytics";
 import { ANALYTICS_CONFIG } from "./analyticsConfig";
 import { substantiveUserTurnCount } from "./transcriptClassify";
+import { formatCampaign } from "./campaignDisplay";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -562,36 +563,36 @@ export function computeTrend(calls: DashCallRow[], startMs: number, endMs: numbe
   return out;
 }
 
-// ── Daily call volume (stacked by campaign) ──────────────────────────────────
+// ── Daily call volume (stacked by campaign COUNTRY) ──────────────────────────
 export interface VolumeSeries {
-  key: string; // campaignId, or "other"
+  key: string; // country (friendly name, e.g. "Australia"), or "other"
   name: string;
 }
 export interface VolumeResult {
-  days: Array<Record<string, number | string>>; // { day, [campaignId|"other"]: count }
-  series: VolumeSeries[]; // top-N campaigns by volume + an "Other" bucket
+  days: Array<Record<string, number | string>>; // { day, [country|"other"]: count }
+  series: VolumeSeries[]; // countries present, by volume, + an "Other" bucket (unparseable names)
 }
 
-/** Calls per day, stacked by campaign. Capped to the top-N campaigns by total calls; the
- *  rest fold into "other" so the stacked bar stays readable. Zero-filled day range. */
+/** Calls per day, stacked by campaign COUNTRY (best-effort L7_<CC>_ parse via formatCampaign;
+ *  campaigns whose name has no parseable country fold into "other"). Grouping by country keeps the
+ *  stack to a handful of stable, meaningful colors instead of a per-campaign rainbow (and the color
+ *  no longer depends on volume rank). Zero-filled day range. */
 export function computeDailyVolume(
   calls: DashCallRow[],
   campaigns: DashCampaignRow[],
   startMs: number,
   endMs: number,
-  topN = 10,
 ): VolumeResult {
-  const totalByCampaign = new Map<string, number>();
-  for (const c of calls) totalByCampaign.set(c.campaign_id, (totalByCampaign.get(c.campaign_id) ?? 0) + 1);
-  const sorted = [...totalByCampaign.entries()].sort((a, b) => b[1] - a[1]);
-  const topIds = new Set(sorted.slice(0, topN).map(([id]) => id));
   const index = buildCampaignIndex(campaigns);
+  const countryOf = (campId: string) => formatCampaign(index.get(campId)?.name ?? null).country || "other";
 
+  const totalByCountry = new Map<string, number>();
   const byDay = new Map<string, Record<string, number>>();
   for (const c of calls) {
     if (!c.created_at) continue;
+    const key = countryOf(c.campaign_id);
+    totalByCountry.set(key, (totalByCountry.get(key) ?? 0) + 1);
     const day = utcDayString(Date.parse(c.created_at));
-    const key = topIds.has(c.campaign_id) ? c.campaign_id : "other";
     let rec = byDay.get(day);
     if (!rec) {
       rec = {};
@@ -607,8 +608,13 @@ export function computeDailyVolume(
     days.push({ day, ...(byDay.get(day) ?? {}) });
   }
 
-  const series: VolumeSeries[] = sorted.slice(0, topN).map(([id]) => ({ key: id, name: index.get(id)?.name ?? id }));
-  if (sorted.length > topN) series.push({ key: "other", name: "Other campaigns" });
+  // Series: countries by total volume (desc); "other" always last so the neutral bucket sits at the
+  // top of the stack. Color is assigned per-country in the chart (entity-keyed), not by this order.
+  const series: VolumeSeries[] = [...totalByCountry.entries()]
+    .filter(([k]) => k !== "other")
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => ({ key: k, name: k }));
+  if (totalByCountry.has("other")) series.push({ key: "other", name: "Other" });
   return { days, series };
 }
 

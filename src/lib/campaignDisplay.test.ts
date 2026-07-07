@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatCampaign, campaignShortLabel, promptAgentLabel } from "./campaignDisplay";
+import { formatCampaign, campaignShortLabel, promptAgentLabel, campaignIdsForCountry } from "./campaignDisplay";
 
 describe("formatCampaign", () => {
   it("parses country + NDFS + DepMatch from a VOIZO code", () => {
@@ -54,6 +54,25 @@ describe("campaignShortLabel", () => {
 
   it("falls back to the full display when there's no run-date to distinguish by", () => {
     expect(campaignShortLabel("L7_CA_VOIZO_RND_20NDFS_300%DEPMATCH")).toBe("Canada · 20 NDFS + 300% DepMatch");
+  });
+});
+
+describe("campaignIdsForCountry", () => {
+  const campaigns = [
+    { id: "au1", name: "L7_AU_VOIZO_RND_20NDFS_300%DEPMATCH_28/05/2026" },
+    { id: "au2", name: "L7_AU_STEVIC_PROMPT_RND_20NDFS_01/07/2026" },
+    { id: "ca1", name: "L7_CA_STEVIC_PROMPT_RND_20NDFS_300%DEPMATCH_11/06/2026" },
+    { id: "test1", name: "Agent response test - EVA" }, // no parseable country
+  ];
+
+  it("returns exactly the campaign ids whose parsed country matches", () => {
+    expect(campaignIdsForCountry(campaigns, "Australia")).toEqual(new Set(["au1", "au2"]));
+    expect(campaignIdsForCountry(campaigns, "Canada")).toEqual(new Set(["ca1"]));
+  });
+
+  it("excludes campaigns with no parseable country", () => {
+    const all = new Set([...campaignIdsForCountry(campaigns, "Australia"), ...campaignIdsForCountry(campaigns, "Canada")]);
+    expect(all.has("test1")).toBe(false);
   });
 });
 

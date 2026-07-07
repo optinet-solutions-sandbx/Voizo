@@ -86,3 +86,16 @@ export function promptAgentLabel(baseName: string | null | undefined, snippetLab
   const name = baseName?.trim();
   return name ? `${name} · ${snippetLabel}` : snippetLabel;
 }
+
+// The campaign ids belonging to a country, by the SAME best-effort L7_<CC>_ parse that
+// formatCampaign uses for display. Single source for the country FILTER across the
+// analytics / records / export routes so filter membership can't drift from the dropdown's
+// labels. Structural {id,name} arg keeps this free of dashboardAnalytics types (no import cycle).
+export function campaignIdsForCountry(
+  campaigns: { id: string; name: string | null }[],
+  country: string,
+): Set<string> {
+  return new Set(
+    campaigns.filter((c) => formatCampaign(c.name).country === country).map((c) => c.id),
+  );
+}

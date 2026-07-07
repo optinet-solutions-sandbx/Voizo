@@ -56,7 +56,7 @@ export function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: stri
   return { status: "all", outcome, smsOnly, title };
 }
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 20;
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
@@ -94,7 +94,7 @@ function buildRecordsQuery(
     if (scope.prompt) q.set("prompt", scope.prompt);
   } else {
     if (filters.campaignIds.length) q.set("campaigns", filters.campaignIds.join(","));
-    if (filters.agent) q.set("agent", filters.agent);
+    if (filters.country) q.set("country", filters.country);
     if (filters.prompt) q.set("prompt", filters.prompt);
     if (filters.phone.trim()) q.set("phone", filters.phone.trim());
   }
@@ -128,6 +128,9 @@ export default function RangedRecordsDrawer({
   const [exporting, setExporting] = useState(false);
   const [truncatedNote, setTruncatedNote] = useState<string | null>(null);
   const [progress, setProgress] = useState<ExportProgress>({ current: 0, total: 0, stage: "" });
+  // Last loaded page — kept so we can show its rows (dimmed) while the NEXT page fetches, instead of
+  // collapsing the table to a one-line "Loading…" (which reflows the drawer height and jumps scroll).
+  const lastPageRef = useRef<RecordsResponse | undefined>(undefined);
 
   // Seed the refinement controls from the clicked slice (adjust-state-on-prop-change during render —
   // NOT an effect; see react.dev you-might-not-need-an-effect). Also resets to page 0 on a new slice.
@@ -153,6 +156,7 @@ export default function RangedRecordsDrawer({
     setPrevScope(scopeKey);
     setPage(0);
     setError(null);
+    lastPageRef.current = undefined; // new filter/slice → don't flash the previous scope's rows
   }
 
   const currentKey = filter ? buildRecordsQuery(filters, filter, dispo, outcome, page * PAGE_SIZE, PAGE_SIZE, scope) : "";
@@ -178,6 +182,9 @@ export default function RangedRecordsDrawer({
       });
     return () => controller.abort();
   }, [open, filter, currentKey, cache]);
+
+  // Remember the latest loaded page so the next page's fetch can keep these rows on-screen (dimmed).
+  useEffect(() => { if (data) lastPageRef.current = data; }, [data]);
 
   // Close on Escape (ref keeps the latest onClose without re-binding the listener).
   const onCloseRef = useRef(onClose);
@@ -230,8 +237,10 @@ export default function RangedRecordsDrawer({
 
   if (!open || !filter) return null;
 
-  const total = data?.total ?? 0;
-  const records = data?.records ?? [];
+  // Fall back to the last loaded page while the next one fetches — keeps the table height stable.
+  const shownData = data ?? lastPageRef.current;
+  const total = shownData?.total ?? 0;
+  const records = shownData?.records ?? [];
   const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const to = page * PAGE_SIZE + records.length;
   const canPrev = page > 0;
@@ -292,11 +301,13 @@ export default function RangedRecordsDrawer({
       <div className="px-4 py-3">
         {error ? (
           <p className="text-xs text-amber-400 font-mono py-3">{error}</p>
-        ) : loading ? (
+        ) : loading && records.length === 0 ? (
           <p className="text-xs text-[var(--text-3)] py-3">Loading records…</p>
         ) : (
           <>
-            <RecordsTable records={records} />
+            <div className={loading ? "opacity-50 transition-opacity" : "transition-opacity"}>
+              <RecordsTable records={records} />
+            </div>
             <div className="flex items-center justify-between gap-3 mt-2.5">
               <p className="text-[11px] text-[var(--text-3)]">
                 Showing {from.toLocaleString()}–{to.toLocaleString()} of {total.toLocaleString()} contacts
