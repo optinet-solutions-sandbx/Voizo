@@ -179,6 +179,30 @@ export async function executeRebindCore(
   // successful rebind into a failure.
   await snapshotCampaignPrompt(campaign.id, clone.id);
 
+  // ── 7. Best-effort voicemail-autohangup config on the NEW clone ──
+  // A rebound campaign gets a fresh clone; if the campaign opted in, re-ensure
+  // transcript streaming + controlUrl on it. Separate guarded read (NOT added to
+  // the step-5 .select) so a missing voicemail_autohangup column — code deployed
+  // before the migration — degrades to "skip" instead of failing the rebind.
+  // ensureVoicemailAutohangupConfig itself never throws.
+  try {
+    const { data: flagRow } = await supabase
+      .from("campaigns_v2")
+      .select("voicemail_autohangup")
+      .eq("id", campaign.id)
+      .single();
+    if (flagRow?.voicemail_autohangup === true) {
+      const { ensureVoicemailAutohangupConfig } = await import("./liveCallControl");
+      const cfg = await ensureVoicemailAutohangupConfig(vapiPrivateKey, clone.id);
+      console.log(
+        `[rebindCore] voicemail-autohangup config for ${clone.id}: ` +
+          `ok=${cfg.ok} patched=${cfg.patched}${cfg.detail ? ` detail=${cfg.detail}` : ""}`,
+      );
+    }
+  } catch (err) {
+    console.warn("[rebindCore] voicemail-autohangup flag read skipped:", err);
+  }
+
   return {
     ok: true,
     clone: { id: clone.id, name: clone.name },

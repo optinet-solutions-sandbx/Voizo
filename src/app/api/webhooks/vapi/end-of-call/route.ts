@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms } from "@/lib/transcriptClassify";
 import { decideSmsDispatch, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { getKillableVoicemailUtterance, resolveControlUrl, endCallViaControlUrl } from "@/lib/vapi/liveCallControl";
 import crypto from "crypto";
 
 // SMS dispatch + multiple Supabase queries run inline before returning 200.
@@ -60,6 +61,68 @@ export async function POST(request: NextRequest) {
 
   // ── Parse Vapi payload ──
   const message = body.message as Record<string, unknown> | undefined;
+
+  // ── Live voicemail auto-hangup (2026-07-07) ──
+  // Spec: docs/2026-07-07_DOC_Voicemail_Autohangup_LiveClassifier_Spec.md. Val-lineage
+  // clones already stream `transcript` serverMessages here (inherited from the base via
+  // createClone's `...base` spread); previously they fell through the early-return below.
+  // When a FINAL customer utterance is conclusively a voicemail greeting AND the owning
+  // campaign opted in (campaigns_v2.voicemail_autohangup), end the call via Live Call
+  // Control now — instead of the LLM pitching ~27s into the machine (measured, campaign
+  // 46a33f3e). Fail-safe by construction: any error → log + 200 and the call simply
+  // continues (prompt rule #4 + silence/maxDuration caps still backstop); non-transcript
+  // messages never enter this branch, so the end-of-call flow below is untouched.
+  if (message && message.type === "transcript") {
+    try {
+      const utterance = getKillableVoicemailUtterance(message);
+      if (utterance) {
+        const call = message.call as Record<string, unknown> | undefined;
+        const assistantId = call?.assistantId as string | undefined;
+        if (assistantId) {
+          // Newest campaign owning this clone — assistant ids can recur across pool
+          // rotations, so order by created_at and take the current owner. Known limit
+          // (review #6): legacy campaigns sharing the voizo-poc fallback assistant
+          // would share the newest owner's flag — moot for dedicated clones; don't
+          // enable the flag on legacy shared-assistant campaigns. Until the
+          // voicemail_autohangup migration is applied this select errors → data null
+          // → no kill (fail-safe, behavior-neutral deploy).
+          const { data: camps, error: flagErr } = await supabaseAdmin
+            .from("campaigns_v2")
+            .select("id, voicemail_autohangup")
+            .eq("vapi_assistant_id", assistantId)
+            .order("created_at", { ascending: false })
+            .limit(1);
+          if (flagErr) {
+            // Pre-migration or transient DB error — no kill. Log so "kills never
+            // fire" is debuggable instead of silent (review #8).
+            console.warn(`[voicemail-autohangup] flag lookup failed (no kill): ${flagErr.message}`);
+          }
+          const camp = camps?.[0] as { id: string; voicemail_autohangup: boolean | null } | undefined;
+          if (camp?.voicemail_autohangup === true) {
+            const monitor = call?.monitor as Record<string, unknown> | undefined;
+            const controlUrl = await resolveControlUrl(
+              process.env.VAPI_PRIVATE_KEY ?? "",
+              call?.id as string | undefined,
+              monitor?.controlUrl as string | undefined,
+            );
+            if (controlUrl) {
+              const kill = await endCallViaControlUrl(controlUrl);
+              console.log(
+                `[voicemail-autohangup] end-call sent (status=${kill.status}) campaign=${camp.id} ` +
+                  `vapiCallId=${call?.id} utterance="${utterance.slice(0, 140)}"`,
+              );
+            } else {
+              console.warn(`[voicemail-autohangup] no controlUrl resolvable vapiCallId=${call?.id}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[voicemail-autohangup] error (call continues, LLM backstop applies):", err);
+    }
+    return NextResponse.json({ received: true });
+  }
+
   if (!message || message.type !== "end-of-call-report") {
     return NextResponse.json({ received: true });
   }

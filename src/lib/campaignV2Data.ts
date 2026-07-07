@@ -62,6 +62,13 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
         input.goalTarget > 0
           ? input.goalTarget
           : null,
+      // Key only sent when the caller explicitly set the flag — an unconditional
+      // `voicemail_autohangup: false` would break EVERY campaign create if the
+      // code deploys before supabase-migration-voicemail-autohangup.sql is
+      // applied. Absent key → DB default false.
+      ...(typeof input.voicemailAutohangup === "boolean"
+        ? { voicemail_autohangup: input.voicemailAutohangup }
+        : {}),
     })
     .select()
     .single();
@@ -101,6 +108,26 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   if (campaignRows.length > 0) {
     const { error: numbersError } = await supabaseAdmin.from("campaign_numbers_v2").insert(campaignRows);
     if (numbersError) throw numbersError;
+  }
+
+  // ── Voicemail auto-hangup: ensure the clone streams transcripts + has controlUrl ──
+  // Post-clone PATCH (createClone is untouchable by project rule). Runs AFTER the
+  // numbers insert so a stalled Vapi call can never half-create a campaign (row
+  // without numbers). Best-effort: ensureVoicemailAutohangupConfig never throws,
+  // and a miss is fail-safe — the clone just never triggers kills (Val-lineage
+  // clones stream via inheritance anyway). Recurring children are NOT wired yet
+  // (trial scope; children default to flag-off — see
+  // supabase-migration-voicemail-autohangup.sql).
+  if (input.voicemailAutohangup === true && input.vapiAssistantId) {
+    const { ensureVoicemailAutohangupConfig } = await import("./vapi/liveCallControl");
+    const cfg = await ensureVoicemailAutohangupConfig(
+      process.env.VAPI_PRIVATE_KEY ?? "",
+      input.vapiAssistantId,
+    );
+    console.log(
+      `[createCampaignV2] voicemail-autohangup config for ${input.vapiAssistantId}: ` +
+        `ok=${cfg.ok} patched=${cfg.patched}${cfg.detail ? ` detail=${cfg.detail}` : ""}`,
+    );
   }
 
   return {

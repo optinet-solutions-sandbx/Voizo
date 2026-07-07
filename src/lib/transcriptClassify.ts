@@ -54,33 +54,48 @@ export function parseTranscriptTurns(transcript: string): TranscriptTurn[] {
 // slipped the >=2 threshold below, surfacing as FAKE "real conversations" in
 // /reviews (campaign 9df71cd3, 2026-06-03). The strong tier fixes that.
 //
-// STRONG — unambiguous machine phrases a live customer would never utter on a
-// sales call; a SINGLE match is conclusive.
-const VOICEMAIL_STRONG_PATTERNS = [
-  /\bvoice\s*mail(?:box)?\b/i, // incl. "voice mailbox"
-  /\bvoicemail\b/i,
+// STRONG — unambiguous machine phrases; a SINGLE match is conclusive for the
+// post-call LABEL (isVoicemail). Split 2026-07-07 (adversarial review of the
+// live kill path) into two groups by a stricter bar — could a LIVE human
+// plausibly utter this? — because the kill tier (isConclusiveVoicemail) hangs
+// up mid-call on one match, where a false positive hangs up on a customer.
+//
+// MACHINE-EXCLUSIVE — scripted greeting/carrier boilerplate no live speaker
+// produces. Safe as a single-match KILL trigger.
+const VOICEMAIL_MACHINE_EXCLUSIVE_PATTERNS = [
   /\bmessage bank\b/i, // AU/UK term for voicemail
   /\b(?:voice |automated )?(?:messaging|answering) (?:system|service)\b/i, // "automated voice messaging system"
   /\bforwarded to (?:an? )?automated\b/i,
   /\bmailbox (?:is )?full\b/i,
   /(?:finished|done) recording/i, // "when you have finished recording, you may hang up"
-  /leave (?:a |your )?(?:detailed |brief |short )?message (?:after|at)\b/i, // "leave a detailed message after the tone"
-  /(?:can'?t|cannot|can not|are not able to|unable to) take your call/i,
+  /leave (?:a |your )?(?:detailed |brief |short )?message (?:after|at)\b/i, // "...message after the tone" — the tone imperative is greeting script
   /please record (?:your )?message/i,
-  // #4 (2026-06-08): carrier voicemail-to-text divert + conversion notices — verbatim machine
-  // boilerplate a live customer never utters, so a single match is conclusive.
+  // #4 (2026-06-08): carrier voicemail-to-text divert + conversion notices — verbatim machine boilerplate.
   /hang up before the tone/i,
   /will be sent in a text message to the person you called/i,
   /your (?:voice )?message is being converted to text/i,
   /standard call charges apply if you proceed/i,
-  // Ernie ticket (2026-06-16): AU/CA carrier + receptionist greetings isVoicemail missed, so they
-  // reached the live-human path and were dropped by the registered_optin announce gate. Each phrase
-  // is machine-exclusive on a cold OUTBOUND sales call (we dial them) — a single match is conclusive.
   /sent as an? (?:audio|text|voice) message\b/i, // "...will be sent as an audio message" (dominant AU greeting)
-  /\brecord your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen)
   /\bmailbox number\b/i, // "you have reached mailbox number ..."
   /voice message system\b/i, // "forwarded to an automatic voice message system"
+];
+// HUMAN-PLAUSIBLE strong — conclusive for LABELING a whole transcript, but a
+// live speaker can say these, so they must never trigger a kill (2026-07-07
+// review, verified by execution): "I got your VOICEMAIL earlier" is an expected
+// opener on retry attempts (3× policy); "I CAN'T TAKE YOUR CALL right now, I'm
+// driving" is a live brush-off; "can I RECORD YOUR NAME" is a live receptionist;
+// "he CANNOT COME TO THE PHONE" is a live third party.
+const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
+  /\bvoice\s*mail(?:box)?\b/i, // incl. "voice mailbox"
+  /\bvoicemail\b/i,
+  /(?:can'?t|cannot|can not|are not able to|unable to) take your call/i,
+  /\brecord your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen)
   /cannot come to the (?:phone|telephone)\b/i, // "the person you called cannot come to the phone"
+];
+// Post-call labeling keeps the FULL set — isVoicemail behavior is unchanged.
+const VOICEMAIL_STRONG_PATTERNS = [
+  ...VOICEMAIL_MACHINE_EXCLUSIVE_PATTERNS,
+  ...VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS,
 ];
 
 // WEAK — generic greeting fragments that can appear incidentally in a real call.
@@ -137,6 +152,33 @@ export function isVoicemail(transcript: string): boolean {
   if (isIvrCallback(safe)) return true;
   if (VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2) return true;
   return allUserTurnsAreMachineFragments(safe);
+}
+
+/**
+ * Live kill-path classifier (voicemail auto-hangup, 2026-07-07): is this SINGLE
+ * final user utterance conclusively a machine? Used mid-call by the end-of-call
+ * route's `transcript` branch to end the call via Live Call Control — a wrong
+ * `true` hangs up on a live customer, so ONLY machine-exclusive phrases fire.
+ *
+ * Deliberately narrower than isVoicemail (adversarial review 2026-07-07,
+ * FP classes verified by execution): human-plausible strong phrases ("I got
+ * your voicemail earlier" on a retry, "can't take your call, I'm driving"),
+ * the IVR callback combo ("leave your number, we'll get back to you" — a live
+ * receptionist line), and the weak-pair rule ("he's not available… want to
+ * leave a message?" — a live third party) all label transcripts but never kill.
+ * Under-kill is the correct failure mode: misses fall to the prompt rule-#4
+ * LLM backstop (~27s) + silence/maxDuration caps.
+ *
+ * NOT reusable via isVoicemail(line): its bare-fragment tier would return true
+ * for a human uttering the single word "message" (its all-turns guard only
+ * makes that safe on whole transcripts). Any kill-tier match is a subset of
+ * STRONG, so a killed call's transcript still labels isVoicemail=true — the
+ * goal_reached veto and registered_optin voicemail-followup SMS keep working.
+ */
+export function isConclusiveVoicemail(utterance: string): boolean {
+  if (!utterance) return false;
+  const safe = utterance.slice(0, TRANSCRIPT_CAP);
+  return VOICEMAIL_MACHINE_EXCLUSIVE_PATTERNS.some((p) => p.test(safe));
 }
 
 // ── Genuine customer consent ────────────────────────────────────────────────

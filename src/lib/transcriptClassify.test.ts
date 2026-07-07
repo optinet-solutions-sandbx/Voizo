@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  isVoicemail, hasRealConversation, hasGenuineCustomerConsent,
+  isVoicemail, isConclusiveVoicemail, hasRealConversation, hasGenuineCustomerConsent,
   agentMentionedSms, customerDeclinedSms, substantiveUserTurnCount,
 } from "./transcriptClassify";
 
@@ -373,5 +373,79 @@ describe("substantiveUserTurnCount", () => {
   });
   it("ignores a 1-char user turn", () => {
     expect(substantiveUserTurnCount("User: y")).toBe(0);
+  });
+});
+
+// ── isConclusiveVoicemail — live kill-path classifier (voicemail auto-hangup, 2026-07-07) ──
+// Runs on SINGLE final user utterances mid-call (not whole transcripts). A wrong `true` HANGS UP
+// ON A LIVE CUSTOMER, so only MACHINE-EXCLUSIVE phrases kill. Adversarial review 2026-07-07
+// (verified by execution) narrowed the tier: human-plausible strong phrases, the IVR combo, and
+// the weak-pair rule all still LABEL transcripts (isVoicemail) but never kill. Voicemail lines
+// below are verbatim from production campaign 46a33f3e (L7_CA 2026-07-06).
+
+// Real single-utterance voicemail greetings with machine-exclusive phrases — must kill.
+const LIVE_VM_KILL_LINES = [
+  "forwarded to an automatic voice message system.",
+  "is not available. Please leave a message after the tone.",
+  "has been forwarded to voicemail. The person you're trying to reach is not available. At the tone, please record your message.",
+  "voice message system. Sure.",
+  "This message bank is full. Please try again later.",
+];
+
+// Voicemail-ish lines that LABEL as voicemail but are too human-plausible to KILL on —
+// they fall to the LLM rule-#4 backstop (deliberate under-kill).
+const LABEL_ONLY_LINES = [
+  // weak-pair personal greetings (a live third party can produce the same pair)
+  "Hello. You've reached Macomb's residence. If you have something important to say, please leave a message, and I'll get back to you.",
+  "Hey. You've reached Terry. Leave a message, and I'll get back to you as soon as I can. Bye.",
+];
+
+// Single HUMAN utterances — every one must stay false. Includes the review's verified
+// FP classes: retry-context voicemail mentions, live brush-offs, third-party answers,
+// live receptionists. A true on ANY of these hangs up on a person.
+const LIVE_HUMAN_LINES = [
+  "Yes. Send me the details. How do I activate them?",
+  "No, not interested anymore. Goodbye.",
+  "Sorry, I'm not available on Tuesday.",
+  "I missed your call earlier, who is this?",
+  "Please leave a message with my wife.",
+  "message", // bare STT fragment — a live human can utter one word
+  "Yeah, I got your voicemail earlier. What's this about?", // retry-attempt opener (3× retry policy)
+  "I saw you left a voicemail this morning.",
+  "Sorry, I can't take your call right now, I'm driving.", // live first-person brush-off
+  "He's not available right now. Do you want to leave a message?", // live third party (spouse)
+  "Sorry I missed your call earlier. Did you leave a message?", // retry-context human
+  "Can I record your name for the visitor log?", // live receptionist
+  "Leave your details and we'll get straight back to you on your number.", // live receptionist (IVR-combo shaped)
+];
+
+describe("isConclusiveVoicemail — kills on machine-exclusive lines only", () => {
+  it("fires on real machine-exclusive greeting lines", () => {
+    for (const line of LIVE_VM_KILL_LINES) {
+      expect(isConclusiveVoicemail(line), `should kill: "${line}"`).toBe(true);
+    }
+  });
+  it("label-only lines: isVoicemail flags them, the kill tier does NOT", () => {
+    for (const line of LABEL_ONLY_LINES) {
+      expect(isVoicemail(line), `should label: "${line}"`).toBe(true);
+      expect(isConclusiveVoicemail(line), `must NOT kill: "${line}"`).toBe(false);
+    }
+  });
+  it("isVoicemail labeling is unchanged for human-plausible strong phrases", () => {
+    // The split must not weaken the post-call label (goal veto + SMS follow-up rely on it).
+    expect(isVoicemail("You've reached the voicemail of John. Please leave a message after the beep.")).toBe(true);
+    expect(isVoicemail("The person you called cannot come to the phone. Please leave a message after the tone.")).toBe(true);
+  });
+});
+
+describe("isConclusiveVoicemail — NEVER fires on live-human utterances", () => {
+  it("stays false on every human line (a true here hangs up on a customer)", () => {
+    for (const line of LIVE_HUMAN_LINES) {
+      expect(isConclusiveVoicemail(line), `must NOT kill: "${line}"`).toBe(false);
+    }
+  });
+  it("stays false on empty/blank input", () => {
+    expect(isConclusiveVoicemail("")).toBe(false);
+    expect(isConclusiveVoicemail("   ")).toBe(false);
   });
 });

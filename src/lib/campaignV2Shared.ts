@@ -41,6 +41,7 @@ export interface CampaignV2CreateInput {
   isTest?: boolean; // Marks the campaign as a test run. Excluded from /api/audience/suggestions; operator-controllable in the wizard + detail page header.
   source?: string; // 'production' (default) | 'ghost_portal'. Segregates internal GhostPortal runs from client analytics/list.
   goalTarget?: number | null; // Optional target number of successful outcomes (e.g. deposits) for this campaign; rendered as X / Y in the performance report. Positive integer or null. Maps to campaigns_v2.goal_target.
+  voicemailAutohangup?: boolean; // Opt-in (2026-07-07): kill calls via Live Call Control when a final customer utterance is conclusively voicemail. Maps to campaigns_v2.voicemail_autohangup (default false). No wizard UI yet — trial campaigns set it via API/SQL.
 }
 
 export function defaultCallWindows(): CallWindow[] {
