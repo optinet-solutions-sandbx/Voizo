@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { X, FileText, Mic, ScrollText, Search } from "lucide-react";
+import { X, FileText, Mic, ScrollText, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   type TodayCallRecord,
   type RecordStatus,
@@ -42,6 +42,8 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
 
+const PAGE_SIZE = 20;
+
 export default function TodayRecordsDrawer({
   day,
   filter,
@@ -64,6 +66,7 @@ export default function TodayRecordsDrawer({
   const [dispo, setDispo] = useState<RecordStatus | "all">("all");
   const [outcome, setOutcome] = useState<AttemptTag | "reached" | "all">("all");
   const [phone, setPhone] = useState("");
+  const [page, setPage] = useState(0);
 
   const cacheKey = day;
   const records = cache[cacheKey];
@@ -78,6 +81,7 @@ export default function TodayRecordsDrawer({
       setDispo(filter.status);
       setOutcome(filter.outcome);
       setPhone("");
+      setPage(0);
     }
   }
 
@@ -126,6 +130,14 @@ export default function TodayRecordsDrawer({
       return true;
     });
   }, [records, filter, dispo, outcome, phone]);
+
+  // Client-side paging over the already-loaded visible set (20/page). safePage clamps when a
+  // filter shrinks the set below the current page. Export still uses the whole `visible` set.
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const paged = visible.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const from = visible.length === 0 ? 0 : safePage * PAGE_SIZE + 1;
+  const to = safePage * PAGE_SIZE + paged.length;
 
   // CSV / Audio / Transcripts of the VISIBLE set via the shared runExport engine (event handler — not
   // an effect). Lazily fetch + cache the day's ExportLeads, then map the visible contacts by
@@ -214,16 +226,16 @@ export default function TodayRecordsDrawer({
         {exporting && <span className="text-[11px] text-[var(--text-3)]">{progress.stage || "Exporting…"}</span>}
         <span className="w-px h-4 bg-[var(--border)] mx-0.5" />
         <div className="w-[160px]">
-          <StyledSelect size="sm" value={dispo} onChange={(v) => setDispo(v as RecordStatus | "all")} options={STATUS_DROPDOWN} />
+          <StyledSelect size="sm" value={dispo} onChange={(v) => { setDispo(v as RecordStatus | "all"); setPage(0); }} options={STATUS_DROPDOWN} />
         </div>
         <div className="w-[190px]">
-          <StyledSelect size="sm" value={outcome} onChange={(v) => setOutcome(v as AttemptTag | "reached" | "all")} options={OUTCOME_DROPDOWN} />
+          <StyledSelect size="sm" value={outcome} onChange={(v) => { setOutcome(v as AttemptTag | "reached" | "all"); setPage(0); }} options={OUTCOME_DROPDOWN} />
         </div>
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none" />
           <input
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => { setPhone(e.target.value); setPage(0); }}
             placeholder="Search number…"
             aria-label="Search by phone number"
             className="pl-8 pr-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary w-[150px]"
@@ -239,10 +251,30 @@ export default function TodayRecordsDrawer({
           <p className="text-xs text-[var(--text-3)] py-3">Loading records…</p>
         ) : (
           <>
-            <RecordsTable records={visible} />
-            <p className="text-[11px] text-[var(--text-3)] mt-2">
-              Showing {visible.length.toLocaleString()} of {records.length.toLocaleString()} contacts dialed {day === "today" ? "today" : "yesterday"}.
-            </p>
+            <RecordsTable records={paged} />
+            <div className="flex items-center justify-between gap-3 mt-2">
+              <p className="text-[11px] text-[var(--text-3)]">
+                Showing {from.toLocaleString()}–{to.toLocaleString()} of {visible.length.toLocaleString()} contacts dialed {day === "today" ? "today" : "yesterday"}.
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={safePage === 0}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={12} /> Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={safePage >= pageCount - 1}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next <ChevronRight size={12} />
+                </button>
+              </div>
+            </div>
           </>
         )}
       </div>
