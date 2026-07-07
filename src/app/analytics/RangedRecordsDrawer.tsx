@@ -56,7 +56,7 @@ export function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: stri
   return { status: "all", outcome, smsOnly, title };
 }
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 20;
 
 const STATUS_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All statuses" },
