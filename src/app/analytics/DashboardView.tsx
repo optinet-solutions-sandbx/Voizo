@@ -56,9 +56,10 @@ export default function DashboardView() {
   return (
     <>
       {/* Background dot-field is now global (rendered once in the app layout). */}
-      {/* Console-density frame (2026-07-02): fluid width + tighter rhythm — the AWS-style
-          "use the screen" layout. Density scale documented in the console-density spec. */}
-      <div className="p-4 w-full grid gap-4">
+      {/* Centered, capped width — 2026-07-07. Reverts the 2026-07-02 fluid "use the screen"
+          layout (cards stretched too wide, Val's meeting note). Val's mockup shell is 900px,
+          but the live Campaign Performance table (5 cols) clips at 900, so capped at 1120. */}
+      <div className="p-4 w-full max-w-[1120px] mx-auto grid gap-4">
       {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
           by the green tick (pattern brief §1), not a background wash. */}
       <SectionIsland>
