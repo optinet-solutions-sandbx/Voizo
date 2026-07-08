@@ -7,6 +7,8 @@ import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { useToast } from "@/lib/toastContext";
 import { useNotifications } from "@/lib/notificationsContext";
 import { useMagnetic } from "@/components/useMagnetic";
+import WidgetCard from "../analytics/WidgetCard";
+import { SectionTick } from "../analytics/SectionIsland";
 import {
   KnowledgeBase,
   fetchKnowledgeBases,
@@ -101,17 +103,16 @@ export default function KnowledgeBasesPage() {
   const deleteTarget = items.find((i) => i.id === deleteConfirmId);
 
   return (
-    <div className="p-4 sm:p-6 w-full">
-      {/* Header */}
-      <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center flex-shrink-0">
-            <BookOpen size={17} className="text-indigo-400" />
+    <div className="p-4 w-full grid gap-4">
+      {/* Header — SectionTick + 18px title, matching the dashboard section-header pattern
+          (design-system rollout, Jasiel 2026-07-06). Fluid p-4 console density. */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#818cf8" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Knowledge Bases</h1>
           </div>
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold text-[var(--text-1)]">Knowledge Bases</h1>
-            <p className="text-xs text-[var(--text-3)] mt-0.5">{activeItems.length} active · {archivedItems.length} archived</p>
-          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">{activeItems.length} active · {archivedItems.length} archived</p>
         </div>
         <button ref={createRef} type="button" onClick={() => setShowModal(true)}
           className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-full transition-colors shadow-md shadow-blue-600/20 flex-shrink-0">
@@ -122,7 +123,7 @@ export default function KnowledgeBasesPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-[var(--border)] mb-5">
+      <div className="flex gap-1 border-b border-[var(--border)]">
         {(["active", "archived"] as const).map((t) => {
           const count = t === "active" ? activeItems.length : archivedItems.length;
           return (
@@ -213,7 +214,12 @@ export default function KnowledgeBasesPage() {
                 {tab === "active" && <p className="text-xs text-[var(--text-3)]">Create one to get started</p>}
               </div>
             ) : (
-              <div className="glow-frame bg-[var(--bg-app)] border border-[var(--border)] rounded-xl overflow-hidden">
+              <WidgetCard
+                title={tab === "active" ? "Active" : "Archived"}
+                icon={<BookOpen size={14} className="text-indigo-400" />}
+                context={`${filtered.length} knowledge base${filtered.length !== 1 ? "s" : ""}`}
+                bodyClassName="p-0"
+              >
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-[var(--bg-card)]">
@@ -255,10 +261,7 @@ export default function KnowledgeBasesPage() {
                     ))}
                   </tbody>
                 </table>
-                <div className="px-6 py-2.5 border-t border-[var(--border)] bg-[var(--bg-card)]">
-                  <p className="text-xs text-[var(--text-3)]">{filtered.length} knowledge base{filtered.length !== 1 ? "s" : ""}</p>
-                </div>
-              </div>
+              </WidgetCard>
             )}
           </div>
         </>
