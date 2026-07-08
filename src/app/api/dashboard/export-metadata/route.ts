@@ -11,6 +11,7 @@ import {
 } from "@/lib/dashboardAnalytics";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { parseRecordsParams, filterRecordsBySlice, FULL_SET_CAP } from "@/lib/rangedRecords";
+import { rangeToWindow } from "@/lib/rangeWindow";
 import { campaignIdsForCountry } from "@/lib/campaignDisplay";
 import { buildExportLeads, type ExportCallRow, type ExportNumberRow, type ExportSmsRow } from "@/lib/exportLeads";
 
@@ -27,7 +28,6 @@ import { buildExportLeads, type ExportCallRow, type ExportNumberRow, type Export
  * export path (capped at FULL_SET_CAP, behind Basic Auth) — never in the always-on aggregate routes.
  * Zero-Trust params, least-disclosure errors, structured log. Read-only, lenient origin (GET).
  */
-const MS_PER_DAY = 86_400_000;
 const IN_CHUNK = 150;
 
 export async function GET(request: NextRequest) {
@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
 
   const now = Date.now();
   const p = parseRecordsParams(new URL(request.url).searchParams);
-  const startMs = now - p.rangeDays * MS_PER_DAY;
+  const { startMs, endMs } = rangeToWindow(p.range, now, p.from, p.to);
   const startIso = new Date(startMs).toISOString();
 
   try {
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
 
     let filtered = filterCalls(
       callRows as unknown as DashCallRow[],
-      { startMs, endMs: now, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
+      { startMs, endMs, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
       index,
     );
     if (p.country) {
@@ -150,7 +150,7 @@ export async function GET(request: NextRequest) {
     console.log(
       "[dashboard/export-metadata]",
       JSON.stringify({
-        range: `${p.rangeDays}d`,
+        range: p.from && p.to ? `${p.from}..${p.to}` : p.range,
         status: p.status,
         outcome: p.outcome,
         smsOnly: p.smsOnly,

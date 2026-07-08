@@ -11,6 +11,7 @@ import {
 } from "@/lib/dashboardAnalytics";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { parseRecordsParams, filterRecordsBySlice, paginate, FULL_SET_CAP } from "@/lib/rangedRecords";
+import { rangeToWindow } from "@/lib/rangeWindow";
 import { campaignIdsForCountry } from "@/lib/campaignDisplay";
 
 /**
@@ -25,7 +26,6 @@ import { campaignIdsForCountry } from "@/lib/campaignDisplay";
  * the response (PII parsimony) — phone only (operator-facing, behind Basic Auth). Lazy: only hit on
  * a card/row click. Read-only, lenient origin (GET). Least-disclosure errors.
  */
-const MS_PER_DAY = 86_400_000;
 const IN_CHUNK = 150; // PostgREST ~16KB URL header guard
 
 export async function GET(request: NextRequest) {
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   const now = Date.now();
   const p = parseRecordsParams(new URL(request.url).searchParams);
-  const startMs = now - p.rangeDays * MS_PER_DAY;
+  const { startMs, endMs } = rangeToWindow(p.range, now, p.from, p.to);
   const startIso = new Date(startMs).toISOString();
 
   try {
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     // Filter by range/campaign/agent/phone (same as analytics) + prompt (shared resolver, lazy).
     let filtered = filterCalls(
       callRows as unknown as DashCallRow[],
-      { startMs, endMs: now, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
+      { startMs, endMs, campaignIds: p.campaignIds, voiceId: p.agent, baseAssistantId: p.baseAgent, numberIds },
       index,
     );
     if (p.country) {
@@ -140,7 +140,7 @@ export async function GET(request: NextRequest) {
     console.log(
       "[dashboard/records]",
       JSON.stringify({
-        range: `${p.rangeDays}d`,
+        range: p.from && p.to ? `${p.from}..${p.to}` : p.range,
         status: p.status,
         outcome: p.outcome,
         smsOnly: p.smsOnly,

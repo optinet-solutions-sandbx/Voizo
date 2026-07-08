@@ -9,8 +9,8 @@ import {
   type RecordStatus,
   type AttemptTag,
 } from "./dashboardAnalytics";
+import { RANGE_PRESETS } from "./rangeWindow";
 
-export const RANGE_DAYS: Record<string, number> = { "7d": 7, "14d": 14, "30d": 30, "60d": 60, "90d": 90 };
 export const FULL_SET_CAP = 10_000; // hard ceiling for the CSV/full-set path (matches the export route)
 export const MAX_PAGE = 200;
 export const MAX_CAMPAIGNS = 500;
@@ -20,7 +20,9 @@ const STATUSES: readonly RecordStatus[] = ["successful", "offer_delivered", "not
 const OUTCOMES: readonly (AttemptTag | "reached")[] = ["reached", "unreachable", "voicemail", "positive", "declined", "early_hangup", "neutral"];
 
 export interface RecordsParams {
-  rangeDays: number;
+  range: string;
+  from: string | null;
+  to: string | null;
   campaignIds: string[] | null;
   agent: string | null;
   country: string | null; // country FILTER (friendly name, e.g. "Australia") — resolved to campaign ids by the route
@@ -37,7 +39,12 @@ export interface RecordsParams {
 
 /** Validate + clamp every query param. Unknown values fall back to safe defaults (never throw). */
 export function parseRecordsParams(sp: URLSearchParams): RecordsParams {
-  const rangeDays = RANGE_DAYS[sp.get("range") ?? "30d"] ?? 30;
+  // Range is resolved to a concrete window by the route (needs `now`); here we just whitelist the
+  // key and pass through the custom from/to strings (rangeToWindow validates them).
+  const rangeRaw = sp.get("range") ?? "30d";
+  const range = RANGE_PRESETS.includes(rangeRaw) ? rangeRaw : "30d";
+  const from = (sp.get("from") || "").slice(0, 32) || null;
+  const to = (sp.get("to") || "").slice(0, 32) || null;
 
   const campaignsRaw = (sp.get("campaigns") ?? "")
     .split(",")
@@ -66,7 +73,7 @@ export function parseRecordsParams(sp: URLSearchParams): RecordsParams {
     ? FULL_SET_CAP
     : Math.min(MAX_PAGE, Math.max(1, Math.trunc(Number(sp.get("limit")) || 50)));
 
-  return { rangeDays, campaignIds, agent, country, baseAgent, promptSha, phone, status, outcome, smsOnly, offset, limit, full };
+  return { range, from, to, campaignIds, agent, country, baseAgent, promptSha, phone, status, outcome, smsOnly, offset, limit, full };
 }
 
 /** Apply the clicked slice (status DISPOSITION + attempt OUTCOME + smsOnly) to the aggregated records.

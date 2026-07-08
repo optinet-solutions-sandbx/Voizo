@@ -17,7 +17,7 @@ describe("parseRecordsParams — Zero-Trust validation", () => {
     const p = parseRecordsParams(new URLSearchParams("limit=9999&offset=-5"));
     expect(p.limit).toBe(200);
     expect(p.offset).toBe(0);
-    expect(p.rangeDays).toBe(30);
+    expect(p.range).toBe("30d");
     expect(p.status).toBe("all");
     expect(p.outcome).toBe("all");
     expect(p.smsOnly).toBe(false);
@@ -25,7 +25,7 @@ describe("parseRecordsParams — Zero-Trust validation", () => {
   });
   it("whitelists range/status/outcome, rejecting junk to defaults", () => {
     const p = parseRecordsParams(new URLSearchParams("range=999d&status=evil&outcome=drop"));
-    expect(p.rangeDays).toBe(30);
+    expect(p.range).toBe("30d");
     expect(p.status).toBe("all");
     expect(p.outcome).toBe("all");
   });
@@ -33,12 +33,18 @@ describe("parseRecordsParams — Zero-Trust validation", () => {
     const p = parseRecordsParams(
       new URLSearchParams("range=90d&status=successful&outcome=positive&smsOnly=true&limit=all"),
     );
-    expect(p.rangeDays).toBe(90);
+    expect(p.range).toBe("90d");
     expect(p.status).toBe("successful");
     expect(p.outcome).toBe("positive");
     expect(p.smsOnly).toBe(true);
     expect(p.full).toBe(true);
     expect(p.limit).toBe(FULL_SET_CAP);
+  });
+  it("whitelists lifetime and passes custom from/to through", () => {
+    expect(parseRecordsParams(new URLSearchParams("range=lifetime")).range).toBe("lifetime");
+    const custom = parseRecordsParams(new URLSearchParams("from=2026-06-01&to=2026-06-10"));
+    expect(custom.from).toBe("2026-06-01");
+    expect(custom.to).toBe("2026-06-10");
   });
   it("parses campaigns into a bounded id list and the reached outcome", () => {
     const p = parseRecordsParams(new URLSearchParams("campaigns=a,b,,c&outcome=reached"));
