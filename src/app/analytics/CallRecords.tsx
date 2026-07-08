@@ -16,7 +16,7 @@
 // component owns fetching, the filter chrome, exports, and the "Showing N" footer.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   type CallRecord,
   type AttemptTag,
@@ -43,6 +43,8 @@ const OUTCOME_DROPDOWN: DropdownOption[] = [
 const inputCls =
   "px-3 py-2 text-sm rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary";
 
+const PAGE_SIZE = 20; // parity with the Today's Performance + Global Performance drawers
+
 export default function CallRecords({
   campaignId,
   slice,
@@ -59,6 +61,7 @@ export default function CallRecords({
   const [dispo, setDispo] = useState<RecordStatus | "all">("all"); // Status (disposition) filter
   const [outcome, setOutcome] = useState<AttemptTag | "all">("all"); // Attempt-outcome filter (matches any attempt)
   const [phone, setPhone] = useState("");
+  const [page, setPage] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -91,6 +94,22 @@ export default function CallRecords({
   }, [records, slice, dispo, outcome, phone]);
 
   const anyFilter = dispo !== "all" || outcome !== "all" || phone;
+
+  // Client-side paging over the filtered set (20/page — parity with the Today's Performance and
+  // Global Performance drawers, which paginate; this Campaign Performance list previously rendered
+  // every row). Reset to page 0 whenever the filter criteria change, keyed off primitive values so
+  // the render-time reset compares by value and can never loop on object identity.
+  const filterKey = `${sliceLabel ?? ""}|${dispo}|${outcome}|${phone.trim()}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey);
+    setPage(0);
+  }
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const paged = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const from = filtered.length === 0 ? 0 : safePage * PAGE_SIZE + 1;
+  const to = safePage * PAGE_SIZE + paged.length;
 
   return (
     <div className="bg-[var(--bg-app)]/40 border-t border-[var(--border)] px-5 py-4">
@@ -151,10 +170,31 @@ export default function CallRecords({
           <RecordsSkeleton />
         ) : (
           <>
-            <RecordsTable records={filtered} />
-            <p className="text-[11px] text-[var(--text-3)] mt-2">
-              Showing {filtered.length.toLocaleString()} of {records.length.toLocaleString()} contacts.
-            </p>
+            <RecordsTable records={paged} />
+            <div className="flex items-center justify-between gap-3 mt-2">
+              <p className="text-[11px] text-[var(--text-3)]">
+                Showing {from.toLocaleString()}–{to.toLocaleString()} of {filtered.length.toLocaleString()} contact{filtered.length === 1 ? "" : "s"}
+                {filtered.length !== records.length ? ` (filtered from ${records.length.toLocaleString()})` : ""}.
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={safePage === 0}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={12} /> Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={safePage >= pageCount - 1}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next <ChevronRight size={12} />
+                </button>
+              </div>
+            </div>
           </>
         )}
       </div>
