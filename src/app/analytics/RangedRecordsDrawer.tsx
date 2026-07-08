@@ -86,7 +86,13 @@ function buildRecordsQuery(
   scope?: DrawerScope,
 ): string {
   const q = new URLSearchParams();
-  q.set("range", filters.range);
+  // Match the cards' window: a custom from/to pair overrides the preset; else send the range key.
+  if (filters.range === "custom" && filters.from && filters.to) {
+    q.set("from", filters.from);
+    q.set("to", filters.to);
+  } else {
+    q.set("range", filters.range);
+  }
   if (scope) {
     // Entity drill (Top Performers): scope REPLACES the bar's entity dims; range still applies.
     if (scope.campaignIds?.length) q.set("campaigns", scope.campaignIds.join(","));

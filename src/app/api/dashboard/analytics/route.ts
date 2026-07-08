@@ -21,6 +21,7 @@ import {
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
+import { rangeToWindow, MS_PER_DAY } from "@/lib/rangeWindow";
 
 /**
  * GET /api/dashboard/analytics
@@ -33,9 +34,6 @@ import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
  * lists, and any phone-lookup match banner. Ghost + test campaigns excluded by filterCalls.
  * Success% = goal/connected; Connect = ANSWER (completed, incl. voicemail). Read-only.
  */
-const MS_PER_DAY = 86_400_000;
-const RANGE_DAYS: Record<string, number> = { "7d": 7, "14d": 14, "30d": 30, "60d": 60, "90d": 90 };
-
 export async function GET(request: NextRequest) {
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
@@ -51,7 +49,6 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const rangeKey = searchParams.get("range") ?? "30d";
-  const rangeDays = RANGE_DAYS[rangeKey] ?? 30;
   const campaignsParam = searchParams.get("campaigns");
   const campaignIds = campaignsParam ? campaignsParam.split(",").filter(Boolean) : null;
   const country = searchParams.get("country");
@@ -59,8 +56,10 @@ export async function GET(request: NextRequest) {
   const phone = (searchParams.get("phone") ?? "").trim();
 
   const now = Date.now();
-  const startMs = now - rangeDays * MS_PER_DAY;
+  // Range → window: presets (7d…90d), "lifetime", or a custom from/to pair (shared resolver).
+  const { startMs, endMs } = rangeToWindow(rangeKey, now, searchParams.get("from"), searchParams.get("to"));
   const startIso = new Date(startMs).toISOString();
+  const rangeDays = Math.round((endMs - startMs) / MS_PER_DAY);
 
   // Phone lookup → matching campaign_number_ids + the campaigns they belong to.
   let numberIds: string[] | null = null;
@@ -118,7 +117,7 @@ export async function GET(request: NextRequest) {
 
   let filtered = filterCalls(
     callRows as unknown as DashCallRow[],
-    { startMs, endMs: now, campaignIds, numberIds },
+    { startMs, endMs, campaignIds, numberIds },
     index,
   );
   // Country filter (replaces the agent filter): keep calls whose campaign parses to the chosen country.
@@ -172,7 +171,7 @@ export async function GET(request: NextRequest) {
   // error must NOT take down the charts/tables/leaderboard, so degrade to perf:null and log with counts.
   let perf: TodayPerfDay | null = null;
   try {
-    perf = computeRangedPerf(filtered, scopedSms, declinedIds, startMs, now);
+    perf = computeRangedPerf(filtered, scopedSms, declinedIds, startMs, endMs);
   } catch (e) {
     console.error("[dashboard/analytics] computeRangedPerf failed:", e, { calls: filtered.length, sms: scopedSms.length });
     perf = null;
@@ -217,7 +216,7 @@ export async function GET(request: NextRequest) {
   const bestPerf = (ids: Set<string> | null): TodayPerfDay | null => {
     if (!ids || ids.size === 0) return null;
     try {
-      return perfForCampaignScope(filtered, scopedSms, declinedIds, startMs, now, ids);
+      return perfForCampaignScope(filtered, scopedSms, declinedIds, startMs, endMs, ids);
     } catch (e) {
       console.error("[dashboard/analytics] perfForCampaignScope failed:", e, { ids: ids.size });
       return null;
@@ -278,8 +277,8 @@ export async function GET(request: NextRequest) {
       smsSent: smsByPrompt.get(r.sha) ?? 0,
       campaignCount: r.campaignCount,
     })),
-    trend: computeTrend(filtered, startMs, now, scopedSms),
-    dailyVolume: computeDailyVolume(filtered, campaigns, startMs, now),
+    trend: computeTrend(filtered, startMs, endMs, scopedSms),
+    dailyVolume: computeDailyVolume(filtered, campaigns, startMs, endMs),
     heatmap: computeHeatmap(filtered, campaigns),
     perf,
     options: { campaigns: campaignOptions, countries: countryOptions, prompts: promptOptions },

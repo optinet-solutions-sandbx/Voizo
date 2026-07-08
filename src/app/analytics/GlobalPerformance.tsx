@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, SlidersHorizontal } from "lucide-react";
-import StatBand from "./StatBand";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
@@ -23,10 +22,12 @@ import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "
 import { useDrawerClaim } from "./drawerExclusivity";
 import { CardGridSkeleton } from "./loadingSkeletons";
 import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
+import { type RangeKey } from "@/lib/rangeWindow";
 
-type RangeKey = "7d" | "14d" | "30d" | "60d" | "90d";
-const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d"];
-const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days" };
+// RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
+const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d", "lifetime"];
+const RANGE_BTN: Record<string, string> = { lifetime: "Lifetime" }; // button caption; presets show their raw key
+const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "Lifetime", custom: "Custom range" };
 
 export interface BestPerformer {
   key: string;
@@ -69,6 +70,8 @@ interface AnalyticsResponse {
 
 export interface Filters {
   range: RangeKey;
+  from?: string; // custom range start (yyyy-mm-dd) — set only when range === "custom"
+  to?: string;   // custom range end (yyyy-mm-dd)
   campaignIds: string[];
   country: string; // "" = all (friendly country name, e.g. "Australia")
   prompt: string; // "" = all (prompt sha)
@@ -87,7 +90,12 @@ interface GlobalPerformanceProps {
 
 function buildQuery(f: Filters): string {
   const p = new URLSearchParams();
-  p.set("range", f.range);
+  if (f.range === "custom" && f.from && f.to) {
+    p.set("from", f.from);
+    p.set("to", f.to);
+  } else {
+    p.set("range", f.range);
+  }
   if (f.campaignIds.length) p.set("campaigns", f.campaignIds.join(","));
   if (f.country) p.set("country", f.country);
   if (f.prompt) p.set("prompt", f.prompt);
@@ -209,6 +217,9 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   const promptDisplay = (sha: string, label: string) =>
     promptAgentLabel(baseAgentName(promptBaseBySha.get(sha) ?? null), label);
   const set = (patch: Partial<Filters>) => onChange({ ...filters, ...patch });
+  // Custom date range: flip to "custom" once BOTH dates are picked; keep partial entries otherwise.
+  const applyDates = (from?: string, to?: string) =>
+    from && to ? set({ range: "custom", from, to }) : set({ from, to });
   const isDefault =
     filters.range === "7d" &&
     filters.campaignIds.length === 0 &&
@@ -246,7 +257,11 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
 
   // Active-filter chips.
   const chips: { key: string; label: string; onRemove: () => void }[] = [
-    { key: "range", label: RANGE_LABEL[filters.range], onRemove: () => set({ range: "7d" }) },
+    {
+      key: "range",
+      label: filters.range === "custom" && filters.from && filters.to ? `${filters.from} → ${filters.to}` : RANGE_LABEL[filters.range],
+      onRemove: () => set({ range: "7d", from: undefined, to: undefined }),
+    },
     ...filters.campaignIds.map((id) => ({
       key: `c-${id}`,
       label: campaignName(id),
@@ -282,7 +297,9 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       <div className="flex items-center gap-2.5 flex-wrap">
         <SectionTick color="#5b9bf0" />
         <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
-        <span className="text-[13px] text-[var(--text-3)]">— historical, across all campaigns</span>
+        <span className="text-[13px] text-[var(--text-3)]">
+          {data ? `— historical · ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"}` : "— historical, across all campaigns"}
+        </span>
       </div>
 
       {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll
@@ -295,14 +312,34 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
             {RANGES.map((r) => (
               <button
                 key={r}
-                onClick={() => set({ range: r })}
+                onClick={() => set({ range: r, from: undefined, to: undefined })}
                 className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
                   filters.range === r ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
                 }`}
               >
-                {r}
+                {RANGE_BTN[r] ?? r}
               </button>
             ))}
+          </div>
+          {/* Custom date range — native pickers (no date lib). Picking BOTH dates switches to "custom". */}
+          <div className="inline-flex items-center gap-1">
+            <input
+              type="date"
+              aria-label="Range from date"
+              value={filters.from ?? ""}
+              max={filters.to || undefined}
+              onChange={(e) => applyDates(e.target.value || undefined, filters.to)}
+              className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
+            />
+            <span className="text-[var(--text-4)] text-[11px]">–</span>
+            <input
+              type="date"
+              aria-label="Range to date"
+              value={filters.to ?? ""}
+              min={filters.from || undefined}
+              onChange={(e) => applyDates(filters.from, e.target.value || undefined)}
+              className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
+            />
           </div>
         </div>
         <div className="w-px h-6 bg-[var(--border)]" />
@@ -375,20 +412,10 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
           into one island, mirroring Today's Performance (Jasiel 2026-07-03). The filter bar,
           leaderboards, charts, table and heatmap stay free-standing on the app background. */}
       <SectionIsland>
-      {/* KPI band (console stat strip) — the window's headline numbers at a glance. */}
-      {data?.perf && k && (
-        <StatBand
-          stats={[
-            { label: "Call attempts", value: data.perf.callAttempts.total },
-            { label: "Reached", value: data.perf.reached.total },
-            { label: "SMS sent", value: data.perf.sms.total },
-            { label: "Positive response", value: k.positiveResponseRate === null ? "—" : `${(k.positiveResponseRate * 100).toFixed(1)}%`, sub: "of reached", accent: "#3ec08a" },
-            { label: "Campaigns", value: data.campaignCount },
-          ]}
-        />
-      )}
-
       {/* Ranged 3-card Performance (Val's mockup, Slice B) — replaces the old 5-card KPI strip.
+          The KPI stat-band above these cards was removed (2026-07-08): its Call attempts / Reached /
+          SMS numbers duplicated the card headlines, "Positive response" is the Reached card's Positive
+          row, and the campaign count moved to the section header — see the Global Performance dedupe.
           NO deltas (mockup intent for Global). The Connect/Reached/Voicemail/Positive metrics now
           live as breakdown ROWS inside the cards. `est` note when voicemail coverage is low on long
           windows (forward-only detection). Drill-down drawer is wired in the next step. */}
