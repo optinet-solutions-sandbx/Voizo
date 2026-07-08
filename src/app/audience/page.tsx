@@ -13,12 +13,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertCircle, AlertTriangle, Clock, Filter, ListPlus, Loader2, Megaphone, Phone,
+  AlertCircle, AlertTriangle, Clock, ListPlus, Loader2, Megaphone, Phone,
   Search, ShieldCheck, Trash2, Users,
 } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { useMagnetic } from "@/components/useMagnetic";
+import WidgetCard from "../analytics/WidgetCard";
+import StatBand from "../analytics/StatBand";
+import { SectionTick } from "../analytics/SectionIsland";
 
 import CreateSegmentDrawer, { type CreateSegmentPrefill } from "./components/CreateSegmentDrawer";
 import SuggestedSegmentsPanel, { type Suggestion } from "./components/SuggestedSegmentsPanel";
@@ -259,15 +261,16 @@ export default function AudiencePage() {
   }, [segments]);
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto w-full grid gap-5">
-      {/* Header */}
+    // Shell — SectionTick + 18px header (design-system rollout, Jasiel 2026-07-08).
+    // p-4/gap-4 console density; wide max-w kept for the master-detail 2-col layout.
+    <div className="p-4 max-w-[1600px] mx-auto w-full grid gap-4">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[26px] font-bold tracking-tight flex items-center gap-2.5">
-            <Users size={22} className="text-amber-400" />
-            Audience
-          </h1>
-          <p className="text-sm text-[var(--text-3)] mt-1">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#fbbf24" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Audience</h1>
+          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             Carve outcome-tagged contacts into reusable segments · DNC-scrubbed by default
           </p>
         </div>
@@ -298,17 +301,14 @@ export default function AudiencePage() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Saved segments" value={stats.totalSegments}
-          icon={<Filter size={14} className="text-amber-400" />} />
-        <StatCard label="Recycled leads" value={stats.totalLeads.toLocaleString()}
-          icon={<Users size={14} className="text-blue-400" />} />
-        <StatCard label="DNC + recent scrubbed" value={stats.totalScrubbed.toLocaleString()}
-          icon={<ShieldCheck size={14} className="text-emerald-400" />} />
-        <StatCard label="Most recent" value={stats.mostRecent ? formatRelative(stats.mostRecent, now) : "—"}
-          icon={<Clock size={14} className="text-violet-400" />} />
-      </div>
+      {/* Stats — shared StatBand KPI strip (design-system rollout). Numbers CountUp
+          (locale-formatted); "Most recent" is a relative string, rendered as-is. */}
+      <StatBand stats={[
+        { label: "Saved segments", value: stats.totalSegments },
+        { label: "Recycled leads", value: stats.totalLeads },
+        { label: "DNC + recent scrubbed", value: stats.totalScrubbed },
+        { label: "Most recent", value: stats.mostRecent ? formatRelative(stats.mostRecent, now) : "—" },
+      ]} />
 
       {/* Suggested-segments panel (audience-suggestions MVP). Hidden when the
           worklist is empty — see SuggestedSegmentsPanel for the early-return.
@@ -318,14 +318,12 @@ export default function AudiencePage() {
 
       {/* Main 2-col */}
       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5">
-        {/* List */}
-        <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 max-h-[720px] overflow-y-auto">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)]">Segments</p>
-            <span className="text-[10px] text-[var(--text-3)] font-mono">
-              {segments ? `${segments.length}` : "…"}
-            </span>
-          </div>
+        {/* List — shared WidgetCard; header holds the count, body scrolls (design-system rollout) */}
+        <WidgetCard
+          title="Segments"
+          context={segments ? `${segments.length} segment${segments.length === 1 ? "" : "s"}` : "…"}
+          bodyClassName="p-4 max-h-[720px] overflow-y-auto"
+        >
           {!segments ? (
             <SkeletonRows count={4} />
           ) : segments.length === 0 ? (
@@ -373,7 +371,7 @@ export default function AudiencePage() {
               ))}
             </ul>
           )}
-        </section>
+        </WidgetCard>
 
         {/* Detail */}
         <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-5 sm:p-6 min-w-0">
@@ -476,20 +474,6 @@ export default function AudiencePage() {
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────
-
-function StatCard({
-  label, value, icon,
-}: { label: string; value: string | number; icon: React.ReactNode }) {
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  return (
-    <div ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">
-        {icon} {label}
-      </div>
-      <div className="mt-2 text-2xl font-bold tabular-nums">{value}</div>
-    </div>
-  );
-}
 
 function SegmentDetailPanel({
   detail, loading, now, loadingMore, onLaunch, onLoadMore, onDelete,

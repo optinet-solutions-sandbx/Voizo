@@ -16,6 +16,10 @@ import GoldenSetPanel from "./GoldenSetPanel";
 import NorthStarPanel from "./NorthStarPanel";
 import AgentPerformancePanel from "./AgentPerformancePanel";
 import Pagination from "@/components/Pagination";
+import Hint from "@/components/Hint";
+import WidgetCard from "../analytics/WidgetCard";
+import StatBand from "../analytics/StatBand";
+import { SectionTick } from "../analytics/SectionIsland";
 
 interface ReviewCampaign {
   campaignId: string;
@@ -111,14 +115,17 @@ export default function ReviewsPage() {
     }`;
 
   return (
-    <div className="p-6 max-w-[1100px] mx-auto w-full grid gap-5">
+    // Shell — SectionTick + 18px header, matching the dashboard section-header pattern
+    // (design-system rollout, Jasiel 2026-07-08). p-4/gap-4 console density; max-w reading
+    // column kept (Reviews is a content column, not a full-bleed data table like DNC/Knowledge).
+    <div className="p-4 max-w-[1100px] mx-auto w-full grid gap-4">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[26px] font-bold tracking-tight flex items-center gap-2.5">
-            <ClipboardList size={24} className="text-blue-400" />
-            Reviews
-          </h1>
-          <p className="text-sm text-[var(--text-3)] mt-1">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#60a5fa" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Reviews</h1>
+          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             Pick a campaign to label its real conversations good / bad — your verdict is the ground truth the AI judge calibrates against.
           </p>
         </div>
@@ -153,16 +160,20 @@ export default function ReviewsPage() {
 
       {tab === "label" && (
         <>
-          {/* totals strip */}
-          <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center gap-x-8 gap-y-2">
-            <Total label="Campaigns" value={loading ? "—" : totals.campaigns} />
-            <Total label="Conversations" value={loading ? "—" : totals.conversations} />
-            <Total label="Goal reached" value={loading ? "—" : totals.goalReached} tone="text-emerald-400" />
-            <Total label="Labeled by you" value={loading ? "—" : totals.labeled} tone="text-blue-400" />
-            <p className="text-[11px] text-[var(--text-3)] basis-full">
+          {/* totals strip — shared StatBand KPI strip (design-system rollout). Loading shows
+              "—" (string, no CountUp); loaded numbers CountUp. Goal reached uses the DS
+              semantic green (#3ec08a, same as the dashboard's Positive response). */}
+          <div className="grid gap-2">
+            <StatBand stats={[
+              { label: "Campaigns", value: loading ? "—" : totals.campaigns },
+              { label: "Conversations", value: loading ? "—" : totals.conversations },
+              { label: "Goal reached", value: loading ? "—" : totals.goalReached, accent: "#3ec08a" },
+              { label: "Labeled by you", value: loading ? "—" : totals.labeled, accent: "#60a5fa" },
+            ]} />
+            <p className="text-[11px] text-[var(--text-3)]">
               Voicemails, no-answers, and AI-only calls are filtered out — only genuine customer conversations appear.
             </p>
-          </section>
+          </div>
 
           {loading ? (
             <SkeletonRows count={6} />
@@ -180,9 +191,18 @@ export default function ReviewsPage() {
                 <div className="text-sm text-[var(--text-3)] py-10 text-center">No campaigns in this region.</div>
               ) : (
                 <>
-                  <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl overflow-hidden divide-y divide-[var(--border)]">
-                    {paginated.map((c) => <CampaignRow key={c.campaignId} c={c} />)}
-                  </div>
+                  <WidgetCard
+                    title="Campaigns"
+                    icon={<ClipboardList size={14} className="text-blue-400" />}
+                    context={region === "all"
+                      ? `${visible.length} campaign${visible.length !== 1 ? "s" : ""}`
+                      : `${visible.length} in ${region}`}
+                    bodyClassName="p-0"
+                  >
+                    <div className="divide-y divide-[var(--border)]">
+                      {paginated.map((c) => <CampaignRow key={c.campaignId} c={c} />)}
+                    </div>
+                  </WidgetCard>
                   <Pagination
                     currentPage={safePage}
                     totalPages={totalPages}
@@ -204,15 +224,6 @@ export default function ReviewsPage() {
           <GoldenSetPanel />
         </>
       )}
-    </div>
-  );
-}
-
-function Total({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className={`text-xl font-bold tabular-nums ${tone ?? "text-[var(--text-1)]"}`}>{value}</span>
-      <span className="text-[11px] text-[var(--text-3)] uppercase tracking-wider">{label}</span>
     </div>
   );
 }
@@ -272,7 +283,9 @@ function CampaignRow({ c }: { c: ReviewCampaign }) {
             <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-blue-500/10 text-blue-300 border-blue-500/25 flex-shrink-0">{campaignRegion(c.campaignName)}</span>
           )}
           {c.isTest && (
-            <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-violet-500/15 text-violet-400 border-violet-500/30 flex-shrink-0">test</span>
+            <Hint content="Test campaign — listed separately and excluded from real metrics.">
+              <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-violet-500/15 text-violet-400 border-violet-500/30 flex-shrink-0 cursor-help">test</span>
+            </Hint>
           )}
         </div>
         {/* labeling progress bar */}
@@ -296,8 +309,10 @@ function CampaignRow({ c }: { c: ReviewCampaign }) {
 }
 
 function Metric({ value, sub, label, tone, title }: { value: string | number; sub?: string; label: string; tone?: string; title?: string }) {
-  return (
-    <div className="min-w-[52px]" title={title}>
+  // Honesty disclosure surfaced via the shared Hint (styled tooltip) instead of native
+  // title= (design-system rollout) — falls back to a plain cell when there's nothing to explain.
+  const body = (
+    <div className={`min-w-[52px] ${title ? "cursor-help" : ""}`}>
       <div className="flex items-baseline justify-end gap-1">
         <span className={`text-sm font-bold tabular-nums ${tone ?? "text-[var(--text-1)]"}`}>{value}</span>
         {sub && <span className="text-[10px] text-[var(--text-3)] font-mono">{sub}</span>}
@@ -305,6 +320,7 @@ function Metric({ value, sub, label, tone, title }: { value: string | number; su
       <div className="text-[10px] text-[var(--text-3)] uppercase tracking-wider">{label}</div>
     </div>
   );
+  return title ? <Hint content={title}>{body}</Hint> : body;
 }
 
 function SkeletonRows({ count }: { count: number }) {

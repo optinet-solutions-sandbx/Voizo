@@ -7,7 +7,8 @@
 
 import { useEffect, useState } from "react";
 import { Target, AlertCircle } from "lucide-react";
-import { useMagnetic } from "@/components/useMagnetic";
+import SectionIsland from "../analytics/SectionIsland";
+import Hint from "@/components/Hint";
 
 interface NsCampaign {
   id: string;
@@ -40,7 +41,6 @@ interface NsResult {
 const pct = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 
 export default function NorthStarPanel() {
-  const magnetRef = useMagnetic<HTMLElement>();
   const [data, setData] = useState<NsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,7 +66,7 @@ export default function NorthStarPanel() {
   const allUnconfirmed = !!p && p.delivered + p.failed === 0 && p.inFlight > 0;
 
   return (
-    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
+    <SectionIsland>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Target size={16} className="text-[var(--text-2)]" />
@@ -91,12 +91,11 @@ export default function NorthStarPanel() {
       ) : (
         <>
           <div className="flex items-baseline gap-3 flex-wrap">
-            <span
-              className={`text-3xl font-bold tabular-nums ${tone}`}
-              title="Share of 'yes, text me' calls whose offer text the network confirmed as delivered."
-            >
-              {pct(rate)}
-            </span>
+            <Hint content="Share of 'yes, text me' calls whose offer text the network confirmed as delivered.">
+              <span className={`text-3xl font-bold tabular-nums cursor-help ${tone}`}>
+                {pct(rate)}
+              </span>
+            </Hint>
             <span className="text-[11px] text-[var(--text-3)] font-mono">
               {p.delivered} of {p.goalReached} offers delivered · {p.includedCampaigns} campaign
               {p.includedCampaigns === 1 ? "" : "s"}
@@ -143,6 +142,6 @@ export default function NorthStarPanel() {
           )}
         </>
       )}
-    </section>
+    </SectionIsland>
   );
 }

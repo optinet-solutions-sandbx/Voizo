@@ -9,7 +9,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Scale, RefreshCw, Snowflake, AlertCircle } from "lucide-react";
-import { useMagnetic } from "@/components/useMagnetic";
+import SectionIsland from "../analytics/SectionIsland";
+import Hint from "@/components/Hint";
 
 interface LatestRun {
   judgeVersion: string;
@@ -31,7 +32,6 @@ interface GoldenSet {
 }
 
 export default function GoldenSetPanel() {
-  const magnetRef = useMagnetic<HTMLElement>();
   const [sets, setSets] = useState<GoldenSet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // "freeze" | `replay:${version}`
@@ -96,7 +96,7 @@ export default function GoldenSetPanel() {
   );
 
   return (
-    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-3">
+    <SectionIsland>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Scale size={16} className="text-[var(--text-2)]" />
@@ -169,7 +169,7 @@ export default function GoldenSetPanel() {
         </div>
       )}
       <PromptVersionStats />
-    </section>
+    </SectionIsland>
   );
 }
 
@@ -182,9 +182,11 @@ function AgreementChip({ agreement, kappa }: { agreement: number | null; kappa: 
   const title =
     kappa != null ? `Cohen's κ ${kappa.toFixed(2)} — agreement corrected for chance (1.0 = perfect)` : "agreement with your verdicts";
   return (
-    <span className={`font-semibold ${tone}`} title={title}>
-      agrees with you {aPct}%
-    </span>
+    <Hint content={title}>
+      <span className={`font-semibold cursor-help ${tone}`}>
+        agrees with you {aPct}%
+      </span>
+    </Hint>
   );
 }
 
