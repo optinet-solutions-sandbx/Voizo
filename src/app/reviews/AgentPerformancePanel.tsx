@@ -8,7 +8,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Gauge, AlertCircle, ChevronRight } from "lucide-react";
-import { useMagnetic } from "@/components/useMagnetic";
+import SectionIsland from "../analytics/SectionIsland";
+import Hint from "@/components/Hint";
 
 interface FailureCallRef {
   callId: string;
@@ -63,7 +64,6 @@ const fmtDay = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
 
 export default function AgentPerformancePanel() {
-  const magnetRef = useMagnetic<HTMLElement>();
   const [data, setData] = useState<ApResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openTheme, setOpenTheme] = useState<string | null>(null);
@@ -86,7 +86,7 @@ export default function AgentPerformancePanel() {
   const maxTheme = failures.reduce((m, t) => Math.max(m, t.count), 0);
 
   return (
-    <section ref={magnetRef} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 grid gap-4">
+    <SectionIsland>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Gauge size={16} className="text-[var(--text-2)]" />
@@ -115,12 +115,11 @@ export default function AgentPerformancePanel() {
             <div className="flex items-center gap-3 text-[11px] font-mono flex-wrap">
               <span className="text-emerald-400">won: {pct(vm.successPct)} ({vm.success})</span>
               <span className="text-red-400">lost: {pct(vm.failurePct)} ({vm.failure})</span>
-              <span
-                className="text-amber-400"
-                title="The grader couldn't confidently call it a win or a loss — often a very short or ambiguous call."
-              >
-                grader unsure: {pct(vm.unsurePct)} ({vm.unsure})
-              </span>
+              <Hint content="The grader couldn't confidently call it a win or a loss — often a very short or ambiguous call.">
+                <span className="text-amber-400 cursor-help">
+                  grader unsure: {pct(vm.unsurePct)} ({vm.unsure})
+                </span>
+              </Hint>
             </div>
             {vm.unsurePct != null && vm.unsurePct >= 0.4 && (
               <p className="text-[11px] text-amber-400/90">
@@ -245,6 +244,6 @@ export default function AgentPerformancePanel() {
           )}
         </>
       )}
-    </section>
+    </SectionIsland>
   );
 }
