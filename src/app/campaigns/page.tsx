@@ -13,7 +13,8 @@ import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignsV2, fetchCampaignAnalytics } from "@/lib/campaignV2Client";
 import Pagination from "@/components/Pagination";
-import { useMagnetic } from "@/components/useMagnetic";
+import StatBand from "../analytics/StatBand";
+import { SectionTick } from "../analytics/SectionIsland";
 import {
   computeCampaignAnalytics,
   computePortfolio,
@@ -320,12 +321,16 @@ function CampaignsPageInner() {
   const runningCount = campaigns.filter((c) => (c.status as string) === "running").length;
 
   return (
-    <div className="p-4 sm:p-6 w-full max-w-[1400px] mx-auto">
-      {/* Header */}
-      <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
+    // Shell — SectionTick + 18px header, p-4/gap-4 console density (design-system rollout,
+    // Jasiel 2026-07-08). Wide max-w kept for the campaigns table.
+    <div className="p-4 w-full max-w-[1400px] mx-auto grid gap-4">
+      <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-1)]">Campaigns</h1>
-          <p className="text-xs text-[var(--text-3)] mt-1">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#4d90f0" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Campaigns</h1>
+          </div>
+          <p className="text-xs text-[var(--text-3)] mt-0.5">
             {activeCount} campaign{activeCount !== 1 ? "s" : ""}
             {runningCount > 0 && (
               <span className="text-emerald-400 ml-1.5">
@@ -344,16 +349,19 @@ function CampaignsPageInner() {
         </Link>
       </div>
 
-      {/* KPI strip — reflects the current search / filters / date window. */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
-        <StatCard label="Players"       value={totals.totalContacts.toLocaleString()} />
-        <StatCard label="Call attempts" value={totals.totalCalls.toLocaleString()}    accent="text-primary" />
-        <StatCard label="Reached"       value={totals.totalReach.toLocaleString()}    accent="text-teal-400" hint="live humans = connected − detected voicemails (unevaluated connects count as reached)" />
-        <StatCard label="SMS sent"      value={totals.totalSms.toLocaleString()}      accent="text-primary" hint="offer texts dispatched (delivered + in-flight + failed)" />
-      </section>
+      {/* KPI strip — shared StatBand; reflects the current search / filters / date window.
+          Numbers CountUp (locale-formatted). The old StatCard hint tooltips are preserved as
+          always-visible subs (Reached/SMS); the "unevaluated connects count as reached" edge
+          note stays on the main dashboard's Reached tooltip. */}
+      <StatBand stats={[
+        { label: "Players", value: totals.totalContacts },
+        { label: "Call attempts", value: totals.totalCalls, accent: "#4d90f0" },
+        { label: "Reached", value: totals.totalReach, accent: "#2dd4bf", sub: "connected − voicemail" },
+        { label: "SMS sent", value: totals.totalSms, accent: "#4d90f0", sub: "delivered + in-flight + failed" },
+      ]} />
 
       {/* Toolbar */}
-      <div className="flex items-center gap-2.5 flex-wrap mb-4">
+      <div className="flex items-center gap-2.5 flex-wrap">
         <div className="flex-1 min-w-[240px] flex items-center gap-2 px-3.5 py-2.5 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl focus-within:border-primary transition">
           <Search size={14} className="text-[var(--text-3)]" />
           <input
@@ -674,20 +682,6 @@ export default function CampaignsPage() {
 // ─────────────────────────────────────────────────────────────────────────
 // Sub-components
 // ─────────────────────────────────────────────────────────────────────────
-
-function StatCard({ label, value, accent, hint }: {
-  label: string; value: string; accent?: string; hint?: string;
-}) {
-  // No sparkline: the previous hardcoded static polyline was identical on every card
-  // and not data-driven — it "quietly lied" (spec §6.7 / G8). Removed in both modes.
-  const magnetRef = useMagnetic<HTMLDivElement>();
-  return (
-    <div ref={magnetRef} title={hint} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-4">
-      <div className="text-[11px] uppercase tracking-wider font-medium text-[var(--text-3)]">{label}</div>
-      <div className={`text-[26px] font-bold tabular-nums leading-tight mt-1 ${accent ?? "text-[var(--text-1)]"}`}>{value}</div>
-    </div>
-  );
-}
 
 function FilterGroup<T extends string>({
   options, value, onChange,
