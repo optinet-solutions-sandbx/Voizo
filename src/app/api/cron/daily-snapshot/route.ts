@@ -6,6 +6,7 @@ import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
 import {
   buildCampaignIndex,
   computeWindowPerf,
+  computeKpis,
   type DashCallRow,
   type DashCampaignRow,
   type DashSmsRow,
@@ -115,19 +116,16 @@ export async function GET(request: NextRequest) {
     useTranscript: true,
   });
 
-  // SMS sent/delivered in the window (raw count — the perf.sms block is outcome-derived, not send status).
-  const smsSent = liveSms.filter((m) => {
-    const t = m.created_at ? Date.parse(m.created_at) : NaN;
-    return (
-      Number.isFinite(t) &&
-      t >= startMs &&
-      t <= endMs &&
-      (m.status === "sent" || m.status === "delivered")
-    );
-  }).length;
+  // Headline KPI rates over the SAME window (computeWindowPerf windows internally; computeKpis does
+  // not, so scope the call set here with the identical [startMs, endMs) bounds → rates match buckets).
+  const windowedCalls = liveCalls.filter((c) => {
+    const t = c.created_at ? Date.parse(c.created_at) : NaN;
+    return Number.isFinite(t) && t >= startMs && t < endMs;
+  });
+  const kpis = computeKpis(windowedCalls);
 
   const dashboardUrl = process.env.SNAPSHOT_DASHBOARD_URL ?? "https://voizo-eight.vercel.app";
-  const { subject, html, text } = buildSnapshotEmail(perf, smsSent, dateLabel, dashboardUrl);
+  const { subject, html, text } = buildSnapshotEmail(perf, kpis, dateLabel, dashboardUrl);
 
   if (request.nextUrl.searchParams.get("dry") === "1") {
     return NextResponse.json({
