@@ -41,19 +41,24 @@ function fmtPct(pct: number | null): string {
   return pct == null ? "&mdash;" : `${(pct * 100).toFixed(1)}%`;
 }
 
-/** Build the daily-snapshot email {subject, html}. Pure; inline-styled for email clients. */
+/**
+ * Build the daily-snapshot email {subject, html, text}. Pure; inline-styled HTML for email
+ * clients + a plain-text alternative (multipart) for spam scoring / screen-reader / preview clients.
+ */
 export function buildSnapshotEmail(
   perf: TodayPerfDay,
   smsSent: number,
   dateLabel: string,
   dashboardUrl: string,
-): { subject: string; html: string } {
+): { subject: string; html: string; text: string } {
   const callsMade = perf.callAttempts.total;
   const reached = rowCount(perf.callAttempts, "reached");
   const voicemail = rowCount(perf.callAttempts, "voicemail");
   const positiveRow = perf.reached.rows.find((r) => r.key === "positive");
   const positive = positiveRow?.count ?? 0;
-  const positivePct = fmtPct(positiveRow?.pct ?? null);
+  const rawPct = positiveRow?.pct ?? null;
+  const positivePct = fmtPct(rawPct); // html: "&mdash;" when null
+  const positivePctText = rawPct == null ? "n/a" : `${(rawPct * 100).toFixed(1)}%`;
 
   const subject = `Voizo Daily Snapshot — ${dateLabel} (UTC)`;
 
@@ -79,5 +84,18 @@ export function buildSnapshotEmail(
   </p>
 </div>`;
 
-  return { subject, html };
+  const text = [
+    `Voizo Daily Snapshot — ${dateLabel} (UTC)`,
+    `Yesterday (00:00–23:59 UTC)`,
+    ``,
+    `Calls made: ${callsMade}`,
+    `Reached: ${reached}`,
+    `Voicemail: ${voicemail}`,
+    `Positive response: ${positive} (${positivePctText})`,
+    `SMS sent/delivered: ${smsSent}`,
+    ``,
+    `View full dashboard: ${dashboardUrl}`,
+  ].join("\n");
+
+  return { subject, html, text };
 }
