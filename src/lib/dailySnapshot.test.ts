@@ -62,7 +62,7 @@ describe("yesterdayWindowUtc", () => {
 
 describe("buildSnapshotEmail", () => {
   it("renders all four headline numbers + the positive rate + the dashboard link", () => {
-    const { subject, html } = buildSnapshotEmail(
+    const { subject, html, text } = buildSnapshotEmail(
       perf(200, 120, 60, 30, 0.25),
       45,
       "8 Jul 2026",
@@ -76,12 +76,24 @@ describe("buildSnapshotEmail", () => {
     expect(html).toContain("25.0%"); // positive rate
     expect(html).toContain("45"); // sms sent
     expect(html).toContain("https://dash.example.com");
+    // plain-text alternative carries the same numbers, no HTML tags, no raw entities
+    expect(text).toContain("Calls made: 200");
+    expect(text).toContain("Reached: 120");
+    expect(text).toContain("Voicemail: 60");
+    expect(text).toContain("Positive response: 30 (25.0%)");
+    expect(text).toContain("SMS sent/delivered: 45");
+    expect(text).toContain("https://dash.example.com");
+    expect(text).not.toContain("<");
+    expect(text).not.toContain("&mdash;");
+    expect(text).not.toContain("&rarr;");
   });
 
-  it("renders a zero-calls day without dividing by zero", () => {
-    const { html } = buildSnapshotEmail(perf(0, 0, 0, 0, null), 0, "8 Jul 2026", "https://d");
+  it("renders a zero-calls day without dividing by zero (html + text)", () => {
+    const { html, text } = buildSnapshotEmail(perf(0, 0, 0, 0, null), 0, "8 Jul 2026", "https://d");
     expect(html).toContain("0");
-    expect(html).toContain("&mdash;"); // rate shown as em-dash, not NaN%
+    expect(html).toContain("&mdash;"); // html rate shown as em-dash, not NaN%
     expect(html).not.toContain("NaN");
+    expect(text).toContain("Positive response: 0 (n/a)"); // text null-rate token
+    expect(text).not.toContain("NaN");
   });
 });

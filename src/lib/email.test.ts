@@ -39,6 +39,26 @@ describe("sendEmail", () => {
     expect(body.html).toBe("<p>body</p>");
   });
 
+  it("includes a text part in the payload when provided (multipart)", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+    vi.stubEnv("RESEND_FROM", "Voizo <snapshot@example.com>");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "m" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await sendEmail(["a@x.com"], "s", "<p>h</p>", "plain body");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).text).toBe("plain body");
+  });
+
+  it("omits the text part when not provided", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+    vi.stubEnv("RESEND_FROM", "Voizo <snapshot@example.com>");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "m" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await sendEmail(["a@x.com"], "s", "<p>h</p>");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).text).toBeUndefined();
+  });
+
   it("throws on a non-2xx Resend response", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test");
     vi.stubEnv("RESEND_FROM", "Voizo <snapshot@example.com>");

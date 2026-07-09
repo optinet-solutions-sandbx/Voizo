@@ -127,13 +127,20 @@ export async function GET(request: NextRequest) {
   }).length;
 
   const dashboardUrl = process.env.SNAPSHOT_DASHBOARD_URL ?? "https://voizo-eight.vercel.app";
-  const { subject, html } = buildSnapshotEmail(perf, smsSent, dateLabel, dashboardUrl);
+  const { subject, html, text } = buildSnapshotEmail(perf, smsSent, dateLabel, dashboardUrl);
 
   if (request.nextUrl.searchParams.get("dry") === "1") {
-    return NextResponse.json({ dryRun: true, dateLabel, recipients: SNAPSHOT_RECIPIENTS, subject, html });
+    return NextResponse.json({
+      dryRun: true,
+      dateLabel,
+      recipients: SNAPSHOT_RECIPIENTS,
+      subject,
+      html,
+      text,
+    });
   }
 
-  const messageId = await sendEmail(SNAPSHOT_RECIPIENTS, subject, html);
+  const messageId = await sendEmail(SNAPSHOT_RECIPIENTS, subject, html, text);
   await recordHeartbeat(supabaseAdmin, CRON_NAMES.dailySnapshot);
 
   return NextResponse.json({
