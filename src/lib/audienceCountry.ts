@@ -27,6 +27,7 @@ const PREFIX_TO_COUNTRY: Array<{ prefix: string; country: string }> = (() => {
     { prefix: "+81",  country: "JP" }, // Japan
     { prefix: "+52",  country: "MX" }, // Mexico
     { prefix: "+1",   country: "NA" }, // US + Canada share +1 (see COUNTRY_TO_TIMEZONES.NA)
+    { prefix: "+64",  country: "NZ" }, // New Zealand
     { prefix: "+63",  country: "PH" }, // Philippines
     { prefix: "+65",  country: "SG" }, // Singapore
     { prefix: "+44",  country: "UK" }, // United Kingdom
@@ -57,6 +58,7 @@ export const COUNTRY_TO_TIMEZONES: Record<string, string[]> = {
     "America/Denver",
     "America/Los_Angeles",
   ],
+  NZ: ["Pacific/Auckland"],
   PH: ["Asia/Manila"],
   SG: ["Asia/Singapore"],
   UK: ["Europe/London"],
@@ -72,6 +74,7 @@ export const COUNTRY_LABELS: Record<string, string> = {
   JP: "Japan",
   MX: "Mexico",
   NA: "North America (US/CA)",
+  NZ: "New Zealand",
   PH: "Philippines",
   SG: "Singapore",
   UK: "United Kingdom",

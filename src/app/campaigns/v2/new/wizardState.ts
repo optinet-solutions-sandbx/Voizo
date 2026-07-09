@@ -67,6 +67,7 @@ export const CALLING_HOURS: Record<string, { start: string; end: string; note: s
   "Asia/Tokyo":          { start: "09:00", end: "20:00", note: "TCA guidance" },
   "Asia/Dubai":          { start: "09:00", end: "21:00", note: "TRA guidance" },
   "Australia/Sydney":    { start: "09:00", end: "20:00", note: "Do Not Call Register Act: 9am–8pm wkday, 9am–5pm Sat" },
+  "Pacific/Auckland":    { start: "09:00", end: "20:00", note: "NZ: 9am–8pm (conservative)" },
   "UTC":                 { start: "09:00", end: "20:00", note: "Safe default" },
 };
 
@@ -94,6 +95,7 @@ export const TIMEZONE_OPTIONS: TimezoneOption[] = [
   { value: "Asia/Manila",         label: "Manila · PHT",           group: "Asia / Pacific" },
   { value: "Asia/Tokyo",          label: "Tokyo · JST",            group: "Asia / Pacific" },
   { value: "Australia/Sydney",    label: "Sydney · AEST",          group: "Asia / Pacific" },
+  { value: "Pacific/Auckland",    label: "Auckland · NZST/NZDT",   group: "Asia / Pacific" },
   { value: "UTC",                 label: "UTC",                    group: "Other" },
 ];
 
