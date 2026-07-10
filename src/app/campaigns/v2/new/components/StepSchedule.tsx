@@ -135,6 +135,10 @@ export default function StepSchedule({ state, dispatch }: Props) {
           />
         </div>
 
+        {/* Goal + operator controls in a 2-col grid — the single-column stack
+            read as visual clutter (Jas, 2026-07-10). Pairs: goal | daily cap
+            (inputs), retry gap | max tries (preset buttons). */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-[18px]">
         {/* Campaign goal (target) — optional. Applies to both run modes. */}
         <div className="flex flex-col gap-2">
           <label
@@ -159,6 +163,34 @@ export default function StepSchedule({ state, dispatch }: Props) {
             Optional. Shown as X / Y in the performance report.
           </p>
         </div>
+
+        {isRecurring && state.realtime && (
+          <div className="flex flex-col gap-2">
+            <label
+              htmlFor="realtime-daily-cap"
+              className="text-xs font-medium text-[var(--text-2)]"
+            >
+              Daily cap
+              <span className="text-[11px] text-[var(--text-3)] font-normal"> — max players added per day</span>
+            </label>
+            <input
+              id="realtime-daily-cap"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={state.dailyCapText}
+              onChange={(e) =>
+                dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { dailyCapText: e.target.value } })
+              }
+              placeholder="e.g. 150"
+              className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+            />
+            <p className="text-[11px] text-[var(--text-3)] leading-snug">
+              Required. When the cap is hit, new sign-ups wait until tomorrow.
+            </p>
+          </div>
+        )}
 
         {/* Operator controls (VOZ-132 §7): retry gap + max tries for every run
             mode; daily cap only for Real-time (its cost brake). */}
@@ -209,33 +241,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
           </div>
         </div>
 
-        {isRecurring && state.realtime && (
-          <div className="flex flex-col gap-2">
-            <label
-              htmlFor="realtime-daily-cap"
-              className="text-xs font-medium text-[var(--text-2)]"
-            >
-              Daily cap
-              <span className="text-[11px] text-[var(--text-3)] font-normal"> — max players added per day</span>
-            </label>
-            <input
-              id="realtime-daily-cap"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              step={1}
-              value={state.dailyCapText}
-              onChange={(e) =>
-                dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { dailyCapText: e.target.value } })
-              }
-              placeholder="e.g. 150"
-              className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
-            />
-            <p className="text-[11px] text-[var(--text-3)] leading-snug">
-              Required. When the cap is hit, new sign-ups wait until tomorrow.
-            </p>
-          </div>
-        )}
+        </div>
 
         {/* Branch */}
         {isRecurring ? (
