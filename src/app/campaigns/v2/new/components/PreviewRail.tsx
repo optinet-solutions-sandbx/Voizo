@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Repeat, Play, Users } from "lucide-react";
+import { Lightbulb, Repeat, Play, Users, Zap } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { TIMEZONE_OPTIONS, type WizardState } from "../wizardState";
@@ -9,6 +9,52 @@ import { useMagnetic } from "@/components/useMagnetic";
 
 interface Props {
   state: WizardState;
+}
+
+/** Step- and mode-aware tips — the rail doubles as the user manual. */
+function tipsFor(state: WizardState): string[] {
+  switch (state.step) {
+    case 1:
+      return [
+        "Repeat daily and Real-time campaigns need exactly one segment — click a segment row, not the checkboxes.",
+        "Test campaigns stay out of audience suggestions.",
+      ];
+    case 2:
+      return [
+        "The script is locked in at launch — changing it later means creating a new campaign.",
+        "The agent's voice comes from the base agent you pick.",
+      ];
+    case 3: {
+      const tips: string[] = ["All times are the customer's local time."];
+      if (state.campaignType === "recurring") {
+        tips.push(
+          "Until · Further notice — runs until you press Stop.",
+          "Until · A specific date — the last day it runs.",
+          "Until · N occurrences — stops after running N days. Empty-list days don't count.",
+        );
+      }
+      if (state.realtime) {
+        tips.push("Daily cap is the spending brake — sign-ups past the cap wait for tomorrow.");
+      }
+      if (state.campaignType === "fixed") {
+        tips.push("A retry gap longer than the day's window means one attempt per day.");
+      }
+      return tips;
+    }
+    case 4:
+      return [
+        "One text per player per campaign — never more.",
+        state.smsConsentMode === "registered_optin"
+          ? "Last resort on: a voicemail gets a call back, and the text goes out only after the last failed try."
+          : "The agent must hear a clear yes on the call before any text goes out.",
+        "“Don’t text me” and the Do-Not-Call list always win.",
+      ];
+    default:
+      return [
+        "What you launch is what runs — check the numbers, mode, and texts one last time.",
+        "You can pause any campaign from the Campaigns page; repeating ones also get a Stop that ends today AND tomorrow.",
+      ];
+  }
 }
 
 export default function PreviewRail({ state }: Props) {
@@ -20,8 +66,10 @@ export default function PreviewRail({ state }: Props) {
   const tzLabel =
     TIMEZONE_OPTIONS.find((o) => o.value === state.timezone)?.label ?? state.timezone;
 
-  const modeLabel = state.campaignType === "recurring" ? "Repeat" : "Fixed";
-  const ModeIcon = state.campaignType === "recurring" ? Repeat : Play;
+  const isRealtime = state.campaignType === "recurring" && state.realtime;
+  const modeLabel =
+    state.campaignType === "recurring" ? (isRealtime ? "Real-time" : "Repeat") : "Fixed";
+  const ModeIcon = isRealtime ? Zap : state.campaignType === "recurring" ? Repeat : Play;
 
   const nextStepLabel = state.step < 5 ? `Step ${state.step + 1}` : "Launch";
   const nextStepDesc =
@@ -86,6 +134,20 @@ export default function PreviewRail({ state }: Props) {
         </div>
         <div className="text-sm font-semibold mt-1">{nextStepLabel}</div>
         <div className="text-[12px] text-[var(--text-3)] mt-1 leading-snug">{nextStepDesc}</div>
+      </div>
+
+      <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
+        <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold inline-flex items-center gap-1.5">
+          <Lightbulb size={11} className="text-amber-400" /> Tips
+        </div>
+        <ul className="mt-2 flex flex-col gap-2">
+          {tipsFor(state).map((tip) => (
+            <li key={tip} className="text-[12px] text-[var(--text-3)] leading-snug pl-3 relative">
+              <span className="absolute left-0 top-[7px] w-1 h-1 rounded-full bg-[var(--text-3)] opacity-60" />
+              {tip}
+            </li>
+          ))}
+        </ul>
       </div>
     </aside>
   );
