@@ -46,6 +46,7 @@ export interface CampaignV2CreateInput {
   maxAttempts?: number; // Operator max tries per player: integer 2–5. Absent/invalid → DB default 3.
   dailyCap?: number | null; // Realtime cost brake: most players added per day. Positive integer; realtime campaigns only.
   realtime?: boolean; // Recurring parent in real-time top-up mode: children spawn empty, the per-minute poll fills them.
+  smsLastResortTemplate?: string | null; // VOZ-132 §8, registered_optin only: non-empty → voicemails re-dial and this ONE text goes out after the final failed try. Null/absent → today's behavior. Maps to campaigns_v2.sms_last_resort_template.
 }
 
 export function defaultCallWindows(): CallWindow[] {

@@ -174,6 +174,14 @@ export interface WizardState {
   smsOptout: string;
   smsLinkEditing: boolean;
   smsOptoutEditing: boolean;
+  /**
+   * VOZ-132 §8 (2026-07-10) — registered_optin only: text as LAST resort.
+   * On: voicemails re-dial instead of instant-texting; after the final failed
+   * try the player gets ONE text composed from smsLastResortMessage + the
+   * campaign's link + opt-out footer. Off (default): today's behavior.
+   */
+  smsLastResortEnabled: boolean;
+  smsLastResortMessage: string;
 
   // Submit state
   saving: boolean;
@@ -240,7 +248,15 @@ export type SchedulePayload = Partial<
 export type SmsPayload = Partial<
   Pick<
     WizardState,
-    "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing"
+    | "smsEnabled"
+    | "smsConsentMode"
+    | "smsMessage"
+    | "smsLink"
+    | "smsOptout"
+    | "smsLinkEditing"
+    | "smsOptoutEditing"
+    | "smsLastResortEnabled"
+    | "smsLastResortMessage"
   >
 >;
 
@@ -270,6 +286,10 @@ export type WizardAction =
  */
 export const DEFAULT_SMS_MESSAGE =
   "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight.";
+/** Default last-resort body (VOZ-132 §8). Operator-editable in Step 4 — the
+ *  editable field IS how compliance wording gets applied per campaign. */
+export const DEFAULT_SMS_LAST_RESORT_MESSAGE =
+  "Sorry we missed you! " + DEFAULT_SMS_MESSAGE;
 export const DEFAULT_SMS_LINK = "https://playmojo.live/promotions?fast-deposit=modal&bonus=LUCKY";
 export const SMS_OPTOUT_FOOTER = "STOP? Qwt5.me";
 /** Mobivate shortens every URL to cllk.me/xxxxxx — 22 chars. */
@@ -379,6 +399,8 @@ export function createInitialState(): WizardState {
     smsOptout: SMS_OPTOUT_FOOTER,
     smsLinkEditing: false,
     smsOptoutEditing: false,
+    smsLastResortEnabled: false,
+    smsLastResortMessage: DEFAULT_SMS_LAST_RESORT_MESSAGE,
 
     saving: false,
     error: null,
@@ -553,6 +575,22 @@ function composedSmsTemplate(state: WizardState): string {
   return parts.join(" ");
 }
 
+/** Last-resort template (VOZ-132 §8): its own message body + the campaign's
+ *  link and opt-out footer (compliance footer is mandatory on every send).
+ *  Null unless the operator turned the feature on in registered_optin mode —
+ *  a null column keeps the campaign on today's behavior. */
+function composedLastResortTemplate(state: WizardState): string | null {
+  if (!state.smsEnabled || state.smsConsentMode !== "registered_optin" || !state.smsLastResortEnabled) {
+    return null;
+  }
+  const parts = [
+    state.smsLastResortMessage.trim(),
+    state.smsLink.trim(),
+    state.smsOptout.trim(),
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 /**
  * Best-effort inverse of `composedSmsTemplate`. Splits a stored `sms_template`
  * back into { message, link, optout } so the wizard's three SMS fields can be
@@ -638,6 +676,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       realtime: state.realtime,
       // parseGoalTarget IS the house positive-int-or-null parser; reused here.
       dailyCap: state.realtime ? parseGoalTarget(state.dailyCapText) : null,
+      smsLastResortTemplate: composedLastResortTemplate(state),
     };
   }
 
@@ -679,6 +718,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     goalTarget: parseGoalTarget(state.goalTargetText),
     retryIntervalMinutes: state.retryGapMinutes,
     maxAttempts: state.maxTries,
+    smsLastResortTemplate: composedLastResortTemplate(state),
   };
 }
 
@@ -696,6 +736,17 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   // goal_target > 0). Applies to both Fixed and Recurring.
   if (state.goalTargetText.trim() && parseGoalTarget(state.goalTargetText) === null) {
     return "Campaign goal must be a whole number greater than 0 (or leave it blank).";
+  }
+
+  // Last-resort text (§8): shared check — the recurring branch below returns
+  // early and would otherwise skip it.
+  if (
+    state.smsEnabled &&
+    state.smsConsentMode === "registered_optin" &&
+    state.smsLastResortEnabled &&
+    state.smsLastResortMessage.trim().length === 0
+  ) {
+    return "The last-resort text is on but its message is empty — write the message or turn the toggle off.";
   }
 
   if (state.campaignType === "recurring") {

@@ -28,7 +28,7 @@ export default function StepFollowup({ state, dispatch }: Props) {
   const isValidSmsLink = state.smsLink.trim() === "" || state.smsLink.trim().startsWith("https://");
   const isSmsBodyEmpty = state.smsEnabled && state.smsMessage.trim().length === 0;
 
-  function setSms<K extends keyof Pick<WizardState, "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing">>(
+  function setSms<K extends keyof Pick<WizardState, "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing" | "smsLastResortEnabled" | "smsLastResortMessage">>(
     key: K,
     value: WizardState[K],
   ) {
@@ -119,6 +119,46 @@ export default function StepFollowup({ state, dispatch }: Props) {
                 </span>
               </label>
             </div>
+          </div>
+        )}
+
+        {/* Last-resort mode (VOZ-132 §8) — registered_optin only. The editable
+            message field is how per-campaign compliance wording gets applied. */}
+        {state.smsEnabled && state.smsConsentMode === "registered_optin" && (
+          <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)] flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-[var(--text-1)]">Text as a last resort instead of on voicemail</div>
+                <div className="text-xs text-[var(--text-3)] mt-1 leading-relaxed">
+                  Off: reaching a voicemail sends the offer text right away (today&apos;s behavior).
+                  On: a voicemail means we <span className="font-semibold text-[var(--text-2)]">call again</span> —
+                  and only after the very last failed try does the player get one
+                  &quot;sorry we missed you&quot; text. Still one text per player, ever.
+                </div>
+              </div>
+              <Toggle
+                on={state.smsLastResortEnabled}
+                onChange={(v) => setSms("smsLastResortEnabled", v)}
+              />
+            </div>
+            {state.smsLastResortEnabled && (
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] block mb-1.5">
+                  Last-resort message
+                  <span className="text-[10px] font-normal normal-case ml-1.5">sent with the same link + opt-out footer below</span>
+                </label>
+                <textarea
+                  value={state.smsLastResortMessage}
+                  onChange={(e) => setSms("smsLastResortMessage", e.target.value)}
+                  rows={2}
+                  placeholder="Sorry we missed you! ..."
+                  className="w-full bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none transition-all"
+                />
+                {state.smsLastResortMessage.trim().length === 0 && (
+                  <p className="text-[10px] text-red-400 mt-1">Message cannot be empty while the last-resort text is on.</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

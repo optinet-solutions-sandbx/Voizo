@@ -72,6 +72,11 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       // Operator controls + realtime mode (VOZ-132): validated/whitelisted by
       // the pure normalizer; conditional keys throughout (see its docblock).
       ...normalizeOperatorControls(input),
+      // Last-resort SMS template (§8): conditional key — absent pre-migration
+      // and for every campaign that doesn't opt in.
+      ...(typeof input.smsLastResortTemplate === "string" && input.smsLastResortTemplate.trim().length > 0
+        ? { sms_last_resort_template: input.smsLastResortTemplate }
+        : {}),
     })
     .select()
     .single();

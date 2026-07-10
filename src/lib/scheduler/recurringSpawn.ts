@@ -57,6 +57,9 @@ export interface RecurringParent {
   // operator's chosen gap/tries silently never apply (review finding 2026-07-10).
   retry_interval_minutes?: number | null;
   max_attempts?: number | null;
+  // Last-resort SMS (§8): same child-row rule — the end-of-call webhook and
+  // the last-resort sweep both read the CHILD campaign.
+  sms_last_resort_template?: string | null;
 }
 
 export interface DueCheckResult {
@@ -519,6 +522,10 @@ export function buildChildPayload(args: {
     // Children carry the flag so the scheduler's keep-awake guard can read
     // it off the child row, and the cap so the poll enforces it per day.
     ...(parent.realtime ? { realtime: true, daily_cap: parent.daily_cap ?? null } : {}),
+    // Last-resort SMS (§8) inherits the same way — webhook + sweep read the child.
+    ...(typeof parent.sms_last_resort_template === "string" && parent.sms_last_resort_template.trim().length > 0
+      ? { sms_last_resort_template: parent.sms_last_resort_template }
+      : {}),
   };
 }
 

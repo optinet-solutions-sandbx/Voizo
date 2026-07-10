@@ -56,6 +56,19 @@ describe("buildChildPayload realtime passthrough", () => {
   });
 });
 
+describe("buildChildPayload last-resort SMS inheritance (§8)", () => {
+  it("children inherit a set template; absent otherwise (deploy-order safe)", () => {
+    const withTemplate = buildChildPayload({
+      parent: { ...parent, sms_last_resort_template: "Sorry we missed you! ..." },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(withTemplate.sms_last_resort_template).toBe("Sorry we missed you! ...");
+
+    const without = buildChildPayload({ parent, ...common });
+    expect("sms_last_resort_template" in without).toBe(false);
+  });
+});
+
 describe("buildChildPayload operator-control inheritance", () => {
   it("children inherit the parent's retry gap and max tries (dialer reads the CHILD row)", () => {
     const p = buildChildPayload({
