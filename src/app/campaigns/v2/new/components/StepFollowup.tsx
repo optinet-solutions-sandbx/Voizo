@@ -143,11 +143,12 @@ export default function StepFollowup({ state, dispatch }: Props) {
             </div>
             {state.smsLastResortEnabled && (
               <div>
-                <label className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] block mb-1.5">
+                <label htmlFor="sms-last-resort-message" className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] block mb-1.5">
                   Last-resort message
                   <span className="text-[10px] font-normal normal-case ml-1.5">sent with the same link + opt-out footer below</span>
                 </label>
                 <textarea
+                  id="sms-last-resort-message"
                   value={state.smsLastResortMessage}
                   onChange={(e) => setSms("smsLastResortMessage", e.target.value)}
                   rows={2}
