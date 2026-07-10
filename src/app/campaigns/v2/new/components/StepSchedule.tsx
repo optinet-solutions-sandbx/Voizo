@@ -124,14 +124,14 @@ export default function StepSchedule({ state, dispatch }: Props) {
             onClick={() => setRunMode("recurring")}
             icon={<Repeat size={14} />}
             name="Repeat daily"
-            description="Auto-spawn a fresh child each scheduled day with the latest segment."
+            description="Runs every scheduled day with the latest list."
           />
           <ChoiceTile
             active={isRecurring && state.realtime}
             onClick={() => setRunMode("realtime")}
             icon={<Zap size={14} />}
             name="Real-time"
-            description="Checks the segment every minute and calls new registrants right away."
+            description="Calls new sign-ups within minutes, all day."
           />
         </div>
 
@@ -165,10 +165,10 @@ export default function StepSchedule({ state, dispatch }: Props) {
             mode; daily cap only for Real-time (its cost brake). */}
         {/* span + role=group (not <label>): these name BUTTON GROUPS, and a
             label without an associated form control is an a11y defect. */}
-        <div className="flex flex-col gap-2" role="group" aria-label="Retry gap — how long before we try a player again">
+        <div className="flex flex-col gap-2" role="group" aria-label="Retry gap">
           <span className="text-xs font-medium text-[var(--text-2)]">
             Retry gap
-            <span className="text-[11px] text-[var(--text-3)] font-normal"> — how long before we try a player again</span>
+            <span className="text-[11px] text-[var(--text-3)] font-normal"> — wait before trying a player again</span>
           </span>
           <div className="flex flex-wrap gap-2">
             {RETRY_GAP_PRESETS.map((v) => (
@@ -188,10 +188,9 @@ export default function StepSchedule({ state, dispatch }: Props) {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2" role="group" aria-label="Max tries per player — after the last try the player is marked unreached">
+        <div className="flex flex-col gap-2" role="group" aria-label="Max tries per player">
           <span className="text-xs font-medium text-[var(--text-2)]">
             Max tries per player
-            <span className="text-[11px] text-[var(--text-3)] font-normal"> — after the last try the player is marked unreached</span>
           </span>
           <div className="flex flex-wrap gap-2">
             {MAX_TRIES_PRESETS.map((v) => (
@@ -218,7 +217,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
               className="text-xs font-medium text-[var(--text-2)]"
             >
               Daily cap
-              <span className="text-[11px] text-[var(--text-3)] font-normal"> — most players added per day</span>
+              <span className="text-[11px] text-[var(--text-3)] font-normal"> — max players added per day</span>
             </label>
             <input
               id="realtime-daily-cap"
@@ -234,8 +233,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
               className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
             />
             <p className="text-[11px] text-[var(--text-3)] leading-snug">
-              Required. The cost brake: once today&apos;s cap is reached, new signups wait
-              for tomorrow&apos;s campaign.
+              Required. When the cap is hit, new sign-ups wait until tomorrow.
             </p>
           </div>
         )}

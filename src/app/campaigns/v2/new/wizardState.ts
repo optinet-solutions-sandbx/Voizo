@@ -746,7 +746,7 @@ export function validateBeforeSubmit(state: WizardState): string | null {
     state.smsLastResortEnabled &&
     state.smsLastResortMessage.trim().length === 0
   ) {
-    return "The last-resort text is on but its message is empty — write the message or turn the toggle off.";
+    return "Last-resort text is on but the message is empty.";
   }
 
   if (state.campaignType === "recurring") {
@@ -757,7 +757,7 @@ export function validateBeforeSubmit(state: WizardState): string | null {
       return "Recurring campaigns require a single segment. Click one segment row in the importer (not the multi-select checkboxes).";
     }
     if (state.realtime && parseGoalTarget(state.dailyCapText) === null) {
-      return "Real-time campaigns need a daily cap — the most players added per day (whole number above 0).";
+      return "Real-time campaigns need a daily cap (whole number above 0).";
     }
     return null;
   }

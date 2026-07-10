@@ -61,8 +61,8 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
     const willStopChild = childStatus === "running" || childStatus === "draft";
     const ok = window.confirm(
       willStopChild
-        ? "Stop this campaign? Today's calls stop and no new day will spawn until you resume."
-        : "Stop this campaign? No new day will spawn until you resume.",
+        ? "Stop this campaign? Today's calls stop and it won't run again until you resume."
+        : "Stop this campaign? It won't run again until you resume.",
     );
     if (!ok) return;
 
@@ -138,11 +138,11 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
     const capTrimmed = draft.dailyCapText.trim();
     const capNumber = capTrimmed === "" ? null : Number(capTrimmed);
     if (capNumber !== null && (!Number.isInteger(capNumber) || capNumber <= 0)) {
-      setRowError({ id, message: "Daily cap must be a whole number above 0 (or empty to remove it)." });
+      setRowError({ id, message: "Daily cap must be a whole number above 0, or empty for no cap." });
       return;
     }
     if (isRealtime && capNumber === null) {
-      setRowError({ id, message: "Real-time campaigns need a daily cap — it's the cost brake." });
+      setRowError({ id, message: "Real-time campaigns need a daily cap." });
       return;
     }
 
@@ -176,8 +176,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
       <div className="px-4 pt-3.5 pb-2.5">
         <div className="text-sm font-semibold text-[var(--text-1)]">Always-on campaigns</div>
         <p className="text-xs text-[var(--text-3)] mt-0.5">
-          Repeating and real-time campaigns. Stop halts today&apos;s calls AND tomorrow&apos;s
-          spawn together; settings apply from the next day&apos;s campaign.
+          Stop ends today&apos;s calls and tomorrow&apos;s run. Settings changes start tomorrow.
         </p>
       </div>
       <div className="divide-y divide-[var(--border)]">
@@ -231,7 +230,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                         )}
                       </>
                     ) : (
-                      <span>no day spawned yet</span>
+                      <span>no run today yet</span>
                     )}
                   </p>
                 </div>
@@ -279,7 +278,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                   <div className="flex flex-col gap-1.5" role="group" aria-label="Retry gap">
                     <span className="text-[11px] font-medium text-[var(--text-2)]">
                       Retry gap
-                      <span className="text-[var(--text-3)] font-normal"> — how long before we try a player again</span>
+                      <span className="text-[var(--text-3)] font-normal"> — wait before trying a player again</span>
                     </span>
                     <div className="flex gap-1.5">
                       {RETRY_GAP_PRESETS.map((v) => (
@@ -323,7 +322,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                     <label htmlFor={`cap-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                       Daily cap
                       <span className="text-[var(--text-3)] font-normal">
-                        {isRealtime ? " — required for real-time (the cost brake)" : " — empty = no cap"}
+                        {isRealtime ? " — required for real-time" : " — empty = no cap"}
                       </span>
                     </label>
                     <input
@@ -344,7 +343,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                       <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                         Last-resort text
                         <span className="text-[var(--text-3)] font-normal">
-                          {" "}— the exact message sent after the final failed try; empty = feature off
+                          {" "}— sent after the last failed try. Empty = off
                         </span>
                       </label>
                       <textarea
@@ -352,7 +351,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                         rows={2}
                         value={draft.lastResortText}
                         onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
-                        placeholder="Off — voicemails get the instant text (today's behavior)"
+                        placeholder="Empty = off"
                         className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
                       />
                     </div>
@@ -369,7 +368,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                       Save
                     </button>
                     <p className="text-[11px] text-[var(--text-3)]">
-                      Applies from tomorrow&apos;s campaign — today&apos;s run keeps its current settings.
+                      Takes effect from tomorrow&apos;s run.
                     </p>
                   </div>
                 </div>

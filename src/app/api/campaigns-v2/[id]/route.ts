@@ -109,7 +109,7 @@ export async function PATCH(
   if (body.dailyCap === null) {
     if (row.realtime === true) {
       return NextResponse.json(
-        { error: "Real-time campaigns need a daily cap — it's the cost brake." },
+        { error: "Real-time campaigns need a daily cap." },
         { status: 400 },
       );
     }
