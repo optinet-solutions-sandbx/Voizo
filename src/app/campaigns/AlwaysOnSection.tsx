@@ -278,7 +278,6 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                   <div className="flex flex-col gap-1.5" role="group" aria-label="Retry gap">
                     <span className="text-[11px] font-medium text-[var(--text-2)]">
                       Retry gap
-                      <span className="text-[var(--text-3)] font-normal"> — wait before trying a player again</span>
                     </span>
                     <div className="flex gap-1.5">
                       {RETRY_GAP_PRESETS.map((v) => (

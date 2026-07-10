@@ -199,7 +199,6 @@ export default function StepSchedule({ state, dispatch }: Props) {
         <div className="flex flex-col gap-2" role="group" aria-label="Retry gap">
           <span className="text-xs font-medium text-[var(--text-2)]">
             Retry gap
-            <span className="text-[11px] text-[var(--text-3)] font-normal"> — wait before trying a player again</span>
           </span>
           <div className="flex flex-wrap gap-2">
             {RETRY_GAP_PRESETS.map((v) => (
