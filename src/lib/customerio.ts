@@ -199,6 +199,12 @@ export async function getCustomerAttributes(
 // the create-flow preview table, not just phones. Different shape, kept
 // separate to avoid an over-eager refactor. If that diverges from this lib in
 // future, reconcile.
+//
+// Third consumer (2026-07-10, VOZ-132): the realtime poll (scheduler/
+// realtimePoll.ts) uses getSegmentMembers + lookupMemberProfileWithFallback +
+// extractPhoneFromAttrs directly — it must NOT use fetchSegmentPhones, which
+// re-looks-up EVERY member's profile on every call (the poll runs per minute
+// and only new members may cost a profile request).
 
 /** Phone-attribute keys to try, in priority order. Customer.io workspaces use
  *  different field names; the create-flow originally surveyed 6 variants. */
@@ -211,7 +217,7 @@ const PHONE_ATTRIBUTE_KEYS = [
   "telephone",
 ] as const;
 
-function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | null {
+export function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | null {
   for (const key of PHONE_ATTRIBUTE_KEYS) {
     const value = attrs[key];
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
@@ -249,7 +255,7 @@ async function chunkedPromiseAll<T, R>(
  * in order; only return failure when ALL identifiers fail. Closes the
  * 2026-05-13 "Glenda" silent-drop bug.
  */
-async function lookupMemberProfileWithFallback(
+export async function lookupMemberProfileWithFallback(
   member: CustomerIOSegmentMember,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
   const identifiers = [
