@@ -6,6 +6,7 @@ import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
+import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
@@ -907,6 +908,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Last-resort text sweep (VOZ-132 §8) ──
+  // End-of-tick placement + wall-clock guard: SMS sends can never starve dial
+  // budget. Dormant while no campaign has sms_last_resort_template set.
+  const lastResort = await runLastResortSweep(
+    supabaseAdmin,
+    maxDuration * 1000 - (Date.now() - tickStartedAt),
+  );
+
   await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
   return NextResponse.json({
     started: results.filter((r) => r.result === "started").length,
@@ -917,5 +926,6 @@ export async function GET(request: NextRequest) {
     sweeperResults,
     spawned: recurringResults.filter((r) => r.result === "spawned").length,
     recurringResults,
+    lastResort,
   });
 }
