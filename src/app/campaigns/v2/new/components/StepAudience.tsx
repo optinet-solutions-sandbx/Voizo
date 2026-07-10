@@ -95,7 +95,6 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
             />
             <span className="text-[11px] text-[var(--text-3)] leading-snug">
               Mark as test campaign
-              <span className="text-[var(--text-3)] opacity-70"> — excluded from Audience suggestions. You can change this any time on the campaign detail page.</span>
             </span>
           </label>
         </div>

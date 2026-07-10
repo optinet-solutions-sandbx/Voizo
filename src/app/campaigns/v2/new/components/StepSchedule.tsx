@@ -156,8 +156,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
             className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
           />
           <p className="text-[11px] text-[var(--text-3)] leading-snug">
-            Optional. Target number of successful outcomes (e.g. deposits) for this
-            campaign — shown as X / Y in the performance report.
+            Optional. Shown as X / Y in the performance report.
           </p>
         </div>
 
