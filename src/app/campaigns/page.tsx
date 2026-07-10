@@ -29,6 +29,7 @@ import {
 import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { useBaseAgentNames } from "@/app/analytics/useBaseAgentNames";
 import { voiceName } from "@/lib/voiceOptions";
+import AlwaysOnSection from "./AlwaysOnSection";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -181,10 +182,19 @@ function CampaignsPageInner() {
         const freshIds = new Set(data.map((d) => d.id as string));
         setCampaigns((prev) => {
           const surviving = prev.filter((c) => freshIds.has(c.id as string));
-          return surviving.map((c) => {
+          const updated = surviving.map((c) => {
             const fresh = data.find((d) => (d.id as string) === (c.id as string));
             return fresh ? { ...c, status: fresh.status, start_at: fresh.start_at } : c;
           });
+          // Rows born AFTER page load (e.g. a recurring/realtime child spawning
+          // at 08:30) must appear too — without this, the always-on section's
+          // compound Stop could pause YESTERDAY's child while today's invisible
+          // one keeps dialing. Prepended to match the list's newest-first order.
+          // Their analytics stay empty until a reload (analytics fetch is
+          // load-time only); the list tolerates missing analytics per row.
+          const knownIds = new Set(updated.map((c) => c.id as string));
+          const born = data.filter((d) => !knownIds.has(d.id as string));
+          return born.length > 0 ? [...born, ...updated] : updated;
         });
       } catch (err) {
         console.error("[campaigns] status poll failed:", err);
@@ -348,6 +358,12 @@ function CampaignsPageInner() {
           New Campaign
         </Link>
       </div>
+
+      {/* Always-on campaigns (recurring/real-time parents) — renders null until
+          the first one exists, so today's prod sees no change. Owns the
+          compound Stop (parent + today's child) and the next-child settings
+          drawer. */}
+      <AlwaysOnSection campaigns={campaigns} onMutate={setCampaigns} />
 
       {/* KPI strip — shared StatBand; reflects the current search / filters / date window.
           Numbers CountUp (locale-formatted). The old StatCard hint tooltips are preserved as
