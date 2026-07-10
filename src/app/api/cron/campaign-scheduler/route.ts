@@ -448,6 +448,16 @@ export async function GET(request: NextRequest) {
 
     const next = await findNextNumber(campaignId);
     if (!next) {
+      // Keep-awake (VOZ-132 spec item 2): a realtime child goes quiet between
+      // signups — the self-heal below would mark it completed and later
+      // registrants would land in a dead campaign with no error anywhere.
+      // Stay awake until its end_at passes. Guarded no-op for every other
+      // campaign (column absent/false → falsy).
+      if ((campaign.realtime as boolean) && campaign.end_at &&
+          new Date(campaign.end_at as string) > new Date()) {
+        resumeResults.push({ id: campaignId, name: campaignName, result: "realtime_idle_awake" });
+        continue;
+      }
       // Nothing due AND nothing waiting → genuinely complete (self-heal).
       // Conditional WHERE status='running' prevents stomping a concurrent
       // operator Pause action.
@@ -701,6 +711,14 @@ export async function GET(request: NextRequest) {
     // ── Find next number and fire first call ──
     const nextNumber = await findNextNumber(campaignId);
     if (!nextNumber) {
+      // Keep-awake (VOZ-132): a realtime child starts EMPTY by design — the
+      // per-minute poll fills it. Leave it running; mirror of the resume-sweep
+      // guard above. Guarded no-op for every other campaign.
+      if ((campaign.realtime as boolean) && campaign.end_at &&
+          new Date(campaign.end_at as string) > new Date()) {
+        results.push({ id: campaignId, name: campaignName, result: "started_idle_realtime" });
+        continue;
+      }
       // No number eligible right now. If pending_retry numbers exist for the
       // future, keep `running` so the resume sweep can fire them when due.
       if (await hasPendingRetry(campaignId)) {
@@ -786,11 +804,12 @@ export async function GET(request: NextRequest) {
   const recurringResults: Array<
     { parentId: string; parentName: string } & (SpawnOutcome | { result: "deferred_low_budget" })
   > = [];
+  // select * (was an explicit 13-column list): the realtime branch (VOZ-132)
+  // needs `realtime` + `daily_cap` off the parent, and * is deploy-order safe —
+  // pre-migration rows simply lack the fields (undefined → non-realtime path).
   const { data: recurringParents, error: recurringErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select(
-      "id, name, timezone, recurrence_pattern, segment_id, base_assistant_id, voice_id, system_prompt, sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode, is_test",
-    )
+    .select("*")
     .eq("campaign_type", "recurring")
     .eq("status", "running");
 
