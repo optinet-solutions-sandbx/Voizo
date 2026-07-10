@@ -26,8 +26,8 @@ import { type RangeKey } from "@/lib/rangeWindow";
 
 // RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d", "lifetime"];
-const RANGE_BTN: Record<string, string> = { lifetime: "Lifetime" }; // button caption; presets show their raw key
-const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "Lifetime", custom: "Custom range" };
+const RANGE_BTN: Record<string, string> = { lifetime: "All" }; // button caption; presets show their raw key
+const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "All time", custom: "Custom range" };
 
 export interface BestPerformer {
   key: string;
