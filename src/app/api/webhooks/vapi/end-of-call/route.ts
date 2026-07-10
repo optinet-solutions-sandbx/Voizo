@@ -492,12 +492,21 @@ export async function POST(request: NextRequest) {
     sms_template: string | null;
     sms_on_goal_reached_only: boolean | null;
     sms_consent_mode?: string | null;
+    /** VOZ-132 §8: non-empty → last-resort mode (voicemails re-dial; the one
+     *  text goes out after the final failed try via the scheduler sweep).
+     *  Optional — the legacy fallback select below omits it (pre-migration). */
+    sms_last_resort_template?: string | null;
   };
   let campaign: SmsCampaignConfig | null = null;
   {
+    // select * (not an explicit list): naming sms_last_resort_template here
+    // would make this select FAIL pre-migration and drop to the legacy
+    // fallback, which lacks sms_consent_mode — silently degrading live
+    // mode-2 campaigns to verbal_yes semantics for the deploy window. With *
+    // a missing column is simply absent (undefined → feature off).
     const sel = await supabaseAdmin
       .from("campaigns_v2")
-      .select("sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode")
+      .select("*")
       .eq("id", callRow.campaign_id)
       .single();
     if (sel.error) {
@@ -526,6 +535,9 @@ export async function POST(request: NextRequest) {
     agentAnnouncedSms: transcript ? agentMentionedSms(transcript) : false,
     customerDeclinedSms: transcript ? customerDeclinedSms(transcript) : false,
     humanConversation: transcript ? hasRealConversation(transcript) : false,
+    lastResortMode:
+      typeof campaign?.sms_last_resort_template === "string" &&
+      campaign.sms_last_resort_template.trim().length > 0,
   });
   // registered_optin supersedes the legacy sms_on_goal_reached_only flag (the
   // mode IS the policy); verbal_yes keeps the original §6 three-condition check.
