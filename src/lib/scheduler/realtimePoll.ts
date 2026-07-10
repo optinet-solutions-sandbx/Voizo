@@ -10,7 +10,10 @@
 // I/O orchestration below.
 
 // Relative imports (not "@/lib/..."): vitest has no alias config in this
-// repo — tested lib modules must resolve without it.
+// repo — tested lib modules must resolve without it. Modules whose import
+// chain loads supabaseServer (throws without env) are dynamic-imported
+// inside functions for the same reason.
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { COUNTRY_TO_TIMEZONES, detectCountry } from "../audienceCountry";
 import { parsePhoneList } from "../campaignV2Shared";
 
@@ -74,4 +77,137 @@ export function diffNewMembers(memberIds: string[], seenIds: ReadonlySet<string>
     out.push(id);
   }
   return out;
+}
+
+// ── Day rollover ──────────────────────────────────────────────────────────
+
+/**
+ * Spec §9 "late evening" case: players queued yesterday but never terminal
+ * must be dialed today. Carry pending/pending_retry into the new child
+ * (attempt_count preserved so max-tries spans days); close the old rows as
+ * 'unreached' (truthful for THAT day's reporting — the player continues in
+ * today's child).
+ */
+export function partitionRollover(
+  rows: Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string }>,
+): { carry: Array<{ phone_e164: string; attempt_count: number }>; closeIds: string[] } {
+  const open = rows.filter((r) => r.outcome === "pending" || r.outcome === "pending_retry");
+  return {
+    carry: open.map((r) => ({ phone_e164: r.phone_e164, attempt_count: r.attempt_count ?? 0 })),
+    closeIds: open.map((r) => r.id),
+  };
+}
+
+/**
+ * Called by spawnChildIfDue (realtime branch) right after today's child is
+ * fully created. Failure-ordering guarantee: old rows are only closed AFTER
+ * the carry insert succeeds — a failed carry leaves them open, so the next
+ * spawn retries and no player is silently lost.
+ */
+export async function rolloverLeftovers(
+  supabase: SupabaseClient,
+  parentId: string,
+  newChildId: string,
+  dayStartIso: string,
+): Promise<{ carried: number }> {
+  // Most recent PRIOR child — it may be paused (overnight auto-pause), still
+  // draft (never started), or running. 'skipped' children have no numbers.
+  const { data: prev, error: prevErr } = await supabase
+    .from("campaigns_v2")
+    .select("id, name, status, vapi_assistant_id, vapi_pool_slot_id")
+    .eq("parent_campaign_id", parentId)
+    .neq("id", newChildId)
+    .neq("status", "skipped")
+    .lt("start_at", dayStartIso)
+    .order("start_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (prevErr) {
+    console.error(`[realtimePoll.rollover] prev-child query failed for ${parentId}:`, prevErr);
+    return { carried: 0 };
+  }
+  if (!prev) return { carried: 0 }; // first-ever day
+
+  const { data: rows, error: rowsErr } = await supabase
+    .from("campaign_numbers_v2")
+    .select("id, phone_e164, attempt_count, outcome")
+    .eq("campaign_id", prev.id as string)
+    .in("outcome", ["pending", "pending_retry"]);
+  if (rowsErr) {
+    console.error(`[realtimePoll.rollover] leftover query failed for ${prev.id}:`, rowsErr);
+    return { carried: 0 };
+  }
+
+  const { carry, closeIds } = partitionRollover(
+    (rows ?? []) as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string }>,
+  );
+  if (carry.length > 0) {
+    const { error: insErr } = await supabase.from("campaign_numbers_v2").insert(
+      carry.map((c) => ({
+        campaign_id: newChildId,
+        phone_e164: c.phone_e164,
+        attempt_count: c.attempt_count,
+        outcome: "pending",
+      })),
+    );
+    if (insErr) {
+      console.error(`[realtimePoll.rollover] carry insert failed (old rows left open):`, insErr);
+      return { carried: 0 };
+    }
+    // Stomp-guard on outcome (matches the sweeper style): a late webhook that
+    // flipped a row terminal between our SELECT and now is not overwritten.
+    const { error: closeErr } = await supabase
+      .from("campaign_numbers_v2")
+      .update({ outcome: "unreached" })
+      .in("id", closeIds)
+      .in("outcome", ["pending", "pending_retry"]);
+    if (closeErr) {
+      // Carried AND old rows still open → yesterday's child would re-carry
+      // on a hypothetical re-spawn, but the per-day idempotency makes that
+      // impossible today; loud-log and move on.
+      console.error(`[realtimePoll.rollover] close update failed:`, closeErr);
+    }
+  }
+
+  // Close yesterday's child + release its clone/slot if still held. Without
+  // this, a child paused overnight with PAUSE_RELEASES_SLOT=false pins a SIP
+  // slot forever → pool exhaustion within days. Pointers are captured above,
+  // nulled in the close, then cleaned via the shared helper (scheduler pattern).
+  const capturedAssistantId = (prev.vapi_assistant_id as string | null) ?? null;
+  const capturedSlotId = (prev.vapi_pool_slot_id as string | null) ?? null;
+  const { data: closed, error: closeCampaignErr } = await supabase
+    .from("campaigns_v2")
+    .update({
+      status: "completed",
+      vapi_assistant_id: null,
+      vapi_pool_slot_id: null,
+      vapi_sip_uri: null,
+    })
+    .eq("id", prev.id as string)
+    .in("status", ["draft", "running", "paused"])
+    .select("id")
+    .maybeSingle();
+  if (closeCampaignErr) {
+    console.error(`[realtimePoll.rollover] child close failed for ${prev.id}:`, closeCampaignErr);
+  }
+  if (closed && (capturedAssistantId || capturedSlotId)) {
+    // Lazy import: campaignVapiCleanup's chain uses "@/" aliases (test poison).
+    const { performCampaignVapiCleanup } = await import("../vapi/campaignVapiCleanup");
+    const { vapiWarnings } = await performCampaignVapiCleanup(supabase, {
+      vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+      campaignName: (prev.name as string) ?? (prev.id as string),
+      vapiAssistantId: capturedAssistantId,
+      vapiPoolSlotId: capturedSlotId,
+    });
+    if (vapiWarnings.length > 0) {
+      console.warn(`[realtimePoll.rollover] ${prev.name}: cleanup warnings: ${vapiWarnings.join(" | ")}`);
+    }
+  }
+
+  if (carry.length > 0) {
+    console.log(
+      `[realtimePoll.rollover] carried ${carry.length} uncalled player(s) from ${prev.name} into ${newChildId}`,
+    );
+  }
+  return { carried: carry.length };
 }

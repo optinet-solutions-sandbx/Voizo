@@ -19,13 +19,16 @@
 // start_at falls inside today's [start, end) in the parent's timezone. If one
 // exists, no second spawn this day.
 
+// Relative imports (2026-07-10, VOZ-132): vitest has no "@/" alias config, and
+// this module is now under test (recurringSpawn.test.ts). snapshotCampaignPrompt
+// moved to a lazy import inside spawnChildIfDue — its module chain loads
+// supabaseServer, which throws at import time without env vars (test poison).
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createClone } from "@/lib/vapi/cloneAssistant";
-import { fetchSegmentPhones } from "@/lib/customerio";
-import { leaseSlot, patchPhoneAssistant, linkSlot, releaseSlot } from "@/lib/vapi/sipPool";
-import { parsePhoneList } from "@/lib/campaignV2Shared";
-import { snapshotCampaignPrompt } from "@/lib/promptVersionData";
-import type { DayOfWeek, RecurrencePattern } from "@/lib/types/recurrence";
+import { createClone } from "../vapi/cloneAssistant";
+import { fetchSegmentPhones } from "../customerio";
+import { leaseSlot, patchPhoneAssistant, linkSlot, releaseSlot } from "../vapi/sipPool";
+import { parsePhoneList } from "../campaignV2Shared";
+import type { DayOfWeek, RecurrencePattern } from "../types/recurrence";
 
 export interface RecurringParent {
   id: string;
@@ -44,6 +47,11 @@ export interface RecurringParent {
   // production-visible children (audit 2026-05-22 HIGH H3). Without this,
   // every spawned child has DB DEFAULT false → pollutes Audience suggestions.
   is_test: boolean;
+  // Real-time top-up mode (VOZ-132): children spawn EMPTY and the per-minute
+  // poll (realtimePoll.ts) is their only number source. Optional so callers/
+  // selects that predate the realtime migration keep compiling and behaving.
+  realtime?: boolean;
+  daily_cap?: number | null;
 }
 
 export interface DueCheckResult {
@@ -142,11 +150,11 @@ function isoForLocalTime(dateStr: string, timeStr: string, tz: string): string {
   return new Date(utcGuess + offsetMs).toISOString();
 }
 
-function startOfDayIsoInTz(now: Date, tz: string): string {
+export function startOfDayIsoInTz(now: Date, tz: string): string {
   return isoForLocalTime(todayInTz(now, tz), "00:00", tz);
 }
 
-function endOfDayIsoInTz(now: Date, tz: string): string {
+export function endOfDayIsoInTz(now: Date, tz: string): string {
   // "End of day" = start of NEXT day, so we can use < (exclusive) in queries.
   const today = todayInTz(now, tz);
   const [y, m, d] = today.split("-").map(Number);
@@ -276,38 +284,43 @@ export async function spawnChildIfDue(
   const endAtIso = isoForLocalTime(todayStr, hours.end, parent.timezone);
   const todaysCallWindow = [{ day: dow, start: hours.start, end: hours.end }];
 
-  // ── 4. Pull segment phones ──
-  const segmentResult = await fetchSegmentPhones(parent.segment_id);
-  if (!segmentResult.ok) {
-    return { result: "spawn_failed", details: `segment fetch: ${segmentResult.error}` };
-  }
-  const phones = parsePhoneList(segmentResult.phones.join("\n"));
-
-  // ── 5. Empty-segment branch ──
-  if (phones.length === 0 && parent.recurrence_pattern.skip_if_empty) {
-    const skipPayload = buildChildPayload({
-      parent,
-      todayStr,
-      startAtIso,
-      endAtIso,
-      todaysCallWindow,
-      status: "skipped",
-      assistantId: null,
-      slotId: null,
-      sipUri: null,
-    });
-    const { data: skippedChild, error: skipErr } = await supabase
-      .from("campaigns_v2")
-      .insert(skipPayload)
-      .select("id")
-      .single();
-    if (skipErr) {
-      return { result: "spawn_failed", details: `insert skipped child: ${skipErr.message}` };
+  // ── 4. Pull segment phones (SKIPPED for realtime parents — VOZ-132: the
+  //       per-minute poll is the sole number source, children spawn empty) ──
+  let phones: string[] = [];
+  if (!parent.realtime) {
+    const segmentResult = await fetchSegmentPhones(parent.segment_id);
+    if (!segmentResult.ok) {
+      return { result: "spawn_failed", details: `segment fetch: ${segmentResult.error}` };
     }
-    await updateParentLastSpawnDate(supabase, parent, todayStr).catch((err) => {
-      console.warn(`[recurringSpawn] ${parent.id}: last_spawn_date update failed:`, err);
-    });
-    return { result: "segment_empty_skipped", childId: skippedChild.id };
+    phones = parsePhoneList(segmentResult.phones.join("\n"));
+
+    // ── 5. Empty-segment branch (non-realtime only: an empty realtime child
+    //       is the NORMAL morning state, not a skip condition) ──
+    if (phones.length === 0 && parent.recurrence_pattern.skip_if_empty) {
+      const skipPayload = buildChildPayload({
+        parent,
+        todayStr,
+        startAtIso,
+        endAtIso,
+        todaysCallWindow,
+        status: "skipped",
+        assistantId: null,
+        slotId: null,
+        sipUri: null,
+      });
+      const { data: skippedChild, error: skipErr } = await supabase
+        .from("campaigns_v2")
+        .insert(skipPayload)
+        .select("id")
+        .single();
+      if (skipErr) {
+        return { result: "spawn_failed", details: `insert skipped child: ${skipErr.message}` };
+      }
+      await updateParentLastSpawnDate(supabase, parent, todayStr).catch((err) => {
+        console.warn(`[recurringSpawn] ${parent.id}: last_spawn_date update failed:`, err);
+      });
+      return { result: "segment_empty_skipped", childId: skippedChild.id };
+    }
   }
 
   // ── 6. Budget check (refreshed by caller per iteration) ──
@@ -420,6 +433,17 @@ export async function spawnChildIfDue(
     console.warn(`[recurringSpawn] linkSlot threw (non-fatal):`, err);
   }
 
+  // ── 12b. Realtime rollover (VOZ-132 spec §9 "late evening"): carry
+  // yesterday's uncalled players into today's child, close yesterday's.
+  // Non-fatal: a rollover failure must not fail an otherwise-good spawn —
+  // uncarried leftovers are retried at the NEXT spawn (old rows stay open).
+  if (parent.realtime) {
+    const { rolloverLeftovers } = await import("./realtimePoll");
+    await rolloverLeftovers(supabase, parent.id, childRow.id, dayStart).catch((err) => {
+      console.warn(`[recurringSpawn] ${parent.id}: rollover failed (non-fatal):`, err);
+    });
+  }
+
   // ── 13. Update parent counters ──
   await updateParentSpawnCounters(supabase, parent, todayStr).catch((err) => {
     console.warn(`[recurringSpawn] ${parent.id}: counter update failed:`, err);
@@ -430,6 +454,9 @@ export async function spawnChildIfDue(
   // after return); snapshotCampaignPrompt never throws, so a snapshot failure
   // cannot turn a successful spawn into a failure. Only the cloned path reaches
   // here — the empty-segment skip branch (no clone) returned earlier.
+  // Lazy import: its chain loads supabaseServer (throws without env), which
+  // would poison this module for vitest (recurringSpawn.test.ts).
+  const { snapshotCampaignPrompt } = await import("../promptVersionData");
   await snapshotCampaignPrompt(childRow.id, clone.id);
 
   return {
@@ -443,7 +470,7 @@ export async function spawnChildIfDue(
 
 // ── Internals ────────────────────────────────────────────────────────────
 
-function buildChildPayload(args: {
+export function buildChildPayload(args: {
   parent: RecurringParent;
   todayStr: string;
   startAtIso: string;
@@ -478,6 +505,11 @@ function buildChildPayload(args: {
     parent_campaign_id: parent.id,
     recurrence_pattern: null,
     is_test: parent.is_test,
+    // Conditional keys (voicemail_autohangup precedent): absent for
+    // non-realtime parents so pre-migration DBs never see unknown columns.
+    // Children carry the flag so the scheduler's keep-awake guard can read
+    // it off the child row, and the cap so the poll enforces it per day.
+    ...(parent.realtime ? { realtime: true, daily_cap: parent.daily_cap ?? null } : {}),
   };
 }
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decideAdmission, diffNewMembers, expectedCountryForTimezone } from "./realtimePoll";
+import {
+  decideAdmission,
+  diffNewMembers,
+  expectedCountryForTimezone,
+  partitionRollover,
+} from "./realtimePoll";
 
 describe("expectedCountryForTimezone", () => {
   it("maps the three launch regions", () => {
@@ -94,5 +99,31 @@ describe("diffNewMembers", () => {
 
   it("all seen → empty", () => {
     expect(diffNewMembers(["a", "b"], new Set(["a", "b"]))).toEqual([]);
+  });
+});
+
+describe("partitionRollover", () => {
+  it("carries pending + pending_retry with attempt_count preserved; closes exactly those rows", () => {
+    const rows = [
+      { id: "1", phone_e164: "+61400000001", attempt_count: 0, outcome: "pending" },
+      { id: "2", phone_e164: "+61400000002", attempt_count: 2, outcome: "pending_retry" },
+      { id: "3", phone_e164: "+61400000003", attempt_count: 1, outcome: "sent_sms" },
+      { id: "4", phone_e164: "+61400000004", attempt_count: null, outcome: "pending" },
+      { id: "5", phone_e164: "+61400000005", attempt_count: 3, outcome: "unreached" },
+    ];
+    const { carry, closeIds } = partitionRollover(rows);
+    expect(carry).toEqual([
+      { phone_e164: "+61400000001", attempt_count: 0 },
+      { phone_e164: "+61400000002", attempt_count: 2 },
+      { phone_e164: "+61400000004", attempt_count: 0 },
+    ]);
+    expect(closeIds).toEqual(["1", "2", "4"]);
+  });
+
+  it("nothing open → nothing carried", () => {
+    expect(
+      partitionRollover([{ id: "1", phone_e164: "+61400000001", attempt_count: 1, outcome: "sent_sms" }]),
+    ).toEqual({ carry: [], closeIds: [] });
+    expect(partitionRollover([])).toEqual({ carry: [], closeIds: [] });
   });
 });
