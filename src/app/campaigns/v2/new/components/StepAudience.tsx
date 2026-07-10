@@ -81,9 +81,6 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
             placeholder="e.g. Lucky7 Reactivation · CA · 19/05/2026"
             className="px-3.5 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] text-sm placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-colors"
           />
-          <p className="text-[11px] text-[var(--text-3)] mt-[-2px]">
-            A descriptive name helps you find this in the campaigns list later.
-          </p>
           <label className="flex items-start gap-2 cursor-pointer select-none mt-1">
             <input
               type="checkbox"

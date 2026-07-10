@@ -24,6 +24,18 @@ export default function StepFollowup({ state, dispatch }: Props) {
   }, [state.smsMessage, state.smsLink, state.smsOptout]);
 
   const smsSegments = smsSegmentCount(estimatedDeliveredLength);
+
+  // Last-resort variant, same composition rules (message + link + opt-out).
+  const lastResortActive =
+    state.smsEnabled && state.smsConsentMode === "registered_optin" && state.smsLastResortEnabled;
+  const lastResortDeliveredLength = useMemo(() => {
+    const msgLen = state.smsLastResortMessage.trim().length;
+    const urlLen = state.smsLink.trim() ? SHORTENED_URL_LENGTH : 0;
+    const optLen = state.smsOptout.trim().length;
+    const spaces = (msgLen > 0 ? 1 : 0) + (urlLen > 0 ? 1 : 0);
+    return msgLen + urlLen + optLen + spaces;
+  }, [state.smsLastResortMessage, state.smsLink, state.smsOptout]);
+  const lastResortSegments = smsSegmentCount(lastResortDeliveredLength);
   const hasUrlInMessage = /https?:\/\//i.test(state.smsMessage);
   const isValidSmsLink = state.smsLink.trim() === "" || state.smsLink.trim().startsWith("https://");
   const isSmsBodyEmpty = state.smsEnabled && state.smsMessage.trim().length === 0;
@@ -263,29 +275,42 @@ export default function StepFollowup({ state, dispatch }: Props) {
             {/* Divider */}
             <div className="border-t border-[var(--border)]" />
 
-            {/* Preview */}
+            {/* Preview — one box per text that can actually go out: the
+                standard one, plus the last-resort one when it's on. */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] inline-flex items-center gap-1.5">
-                  <MessageSquareText size={11} /> Preview
-                </span>
-                <span
-                  className={`text-[10px] font-mono font-medium ${
-                    smsSegments > 2
-                      ? "text-red-400"
-                      : smsSegments > 1
-                        ? "text-amber-400"
-                        : "text-emerald-400"
-                  }`}
-                >
-                  ~{estimatedDeliveredLength} chars · {smsSegments} SMS{smsSegments !== 1 ? "" : ""}
-                </span>
-              </div>
-              <p className="text-xs text-[var(--text-2)] leading-relaxed whitespace-pre-wrap bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2">
-                {state.smsMessage.trim()}
-                {state.smsLink.trim() ? ` ${state.smsLink.trim()}` : ""}
-                {state.smsOptout.trim() ? ` ${state.smsOptout.trim()}` : ""}
-              </p>
+              {(lastResortActive
+                ? [
+                    { label: "Preview — standard", message: state.smsMessage, length: estimatedDeliveredLength, segments: smsSegments },
+                    { label: "Preview — last resort", message: state.smsLastResortMessage, length: lastResortDeliveredLength, segments: lastResortSegments },
+                  ]
+                : [
+                    { label: "Preview", message: state.smsMessage, length: estimatedDeliveredLength, segments: smsSegments },
+                  ]
+              ).map((v, i) => (
+                <div key={v.label} className={i > 0 ? "mt-3" : ""}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-3)] inline-flex items-center gap-1.5">
+                      <MessageSquareText size={11} /> {v.label}
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono font-medium ${
+                        v.segments > 2
+                          ? "text-red-400"
+                          : v.segments > 1
+                            ? "text-amber-400"
+                            : "text-emerald-400"
+                      }`}
+                    >
+                      ~{v.length} chars · {v.segments} SMS
+                    </span>
+                  </div>
+                  <p className="text-xs text-[var(--text-2)] leading-relaxed whitespace-pre-wrap bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2">
+                    {v.message.trim()}
+                    {state.smsLink.trim() ? ` ${state.smsLink.trim()}` : ""}
+                    {state.smsOptout.trim() ? ` ${state.smsOptout.trim()}` : ""}
+                  </p>
+                </div>
+              ))}
               <p className="text-[10px] text-[var(--text-3)] mt-1">
                 Link appears shortened (cllk.me) on delivery.
               </p>
