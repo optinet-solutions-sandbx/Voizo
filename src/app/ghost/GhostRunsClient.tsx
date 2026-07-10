@@ -54,7 +54,7 @@ export default function GhostRunsClient() {
               <Ghost size={20} className="text-violet-400" /> GhostPortal
             </h1>
             <p className="text-sm text-[var(--text-3)] mt-1">
-              Internal control room — launch voice-AI runs from a manual list. DNC + consent enforced; segregated from client data.
+              Internal control room. Launch voice-AI runs from a manual list. DNC + consent enforced; segregated from client data.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">

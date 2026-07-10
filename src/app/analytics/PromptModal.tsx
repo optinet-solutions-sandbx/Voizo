@@ -37,7 +37,7 @@ export default function PromptModal({
               <FileText size={15} className="shrink-0" />
               <span className="font-semibold truncate">{title}</span>
             </div>
-            <p className="text-[11px] text-[var(--text-3)] mt-1">The prompt this campaign ran — from prompt_versions snapshots.</p>
+            <p className="text-[11px] text-[var(--text-3)] mt-1">The prompt this campaign ran, from saved snapshots.</p>
           </div>
           <button onClick={onClose} aria-label="Close" className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors shrink-0">
             <X size={18} />

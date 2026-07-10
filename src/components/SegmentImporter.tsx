@@ -380,12 +380,12 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
               {/* Multi-select hint (hidden in single-select-only mode) */}
               {!singleSelectOnly && checkedIds.size > 0 && (
                 <p className="text-xs text-indigo-400">
-                  {checkedIds.size} segment{checkedIds.size > 1 ? "s" : ""} checked — numbers will be combined
+                  {checkedIds.size} segment{checkedIds.size > 1 ? "s" : ""} checked; numbers will be combined
                 </p>
               )}
               {singleSelectOnly && (
                 <p className="text-xs text-[var(--text-3)]">
-                  Pick exactly one segment — recurring campaigns refresh from a single source.
+                  Pick exactly one segment. Repeating campaigns refresh from a single source.
                 </p>
               )}
 

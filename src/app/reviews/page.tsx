@@ -126,7 +126,7 @@ export default function ReviewsPage() {
             <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Reviews</h1>
           </div>
           <p className="text-xs text-[var(--text-3)] mt-0.5">
-            Pick a campaign to label its real conversations good / bad — your verdict is the ground truth the AI judge calibrates against.
+            Pick a campaign to label its real conversations good / bad. Your verdict is the ground truth the AI judge calibrates against.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -171,7 +171,7 @@ export default function ReviewsPage() {
               { label: "Labeled by you", value: loading ? "—" : totals.labeled, accent: "#60a5fa" },
             ]} />
             <p className="text-[11px] text-[var(--text-3)]">
-              Voicemails, no-answers, and AI-only calls are filtered out — only genuine customer conversations appear.
+              Voicemails, no-answers, and AI-only calls are filtered out. Only genuine customer conversations appear.
             </p>
           </div>
 
@@ -283,7 +283,7 @@ function CampaignRow({ c }: { c: ReviewCampaign }) {
             <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-blue-500/10 text-blue-300 border-blue-500/25 flex-shrink-0">{campaignRegion(c.campaignName)}</span>
           )}
           {c.isTest && (
-            <Hint content="Test campaign — listed separately and excluded from real metrics.">
+            <Hint content="Test campaign. Listed separately and excluded from real metrics.">
               <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-violet-500/15 text-violet-400 border-violet-500/30 flex-shrink-0 cursor-help">test</span>
             </Hint>
           )}

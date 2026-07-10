@@ -635,14 +635,14 @@ function outcomeHint(outcome: string): string {
   switch (outcome) {
     case "pending": return "Not yet dialed.";
     case "in_progress": return "Currently being dialed.";
-    case "unreached": return "Attempted — no live contact yet.";
+    case "unreached": return "Attempted. No live contact yet.";
     case "pending_retry": return "Awaiting a retry attempt.";
     case "sent_sms": return "Offer SMS sent during the call.";
-    case "sms_delivered": return "Reached via SMS — delivery confirmed (DLR); dialing stops.";
+    case "sms_delivered": return "Reached via SMS. Delivery confirmed; dialing stops.";
     case "not_interested": return "Contact wasn't interested.";
     case "declined_offer": return "Contact declined the offer.";
     case "wrong_number": return "Wrong / not the intended contact.";
-    case "suppressed": return "Suppressed — on the do-not-call list.";
+    case "suppressed": return "Suppressed. On the do-not-call list.";
     default: return outcome.replace(/_/g, " ");
   }
 }

@@ -71,7 +71,7 @@ export default function PromptVersionsPanel({ campaignId }: { campaignId: string
   if (versions.length === 0 || !current) {
     return (
       <p className="text-[var(--text-3)] text-sm">
-        No prompt snapshot captured for this campaign yet. Snapshots are taken on clone / rebind — older
+        No prompt snapshot captured for this campaign yet. Snapshots are taken on clone / rebind. Older
         campaigns may not have one.
       </p>
     );

@@ -1,5 +1,5 @@
 // src/app/reviews/AgentPerformancePanel.tsx
-// "How are our agents doing — and why do calls fall through?" — read-only view over the
+// "How are our agents doing, and why do calls fall through?" — read-only view over the
 // AI judge's verdicts on Reviews: (1) how calls are landing, (2) the top reasons calls
 // don't convert (themes clustered from the judge's notes), (3) how each base agent
 // compares. Operator-plain copy. Data: GET /api/qa/agent-performance.
@@ -90,7 +90,7 @@ export default function AgentPerformancePanel() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <Gauge size={16} className="text-[var(--text-2)]" />
-          <h2 className="text-sm font-semibold text-[var(--text-1)]">How are our agents doing — and why do calls fall through?</h2>
+          <h2 className="text-sm font-semibold text-[var(--text-1)]">How are our agents doing, and why do calls fall through?</h2>
         </div>
         {error && (
           <span className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
@@ -115,7 +115,7 @@ export default function AgentPerformancePanel() {
             <div className="flex items-center gap-3 text-[11px] font-mono flex-wrap">
               <span className="text-emerald-400">won: {pct(vm.successPct)} ({vm.success})</span>
               <span className="text-red-400">lost: {pct(vm.failurePct)} ({vm.failure})</span>
-              <Hint content="The grader couldn't confidently call it a win or a loss — often a very short or ambiguous call.">
+              <Hint content="The grader couldn't confidently call it a win or a loss. Often a very short or ambiguous call.">
                 <span className="text-amber-400 cursor-help">
                   grader unsure: {pct(vm.unsurePct)} ({vm.unsure})
                 </span>
@@ -123,7 +123,7 @@ export default function AgentPerformancePanel() {
             </div>
             {vm.unsurePct != null && vm.unsurePct >= 0.4 && (
               <p className="text-[11px] text-amber-400/90">
-                ⚠ The grader is unsure on ~{pct(vm.unsurePct)} of calls — worth a look at whether those are genuinely
+                ⚠ The grader is unsure on ~{pct(vm.unsurePct)} of calls. Worth a look at whether those are genuinely
                 ambiguous or short/no-answer calls slipping through.
               </p>
             )}
@@ -178,7 +178,7 @@ export default function AgentPerformancePanel() {
                                 <Link
                                   href={`/reviews/${c.campaignId}?call=${c.callId}`}
                                   className="flex-shrink-0 inline-flex items-center gap-0.5 text-blue-400 hover:text-blue-300 transition"
-                                  title="Open this call on the labeling page — transcript, audio, and your label"
+                                  title="Open this call on the labeling page: transcript, audio, and your label"
                                 >
                                   Open call <ChevronRight size={11} />
                                 </Link>
@@ -195,7 +195,7 @@ export default function AgentPerformancePanel() {
                 ))}
               </div>
               <p className="text-[10px] text-[var(--text-3)]">
-                Click a reason to see the calls behind it — open a call to read the transcript and label it. Themes are grouped from the grader&apos;s written reasons.
+                Click a reason to see the calls behind it. Open a call to read the transcript and label it. Themes are grouped from the grader&apos;s written reasons.
               </p>
             </div>
           )}

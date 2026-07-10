@@ -52,7 +52,7 @@ export function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFil
 export function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: string, label: string): DrawerFilter {
   const outcome = rowKey as DrawerFilter["outcome"]; // row keys are AttemptTag | "reached"
   const smsOnly = card === "sms";
-  const title = smsOnly ? `SMS — ${label.toLowerCase()}` : label;
+  const title = smsOnly ? `SMS: ${label.toLowerCase()}` : label;
   return { status: "all", outcome, smsOnly, title };
 }
 
@@ -230,7 +230,7 @@ export default function RangedRecordsDrawer({
           signal: ctrl.signal,
           onProgress: setProgress,
         });
-        if (j.truncated) setTruncatedNote(`Exported the first ${j.cap.toLocaleString()} of ${j.total.toLocaleString()} — narrow the filter for the rest.`);
+        if (j.truncated) setTruncatedNote(`Exported the first ${j.cap.toLocaleString()} of ${j.total.toLocaleString()}. Narrow the filter for the rest.`);
       } catch (e) {
         if ((e as Error).name === "AbortError") return;
         setError(e instanceof Error ? e.message : "Export failed");

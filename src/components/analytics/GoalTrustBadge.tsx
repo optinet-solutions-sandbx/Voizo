@@ -29,7 +29,7 @@ export default function GoalTrustBadge({ coverage, size = 12 }: GoalTrustBadgePr
   }
   if (coverage >= ANALYTICS_CONFIG.GOAL_TRUST_AMBER) {
     return (
-      <span className="inline-flex items-center gap-1 text-amber-400 text-[11px]" title={`Goal-trust coverage ${pct}% — some goal_reached NULL`}>
+      <span className="inline-flex items-center gap-1 text-amber-400 text-[11px]" title={`Goal-trust coverage ${pct}%: some calls are missing a goal verdict`}>
         <ShieldAlert size={size} /> {pct}%
       </span>
     );
@@ -37,7 +37,7 @@ export default function GoalTrustBadge({ coverage, size = 12 }: GoalTrustBadgePr
   return (
     <span
       className="inline-flex items-center gap-1 text-red-400 text-[11px]"
-      title={`Low goal-trust coverage ${pct}% — investigate the Vapi end-of-call webhook before actioning this data`}
+      title={`Low goal-trust coverage ${pct}%: investigate the Vapi end-of-call webhook before actioning this data`}
     >
       <ShieldX size={size} /> {pct}%
     </span>

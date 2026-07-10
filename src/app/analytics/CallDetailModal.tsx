@@ -89,7 +89,7 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
               <Phone size={15} className="shrink-0" />
               <span className="font-semibold font-mono truncate">{record.phone ?? "Contact"}</span>
             </div>
-            <p className="text-[11px] text-[var(--text-3)] mt-1">Call recordings &amp; transcripts — one block per attempt.</p>
+            <p className="text-[11px] text-[var(--text-3)] mt-1">Call recordings &amp; transcripts, one block per attempt.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors shrink-0">
             <X size={18} />

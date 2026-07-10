@@ -14,8 +14,8 @@ import { fetchCampaignsV2 } from "@/lib/campaignV2Client";
 
 const allPages = [
   { label: "Workers",        href: "/workers",         icon: Globe2,         description: "Worker fleet and world-time view" },
-  { label: "Live Activity",  href: "/activity",        icon: Activity,       description: "Live operations console — calls, SMS, outcomes" },
-  { label: "Reviews",        href: "/reviews",         icon: ClipboardCheck, description: "Label call quality — good/bad verdicts that calibrate the AI judge" },
+  { label: "Live Activity",  href: "/activity",        icon: Activity,       description: "Live operations console: calls, SMS, outcomes" },
+  { label: "Reviews",        href: "/reviews",         icon: ClipboardCheck, description: "Label call quality: good/bad verdicts that calibrate the AI judge" },
   { label: "Campaigns",      href: "/campaigns",       icon: Megaphone,      description: "Manage your calling campaigns" },
   { label: "Audience",       href: "/audience",        icon: Users,          description: "Recycled local segments carved from past outcomes" },
   { label: "Do Not Call",    href: "/do-not-call",     icon: PhoneOff,       description: "DNC list management" },

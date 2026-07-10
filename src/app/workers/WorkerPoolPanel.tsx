@@ -119,7 +119,7 @@ function WorkerRow({
       </div>
 
       {slot.status === "free" ? (
-        <p className="text-xs text-[var(--text-3)] italic">Free — no campaign</p>
+        <p className="text-xs text-[var(--text-3)] italic">Free (no campaign)</p>
       ) : slot.status === "maintenance" ? (
         <p className="text-xs text-[var(--text-3)] italic">
           {slot.notes || "Manual intervention required"}

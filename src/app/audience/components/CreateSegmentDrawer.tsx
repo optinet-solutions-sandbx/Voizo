@@ -374,7 +374,7 @@ export default function CreateSegmentDrawer({ open, onClose, onCreated, prefill 
             {(outcomes.has("pending") || outcomes.has("pending_retry")) && (
               <p className="mt-2 text-[10px] text-[var(--text-3)] leading-snug">
                 Pending and pending-retry phones get soft-marked in the source as
-                <span className="text-[var(--text-2)] font-mono"> removed_from_segment</span> on save — the source
+                <span className="text-[var(--text-2)] font-mono"> removed_from_segment</span> on save. The source
                 campaign can&apos;t double-dial them if you resume it.
               </p>
             )}

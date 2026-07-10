@@ -204,7 +204,7 @@ function CampaignReviewPageInner() {
       {focusMissing && (
         <p className="text-[11px] text-amber-400 inline-flex items-center gap-1.5">
           <AlertCircle size={11} className="flex-shrink-0" />
-          The call you followed isn&apos;t in this list — it may have been filtered out as a non-conversation or removed.
+          The call you followed isn&apos;t in this list. It may have been filtered out as a non-conversation or removed.
         </p>
       )}
 

@@ -198,7 +198,7 @@ export default function CreateRunDrawer({ open, onClose, onDone }: Props) {
                   </label>
                   {!useStandardWindows && (
                     <p className="mt-1 text-[10px] text-amber-400 inline-flex items-center gap-1">
-                      <AlertTriangle size={11} /> No window set — launch will be rejected. Re-enable standard windows for Phase 1.
+                      <AlertTriangle size={11} /> No window set. Launch will be rejected. Re-enable standard windows for Phase 1.
                     </p>
                   )}
                 </Field>
@@ -288,7 +288,7 @@ function ReviewPanel({ scrub, rejected, warning, tier }: { scrub: ScrubSummary |
       )}
       {allSuppressed && (
         <div className="px-3 py-2.5 rounded-xl bg-red-500/[0.08] border border-red-500/30 text-[11px] text-red-300 inline-flex items-center gap-2">
-          <AlertTriangle size={12} className="text-red-400" /> Every number is suppressed — nothing to dial. Edit the list.
+          <AlertTriangle size={12} className="text-red-400" /> Every number is suppressed. Nothing to dial; edit the list.
         </div>
       )}
     </div>

@@ -298,7 +298,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         <SectionTick color="#5b9bf0" />
         <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
         <span className="text-[13px] text-[var(--text-3)]">
-          {data ? `— historical · ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"}` : "— historical, across all campaigns"}
+          {data ? `(historical · ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"})` : "(historical, across all campaigns)"}
         </span>
       </div>
 
@@ -423,7 +423,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         <div className="grid gap-2">
           {reachEstimated && (
             <p className="text-[11px] text-[var(--text-3)] flex items-center gap-1.5">
-              <EstBadge tone="warn" content="Estimated — long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
+              <EstBadge tone="warn" content="Estimated: long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
               Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
             </p>
           )}

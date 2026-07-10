@@ -77,7 +77,7 @@ export default function DashboardView() {
             </span>
           </div>
           <p className="text-xs text-[var(--text-3)] mt-0.5">
-            Live operational snapshot — never affected by the filters below.
+            Live operational snapshot. Never affected by the filters below.
           </p>
         </div>
         <div className="flex items-center gap-2">

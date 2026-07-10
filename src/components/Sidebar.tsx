@@ -149,7 +149,7 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
             type="button"
             onClick={() => setLocked(!locked)}
             aria-pressed={locked}
-            title={locked ? "Unlock — auto-collapse on mouse-leave" : "Lock sidebar open"}
+            title={locked ? "Unlock (auto-collapse on mouse-leave)" : "Lock sidebar open"}
             className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
               locked
                 ? "bg-[var(--bg-card)] border border-[var(--border-2)] text-[var(--text-1)]"

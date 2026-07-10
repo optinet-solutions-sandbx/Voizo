@@ -84,7 +84,7 @@ export default function GoldenSetPanel() {
         if (!r.ok) throw new Error(j.error || `Re-check failed (HTTP ${r.status})`);
         await load();
         if (j.persisted === false) {
-          setError("Score computed but couldn't be saved — re-check to store it.");
+          setError("Score computed but couldn't be saved. Re-check to store it.");
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Re-check failed");
@@ -122,7 +122,7 @@ export default function GoldenSetPanel() {
 
       <p className="text-[11px] text-[var(--text-3)]">
         A fixed set of calls you&apos;ve judged good or bad. Re-running the AI grader on that same set shows whether it
-        still agrees with you — if its agreement slips over time, the grader has drifted.
+        still agrees with you. If its agreement slips over time, the grader has drifted.
       </p>
 
       {sets === null ? (
@@ -180,7 +180,7 @@ function AgreementChip({ agreement, kappa }: { agreement: number | null; kappa: 
   const aPct = Math.round(agreement * 100);
   const tone = aPct >= 90 ? "text-emerald-400" : aPct >= 70 ? "text-amber-400" : "text-red-400";
   const title =
-    kappa != null ? `Cohen's κ ${kappa.toFixed(2)} — agreement corrected for chance (1.0 = perfect)` : "agreement with your verdicts";
+    kappa != null ? `Cohen's κ ${kappa.toFixed(2)}: agreement corrected for chance (1.0 = perfect)` : "agreement with your verdicts";
   return (
     <Hint content={title}>
       <span className={`font-semibold cursor-help ${tone}`}>
@@ -253,7 +253,7 @@ function PromptVersionStats() {
       ) : stats === null ? (
         <p className="text-[11px] text-[var(--text-3)]">Loading…</p>
       ) : !judgeEnabled ? (
-        <p className="text-[11px] text-[var(--text-3)]">Grader is off — no scored calls to compare yet.</p>
+        <p className="text-[11px] text-[var(--text-3)]">Grader is off. No scored calls to compare yet.</p>
       ) : stats.length === 0 ? (
         <p className="text-[11px] text-[var(--text-3)]">No scored calls yet.</p>
       ) : (

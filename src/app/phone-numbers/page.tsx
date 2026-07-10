@@ -88,7 +88,7 @@ export default function PhoneNumbersPage() {
             <p className="text-sm text-[var(--text-2)] leading-relaxed">
               Phone number management is currently handled at the infrastructure level.
               This page will give you direct control over your outbound numbers, pools,
-              and health monitoring — no server access needed.
+              and health monitoring. No server access needed.
             </p>
             <p className="text-xs text-[var(--text-3)] mt-2">
               Right now, all campaigns use a single caller ID configured in the FreeSWITCH dialplan.

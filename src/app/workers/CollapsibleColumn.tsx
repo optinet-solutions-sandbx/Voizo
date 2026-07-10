@@ -67,7 +67,7 @@ export default function CollapsibleColumn({
       {/* Lock chip */}
       <button
         onClick={() => setLocked(l => !l)}
-        title={locked ? "Unlock — auto-collapse on mouse-leave" : "Lock open"}
+        title={locked ? "Unlock (auto-collapse on mouse-leave)" : "Lock open"}
         aria-pressed={locked}
         className={`${lockAlign} w-6 h-6 rounded-lg grid place-items-center transition-all border ${
           locked

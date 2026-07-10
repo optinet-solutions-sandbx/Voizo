@@ -448,7 +448,7 @@ export default function AudiencePage() {
               </span>.
             </p>
             <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
-              Source campaign outcomes are not affected — you can always carve a new segment from the same campaign later.
+              Source campaign outcomes are not affected. You can always carve a new segment from the same campaign later.
             </p>
             <div className="flex justify-end gap-2">
               <button

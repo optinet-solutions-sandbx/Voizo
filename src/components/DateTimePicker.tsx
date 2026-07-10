@@ -275,7 +275,7 @@ export default function DateTimePicker({ value, onChange, min }: Props) {
       {/* ── Select button ── */}
       <div className="border-t border-[var(--border)] px-4 py-3">
         {isInPast && hasSelection && (
-          <p className="text-xs text-amber-400 mb-2">Selected time is in the past — pick a future time.</p>
+          <p className="text-xs text-amber-400 mb-2">Selected time is in the past. Pick a future time.</p>
         )}
         <button
           type="button"

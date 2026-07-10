@@ -41,7 +41,7 @@ export function JudgeVerdictChip({
       title={
         judgeEnabled
           ? "Score this call with the auto-review"
-          : "Auto-review is OFF — set QA_JUDGE_ENABLED + your provider API key to enable"
+          : "Auto-review is off. Set QA_JUDGE_ENABLED and a provider API key to enable it"
       }
       className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition disabled:opacity-50 disabled:cursor-not-allowed"
     >

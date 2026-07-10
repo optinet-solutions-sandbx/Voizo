@@ -109,7 +109,7 @@ export default function NorthStarPanel() {
 
           {allUnconfirmed && (
             <p className="text-[11px] text-amber-400/90">
-              ⚠ None of these texts have a delivery confirmation yet — they show as &ldquo;sent&rdquo; but unconfirmed.
+              ⚠ None of these texts have a delivery confirmation yet. They show as &ldquo;sent&rdquo; but unconfirmed.
               That&apos;s usually a delivery-receipt gap (texts go out, receipts don&apos;t come back), not real failures.
             </p>
           )}

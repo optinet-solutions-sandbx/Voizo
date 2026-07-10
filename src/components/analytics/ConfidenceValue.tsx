@@ -16,7 +16,7 @@ export default function ConfidenceValue({ value, median, confidence, higherIsBet
   // G4: thin samples never get benchmark color, and are visually desaturated.
   if (confidence === "thin") {
     return (
-      <span className="text-[var(--text-3)] tabular-nums" title="Thin sample (n<10 connected) — let it accumulate; excluded from the portfolio median">
+      <span className="text-[var(--text-3)] tabular-nums" title="Thin sample (n<10 connected). Let it accumulate; excluded from the portfolio median">
         {label}
       </span>
     );

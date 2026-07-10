@@ -42,7 +42,7 @@ export default function AccountMenu() {
             <p className="text-[10px] text-[var(--text-3)] mt-0.5">Workspace</p>
           </div>
 
-          <button type="button" disabled title="Profile — coming soon" className={`${itemCls} text-[var(--text-3)] cursor-not-allowed`}>
+          <button type="button" disabled title="Profile (coming soon)" className={`${itemCls} text-[var(--text-3)] cursor-not-allowed`}>
             <User size={13} /> Profile
           </button>
 
@@ -56,7 +56,7 @@ export default function AccountMenu() {
           </button>
 
           <div className="border-t border-[var(--border)] mt-1 pt-1">
-            <button type="button" disabled title="Sign out — available once accounts ship" className={`${itemCls} text-[var(--text-3)] cursor-not-allowed`}>
+            <button type="button" disabled title="Sign out (available once accounts ship)" className={`${itemCls} text-[var(--text-3)] cursor-not-allowed`}>
               <LogOut size={13} /> Sign out
               <span className="ml-auto text-[9px] text-[var(--text-3)] border border-[var(--border)] rounded px-1 py-0.5">soon</span>
             </button>

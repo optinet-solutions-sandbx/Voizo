@@ -49,7 +49,7 @@ export default function FunnelWaterfall({ a }: FunnelWaterfallProps) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-      {thin && <p className="text-[10px] text-[var(--text-3)] mt-1">Thin sample (n&lt;10 connected) — directional only.</p>}
+      {thin && <p className="text-[10px] text-[var(--text-3)] mt-1">Thin sample (n&lt;10 connected), directional only.</p>}
     </div>
   );
 }

@@ -61,7 +61,7 @@ export default function GhostRunReviews({ runId }: { runId: string }) {
         <h2 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)]">
           Review calls{calls ? ` (${calls.length})` : ""}
         </h2>
-        <span className="text-[10px] text-[var(--text-3)]">Private — not in the main /reviews queue</span>
+        <span className="text-[10px] text-[var(--text-3)]">Private (not in the main /reviews queue)</span>
       </div>
 
       {error && (
@@ -176,7 +176,7 @@ function GhostCallCard({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         onBlur={() => { if (verdict) void persist(verdict, reason); }}
-        placeholder="Notes (optional) — saved on blur"
+        placeholder="Notes (optional), saved automatically"
         maxLength={2000}
         aria-label="Review notes"
         className="mt-2.5 w-full px-3 py-1.5 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-violet-500"

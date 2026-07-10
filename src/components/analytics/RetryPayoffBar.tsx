@@ -42,7 +42,7 @@ export default function RetryPayoffBar({ a }: RetryPayoffBarProps) {
                         {String(row.pct)}% connect ({String(row.connected)}/{String(row.dialed)})
                       </p>
                       {Number(row.dialed) < ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN && (
-                        <p className="text-amber-400/80">{`Low sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}) — interpret with caution`}</p>
+                        <p className="text-amber-400/80">{`Low sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}), interpret with caution`}</p>
                       )}
                     </>
                   )}
@@ -60,7 +60,7 @@ export default function RetryPayoffBar({ a }: RetryPayoffBarProps) {
       <p className="text-[10px] text-[var(--text-3)] mt-1">
         {data.length === 0
           ? "No retry data."
-          : `Faded bars are low-sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}); later attempts are survivorship-biased — read N≥3 as conditional.`}
+          : `Faded bars are low-sample (n<${ANALYTICS_CONFIG.SAMPLE_FLOOR_THIN}); later attempts are survivorship-biased, so read N≥3 as conditional.`}
       </p>
     </div>
   );

@@ -116,7 +116,7 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
                   key={s.key}
                   type="button"
                   onClick={() => setHidden((h) => toggleKey(h, s.key))}
-                  title={`${seriesFull(s)} — click to ${off ? "show" : "hide"}`}
+                  title={`${seriesFull(s)}. Click to ${off ? "show" : "hide"}`}
                   aria-pressed={!off}
                   className={`inline-flex items-center gap-1.5 text-[11px] transition ${off ? "text-[var(--text-3)] opacity-40 line-through" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
                 >

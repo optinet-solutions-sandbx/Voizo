@@ -29,7 +29,7 @@ export function JudgeScorecard({
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <Scale size={14} className="text-blue-400" />
-        <span className="text-[13px] font-semibold">Auto-review — agreement with your ratings</span>
+        <span className="text-[13px] font-semibold">Auto-review: agreement with your ratings</span>
         <div className="ml-auto flex items-center gap-2">
           {judgeEnabled && onGradeAll && (
             <button
@@ -63,7 +63,7 @@ export function JudgeScorecard({
         </p>
       ) : !calibration || calibration.n === 0 ? (
         <p className="text-[11px] text-[var(--text-3)]">
-          On · {scoredCount} call{scoredCount === 1 ? "" : "s"} scored. No overlap with your ratings yet — rate + score
+          On · {scoredCount} call{scoredCount === 1 ? "" : "s"} scored. No overlap with your ratings yet. Rate and score
           the same calls to populate the gauge.
         </p>
       ) : (

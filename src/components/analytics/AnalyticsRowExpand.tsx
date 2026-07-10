@@ -39,7 +39,7 @@ export default function AnalyticsRowExpand({ a }: AnalyticsRowExpandProps) {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
-        <Metric label="Connect Rate" value={pct(a.connectRate)} hint="connected ÷ terminal calls (excludes in-flight); no min-duration floor — 2s answer-drops count" />
+        <Metric label="Connect Rate" value={pct(a.connectRate)} hint="connected ÷ terminal calls (excludes in-flight); no min-duration floor, so 2s answer-drops count" />
         <Metric label="Reachability" value={pct(a.reachability)} hint="distinct connected numbers ÷ distinct dialed numbers" />
         <Metric label="Never-Dialed" value={pct(a.neverDialedShare)} hint="numbers with no call AND outcome pending/pending_retry ÷ targeted" />
         <Metric label="Exhaustion" value={pct(a.exhaustionRate)} hint="outcome=unreached ÷ targeted" />

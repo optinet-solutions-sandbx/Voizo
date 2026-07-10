@@ -36,8 +36,8 @@ export default function AnalyticsTable({ records, portfolio }: AnalyticsTablePro
             <Th>Campaign</Th>
             <Th>Date</Th>
             <Th><span title="Targeted → connected → goal, scaled to the list. Hover a bar for raw counts.">Funnel</span></Th>
-            <Th alignRight><span title="Conversion — wins (goals) per connected call.">Conv.</span></Th>
-            <Th alignRight><span title="Yield — wins (goals) per targeted lead.">Yield</span></Th>
+            <Th alignRight><span title="Conversion: wins (goals) per connected call.">Conv.</span></Th>
+            <Th alignRight><span title="Yield: wins (goals) per targeted lead.">Yield</span></Th>
             <Th><span title="The biggest drop-off stage to fix first.">Leak</span></Th>
             <Th alignRight><span title="Goals per active day.">Velocity</span></Th>
             <Th><span title="Goals per day over the last 14 days.">14-day goals</span></Th>

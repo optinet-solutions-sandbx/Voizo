@@ -23,7 +23,7 @@ function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
 function rowFilter(card: "callAttempts" | "reached" | "sms", rowKey: string, label: string): DrawerFilter {
   const outcome = rowKey as DrawerFilter["outcome"]; // row keys are AttemptTag | "reached"
   const smsOnly = card === "sms";
-  const title = smsOnly ? `SMS — ${label.toLowerCase()}` : label;
+  const title = smsOnly ? `SMS: ${label.toLowerCase()}` : label;
   return { status: "all", outcome, smsOnly, title };
 }
 
