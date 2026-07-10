@@ -16,6 +16,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { COUNTRY_TO_TIMEZONES, detectCountry } from "../audienceCountry";
 import { parsePhoneList } from "../campaignV2Shared";
+import {
+  chunkedPromiseAll,
+  extractPhoneFromAttrs,
+  getSegmentMembers,
+  lookupMemberProfileWithFallback,
+  type CustomerIOSegmentMember,
+} from "../customerio";
+import { fetchAllRows } from "../supabaseFetchAll";
+import { postSlackAlert, shouldAlertSpawnFail } from "../alerts/slack";
+import { endOfDayIsoInTz, startOfDayIsoInTz } from "./recurringSpawn";
 
 // ── Pure decisions ────────────────────────────────────────────────────────
 
@@ -210,4 +220,253 @@ export async function rolloverLeftovers(
     );
   }
   return { carried: carry.length };
+}
+
+// ── Per-minute poll orchestration ─────────────────────────────────────────
+
+/** Profile lookups are the expensive Cio call (up to 3 req each at 10 req/s
+ *  acct-wide). Bound the per-tick burst; the remainder stays "new" and is
+ *  picked up next tick. ~10-15s per 100 at the 8-chunk/150ms throttle. */
+const LOOKUP_CAP_PER_TICK = 100;
+/** Matches fetchSegmentPhones' page cap: 10 pages × 1000 members. */
+const MEMBERSHIP_PAGE_CAP = 10;
+/** Alert dedup window (mirrors recurring spawn_failed's 6h default). */
+const ALERT_KIND_DAILY_CAP = "daily_cap";
+
+export interface RealtimeParentRow {
+  id: string;
+  name: string;
+  timezone: string;
+  segment_id: number | null;
+}
+
+export interface PollSummary {
+  result: "no_segment" | "no_child_today" | "membership_fetch_failed" | "polled";
+  added?: number;
+  rejectedCountry?: number;
+  capBlocked?: boolean;
+  lookupFailed?: number;
+  truncated?: number;
+}
+
+/**
+ * One poll tick for one realtime parent (spec §5): membership diff → profile
+ * lookup (new members only) → admission (country + cap) → race-safe claim →
+ * dial-row insert into today's child. The claim upsert on the seen-table PK
+ * is the no-duplicates rule (spec item 3): overlapping ticks both try, one
+ * INSERT wins, only the winner inserts the dial row.
+ */
+export async function pollRealtimeParent(
+  supabase: SupabaseClient,
+  parent: RealtimeParentRow,
+  now: Date,
+): Promise<PollSummary> {
+  if (parent.segment_id == null) return { result: "no_segment" };
+
+  // 1) Today's child — same day-math as the spawn idempotency check. draft
+  //    (pre-window) and paused (post-window) children still accept numbers:
+  //    queued players wait for the window, exactly like the daily flow.
+  const dayStart = startOfDayIsoInTz(now, parent.timezone);
+  const dayEnd = endOfDayIsoInTz(now, parent.timezone);
+  const { data: child, error: childErr } = await supabase
+    .from("campaigns_v2")
+    .select("id, name, daily_cap")
+    .eq("parent_campaign_id", parent.id)
+    .in("status", ["draft", "running", "paused"])
+    .gte("start_at", dayStart)
+    .lt("start_at", dayEnd)
+    .limit(1)
+    .maybeSingle();
+  if (childErr) {
+    console.error(`[realtimePoll] ${parent.name}: child query failed:`, childErr);
+    return { result: "no_child_today" };
+  }
+  if (!child) return { result: "no_child_today" }; // spawn cron owns child creation
+
+  const childId = child.id as string;
+  const dailyCap = (child.daily_cap as number | null) ?? null;
+
+  // 2) Membership ids — cheap (1 request per 1000 members). Transient fetch
+  //    failure → skip this minute, next tick retries (spec §4: "skip a minute
+  //    and try again").
+  const members = new Map<string, CustomerIOSegmentMember>();
+  let cursor: string | undefined;
+  for (let pages = 0; pages < MEMBERSHIP_PAGE_CAP; pages++) {
+    const batch = await getSegmentMembers(parent.segment_id, { start: cursor, limit: 1000 });
+    if (!batch.success) {
+      console.warn(`[realtimePoll] ${parent.name}: membership fetch failed: ${batch.error}`);
+      return { result: "membership_fetch_failed" };
+    }
+    for (const m of batch.data.identifiers) {
+      if (m.cio_id) members.set(m.cio_id, m);
+    }
+    if (!batch.data.next) break;
+    cursor = batch.data.next;
+  }
+
+  // 3) Diff against the seen-table (already-called memory, spec item 1).
+  const seenRows = await fetchAllRows(supabase, "realtime_seen_members", "cio_id", "cio_id", {
+    column: "parent_campaign_id",
+    value: parent.id,
+  });
+  const fresh = diffNewMembers(
+    Array.from(members.keys()),
+    new Set(seenRows.map((r) => r.cio_id as string)),
+  );
+  if (fresh.length === 0) return { result: "polled", added: 0 };
+
+  // 4) Cap pre-check BEFORE spending profile lookups. addedToday counts every
+  //    row in today's child, including rollover carries — the cap is a
+  //    day-cost brake and carried players cost dials today too.
+  const { count: addedToday, error: countErr } = await supabase
+    .from("campaign_numbers_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", childId);
+  if (countErr) {
+    console.error(`[realtimePoll] ${parent.name}: addedToday count failed:`, countErr);
+    return { result: "polled", added: 0 };
+  }
+  if (dailyCap != null && (addedToday ?? 0) >= dailyCap) {
+    await alertCapOnce(supabase, childId, parent.name, dailyCap);
+    return { result: "polled", added: 0, capBlocked: true };
+  }
+
+  // 5) Profile lookups for NEW members only, bounded per tick. No silent
+  //    caps: log what was deferred.
+  const batchIds = fresh.slice(0, LOOKUP_CAP_PER_TICK);
+  const truncated = fresh.length - batchIds.length;
+  if (truncated > 0) {
+    console.log(
+      `[realtimePoll] ${parent.name}: ${truncated} new member(s) deferred to next tick (lookup cap ${LOOKUP_CAP_PER_TICK})`,
+    );
+  }
+  const profiles = await chunkedPromiseAll(batchIds, 8, async (cioId) => ({
+    cioId,
+    lookup: await lookupMemberProfileWithFallback(members.get(cioId)!),
+  }));
+
+  // 6) Admit → claim → insert, sequentially (the cap counter is shared state).
+  const expectedCountry = expectedCountryForTimezone(parent.timezone);
+  let admitted = 0;
+  let rejectedCountry = 0;
+  let lookupFailed = 0;
+  let capBlocked = false;
+  const rejectedPhones: string[] = [];
+
+  for (const { cioId, lookup } of profiles) {
+    let claimStatus: string;
+    let phone: string | null = null;
+    let admitThis = false;
+
+    if (!lookup.success) {
+      // Claimed permanently (bounded cost) — the hourly rollup surfaces the
+      // count. Alternative (retry forever) burns 1+ req/min on a broken
+      // profile. Flagged as an accepted default in the plan.
+      claimStatus = "lookup_failed";
+      lookupFailed++;
+    } else {
+      const decision = decideAdmission({
+        rawPhone: extractPhoneFromAttrs(lookup.data.attributes),
+        expectedCountry,
+        addedToday: (addedToday ?? 0) + admitted,
+        dailyCap,
+      });
+      if ("capBlocked" in decision) {
+        capBlocked = true;
+        break; // stop adding — nothing claimed, members retry on a later day
+      }
+      if (decision.admit) {
+        claimStatus = "queued";
+        phone = decision.phone;
+        admitThis = true;
+      } else {
+        claimStatus = decision.claimStatus;
+        phone = decision.phone;
+        if (claimStatus === "rejected_country" && phone) {
+          rejectedCountry++;
+          rejectedPhones.push(`${phone.slice(0, -4)}****`);
+        }
+      }
+    }
+
+    // Race-safe claim: PK (parent, cio_id) + ignoreDuplicates. RETURNING is
+    // empty when another tick already claimed — then we must NOT insert.
+    const { data: claimed, error: claimErr } = await supabase
+      .from("realtime_seen_members")
+      .upsert(
+        {
+          parent_campaign_id: parent.id,
+          cio_id: cioId,
+          phone_e164: phone,
+          status: claimStatus,
+          child_campaign_id: admitThis ? childId : null,
+        },
+        { onConflict: "parent_campaign_id,cio_id", ignoreDuplicates: true },
+      )
+      .select("cio_id");
+    if (claimErr) {
+      console.error(`[realtimePoll] ${parent.name}: claim upsert failed for ${cioId}:`, claimErr);
+      continue; // not claimed → retried next tick
+    }
+    const won = Array.isArray(claimed) && claimed.length > 0;
+    if (!won || !admitThis) continue;
+
+    const { error: insErr } = await supabase.from("campaign_numbers_v2").insert({
+      campaign_id: childId,
+      phone_e164: phone,
+      outcome: "pending",
+    });
+    if (insErr) {
+      // Compensation: a claimed-but-never-queued member would be a silently
+      // lost player. Release the claim so the next tick retries.
+      console.error(`[realtimePoll] ${parent.name}: dial-row insert failed for ${cioId} — releasing claim:`, insErr);
+      await supabase
+        .from("realtime_seen_members")
+        .delete()
+        .eq("parent_campaign_id", parent.id)
+        .eq("cio_id", cioId);
+      continue;
+    }
+    admitted++;
+  }
+
+  // 7) Operator flags (spec item 4). Wrong-country posts at most once per
+  //    member by construction (each member is claimed exactly once).
+  if (rejectedPhones.length > 0) {
+    await postSlackAlert("WARN", "Realtime: wrong-country numbers set aside", [
+      `${parent.name}: ${rejectedPhones.length} number(s) didn't match the campaign country — never dialed.`,
+      ...rejectedPhones.slice(0, 8),
+    ]);
+  }
+  if (capBlocked) {
+    await alertCapOnce(supabase, childId, parent.name, dailyCap ?? 0);
+  }
+  if (admitted > 0) {
+    console.log(`[realtimePoll] ${parent.name}: +${admitted} player(s) queued into ${child.name}`);
+  }
+
+  return { result: "polled", added: admitted, rejectedCountry, capBlocked, lookupFailed, truncated };
+}
+
+/** Daily-cap WARN, deduped to once per ~6h per child via realtime_alert_state. */
+async function alertCapOnce(
+  supabase: SupabaseClient,
+  childId: string,
+  parentName: string,
+  cap: number,
+): Promise<void> {
+  const { data: state } = await supabase
+    .from("realtime_alert_state")
+    .select("last_alerted_at")
+    .eq("child_campaign_id", childId)
+    .eq("kind", ALERT_KIND_DAILY_CAP)
+    .maybeSingle();
+  if (!shouldAlertSpawnFail((state?.last_alerted_at as string | null) ?? null, Date.now())) return;
+  await postSlackAlert("WARN", "Realtime: daily cap reached", [
+    `${parentName}: today's cap (${cap}) is full — new signups wait for tomorrow's campaign.`,
+  ]);
+  await supabase.from("realtime_alert_state").upsert(
+    { child_campaign_id: childId, kind: ALERT_KIND_DAILY_CAP, last_alerted_at: new Date().toISOString() },
+    { onConflict: "child_campaign_id,kind" },
+  );
 }

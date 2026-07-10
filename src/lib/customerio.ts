@@ -230,7 +230,7 @@ export function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | 
  * limit. 8 calls per chunk with 150ms pauses keeps worst-case burst safely
  * under cap while completing a 100-member batch in ~10-15s.
  */
-async function chunkedPromiseAll<T, R>(
+export async function chunkedPromiseAll<T, R>(
   items: T[],
   chunkSize: number,
   fn: (item: T) => Promise<R>,
