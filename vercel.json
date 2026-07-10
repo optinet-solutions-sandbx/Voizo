@@ -9,6 +9,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/realtime-poll",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/campaign-heartbeat",
       "schedule": "*/30 * * * *"
     },

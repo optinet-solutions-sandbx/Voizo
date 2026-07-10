@@ -242,6 +242,7 @@ export interface RealtimeParentRow {
 
 export interface PollSummary {
   result: "no_segment" | "no_child_today" | "membership_fetch_failed" | "polled";
+  childId?: string;
   added?: number;
   rejectedCountry?: number;
   capBlocked?: boolean;
@@ -313,7 +314,7 @@ export async function pollRealtimeParent(
     Array.from(members.keys()),
     new Set(seenRows.map((r) => r.cio_id as string)),
   );
-  if (fresh.length === 0) return { result: "polled", added: 0 };
+  if (fresh.length === 0) return { result: "polled", childId, added: 0 };
 
   // 4) Cap pre-check BEFORE spending profile lookups. addedToday counts every
   //    row in today's child, including rollover carries — the cap is a
@@ -324,11 +325,11 @@ export async function pollRealtimeParent(
     .eq("campaign_id", childId);
   if (countErr) {
     console.error(`[realtimePoll] ${parent.name}: addedToday count failed:`, countErr);
-    return { result: "polled", added: 0 };
+    return { result: "polled", childId, added: 0 };
   }
   if (dailyCap != null && (addedToday ?? 0) >= dailyCap) {
     await alertCapOnce(supabase, childId, parent.name, dailyCap);
-    return { result: "polled", added: 0, capBlocked: true };
+    return { result: "polled", childId, added: 0, capBlocked: true };
   }
 
   // 5) Profile lookups for NEW members only, bounded per tick. No silent
@@ -445,28 +446,43 @@ export async function pollRealtimeParent(
     console.log(`[realtimePoll] ${parent.name}: +${admitted} player(s) queued into ${child.name}`);
   }
 
-  return { result: "polled", added: admitted, rejectedCountry, capBlocked, lookupFailed, truncated };
+  return { result: "polled", childId, added: admitted, rejectedCountry, capBlocked, lookupFailed, truncated };
 }
 
-/** Daily-cap WARN, deduped to once per ~6h per child via realtime_alert_state. */
+/**
+ * Post a per-child Slack WARN at most once per ~6h per kind (a per-tick
+ * condition like cap-full or fallen-behind fires every minute otherwise).
+ * Shared by the poll (daily_cap) and the cron route (fallen_behind).
+ */
+export async function alertChildOnceDeduped(
+  supabase: SupabaseClient,
+  childId: string,
+  kind: string,
+  title: string,
+  details: string[],
+): Promise<void> {
+  const { data: state } = await supabase
+    .from("realtime_alert_state")
+    .select("last_alerted_at")
+    .eq("child_campaign_id", childId)
+    .eq("kind", kind)
+    .maybeSingle();
+  if (!shouldAlertSpawnFail((state?.last_alerted_at as string | null) ?? null, Date.now())) return;
+  await postSlackAlert("WARN", title, details);
+  await supabase.from("realtime_alert_state").upsert(
+    { child_campaign_id: childId, kind, last_alerted_at: new Date().toISOString() },
+    { onConflict: "child_campaign_id,kind" },
+  );
+}
+
+/** Daily-cap WARN, deduped. */
 async function alertCapOnce(
   supabase: SupabaseClient,
   childId: string,
   parentName: string,
   cap: number,
 ): Promise<void> {
-  const { data: state } = await supabase
-    .from("realtime_alert_state")
-    .select("last_alerted_at")
-    .eq("child_campaign_id", childId)
-    .eq("kind", ALERT_KIND_DAILY_CAP)
-    .maybeSingle();
-  if (!shouldAlertSpawnFail((state?.last_alerted_at as string | null) ?? null, Date.now())) return;
-  await postSlackAlert("WARN", "Realtime: daily cap reached", [
+  await alertChildOnceDeduped(supabase, childId, ALERT_KIND_DAILY_CAP, "Realtime: daily cap reached", [
     `${parentName}: today's cap (${cap}) is full — new signups wait for tomorrow's campaign.`,
   ]);
-  await supabase.from("realtime_alert_state").upsert(
-    { child_campaign_id: childId, kind: ALERT_KIND_DAILY_CAP, last_alerted_at: new Date().toISOString() },
-    { onConflict: "child_campaign_id,kind" },
-  );
 }
