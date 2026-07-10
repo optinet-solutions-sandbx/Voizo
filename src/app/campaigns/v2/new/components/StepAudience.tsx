@@ -61,7 +61,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
     <div className="flex-1 flex flex-col">
       <h1 className="text-[22px] font-bold tracking-tight">Who are you calling?</h1>
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
-        Start with the audience — Voizo derives location, timezone, and recommended hours from
+        Start with the audience. Voizo derives location, timezone, and recommended hours from
         your segment so you don&apos;t have to.
       </p>
 
@@ -290,7 +290,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   <>
                     {" · your pick "}
                     <span className="text-[var(--text-1)] font-mono">{state.timezone}</span>
-                    <span className="text-amber-300"> isn&apos;t a {countryLabel(detection.country)} calling zone — tick below to override, or change the timezone</span>
+                    <span className="text-amber-300"> isn&apos;t a {countryLabel(detection.country)} calling zone. Tick below to override, or change the timezone</span>
                   </>
                 )}
               </span>
@@ -315,7 +315,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   className="mt-0.5 shrink-0"
                 />
                 <span>
-                  I understand — dial <span className="font-semibold">{countryLabel(detection.country)}</span> numbers on{" "}
+                  I understand: dial <span className="font-semibold">{countryLabel(detection.country)}</span> numbers on{" "}
                   <span className="font-mono">{state.timezone}</span> anyway.
                 </span>
               </label>

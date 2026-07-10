@@ -65,7 +65,7 @@ export default function RunFlowStrip({
         {flow.upNext && (
           <span
             className="inline-flex items-center gap-1 text-xs text-[var(--text-2)]"
-            title="The next number the dialer will call — same order the dialer uses (fresh pending first, then due retries by window time). It re-checks the do-not-call list at dial time."
+            title="The next number the dialer will call. Same order the dialer uses (fresh pending first, then due retries by window time). It re-checks the do-not-call list at dial time."
           >
             <ChevronRight size={12} className="text-[var(--text-3)]" />
             {running ? "Up next" : "Resumes with"}{" "}

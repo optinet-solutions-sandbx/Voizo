@@ -827,7 +827,7 @@ export function validateBeforeSubmit(state: WizardState): string | null {
       )
     ) {
       const at = clockHHMMInTimezone(effectiveStart.getTime(), state.timezone);
-      return `Start time is ${at} on ${expectedDay.toUpperCase()} (in ${state.timezone}), but ${expectedDay.toUpperCase()}'s call window is ${startRow.start}–${startRow.end}. The campaign won't dial until the window opens — move the start into the window, or widen the window.`;
+      return `Start time is ${at} on ${expectedDay.toUpperCase()} (in ${state.timezone}), but ${expectedDay.toUpperCase()}'s call window is ${startRow.start}–${startRow.end}. The campaign won't dial until the window opens. Move the start into the window or widen it.`;
     }
   }
 

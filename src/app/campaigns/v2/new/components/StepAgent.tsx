@@ -46,7 +46,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
     <div className="flex-1 flex flex-col">
       <h1 className="text-[22px] font-bold tracking-tight">Who&apos;s making the call?</h1>
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
-        Pick the Vapi assistant. Voice is locked to the assistant&apos;s default — change it in
+        Pick the Vapi assistant. Voice is locked to the assistant&apos;s default. Change it in
         Vapi if you need a different one.
       </p>
 

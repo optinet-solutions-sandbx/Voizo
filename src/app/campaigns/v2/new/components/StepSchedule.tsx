@@ -171,7 +171,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
               className="text-xs font-medium text-[var(--text-2)]"
             >
               Daily cap
-              <span className="text-[11px] text-[var(--text-3)] font-normal"> — max players added per day</span>
+              <span className="text-[11px] text-[var(--text-3)] font-normal"> (max players added per day)</span>
             </label>
             <input
               id="realtime-daily-cap"
@@ -338,7 +338,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
                 <p className="leading-snug">
                   Your shortest call window{" "}
                   <span className="font-semibold text-amber-100">({minWindowMinutes(callWindows)} min)</span>{" "}
-                  is shorter than the {state.retryGapMinutes}-min retry gap — a no-answer won&apos;t get a second
+                  is shorter than the {state.retryGapMinutes}-min retry gap, so a no-answer won&apos;t get a second
                   attempt before the window closes. Widen the window, or expect just one attempt per window.
                 </p>
               </div>
@@ -389,7 +389,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
                     const openNow = isWithinCallWindowAt(windows, state.timezone, Date.now());
                     return openNow ? (
                       <p className="leading-snug">
-                        Starts dialing <span className="text-[var(--text-1)] font-semibold">now</span> — the call window is open.
+                        Starts dialing <span className="text-[var(--text-1)] font-semibold">now</span>. The call window is open.
                       </p>
                     ) : (
                       <p className="leading-snug">
@@ -408,7 +408,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
                     <p className="leading-snug">
                       Auto-starts in{" "}
                       <span className="text-[var(--text-1)] font-semibold">{state.delayMinutes} min</span>
-                      {" — "}
+                      {" at "}
                       <span className="text-[var(--text-1)] font-semibold">
                         {formatLocalTime(new Date(Date.now() + state.delayMinutes * 60_000), state.timezone)}
                       </span>
@@ -426,7 +426,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
                   )}
                   {isWarn && (
                     <p className="leading-snug">
-                      Pick a date below — or switch to{" "}
+                      Pick a date below, or switch to{" "}
                       <span className="font-semibold">Immediately</span>.
                     </p>
                   )}
@@ -489,13 +489,13 @@ export default function StepSchedule({ state, dispatch }: Props) {
                       <span className="text-amber-300/70">({tzShort})</span>{" "}
                       is outside that day&apos;s window{" "}
                       <span className="font-semibold text-amber-100">{startRow.start}–{startRow.end}</span>
-                      {" — move the start in, or widen the window, otherwise calls won't fire then."}
+                      {". Move the start in or widen the window, otherwise calls won't fire."}
                     </p>
                   ) : (
                     <p className="leading-snug">
                       Start time falls on{" "}
                       <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
-                      <span className="text-amber-300/70">({tzShort})</span>{" — "}
+                      <span className="text-amber-300/70">({tzShort})</span>{" but "}
                       {enabledDayKeys.length === 0
                         ? "no days are enabled above."
                         : (
@@ -508,7 +508,7 @@ export default function StepSchedule({ state, dispatch }: Props) {
                       {" "}
                       Toggle{" "}
                       <span className="font-semibold text-amber-100">{expectedDay.toUpperCase()}</span>{" "}
-                      on, or change the start time — otherwise calls won&apos;t fire.
+                      on, or change the start time. Otherwise calls won&apos;t fire.
                     </p>
                   )}
                 </div>

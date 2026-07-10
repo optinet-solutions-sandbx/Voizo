@@ -91,10 +91,10 @@ function summarizeRecurrence(p: RecurrencePattern): string {
   const startPhrase = p.start_date ? ` starting ${formatHumanDate(p.start_date)}` : "";
 
   const endPhrase = (() => {
-    if (p.end_kind === "never") return " — until further notice";
-    if (p.end_kind === "on_date" && p.end_date) return ` — until ${formatHumanDate(p.end_date)}`;
+    if (p.end_kind === "never") return ", until further notice";
+    if (p.end_kind === "on_date" && p.end_date) return `, until ${formatHumanDate(p.end_date)}`;
     if (p.end_kind === "after_n" && p.end_after_n) {
-      return ` — for ${p.end_after_n} occurrence${p.end_after_n === 1 ? "" : "s"}`;
+      return `, for ${p.end_after_n} occurrence${p.end_after_n === 1 ? "" : "s"}`;
     }
     return "";
   })();

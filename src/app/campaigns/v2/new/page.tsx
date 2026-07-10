@@ -490,7 +490,7 @@ function WizardPage({
                   .filter((b) => b.share >= 0.05)
                   .map((b) => `${countryLabel(b.country) || b.country} ${Math.round(b.share * 100)}%`)
                   .join(" · ")}
-                {" — pick the timezone that matches the majority. Voizo dials in one timezone per campaign; others may get calls at unusual hours."}
+                {". Pick the timezone that matches the majority. Voizo dials in one timezone per campaign; others may get calls at unusual hours."}
               </p>
             </div>
           )}
@@ -517,7 +517,7 @@ function WizardPage({
                 The source template contained {smsMultiUrlNotice.urlCount} URLs. The
                 Link field tracks the trailing one (
                 <span className="font-mono text-[12px]">{smsMultiUrlNotice.trackedLink || "—"}</span>
-                ). Any earlier URLs stay embedded in the Message field — don&apos;t
+                ). Any earlier URLs stay embedded in the Message field. Don&apos;t
                 remove them unless intentional.
               </p>
             </div>

@@ -16,25 +16,25 @@ function tipsFor(state: WizardState): string[] {
   switch (state.step) {
     case 1:
       return [
-        "Repeat daily and Real-time campaigns need exactly one segment — click a segment row, not the checkboxes.",
+        "Repeat daily and Real-time campaigns need exactly one segment. Click a segment row, not the checkboxes.",
         "Test campaigns stay out of audience suggestions.",
       ];
     case 2:
       return [
-        "The script is locked in at launch — changing it later means creating a new campaign.",
+        "The script is locked in at launch. Changing it later means a new campaign.",
         "The agent's voice comes from the base agent you pick.",
       ];
     case 3: {
       const tips: string[] = ["All times are the customer's local time."];
       if (state.campaignType === "recurring") {
         tips.push(
-          "Until · Further notice — runs until you press Stop.",
-          "Until · A specific date — the last day it runs.",
-          "Until · N occurrences — stops after running N days. Empty-list days don't count.",
+          "Further notice: runs until you press Stop.",
+          "A specific date: the last day it runs.",
+          "N occurrences: stops after running N days. Empty-list days don't count.",
         );
       }
       if (state.realtime) {
-        tips.push("Daily cap is the spending brake — sign-ups past the cap wait for tomorrow.");
+        tips.push("Daily cap is the spending brake. Sign-ups past the cap wait for tomorrow.");
       }
       if (state.campaignType === "fixed") {
         tips.push("A retry gap longer than the day's window means one attempt per day.");
@@ -43,7 +43,7 @@ function tipsFor(state: WizardState): string[] {
     }
     case 4:
       return [
-        "One text per player per campaign — never more.",
+        "One text per player per campaign, never more.",
         state.smsConsentMode === "registered_optin"
           ? "Last resort on: a voicemail gets a call back, and the text goes out only after the last failed try."
           : "The agent must hear a clear yes on the call before any text goes out.",
@@ -51,8 +51,8 @@ function tipsFor(state: WizardState): string[] {
       ];
     default:
       return [
-        "What you launch is what runs — check the numbers, mode, and texts one last time.",
-        "You can pause any campaign from the Campaigns page; repeating ones also get a Stop that ends today AND tomorrow.",
+        "What you launch is what runs. Check the numbers, mode, and texts one last time.",
+        "You can pause any campaign from the Campaigns page. Repeating ones also get a Stop that ends today and tomorrow.",
       ];
   }
 }

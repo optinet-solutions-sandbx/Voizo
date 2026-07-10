@@ -1091,7 +1091,7 @@ export default function CampaignV2DetailPage() {
                 <button
                   onClick={() => setConfirmStop(true)}
                   disabled={acting}
-                  title="Emergency stop — stops queueing new calls; any in-flight call ends naturally within ~60s"
+                  title="Emergency stop. Stops queueing new calls; any in-flight call ends naturally within ~60s"
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
                 >
                   <StopCircle size={15} /> Stop
@@ -1105,7 +1105,7 @@ export default function CampaignV2DetailPage() {
               <button
                 onClick={() => setConfirmEject(true)}
                 disabled={acting}
-                title="Eject worker — releases the SIP slot and deletes the Vapi clone; campaign and history preserved"
+                title="Eject worker. Releases the SIP slot and deletes the Vapi clone; campaign and history preserved"
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
               >
                 <Unplug size={15} /> Eject
@@ -1123,7 +1123,7 @@ export default function CampaignV2DetailPage() {
               <button
                 onClick={openResumeModal}
                 disabled={acting}
-                title="Resume — review the three-bucket diff (suppression, recent, segment) before re-leasing a worker"
+                title="Resume. Review the three-bucket diff (suppression, recent, segment) before re-leasing a worker"
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 text-white text-sm font-medium whitespace-nowrap transition-colors"
               >
                 <Plug size={15} /> Resume
@@ -1142,7 +1142,7 @@ export default function CampaignV2DetailPage() {
                 ? "Pause the campaign first"
                 : cannotNoSegment
                   ? "No source segment to refresh from"
-                  : "Refresh segment — pull current customer.io members and apply a non-destructive diff";
+                  : "Refresh segment. Pulls current customer.io members and applies a non-destructive diff";
               return (
                 <button
                   onClick={openRefreshModal}
@@ -1258,8 +1258,8 @@ export default function CampaignV2DetailPage() {
                   disabled={acting || togglingIsTest}
                   title={
                     isTest
-                      ? "Unmark as test — this campaign will appear in Audience suggestions"
-                      : "Mark as test — this campaign will be excluded from Audience suggestions"
+                      ? "Unmark as test. This campaign will appear in Audience suggestions"
+                      : "Mark as test. This campaign will be excluded from Audience suggestions"
                   }
                   className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-colors disabled:opacity-60 ${
                     isTest
@@ -1434,7 +1434,7 @@ export default function CampaignV2DetailPage() {
               naturally within ~60 seconds (queue gate caps in-flight calls at one).
             </p>
             <p className="text-xs text-[var(--text-3)] mb-5 leading-relaxed">
-              Numbers scheduled for retry stay queued — resume later with Start, or delete the
+              Numbers scheduled for retry stay queued. Resume later with Start, or delete the
               campaign after pausing to discard everything.
             </p>
             <div className="flex justify-end gap-2">
@@ -1775,7 +1775,7 @@ export default function CampaignV2DetailPage() {
                       <p className="text-sm font-medium text-[var(--text-1)]">Refresh segment from customer.io</p>
                       <p className="text-[10px] text-[var(--text-3)] leading-relaxed">
                         {campaign.segment_id == null
-                          ? "Disabled — this campaign has no source segment. Numbers will be copied from the source's pending list."
+                          ? "Disabled: this campaign has no source segment. Numbers will be copied from the source's pending list."
                           : "Re-queries customer.io for current segment members. Without this, numbers are copied from the source's pending list."}
                       </p>
                     </div>
@@ -2078,7 +2078,7 @@ export default function CampaignV2DetailPage() {
                 {textedCount > 0 && (
                   <span
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/12 text-sky-400 border border-sky-500/30 ml-1"
-                    title="Contacts we actually sent a text to, counted from the SMS log. Includes voicemail follow-ups — once delivery confirms they move to 'Reached via SMS'; sent-but-unconfirmed ones still sit under 'Awaiting retry' — so this can exceed the 'Texted on call' + 'Reached via SMS' buckets."
+                    title="Contacts we actually sent a text to, counted from the SMS log. Includes voicemail follow-ups: once delivery confirms they move to 'Reached via SMS', and sent-but-unconfirmed ones sit under 'Awaiting retry', so this can exceed the 'Texted on call' + 'Reached via SMS' buckets."
                   >
                     <span className="font-semibold">{textedCount}</span>
                     <span>Texted</span>

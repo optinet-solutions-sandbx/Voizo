@@ -121,10 +121,10 @@ export default function StepFollowup({ state, dispatch }: Props) {
                   className="mt-0.5 accent-blue-500"
                 />
                 <span className="min-w-0">
-                  <span className="block text-sm text-[var(--text-1)]">To everyone we reach — the list already opted in</span>
+                  <span className="block text-sm text-[var(--text-1)]">To everyone we reach (the list already opted in)</span>
                   <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
                     Only for lists that ticked &quot;Receive SMS Promos&quot; at signup. One text per
-                    player — live answers right away, voicemails as a missed-call follow-up.
+                    player: live answers right away, voicemails as a missed-call follow-up.
                     &quot;Don&apos;t text me&quot; and the Do-Not-Call list always win.
                   </span>
                 </span>
@@ -142,8 +142,8 @@ export default function StepFollowup({ state, dispatch }: Props) {
                 <div className="text-sm font-semibold text-[var(--text-1)]">Text only as a last resort</div>
                 <div className="text-xs text-[var(--text-3)] mt-1 leading-relaxed">
                   Off: a voicemail gets the offer text right away.
-                  On: we <span className="font-semibold text-[var(--text-2)]">call again</span> instead —
-                  the text only goes out after the last failed try. One text per player either way.
+                  On: we <span className="font-semibold text-[var(--text-2)]">call again</span> instead,
+                  and the text goes out only after the last failed try. One text per player either way.
                 </div>
               </div>
               <Toggle
@@ -190,7 +190,7 @@ export default function StepFollowup({ state, dispatch }: Props) {
               />
               {hasUrlInMessage && (
                 <p className="text-[10px] text-amber-400 mt-1 inline-flex items-center gap-1">
-                  <AlertTriangle size={9} /> Tip: use the Link field below for URLs — they&apos;ll be auto-shortened.
+                  <AlertTriangle size={9} /> Tip: use the Link field below for URLs. They&apos;ll be auto-shortened.
                 </p>
               )}
               {isSmsBodyEmpty && (
@@ -280,8 +280,8 @@ export default function StepFollowup({ state, dispatch }: Props) {
             <div>
               {(lastResortActive
                 ? [
-                    { label: "Preview — standard", message: state.smsMessage, length: estimatedDeliveredLength, segments: smsSegments },
-                    { label: "Preview — last resort", message: state.smsLastResortMessage, length: lastResortDeliveredLength, segments: lastResortSegments },
+                    { label: "Standard preview", message: state.smsMessage, length: estimatedDeliveredLength, segments: smsSegments },
+                    { label: "Last-resort preview", message: state.smsLastResortMessage, length: lastResortDeliveredLength, segments: lastResortSegments },
                   ]
                 : [
                     { label: "Preview", message: state.smsMessage, length: estimatedDeliveredLength, segments: smsSegments },

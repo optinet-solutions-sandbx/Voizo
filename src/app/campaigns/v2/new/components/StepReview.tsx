@@ -74,14 +74,14 @@ export default function StepReview({ state, dispatch }: Props) {
     <div className="flex-1 flex flex-col">
       <h1 className="text-[22px] font-bold tracking-tight">Ready to launch?</h1>
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
-        Last look. Nothing dials until you tap Launch — and you&apos;ll still get one more confirm
+        Last look. Nothing dials until you tap Launch. You&apos;ll still get one more confirm
         on the campaign page after.
       </p>
 
       <div className="mt-7 flex flex-col gap-3">
         {/* AUDIENCE */}
         <ReviewCard title="Audience" icon={<Users size={13} />} onEdit={() => jump(1)}>
-          <ReviewRow label="Name" value={state.name || <em className="text-[var(--text-3)]">— required</em>} />
+          <ReviewRow label="Name" value={state.name || <em className="text-[var(--text-3)]">required</em>} />
           <ReviewRow
             label="Segment"
             value={
@@ -93,7 +93,7 @@ export default function StepReview({ state, dispatch }: Props) {
               ) : parsedNumbers.length > 0 ? (
                 <>{parsedNumbers.length.toLocaleString()} manual number{parsedNumbers.length === 1 ? "" : "s"}</>
               ) : (
-                <em className="text-amber-300">— pick a segment or paste numbers</em>
+                <em className="text-amber-300">pick a segment or paste numbers</em>
               )
             }
           />
@@ -112,7 +112,7 @@ export default function StepReview({ state, dispatch }: Props) {
         <ReviewCard title="Agent" icon={<Bot size={13} />} onEdit={() => jump(2)}>
           <ReviewRow
             label="Assistant"
-            value={state.vapiAssistantId ? <span className="font-mono text-[12px]">{state.vapiAssistantId}</span> : <em className="text-amber-300">— required</em>}
+            value={state.vapiAssistantId ? <span className="font-mono text-[12px]">{state.vapiAssistantId}</span> : <em className="text-amber-300">required</em>}
           />
           {state.baseVoiceId && (
             <ReviewRow
@@ -151,7 +151,7 @@ export default function StepReview({ state, dispatch }: Props) {
                 label="Days"
                 value={
                   recurringDays.length === 0 ? (
-                    <em className="text-amber-300">— pick at least one day</em>
+                    <em className="text-amber-300">pick at least one day</em>
                   ) : (
                     <span className="font-mono uppercase tracking-wider text-[12px]">
                       {recurringDays.join(" · ")}
@@ -188,7 +188,7 @@ export default function StepReview({ state, dispatch }: Props) {
                 label="Days"
                 value={
                   enabledDays.length === 0 ? (
-                    <em className="text-amber-300">— pick at least one day</em>
+                    <em className="text-amber-300">pick at least one day</em>
                   ) : (
                     <span className="font-mono uppercase tracking-wider text-[12px]">
                       {enabledDays.map((r) => DAYS.find((d) => d.key === r.day)?.short ?? r.day).join(" · ")}
@@ -223,7 +223,7 @@ export default function StepReview({ state, dispatch }: Props) {
                   ) : state.scheduledDate ? (
                     <span className="font-mono">{formatLocalTime(new Date(state.scheduledDate), state.timezone)}</span>
                   ) : (
-                    <em className="text-amber-300">— pick a date</em>
+                    <em className="text-amber-300">pick a date</em>
                   )
                 }
               />
@@ -231,7 +231,7 @@ export default function StepReview({ state, dispatch }: Props) {
                 label="Numbers"
                 value={
                   parsedNumbers.length === 0 ? (
-                    <em className="text-amber-300">— add at least one</em>
+                    <em className="text-amber-300">add at least one</em>
                   ) : (
                     `${parsedNumbers.length.toLocaleString()} valid E.164`
                   )
@@ -299,7 +299,7 @@ export default function StepReview({ state, dispatch }: Props) {
         <div className="flex items-center gap-1.5 mt-1 text-[11px] text-[var(--text-3)]">
           <Play size={11} />
           {isRecurring
-            ? "Launching a recurring parent — children spawn at the refresh time each scheduled day."
+            ? "Launching a repeating campaign. A new run starts at the refresh time each scheduled day."
             : "Launching creates the campaign; you'll be taken to its page where the operator can Start."}
         </div>
       </div>

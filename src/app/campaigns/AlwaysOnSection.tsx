@@ -90,7 +90,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
       console.error("[always-on] stop failed:", err);
       setRowError({
         id: parent.id as string,
-        message: err instanceof Error ? err.message : "Stop failed — check the campaign pages.",
+        message: err instanceof Error ? err.message : "Stop failed. Check the campaign pages.",
       });
     } finally {
       setActionId(null);
@@ -226,7 +226,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                           {childStatus}
                         </Link>
                         {childStatus === "paused" && parentRunning && (
-                          <span> — resume it from its page</span>
+                          <span> (resume it from its page)</span>
                         )}
                       </>
                     ) : (
@@ -321,7 +321,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                     <label htmlFor={`cap-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                       Daily cap
                       <span className="text-[var(--text-3)] font-normal">
-                        {isRealtime ? " — required for real-time" : " — empty = no cap"}
+                        {isRealtime ? " (required for real-time)" : " (empty = no cap)"}
                       </span>
                     </label>
                     <input
@@ -342,7 +342,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                       <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                         Last-resort text
                         <span className="text-[var(--text-3)] font-normal">
-                          {" "}— sent after the last failed try. Empty = off
+                          {" "}(sent after the last failed try; empty = off)
                         </span>
                       </label>
                       <textarea
