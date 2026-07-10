@@ -50,6 +50,12 @@ export interface SmsDispatchInput {
   /** hasRealConversation(transcript) — a real human actually spoke (review H3:
    *  without this, an agent monologue into an undetected machine arms dispatch). */
   humanConversation: boolean;
+  /** VOZ-132 §8 (2026-07-10): campaign has sms_last_resort_template set —
+   *  the text becomes a LAST resort, so a mode-2 voicemail re-dials instead of
+   *  texting instantly; the one text goes out only after the final failed try
+   *  (scheduler last-resort sweep). OPTIONAL so the flag's absence (every
+   *  pre-existing caller/campaign) preserves today's behavior byte-for-byte. */
+  lastResortMode?: boolean;
 }
 
 export interface SmsDispatchDecision {
@@ -62,6 +68,7 @@ export interface SmsDispatchDecision {
     | "no_human_conversation"
     | "registered_optin_reached"
     | "registered_optin_voicemail_followup"
+    | "voicemail_redial_first"
     | "goal_not_reached"
     | "no_consent_evidence"
     | "verbal_consent";
@@ -81,7 +88,15 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
     // above — a real "stop calling" must always win.) The announce / human-conversation gates
     // only apply to the live-human path (no announce is possible on a voicemail — prefix rule
     // #4 ends those calls). The per-player dedup in the webhook caps retried voicemails at ONE text.
-    if (i.voicemailDetected) return { attempt: true, reason: "registered_optin_voicemail_followup" };
+    if (i.voicemailDetected) {
+      // Last-resort mode (VOZ-132 §8): don't text the voicemail — the number
+      // rides the normal retry cycle (outcome routing is untouched; the
+      // webhook already skips the outcome update for voicemails and the
+      // sweeper resolves to pending_retry). The one text goes out after the
+      // FINAL failed try via decideLastResortSend below.
+      if (i.lastResortMode) return { attempt: false, reason: "voicemail_redial_first" };
+      return { attempt: true, reason: "registered_optin_voicemail_followup" };
+    }
     if (i.customerDeclinedSms) return { attempt: false, reason: "customer_declined_sms" };
     if (!i.humanConversation) return { attempt: false, reason: "no_human_conversation" };
     // 2026-06-16 (Ernie ticket, Val approved): the announce requirement is REMOVED — a reached
@@ -103,4 +118,38 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (!i.goalReached) return { attempt: false, reason: "goal_not_reached" };
   if (!(i.nativeSuccess || i.hasVerbalConsent)) return { attempt: false, reason: "no_consent_evidence" };
   return { attempt: true, reason: "verbal_consent" };
+}
+
+/**
+ * VOZ-132 §8 — should this number receive the ONE "sorry we missed you"
+ * last-resort text? Pure predicate; the campaign-scheduler sweep owns the I/O
+ * (suppression check, one-text dedup, claim insert, Mobivate send).
+ *
+ * attemptCount >= maxAttempts is load-bearing beyond the obvious: realtime
+ * rollover closes yesterday's uncalled rows as 'unreached' while the player
+ * CONTINUES in today's child — those rows are under max by definition and
+ * must never trigger a text.
+ *
+ * campaignStatus running/paused only: a number that exhausts while the
+ * campaign is live gets the text; players in operator-stopped or completed
+ * campaigns never receive surprise texts later.
+ */
+export function decideLastResortSend(args: {
+  outcome: string;
+  attemptCount: number | null;
+  maxAttempts: number;
+  mode: SmsConsentMode;
+  smsEnabled: boolean;
+  lastResortTemplate: string | null;
+  campaignStatus: string;
+}): boolean {
+  return (
+    args.outcome === "unreached" &&
+    (args.attemptCount ?? 0) >= args.maxAttempts &&
+    args.mode === "registered_optin" &&
+    args.smsEnabled &&
+    typeof args.lastResortTemplate === "string" &&
+    args.lastResortTemplate.trim().length > 0 &&
+    (args.campaignStatus === "running" || args.campaignStatus === "paused")
+  );
 }

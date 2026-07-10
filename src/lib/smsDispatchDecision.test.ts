@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideSmsDispatch, type SmsDispatchInput } from "./smsDispatchDecision";
+import { decideLastResortSend, decideSmsDispatch, type SmsDispatchInput } from "./smsDispatchDecision";
 
 const base: SmsDispatchInput = {
   mode: "verbal_yes",
@@ -75,5 +75,75 @@ describe("decideSmsDispatch — registered_optin (signup opt-in basis; announce 
   it("on-call opt-out still vetoes", () => {
     expect(decideSmsDispatch({ ...reg, optedOut: true }))
       .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+});
+
+describe("decideSmsDispatch — last-resort mode (VOZ-132 §8, built 2026-07-10)", () => {
+  const reg: SmsDispatchInput = { ...base, mode: "registered_optin", humanConversation: true };
+
+  it("voicemail in last-resort mode re-dials instead of texting instantly", () => {
+    expect(
+      decideSmsDispatch({ ...reg, voicemailDetected: true, humanConversation: false, lastResortMode: true }),
+    ).toEqual({ attempt: false, reason: "voicemail_redial_first" });
+  });
+
+  it("lastResortMode absent/false keeps today's instant follow-up byte-for-byte", () => {
+    expect(decideSmsDispatch({ ...reg, voicemailDetected: true, humanConversation: false }))
+      .toEqual({ attempt: true, reason: "registered_optin_voicemail_followup" });
+    expect(
+      decideSmsDispatch({ ...reg, voicemailDetected: true, humanConversation: false, lastResortMode: false }),
+    ).toEqual({ attempt: true, reason: "registered_optin_voicemail_followup" });
+  });
+
+  it("a reached human still gets the normal text in last-resort mode (only the voicemail branch changes)", () => {
+    expect(decideSmsDispatch({ ...reg, lastResortMode: true }))
+      .toEqual({ attempt: true, reason: "registered_optin_reached" });
+  });
+
+  it("verbal_yes is untouched by the flag (voicemail still an absolute veto)", () => {
+    expect(decideSmsDispatch({ ...base, voicemailDetected: true, lastResortMode: true, goalReached: true, nativeSuccess: true }))
+      .toEqual({ attempt: false, reason: "voicemail" });
+  });
+
+  it("on-call opt-out still beats everything in last-resort mode", () => {
+    expect(decideSmsDispatch({ ...reg, voicemailDetected: true, optedOut: true, lastResortMode: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+});
+
+describe("decideLastResortSend — the one exhaustion text (VOZ-132 §8)", () => {
+  const ok = {
+    outcome: "unreached",
+    attemptCount: 3,
+    maxAttempts: 3,
+    mode: "registered_optin" as const,
+    smsEnabled: true,
+    lastResortTemplate: "Sorry we missed you! ...",
+    campaignStatus: "running",
+  };
+
+  it("sends for a genuinely exhausted unreached player in a live last-resort campaign", () => {
+    expect(decideLastResortSend(ok)).toBe(true);
+    expect(decideLastResortSend({ ...ok, campaignStatus: "paused" })).toBe(true);
+    expect(decideLastResortSend({ ...ok, attemptCount: 5 })).toBe(true);
+  });
+
+  it("NEVER sends to realtime-rollover bookkeeping rows (unreached but under max — the player continues in today's child)", () => {
+    expect(decideLastResortSend({ ...ok, attemptCount: 2 })).toBe(false);
+    expect(decideLastResortSend({ ...ok, attemptCount: null })).toBe(false);
+  });
+
+  it("mode 1 (verbal_yes) never sends — no spoken yes means no text, ever", () => {
+    expect(decideLastResortSend({ ...ok, mode: "verbal_yes" })).toBe(false);
+  });
+
+  it("off without the template / sms disabled / non-unreached / terminal campaign", () => {
+    expect(decideLastResortSend({ ...ok, lastResortTemplate: null })).toBe(false);
+    expect(decideLastResortSend({ ...ok, lastResortTemplate: "   " })).toBe(false);
+    expect(decideLastResortSend({ ...ok, smsEnabled: false })).toBe(false);
+    expect(decideLastResortSend({ ...ok, outcome: "pending_retry" })).toBe(false);
+    expect(decideLastResortSend({ ...ok, outcome: "sent_sms" })).toBe(false);
+    expect(decideLastResortSend({ ...ok, campaignStatus: "completed" })).toBe(false);
+    expect(decideLastResortSend({ ...ok, campaignStatus: "inactive" })).toBe(false);
   });
 });
