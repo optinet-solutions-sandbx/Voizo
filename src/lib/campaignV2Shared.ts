@@ -42,6 +42,10 @@ export interface CampaignV2CreateInput {
   source?: string; // 'production' (default) | 'ghost_portal'. Segregates internal GhostPortal runs from client analytics/list.
   goalTarget?: number | null; // Optional target number of successful outcomes (e.g. deposits) for this campaign; rendered as X / Y in the performance report. Positive integer or null. Maps to campaigns_v2.goal_target.
   voicemailAutohangup?: boolean; // Opt-in (2026-07-07): kill calls via Live Call Control when a final customer utterance is conclusively voicemail. Maps to campaigns_v2.voicemail_autohangup (default false). No wizard UI yet — trial campaigns set it via API/SQL.
+  retryIntervalMinutes?: number; // Operator retry gap (VOZ-132 §7): 30 | 60 | 90. Absent/invalid → DB default 90.
+  maxAttempts?: number; // Operator max tries per player: integer 2–5. Absent/invalid → DB default 3.
+  dailyCap?: number | null; // Realtime cost brake: most players added per day. Positive integer; realtime campaigns only.
+  realtime?: boolean; // Recurring parent in real-time top-up mode: children spawn empty, the per-minute poll fills them.
 }
 
 export function defaultCallWindows(): CallWindow[] {
@@ -58,6 +62,28 @@ export function defaultCallWindows(): CallWindow[] {
 
 export function formatDefaultCallWindowsJson(): string {
   return JSON.stringify(defaultCallWindows(), null, 2);
+}
+
+/**
+ * Operator-control inputs → DB column keys, as CONDITIONAL keys only
+ * (voicemail_autohangup precedent): an absent/invalid input sends no key, so
+ * DB defaults win and a deploy that precedes the realtime migration can never
+ * reference a missing column. Whitelists mirror the wizard UI (30/60/90 gap,
+ * 2–5 tries) and the DB CHECK (daily_cap > 0).
+ */
+export function normalizeOperatorControls(
+  i: Pick<CampaignV2CreateInput, "retryIntervalMinutes" | "maxAttempts" | "dailyCap" | "realtime">,
+): Record<string, unknown> {
+  return {
+    ...([30, 60, 90].includes(i.retryIntervalMinutes as number)
+      ? { retry_interval_minutes: i.retryIntervalMinutes }
+      : {}),
+    ...(Number.isInteger(i.maxAttempts) && (i.maxAttempts as number) >= 2 && (i.maxAttempts as number) <= 5
+      ? { max_attempts: i.maxAttempts }
+      : {}),
+    ...(Number.isInteger(i.dailyCap) && (i.dailyCap as number) > 0 ? { daily_cap: i.dailyCap } : {}),
+    ...(i.realtime === true ? { realtime: true } : {}),
+  };
 }
 
 export function parsePhoneList(input: string): string[] {

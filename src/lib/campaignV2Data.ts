@@ -18,7 +18,7 @@
 // admin client into the bundle.
 
 import { supabaseAdmin } from "./supabaseServer";
-import type { CampaignV2CreateInput } from "./campaignV2Shared";
+import { normalizeOperatorControls, type CampaignV2CreateInput } from "./campaignV2Shared";
 
 export async function createCampaignV2(input: CampaignV2CreateInput) {
   // Recurring parents save directly as 'running' (active schedule definition);
@@ -69,6 +69,9 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       ...(typeof input.voicemailAutohangup === "boolean"
         ? { voicemail_autohangup: input.voicemailAutohangup }
         : {}),
+      // Operator controls + realtime mode (VOZ-132): validated/whitelisted by
+      // the pure normalizer; conditional keys throughout (see its docblock).
+      ...normalizeOperatorControls(input),
     })
     .select()
     .single();

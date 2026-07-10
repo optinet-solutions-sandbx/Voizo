@@ -3,6 +3,7 @@ import {
   parsePhoneList,
   defaultCallWindows,
   formatDefaultCallWindowsJson,
+  normalizeOperatorControls,
 } from "./campaignV2Shared";
 
 // These tests pin the pure-helper contract that moved out of campaignV2Data.ts
@@ -70,5 +71,41 @@ describe("defaultCallWindows / formatDefaultCallWindowsJson", () => {
   it("formats the default windows as pretty JSON that round-trips", () => {
     const json = formatDefaultCallWindowsJson();
     expect(JSON.parse(json)).toEqual(defaultCallWindows());
+  });
+});
+
+describe("normalizeOperatorControls", () => {
+  it("passes valid values through as DB column keys", () => {
+    expect(
+      normalizeOperatorControls({
+        retryIntervalMinutes: 30,
+        maxAttempts: 5,
+        dailyCap: 200,
+        realtime: true,
+      }),
+    ).toEqual({ retry_interval_minutes: 30, max_attempts: 5, daily_cap: 200, realtime: true });
+  });
+
+  it("empty input → empty object (DB defaults win)", () => {
+    expect(normalizeOperatorControls({})).toEqual({});
+  });
+
+  it("drops out-of-whitelist / out-of-range / falsy values", () => {
+    expect(
+      normalizeOperatorControls({
+        retryIntervalMinutes: 45, // not in 30/60/90
+        maxAttempts: 7, // > 5
+        dailyCap: -1, // not positive
+        realtime: false, // only true is sent
+      }),
+    ).toEqual({});
+    expect(normalizeOperatorControls({ maxAttempts: 1, dailyCap: 2.5 })).toEqual({});
+  });
+
+  it("each key is independent", () => {
+    expect(normalizeOperatorControls({ retryIntervalMinutes: 60 })).toEqual({
+      retry_interval_minutes: 60,
+    });
+    expect(normalizeOperatorControls({ dailyCap: 1 })).toEqual({ daily_cap: 1 });
   });
 });
