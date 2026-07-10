@@ -2,7 +2,7 @@
 
 import { useMemo, type Dispatch } from "react";
 import {
-  CalendarDays, Globe2, Info, Play, Repeat, Target, Timer,
+  CalendarDays, Globe2, Info, Play, Repeat, Target, Timer, Zap,
 } from "lucide-react";
 
 import { RecurrenceEditor } from "@/components/RecurrenceEditor";
@@ -31,9 +31,9 @@ const DELAY_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
   { label: "24 hours", value: 1440 },
 ];
 
-// Effective retry gap for V2-created campaigns: campaigns_v2.retry_interval_minutes
-// is not exposed in this wizard and defaults to 90 (mirrors the dialer/scheduler "?? 90").
-const DEFAULT_RETRY_INTERVAL_MIN = 90;
+// Operator controls (VOZ-132 §7). The whitelists mirror normalizeOperatorControls.
+const RETRY_GAP_PRESETS: ReadonlyArray<number> = [30, 60, 90];
+const MAX_TRIES_PRESETS: ReadonlyArray<number> = [2, 3, 4, 5];
 
 function formatLocalTime(date: Date, timeZone: string): string {
   try {
@@ -53,8 +53,16 @@ export default function StepSchedule({ state, dispatch }: Props) {
   // Run-once helpers — mutate scheduleRows immutably and dispatch a full
   // SET_SCHEDULE_FIELDS update so the reducer stays dumb (caller computes
   // the new array — per plan's fat-action pattern).
-  function setCampaignType(next: "fixed" | "recurring") {
-    dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { campaignType: next } });
+  // "Real-time" is a third tile, but under the hood = recurring + realtime flag
+  // (children spawn empty; the per-minute poll fills them — VOZ-132).
+  function setRunMode(next: "fixed" | "recurring" | "realtime") {
+    dispatch({
+      type: "SET_SCHEDULE_FIELDS",
+      payload: {
+        campaignType: next === "fixed" ? "fixed" : "recurring",
+        realtime: next === "realtime",
+      },
+    });
   }
   function toggleDay(day: Day) {
     const next = state.scheduleRows.map((r) =>
@@ -103,20 +111,27 @@ export default function StepSchedule({ state, dispatch }: Props) {
 
       <div className="mt-7 flex flex-col gap-[18px]">
         {/* Run mode tiles */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           <ChoiceTile
             active={!isRecurring}
-            onClick={() => setCampaignType("fixed")}
+            onClick={() => setRunMode("fixed")}
             icon={<Play size={14} />}
             name="Run once"
             description="Dial through this list once, then stop. Best for promos and tests."
           />
           <ChoiceTile
-            active={isRecurring}
-            onClick={() => setCampaignType("recurring")}
+            active={isRecurring && !state.realtime}
+            onClick={() => setRunMode("recurring")}
             icon={<Repeat size={14} />}
             name="Repeat daily"
             description="Auto-spawn a fresh child each scheduled day with the latest segment."
+          />
+          <ChoiceTile
+            active={isRecurring && state.realtime}
+            onClick={() => setRunMode("realtime")}
+            icon={<Zap size={14} />}
+            name="Real-time"
+            description="Checks the segment every minute and calls new registrants right away."
           />
         </div>
 
@@ -145,6 +160,83 @@ export default function StepSchedule({ state, dispatch }: Props) {
             campaign — shown as X / Y in the performance report.
           </p>
         </div>
+
+        {/* Operator controls (VOZ-132 §7): retry gap + max tries for every run
+            mode; daily cap only for Real-time (its cost brake). */}
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-[var(--text-2)]">
+            Retry gap
+            <span className="text-[11px] text-[var(--text-3)] font-normal"> — how long before we try a player again</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {RETRY_GAP_PRESETS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { retryGapMinutes: v } })}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  state.retryGapMinutes === v
+                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                    : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30 hover:text-blue-400"
+                }`}
+              >
+                {v} min
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-[var(--text-2)]">
+            Max tries per player
+            <span className="text-[11px] text-[var(--text-3)] font-normal"> — after the last try the player is marked unreached</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {MAX_TRIES_PRESETS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { maxTries: v } })}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  state.maxTries === v
+                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                    : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30 hover:text-blue-400"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {isRecurring && state.realtime && (
+          <div className="flex flex-col gap-2">
+            <label
+              htmlFor="realtime-daily-cap"
+              className="text-xs font-medium text-[var(--text-2)]"
+            >
+              Daily cap
+              <span className="text-[11px] text-[var(--text-3)] font-normal"> — most players added per day</span>
+            </label>
+            <input
+              id="realtime-daily-cap"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={state.dailyCapText}
+              onChange={(e) =>
+                dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { dailyCapText: e.target.value } })
+              }
+              placeholder="e.g. 150"
+              className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+            />
+            <p className="text-[11px] text-[var(--text-3)] leading-snug">
+              Required. The cost brake: once today&apos;s cap is reached, new signups wait
+              for tomorrow&apos;s campaign.
+            </p>
+          </div>
+        )}
 
         {/* Branch */}
         {isRecurring ? (
@@ -231,18 +323,18 @@ export default function StepSchedule({ state, dispatch }: Props) {
               </div>
             )}
 
-            {/* Retry-vs-window guard: when the 90m retry gap (not set here) exceeds the
+            {/* Retry-vs-window guard: when the chosen retry gap exceeds the
                 shortest window, a no-answer's retry is scheduled past the window close, so
                 it only fires when the window NEXT reopens (next day / next enabled window)
                 — effectively one attempt per window. Advisory only (operator may want short
                 windows). */}
-            {enabledRows.length > 0 && !retryFitsShortestWindow(callWindows, DEFAULT_RETRY_INTERVAL_MIN) && (
+            {enabledRows.length > 0 && !retryFitsShortestWindow(callWindows, state.retryGapMinutes) && (
               <div className="px-3.5 py-2.5 rounded-xl flex items-start gap-2 text-xs bg-amber-500/[0.08] text-amber-200 border border-amber-500/25">
                 <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
                 <p className="leading-snug">
                   Your shortest call window{" "}
                   <span className="font-semibold text-amber-100">({minWindowMinutes(callWindows)} min)</span>{" "}
-                  is shorter than the {DEFAULT_RETRY_INTERVAL_MIN}-min retry gap — a no-answer won&apos;t get a second
+                  is shorter than the {state.retryGapMinutes}-min retry gap — a no-answer won&apos;t get a second
                   attempt before the window closes. Widen the window, or expect just one attempt per window.
                 </p>
               </div>

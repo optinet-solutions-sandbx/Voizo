@@ -135,6 +135,19 @@ export interface WizardState {
 
   // Step 3 — Schedule (Run-once branch)
   campaignType: "fixed" | "recurring";
+  /**
+   * VOZ-132: "Real-time" is the third run-mode tile — under the hood it is
+   * campaignType 'recurring' + this flag (children spawn empty, the
+   * per-minute poll fills them). Only meaningful when campaignType is
+   * 'recurring'.
+   */
+  realtime: boolean;
+  /** Operator retry gap in minutes (VOZ-132 §7): 30 | 60 | 90. */
+  retryGapMinutes: number;
+  /** Operator max tries per player: 2–5. */
+  maxTries: number;
+  /** Daily cap ("" = unset). Required for realtime campaigns — the cost brake. */
+  dailyCapText: string;
   scheduleRows: ScheduleRow[];
   startMode: StartMode;
   delayMinutes: number;
@@ -203,7 +216,19 @@ export type AgentPayload = Partial<
  * action surface small while still allowing fine-grained updates.
  */
 export type SchedulePayload = Partial<
-  Pick<WizardState, "campaignType" | "scheduleRows" | "startMode" | "delayMinutes" | "scheduledDate" | "goalTargetText">
+  Pick<
+    WizardState,
+    | "campaignType"
+    | "realtime"
+    | "retryGapMinutes"
+    | "maxTries"
+    | "dailyCapText"
+    | "scheduleRows"
+    | "startMode"
+    | "delayMinutes"
+    | "scheduledDate"
+    | "goalTargetText"
+  >
 >;
 
 /**
@@ -334,6 +359,10 @@ export function createInitialState(): WizardState {
     systemPrompt: "",
 
     campaignType: "fixed",
+    realtime: false,
+    retryGapMinutes: 90, // spec §7 default — mirrors the dialer/scheduler "?? 90"
+    maxTries: 3,         // spec §7 default — mirrors "?? 3"
+    dailyCapText: "",
     scheduleRows: initialScheduleRows(hours.start, hours.end),
     startMode: "now",
     delayMinutes: 60,
@@ -604,6 +633,11 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       recurrencePattern: state.recurrencePattern,
       isTest: state.isTest,
       goalTarget: parseGoalTarget(state.goalTargetText),
+      retryIntervalMinutes: state.retryGapMinutes,
+      maxAttempts: state.maxTries,
+      realtime: state.realtime,
+      // parseGoalTarget IS the house positive-int-or-null parser; reused here.
+      dailyCap: state.realtime ? parseGoalTarget(state.dailyCapText) : null,
     };
   }
 
@@ -643,6 +677,8 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     numbers: parsePhoneList(state.numbersText),
     isTest: state.isTest,
     goalTarget: parseGoalTarget(state.goalTargetText),
+    retryIntervalMinutes: state.retryGapMinutes,
+    maxAttempts: state.maxTries,
   };
 }
 
@@ -668,6 +704,9 @@ export function validateBeforeSubmit(state: WizardState): string | null {
     }
     if (!state.segmentId) {
       return "Recurring campaigns require a single segment. Click one segment row in the importer (not the multi-select checkboxes).";
+    }
+    if (state.realtime && parseGoalTarget(state.dailyCapText) === null) {
+      return "Real-time campaigns need a daily cap — the most players added per day (whole number above 0).";
     }
     return null;
   }
