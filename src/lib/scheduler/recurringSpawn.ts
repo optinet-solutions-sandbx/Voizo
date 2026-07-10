@@ -52,6 +52,11 @@ export interface RecurringParent {
   // selects that predate the realtime migration keep compiling and behaving.
   realtime?: boolean;
   daily_cap?: number | null;
+  // Operator controls (VOZ-132 §7). Children MUST inherit these — the dialer
+  // and voice-status webhooks read the CHILD row, so without passthrough the
+  // operator's chosen gap/tries silently never apply (review finding 2026-07-10).
+  retry_interval_minutes?: number | null;
+  max_attempts?: number | null;
 }
 
 export interface DueCheckResult {
@@ -505,6 +510,10 @@ export function buildChildPayload(args: {
     parent_campaign_id: parent.id,
     recurrence_pattern: null,
     is_test: parent.is_test,
+    // Operator controls inherit unconditionally (columns pre-date this build,
+    // so no deploy-order concern): the dialer + webhooks read the CHILD row.
+    retry_interval_minutes: parent.retry_interval_minutes ?? 90,
+    max_attempts: parent.max_attempts ?? 3,
     // Conditional keys (voicemail_autohangup precedent): absent for
     // non-realtime parents so pre-migration DBs never see unknown columns.
     // Children carry the flag so the scheduler's keep-awake guard can read

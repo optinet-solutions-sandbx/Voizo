@@ -179,6 +179,22 @@ export async function rolloverLeftovers(
     }
   }
 
+  // Never complete/clean a child that still has a LIVE call (pathological
+  // late-window + early-spawn overlap): deleting its clone would drop the
+  // call mid-conversation. The carry above already happened; the close simply
+  // waits — heartbeat reconciliation surfaces a child that stays stuck.
+  const { count: inFlight } = await supabase
+    .from("calls_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", prev.id as string)
+    .in("status", ["initiated", "ringing", "in_progress", "answered"]);
+  if ((inFlight ?? 0) > 0) {
+    console.warn(
+      `[realtimePoll.rollover] ${prev.name}: ${inFlight} live call(s) — skipping child close this spawn.`,
+    );
+    return { carried: carry.length };
+  }
+
   // Close yesterday's child + release its clone/slot if still held. Without
   // this, a child paused overnight with PAUSE_RELEASES_SLOT=false pins a SIP
   // slot forever → pool exhaustion within days. Pointers are captured above,
@@ -306,6 +322,8 @@ export async function pollRealtimeParent(
   }
 
   // 3) Diff against the seen-table (already-called memory, spec item 1).
+  // ponytail: full seen-table scan per tick — fine for months at PoC volume;
+  // filter by first_seen_at >= the segment-retention window when it grows.
   const seenRows = await fetchAllRows(supabase, "realtime_seen_members", "cio_id", "cio_id", {
     column: "parent_campaign_id",
     value: parent.id,
@@ -360,11 +378,15 @@ export async function pollRealtimeParent(
     let admitThis = false;
 
     if (!lookup.success) {
-      // Claimed permanently (bounded cost) — the hourly rollup surfaces the
-      // count. Alternative (retry forever) burns 1+ req/min on a broken
-      // profile. Flagged as an accepted default in the plan.
-      claimStatus = "lookup_failed";
       lookupFailed++;
+      // Permanent 404 (profile genuinely missing on ALL identifiers — the
+      // Glenda class) is claimed so we stop paying for it every minute. ANY
+      // other failure (429 rate-limit, 5xx, network) is transient: leave the
+      // member UNCLAIMED so the next tick retries — a permanent claim on a
+      // transient burst would silently drop a real registrant forever
+      // (review finding 2026-07-10).
+      if (!/Customer\.io 404/.test(lookup.error)) continue;
+      claimStatus = "lookup_failed";
     } else {
       const decision = decideAdmission({
         rawPhone: extractPhoneFromAttrs(lookup.data.attributes),

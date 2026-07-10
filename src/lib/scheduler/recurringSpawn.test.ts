@@ -55,3 +55,20 @@ describe("buildChildPayload realtime passthrough", () => {
     expect(p.daily_cap).toBeNull();
   });
 });
+
+describe("buildChildPayload operator-control inheritance", () => {
+  it("children inherit the parent's retry gap and max tries (dialer reads the CHILD row)", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, retry_interval_minutes: 30, max_attempts: 5 },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.retry_interval_minutes).toBe(30);
+    expect(p.max_attempts).toBe(5);
+  });
+
+  it("parents without explicit values fall back to the system defaults 90/3", () => {
+    const p = buildChildPayload({ parent, ...common }) as Record<string, unknown>;
+    expect(p.retry_interval_minutes).toBe(90);
+    expect(p.max_attempts).toBe(3);
+  });
+});
