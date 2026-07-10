@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { fetchCampaignV2 } from "@/lib/campaignV2Data";
+import { rejectIfCrossOriginStrict } from "@/lib/csrf";
+import { normalizeOperatorControls } from "@/lib/campaignV2Shared";
 
 /**
  * GET /api/campaigns-v2/[id]
@@ -30,6 +32,119 @@ export async function GET(
   } catch {
     return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * PATCH /api/campaigns-v2/[id]
+ * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate? }
+ *
+ * Always-on section's settings drawer (2026-07-10). Edits a RECURRING PARENT's
+ * next-child knobs only — children copy the parent row at every spawn, so a
+ * change here applies from tomorrow's campaign with no deploy. Today's
+ * already-spawned child keeps the settings it was born with.
+ *
+ * Scope guards:
+ *  - recurring parents only (the drawer's surface; fixed campaigns keep the
+ *    delete-and-recreate path).
+ *  - retry/max/cap validated by the same whitelist the wizard uses
+ *    (normalizeOperatorControls); the `realtime` flag is deliberately NOT
+ *    accepted — mode changes go through recreate, never a quick edit.
+ *  - dailyCap: explicit null clears the cap, but NOT on a realtime parent
+ *    (the cap is its cost brake — mirrors the wizard's create rule).
+ *  - smsLastResortTemplate: non-empty string sets it; null/"" clears it
+ *    (feature off). Inert on verbal_yes campaigns by design (dispatch + sweep
+ *    both check the consent mode).
+ */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const csrf = rejectIfCrossOriginStrict(request);
+  if (csrf) return csrf;
+
+  const { id } = await params;
+  if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+    return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
+  }
+
+  let body: {
+    retryIntervalMinutes?: unknown;
+    maxAttempts?: unknown;
+    dailyCap?: unknown;
+    smsLastResortTemplate?: unknown;
+  };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  // select * — deploy-order-safe read (missing new columns are simply absent).
+  const { data: row, error: rowErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (rowErr || !row) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+  if ((row.campaign_type as string) !== "recurring") {
+    return NextResponse.json(
+      { error: "Settings edits apply to recurring/real-time parents only." },
+      { status: 400 },
+    );
+  }
+
+  const update: Record<string, unknown> = {
+    // Same whitelist as campaign create; `realtime` is not forwarded.
+    ...normalizeOperatorControls({
+      retryIntervalMinutes: body.retryIntervalMinutes as number | undefined,
+      maxAttempts: body.maxAttempts as number | undefined,
+      dailyCap: body.dailyCap as number | null | undefined,
+    }),
+  };
+
+  if (body.dailyCap === null) {
+    if (row.realtime === true) {
+      return NextResponse.json(
+        { error: "Real-time campaigns need a daily cap — it's the cost brake." },
+        { status: 400 },
+      );
+    }
+    update.daily_cap = null;
+  }
+
+  if (typeof body.smsLastResortTemplate === "string") {
+    const t = body.smsLastResortTemplate.trim();
+    update.sms_last_resort_template = t.length > 0 ? t : null;
+  } else if (body.smsLastResortTemplate === null) {
+    update.sms_last_resort_template = null;
+  }
+
+  if (Object.keys(update).length === 0) {
+    return NextResponse.json(
+      { error: "No valid settings in the request (out-of-range values are rejected)." },
+      { status: 400 },
+    );
+  }
+
+  const { data: updated, error: updateErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .update(update)
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (updateErr || !updated) {
+    console.error(`[campaigns-v2] settings PATCH failed for ${id}:`, updateErr);
+    return NextResponse.json({ error: "Failed to update settings" }, { status: 500 });
+  }
+
+  console.log(
+    `[campaigns-v2] parent settings updated: campaign=${id} fields=${Object.keys(update).join(",")}`,
+  );
+  return NextResponse.json(updated);
 }
 
 // `inactive` is deletable too: by definition, an inactive campaign has

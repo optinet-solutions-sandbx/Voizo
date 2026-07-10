@@ -126,3 +126,29 @@ export async function updateCampaignV2Status(id: string, status: string): Promis
   }
   return (await res.json()) as Row;
 }
+
+/**
+ * PATCH a recurring/real-time PARENT's next-child settings (always-on section
+ * drawer, 2026-07-10). Server whitelists values; children pick the new values
+ * up at the next spawn. Throws the server's error message on a non-2xx.
+ */
+export async function patchCampaignSettings(
+  id: string,
+  settings: {
+    retryIntervalMinutes?: number;
+    maxAttempts?: number;
+    dailyCap?: number | null;
+    smsLastResortTemplate?: string | null;
+  },
+): Promise<Row> {
+  const res = await fetch(`/api/campaigns-v2/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Failed to update settings (${res.status})`);
+  }
+  return (await res.json()) as Row;
+}
