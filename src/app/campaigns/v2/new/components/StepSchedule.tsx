@@ -163,11 +163,13 @@ export default function StepSchedule({ state, dispatch }: Props) {
 
         {/* Operator controls (VOZ-132 §7): retry gap + max tries for every run
             mode; daily cap only for Real-time (its cost brake). */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-[var(--text-2)]">
+        {/* span + role=group (not <label>): these name BUTTON GROUPS, and a
+            label without an associated form control is an a11y defect. */}
+        <div className="flex flex-col gap-2" role="group" aria-label="Retry gap — how long before we try a player again">
+          <span className="text-xs font-medium text-[var(--text-2)]">
             Retry gap
             <span className="text-[11px] text-[var(--text-3)] font-normal"> — how long before we try a player again</span>
-          </label>
+          </span>
           <div className="flex flex-wrap gap-2">
             {RETRY_GAP_PRESETS.map((v) => (
               <button
@@ -186,11 +188,11 @@ export default function StepSchedule({ state, dispatch }: Props) {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-[var(--text-2)]">
+        <div className="flex flex-col gap-2" role="group" aria-label="Max tries per player — after the last try the player is marked unreached">
+          <span className="text-xs font-medium text-[var(--text-2)]">
             Max tries per player
             <span className="text-[11px] text-[var(--text-3)] font-normal"> — after the last try the player is marked unreached</span>
-          </label>
+          </span>
           <div className="flex flex-wrap gap-2">
             {MAX_TRIES_PRESETS.map((v) => (
               <button
