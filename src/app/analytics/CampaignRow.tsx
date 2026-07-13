@@ -25,6 +25,8 @@ import PromptHoverCard from "./PromptHoverCard";
 export type { DisplayStatus };
 export const STATUS_META: Record<DisplayStatus, { label: string; cls: string; pulse?: boolean }> = {
   running: { label: "Running", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", pulse: true },
+  // Recurring parent whose schedule is armed but not dialing (its children dial).
+  scheduled: { label: "Scheduled", cls: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
   paused: { label: "Paused", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
   finished: { label: "Finished", cls: "bg-[var(--bg-elevated)] text-[var(--text-2)] border-[var(--border)]" },
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveAlwaysOnRows } from "./alwaysOn";
+import { deriveAlwaysOnRows, formatRecurrenceDays } from "./alwaysOn";
 
 type Row = Record<string, unknown>;
 
@@ -76,5 +76,24 @@ describe("deriveAlwaysOnRows", () => {
       child("good", "p1", "2026-07-10T13:00:00Z"),
     ]);
     expect(rows[0].latestChild?.id).toBe("good");
+  });
+});
+
+describe("formatRecurrenceDays", () => {
+  it("null/undefined/empty → null", () => {
+    expect(formatRecurrenceDays(null)).toBeNull();
+    expect(formatRecurrenceDays(undefined)).toBeNull();
+    expect(formatRecurrenceDays({ days_of_week: [] })).toBeNull();
+  });
+
+  it("formats and orders Sun→Sat regardless of input order", () => {
+    expect(formatRecurrenceDays({ days_of_week: ["mon", "wed", "fri"] })).toBe("Mon, Wed, Fri");
+    expect(formatRecurrenceDays({ days_of_week: ["fri", "mon"] })).toBe("Mon, Fri");
+  });
+
+  it("all seven → 'Every day'", () => {
+    expect(
+      formatRecurrenceDays({ days_of_week: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] }),
+    ).toBe("Every day");
   });
 });

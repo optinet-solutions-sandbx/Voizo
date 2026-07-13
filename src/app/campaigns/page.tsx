@@ -30,6 +30,8 @@ import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { useBaseAgentNames } from "@/app/analytics/useBaseAgentNames";
 import { voiceName } from "@/lib/voiceOptions";
 import AlwaysOnSection from "./AlwaysOnSection";
+import { formatRecurrenceDays } from "@/lib/alwaysOn";
+import type { RecurrencePattern } from "@/lib/types/recurrence";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -57,6 +59,27 @@ function formatWhen(c: CampaignRow): WhenInfo {
   if (status === "draft") return { label: "Manual start", muted: true };
   if (status === "paused") return { label: "Paused", muted: true };
   return { label: "—", muted: true };
+}
+
+// A recurring PARENT's DB status='running' means its SCHEDULE is armed, not
+// that it is dialing right now — its per-day children dial as their own rows.
+// Present it honestly as "Scheduled" so an idle schedule doesn't read as live.
+// NOTE: display-only. Row actions (Pause/Delete) still key off the RAW status,
+// so a running parent keeps its Pause control.
+function isArmedRecurringParent(c: CampaignRow): boolean {
+  return (c.campaign_type as string) === "recurring" && ((c.status as string) || "draft") === "running";
+}
+function displayStatusOf(c: CampaignRow): string {
+  return isArmedRecurringParent(c) ? "scheduled" : ((c.status as string) || "draft");
+}
+function whenFor(c: CampaignRow): WhenInfo {
+  if (isArmedRecurringParent(c)) {
+    const days = formatRecurrenceDays(c.recurrence_pattern as RecurrencePattern | null);
+    const tz = c.timezone as string | undefined;
+    const tzShort = tz ? tz.split("/").pop()?.replace(/_/g, " ") : undefined;
+    return { label: "Scheduled", sub: days ?? tzShort };
+  }
+  return formatWhen(c);
 }
 
 function relativeStart(iso: string): string {
@@ -474,7 +497,7 @@ function CampaignsPageInner() {
                 const reach = a?.reach ?? 0;
                 const smsSent = a ? smsSentOf(a.sms) : 0;
                 const hasActivity = totalCalls > 0;
-                const when = formatWhen(c);
+                const when = whenFor(c);
                 const isRecurring = (c.campaign_type as string) === "recurring";
                 const isOpen = expanded.has(id);
                 return (
@@ -491,7 +514,7 @@ function CampaignsPageInner() {
                         </div>
                         <span className="font-semibold text-[var(--text-1)] text-sm truncate">{c.name as string}</span>
                       </div>
-                      <StatusBadge status={(c.status as string) || "draft"} />
+                      <StatusBadge status={displayStatusOf(c)} />
                     </div>
                     <div className="flex items-center gap-1.5 mb-2.5 ml-10">
                       <Clock size={10} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
@@ -557,8 +580,9 @@ function CampaignsPageInner() {
                     const reach = a?.reach ?? 0;
                     const smsSent = a ? smsSentOf(a.sms) : 0;
                     const hasActivity = totalCalls > 0;
-                    const when = formatWhen(c);
-                    const status = (c.status as string) || "draft";
+                    const when = whenFor(c);
+                    const status = (c.status as string) || "draft"; // RAW — drives the row actions
+                    const dispStatus = displayStatusOf(c); // display-only (recurring parent → "scheduled")
                     const isRecurring = (c.campaign_type as string) === "recurring";
                     const isInFlight = actionInFlightId === id;
                     return (
@@ -595,7 +619,7 @@ function CampaignsPageInner() {
                         </td>
                         <td className="px-4 py-4 text-xs">
                           <span className="inline-flex items-center gap-1.5">
-                            <StatusDot status={status} />
+                            <StatusDot status={dispStatus} />
                             <span className={when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}>
                               {when.label}
                             </span>
@@ -612,7 +636,7 @@ function CampaignsPageInner() {
                         <td className="px-4 py-4 text-right font-mono tabular-nums">
                           <span className={smsSent > 0 ? "text-primary" : "text-[var(--text-3)]"}>{smsSent.toLocaleString()}</span>
                         </td>
-                        <td className="px-4 py-4"><StatusBadge status={status} /></td>
+                        <td className="px-4 py-4"><StatusBadge status={dispStatus} /></td>
                         <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
                           <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition">
                             {status === "running" ? (

@@ -110,7 +110,7 @@ export interface CampaignRollup extends RateRow {
 // Running (live), Paused (recently active / resumable), Finished (ran-then-done: past-end or
 // idle — AND never-ran draft/inactive, folded in). PRESENTATION-ONLY — never mutates
 // campaigns_v2.status or the scheduler. Completed+Ended→Finished, then Inactive→Finished (2026-07-03).
-export type DisplayStatus = "running" | "paused" | "finished";
+export type DisplayStatus = "running" | "scheduled" | "paused" | "finished";
 
 // A paused campaign idle (no calls) for this many days reads as "Finished", so paused campaigns
 // don't pile up (Jasiel 2026-07-03; was 7). Single source for the idle window — the API route, the

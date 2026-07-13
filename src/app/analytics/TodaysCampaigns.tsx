@@ -55,6 +55,11 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
             </div>
 
             {rows.map((c) => {
+              // A recurring PARENT is a schedule, not a dialer — its DB status is
+              // 'running' but it makes no calls (its children do, as their own
+              // rows). Show it as "Scheduled" and drop the misleading "running
+              // for Xh" runtime. Fixed campaigns and children stay "Running".
+              const isSchedule = c.scheduleType === "recurring";
               const data: CampaignRowData = {
                 id: c.id,
                 name: c.name,
@@ -63,8 +68,8 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
                 agentLabel: c.agentLabel,
                 baseAssistantId: c.baseAssistantId,
                 scheduleType: c.scheduleType,
-                status: "running",
-                timeLabel: fmtRuntime(c.startAt) ?? "",
+                status: isSchedule ? "scheduled" : "running",
+                timeLabel: isSchedule ? "" : (fmtRuntime(c.startAt) ?? ""),
                 players: c.players,
                 startAt: c.startAt,
                 perf: c.perf,

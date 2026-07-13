@@ -11,7 +11,31 @@
 // and "latest child" needs no timezone math — the child with the greatest
 // start_at IS the operative one (older ones are completed/closed by rollover).
 
+import type { DayOfWeek } from "./types/recurrence";
+
 type CampaignRow = Record<string, unknown>;
+
+const DAY_ORDER: readonly DayOfWeek[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAY_LABEL: Record<DayOfWeek, string> = {
+  sun: "Sun", mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat",
+};
+
+/**
+ * Compact schedule days for a status sub-line: "Mon, Wed, Fri" (Sun→Sat order),
+ * "Every day" for all seven, null when there's nothing to show. Distinct from
+ * RecurrenceEditor.summarizeRecurrence (a full sentence) — this is a glanceable
+ * chip for the campaigns list, where a recurring parent reads "Scheduled · <days>".
+ */
+export function formatRecurrenceDays(
+  pattern: { days_of_week?: DayOfWeek[] } | null | undefined,
+): string | null {
+  const days = pattern?.days_of_week;
+  if (!days || days.length === 0) return null;
+  const present = DAY_ORDER.filter((d) => days.includes(d));
+  if (present.length === 0) return null;
+  if (present.length === 7) return "Every day";
+  return present.map((d) => DAY_LABEL[d]).join(", ");
+}
 
 export interface AlwaysOnRow {
   parent: CampaignRow;
