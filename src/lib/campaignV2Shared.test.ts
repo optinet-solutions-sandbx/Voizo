@@ -4,6 +4,8 @@ import {
   defaultCallWindows,
   formatDefaultCallWindowsJson,
   normalizeOperatorControls,
+  resolveCallDelay,
+  CALL_DELAY_MAX_MINUTES,
 } from "./campaignV2Shared";
 
 // These tests pin the pure-helper contract that moved out of campaignV2Data.ts
@@ -107,5 +109,41 @@ describe("normalizeOperatorControls", () => {
       retry_interval_minutes: 60,
     });
     expect(normalizeOperatorControls({ dailyCap: 1 })).toEqual({ daily_cap: 1 });
+  });
+
+  it("accepts callDelayMinutes 5 / 45 / 1440", () => {
+    expect(normalizeOperatorControls({ callDelayMinutes: 5 })).toEqual({ call_delay_minutes: 5 });
+    expect(normalizeOperatorControls({ callDelayMinutes: 45 })).toEqual({ call_delay_minutes: 45 });
+    expect(normalizeOperatorControls({ callDelayMinutes: CALL_DELAY_MAX_MINUTES })).toEqual({
+      call_delay_minutes: 1440,
+    });
+  });
+
+  it("drops callDelayMinutes 0 / -5 / 2.5 / 1441 / null / undefined", () => {
+    for (const bad of [0, -5, 2.5, 1441, null, undefined]) {
+      expect(
+        normalizeOperatorControls({ callDelayMinutes: bad as number | null | undefined }),
+      ).toEqual({});
+    }
+  });
+});
+
+describe("resolveCallDelay", () => {
+  it("maps pills", () => {
+    expect(resolveCallDelay("now", "")).toEqual({ minutes: null, invalid: false });
+    expect(resolveCallDelay("5", "")).toEqual({ minutes: 5, invalid: false });
+    expect(resolveCallDelay("30", "ignored")).toEqual({ minutes: 30, invalid: false });
+    expect(resolveCallDelay("60", "")).toEqual({ minutes: 60, invalid: false });
+  });
+
+  it("parses custom within 1..1440", () => {
+    expect(resolveCallDelay("custom", " 45 ")).toEqual({ minutes: 45, invalid: false });
+    expect(resolveCallDelay("custom", "1440")).toEqual({ minutes: 1440, invalid: false });
+  });
+
+  it("flags junk / out-of-range custom as invalid", () => {
+    for (const bad of ["", "0", "-5", "2.5", "1441", "abc"]) {
+      expect(resolveCallDelay("custom", bad)).toEqual({ minutes: null, invalid: true });
+    }
   });
 });

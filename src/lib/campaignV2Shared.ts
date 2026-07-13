@@ -47,6 +47,7 @@ export interface CampaignV2CreateInput {
   dailyCap?: number | null; // Realtime cost brake: most players added per day. Positive integer; realtime campaigns only.
   realtime?: boolean; // Recurring parent in real-time top-up mode: children spawn empty, the per-minute poll fills them.
   smsLastResortTemplate?: string | null; // VOZ-132 §8, registered_optin only: non-empty → voicemails re-dial and this ONE text goes out after the final failed try. Null/absent → today's behavior. Maps to campaigns_v2.sms_last_resort_template.
+  callDelayMinutes?: number | null; // Realtime: minutes between a sign-up appearing in the segment and the dial (1-1440). Null/absent = right away. Maps to campaigns_v2.call_delay_minutes.
 }
 
 export function defaultCallWindows(): CallWindow[] {
@@ -65,15 +66,43 @@ export function formatDefaultCallWindowsJson(): string {
   return JSON.stringify(defaultCallWindows(), null, 2);
 }
 
+/** Ceiling for the realtime call delay (24 hours). DB CHECK only enforces > 0
+ *  (daily_cap precedent: DB floor, app whitelist). */
+export const CALL_DELAY_MAX_MINUTES = 1440;
+
+/**
+ * Wizard/drawer "Call new sign-ups" pill + custom text -> minutes for the API.
+ * null minutes = right away. invalid=true only for a bad CUSTOM value, so
+ * callers can block save instead of silently sending "right away".
+ */
+export function resolveCallDelay(
+  choice: string,
+  customText: string,
+): { minutes: number | null; invalid: boolean } {
+  if (choice === "custom") {
+    const t = customText.trim();
+    const n = Number(t);
+    const ok = t !== "" && Number.isInteger(n) && n > 0 && n <= CALL_DELAY_MAX_MINUTES;
+    return ok ? { minutes: n, invalid: false } : { minutes: null, invalid: true };
+  }
+  if (choice === "5" || choice === "30" || choice === "60") {
+    return { minutes: Number(choice), invalid: false };
+  }
+  return { minutes: null, invalid: false };
+}
+
 /**
  * Operator-control inputs → DB column keys, as CONDITIONAL keys only
  * (voicemail_autohangup precedent): an absent/invalid input sends no key, so
  * DB defaults win and a deploy that precedes the realtime migration can never
  * reference a missing column. Whitelists mirror the wizard UI (30/60/90 gap,
- * 2–5 tries) and the DB CHECK (daily_cap > 0).
+ * 2–5 tries, call delay 1–1440) and the DB CHECK (daily_cap > 0).
  */
 export function normalizeOperatorControls(
-  i: Pick<CampaignV2CreateInput, "retryIntervalMinutes" | "maxAttempts" | "dailyCap" | "realtime">,
+  i: Pick<
+    CampaignV2CreateInput,
+    "retryIntervalMinutes" | "maxAttempts" | "dailyCap" | "realtime" | "callDelayMinutes"
+  >,
 ): Record<string, unknown> {
   return {
     ...([30, 60, 90].includes(i.retryIntervalMinutes as number)
@@ -84,6 +113,11 @@ export function normalizeOperatorControls(
       : {}),
     ...(Number.isInteger(i.dailyCap) && (i.dailyCap as number) > 0 ? { daily_cap: i.dailyCap } : {}),
     ...(i.realtime === true ? { realtime: true } : {}),
+    ...(Number.isInteger(i.callDelayMinutes) &&
+    (i.callDelayMinutes as number) > 0 &&
+    (i.callDelayMinutes as number) <= CALL_DELAY_MAX_MINUTES
+      ? { call_delay_minutes: i.callDelayMinutes }
+      : {}),
   };
 }
 
