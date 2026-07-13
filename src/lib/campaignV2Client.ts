@@ -139,6 +139,7 @@ export async function patchCampaignSettings(
     maxAttempts?: number;
     dailyCap?: number | null;
     smsLastResortTemplate?: string | null;
+    callDelayMinutes?: number | null;
   },
 ): Promise<Row> {
   const res = await fetch(`/api/campaigns-v2/${id}`, {

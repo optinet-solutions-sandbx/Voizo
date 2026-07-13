@@ -22,6 +22,7 @@ import Link from "next/link";
 import { ChevronDown, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
 import { deriveAlwaysOnRows, type AlwaysOnRow } from "@/lib/alwaysOn";
 import { patchCampaignSettings, updateCampaignV2Status } from "@/lib/campaignV2Client";
+import { resolveCallDelay } from "@/lib/campaignV2Shared";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -33,12 +34,21 @@ interface Props {
 
 const RETRY_GAP_PRESETS = [30, 60, 90] as const;
 const MAX_TRIES_PRESETS = [2, 3, 4, 5] as const;
+const CALL_DELAY_PRESETS: ReadonlyArray<{ choice: "now" | "5" | "30" | "60" | "custom"; label: string }> = [
+  { choice: "now", label: "Right away" },
+  { choice: "5", label: "After 5 min" },
+  { choice: "30", label: "After 30 min" },
+  { choice: "60", label: "After 1 hour" },
+  { choice: "custom", label: "Custom" },
+];
 
 interface SettingsDraft {
   retryGap: number;
   maxTries: number;
   dailyCapText: string;
   lastResortText: string;
+  callDelayChoice: "now" | "5" | "30" | "60" | "custom";
+  callDelayCustomText: string;
 }
 
 export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
@@ -123,11 +133,15 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
     }
     setOpenSettingsId(id);
     setRowError(null);
+    const delay = (parent.call_delay_minutes as number | null) ?? null;
     setDraft({
       retryGap: (parent.retry_interval_minutes as number) ?? 90,
       maxTries: (parent.max_attempts as number) ?? 3,
       dailyCapText: parent.daily_cap != null ? String(parent.daily_cap) : "",
       lastResortText: (parent.sms_last_resort_template as string) ?? "",
+      callDelayChoice:
+        delay == null ? "now" : delay === 5 || delay === 30 || delay === 60 ? (String(delay) as "5" | "30" | "60") : "custom",
+      callDelayCustomText: delay != null && ![5, 30, 60].includes(delay) ? String(delay) : "",
     });
   }
 
@@ -145,6 +159,14 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
       setRowError({ id, message: "Real-time campaigns need a daily cap." });
       return;
     }
+    const delay = resolveCallDelay(draft.callDelayChoice, draft.callDelayCustomText);
+    if (isRealtime && delay.invalid) {
+      setRowError({
+        id,
+        message: "Custom call delay must be a whole number of minutes between 1 and 1440 (24 hours).",
+      });
+      return;
+    }
 
     setActionId(id);
     setRowError(null);
@@ -153,6 +175,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
         retryIntervalMinutes: draft.retryGap,
         maxAttempts: draft.maxTries,
         dailyCap: capNumber,
+        ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
         ...(parent.sms_consent_mode === "registered_optin"
           ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
           : {}),
@@ -336,6 +359,43 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                       className="w-full sm:max-w-[10rem] px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
                     />
                   </div>
+
+                  {isRealtime && draft && (
+                    <div className="flex flex-col gap-1.5" role="group" aria-label="Call new sign-ups">
+                      <span className="text-[11px] font-medium text-[var(--text-2)]">Call new sign-ups</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {CALL_DELAY_PRESETS.map((p) => (
+                          <button
+                            key={p.choice}
+                            type="button"
+                            onClick={() => setDraft({ ...draft, callDelayChoice: p.choice })}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
+                              draft.callDelayChoice === p.choice
+                                ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                                : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30"
+                            }`}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                      {draft.callDelayChoice === "custom" && (
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={1440}
+                          step={1}
+                          value={draft.callDelayCustomText}
+                          onChange={(e) => setDraft({ ...draft, callDelayCustomText: e.target.value })}
+                          placeholder="minutes, e.g. 45"
+                          aria-label="Custom call delay in minutes"
+                          className="w-full sm:max-w-[10rem] px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+                        />
+                      )}
+                      <p className="text-[11px] text-[var(--text-3)]">Applies from the next check, not tomorrow.</p>
+                    </div>
+                  )}
 
                   {parent.sms_consent_mode === "registered_optin" && (
                     <div className="flex flex-col gap-1.5">

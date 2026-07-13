@@ -38,7 +38,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * PATCH /api/campaigns-v2/[id]
- * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate? }
+ * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate?, callDelayMinutes? }
  *
  * Always-on section's settings drawer (2026-07-10). Edits a RECURRING PARENT's
  * next-child knobs only — children copy the parent row at every spawn, so a
@@ -74,6 +74,7 @@ export async function PATCH(
     maxAttempts?: unknown;
     dailyCap?: unknown;
     smsLastResortTemplate?: unknown;
+    callDelayMinutes?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -103,6 +104,7 @@ export async function PATCH(
       retryIntervalMinutes: body.retryIntervalMinutes as number | undefined,
       maxAttempts: body.maxAttempts as number | undefined,
       dailyCap: body.dailyCap as number | null | undefined,
+      callDelayMinutes: body.callDelayMinutes as number | null | undefined,
     }),
   };
 
@@ -121,6 +123,13 @@ export async function PATCH(
     update.sms_last_resort_template = t.length > 0 ? t : null;
   } else if (body.smsLastResortTemplate === null) {
     update.sms_last_resort_template = null;
+  }
+
+  // Right away is a valid state: explicit null clears the delay (no realtime
+  // guard, unlike the cap which is the cost brake). Applies from the next
+  // poll tick — the poll reads the parent row live.
+  if (body.callDelayMinutes === null) {
+    update.call_delay_minutes = null;
   }
 
   if (Object.keys(update).length === 0) {
