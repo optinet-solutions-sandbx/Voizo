@@ -35,6 +35,7 @@ function tipsFor(state: WizardState): string[] {
       }
       if (state.realtime) {
         tips.push("Daily cap is the spending brake. Sign-ups past the cap wait for tomorrow.");
+        tips.push("Call delay counts from when a sign-up first appears in your segment. Sign-ups outside calling hours are called next morning.");
       }
       if (state.campaignType === "fixed") {
         tips.push("A retry gap longer than the day's window means one attempt per day.");

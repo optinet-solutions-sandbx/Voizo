@@ -34,6 +34,13 @@ const DELAY_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
 // Operator controls (VOZ-132 §7). The whitelists mirror normalizeOperatorControls.
 const RETRY_GAP_PRESETS: ReadonlyArray<number> = [30, 60, 90];
 const MAX_TRIES_PRESETS: ReadonlyArray<number> = [2, 3, 4, 5];
+const CALL_DELAY_PRESETS: ReadonlyArray<{ choice: "now" | "5" | "30" | "60" | "custom"; label: string }> = [
+  { choice: "now", label: "Right away" },
+  { choice: "5", label: "After 5 min" },
+  { choice: "30", label: "After 30 min" },
+  { choice: "60", label: "After 1 hour" },
+  { choice: "custom", label: "Custom" },
+];
 
 function formatLocalTime(date: Date, timeZone: string): string {
   try {
@@ -239,6 +246,49 @@ export default function StepSchedule({ state, dispatch }: Props) {
             ))}
           </div>
         </div>
+
+        {/* Call delay (realtime only): how long a fresh sign-up waits before
+            the dial. Right away = pre-feature behavior (DB null). */}
+        {isRecurring && state.realtime && (
+          <div className="flex flex-col gap-2" role="group" aria-label="Call new sign-ups">
+            <span className="text-xs font-medium text-[var(--text-2)]">Call new sign-ups</span>
+            <div className="flex flex-wrap gap-2">
+              {CALL_DELAY_PRESETS.map((p) => (
+                <button
+                  key={p.choice}
+                  type="button"
+                  onClick={() => dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { callDelayChoice: p.choice } })}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                    state.callDelayChoice === p.choice
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                      : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30 hover:text-blue-400"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {state.callDelayChoice === "custom" && (
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={1440}
+                step={1}
+                value={state.callDelayCustomText}
+                onChange={(e) =>
+                  dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { callDelayCustomText: e.target.value } })
+                }
+                placeholder="minutes, e.g. 45"
+                aria-label="Custom call delay in minutes"
+                className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+              />
+            )}
+            <p className="text-[11px] text-[var(--text-3)] leading-snug">
+              How soon we call after a sign-up appears in your CRM segment. Right away means within a couple of minutes.
+            </p>
+          </div>
+        )}
 
         </div>
 
