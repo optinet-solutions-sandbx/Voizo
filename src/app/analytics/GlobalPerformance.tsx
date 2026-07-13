@@ -26,8 +26,8 @@ import { type RangeKey } from "@/lib/rangeWindow";
 
 // RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d", "lifetime"];
-const RANGE_BTN: Record<string, string> = { lifetime: "Lifetime" }; // button caption; presets show their raw key
-const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "Lifetime", custom: "Custom range" };
+const RANGE_BTN: Record<string, string> = { lifetime: "All" }; // button caption; presets show their raw key
+const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "All time", custom: "Custom range" };
 
 export interface BestPerformer {
   key: string;
@@ -220,6 +220,14 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   // Custom date range: flip to "custom" once BOTH dates are picked; keep partial entries otherwise.
   const applyDates = (from?: string, to?: string) =>
     from && to ? set({ range: "custom", from, to }) : set({ from, to });
+  // The date inputs are hidden until asked for — two permanently-empty mm/dd/yyyy boxes read as a
+  // broken filter (Jasiel 2026-07-10). "custom" range set from outside still reveals them.
+  const [customOpen, setCustomOpen] = useState(false);
+  const customVisible = customOpen || filters.range === "custom";
+  const closeCustom = () => {
+    setCustomOpen(false);
+    set({ range: filters.range === "custom" ? "7d" : filters.range, from: undefined, to: undefined });
+  };
   const isDefault =
     filters.range === "7d" &&
     filters.campaignIds.length === 0 &&
@@ -260,7 +268,10 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
     {
       key: "range",
       label: filters.range === "custom" && filters.from && filters.to ? `${filters.from} → ${filters.to}` : RANGE_LABEL[filters.range],
-      onRemove: () => set({ range: "7d", from: undefined, to: undefined }),
+      onRemove: () => {
+        setCustomOpen(false);
+        set({ range: "7d", from: undefined, to: undefined });
+      },
     },
     ...filters.campaignIds.map((id) => ({
       key: `c-${id}`,
@@ -312,7 +323,10 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
             {RANGES.map((r) => (
               <button
                 key={r}
-                onClick={() => set({ range: r, from: undefined, to: undefined })}
+                onClick={() => {
+                  setCustomOpen(false);
+                  set({ range: r, from: undefined, to: undefined });
+                }}
                 className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
                   filters.range === r ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
                 }`}
@@ -320,27 +334,38 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
                 {RANGE_BTN[r] ?? r}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => (customVisible ? closeCustom() : setCustomOpen(true))}
+              className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
+                customVisible ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
+              }`}
+            >
+              Custom
+            </button>
           </div>
           {/* Custom date range — native pickers (no date lib). Picking BOTH dates switches to "custom". */}
-          <div className="inline-flex items-center gap-1">
-            <input
-              type="date"
-              aria-label="Range from date"
-              value={filters.from ?? ""}
-              max={filters.to || undefined}
-              onChange={(e) => applyDates(e.target.value || undefined, filters.to)}
-              className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
-            />
-            <span className="text-[var(--text-4)] text-[11px]">–</span>
-            <input
-              type="date"
-              aria-label="Range to date"
-              value={filters.to ?? ""}
-              min={filters.from || undefined}
-              onChange={(e) => applyDates(filters.from, e.target.value || undefined)}
-              className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
-            />
-          </div>
+          {customVisible && (
+            <div className="inline-flex items-center gap-1">
+              <input
+                type="date"
+                aria-label="Range from date"
+                value={filters.from ?? ""}
+                max={filters.to || undefined}
+                onChange={(e) => applyDates(e.target.value || undefined, filters.to)}
+                className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
+              />
+              <span className="text-[var(--text-4)] text-[11px]">–</span>
+              <input
+                type="date"
+                aria-label="Range to date"
+                value={filters.to ?? ""}
+                min={filters.from || undefined}
+                onChange={(e) => applyDates(filters.from, e.target.value || undefined)}
+                className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
+              />
+            </div>
+          )}
         </div>
         <div className="w-px h-6 bg-[var(--border)]" />
         <MultiSelect
@@ -366,7 +391,10 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         </div>
         {!isDefault && (
           <button
-            onClick={() => onChange(DEFAULTS)}
+            onClick={() => {
+              setCustomOpen(false);
+              onChange(DEFAULTS);
+            }}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition-colors"
           >
             <X size={13} /> Clear
