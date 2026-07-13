@@ -19,10 +19,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
+import { ChevronDown, Globe2, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
 import { deriveAlwaysOnRows, type AlwaysOnRow } from "@/lib/alwaysOn";
 import { patchCampaignSettings, updateCampaignV2Status } from "@/lib/campaignV2Client";
 import { resolveCallDelay } from "@/lib/campaignV2Shared";
+import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
+import StyledSelect from "@/components/StyledSelect";
+import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
+import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -49,6 +53,8 @@ interface SettingsDraft {
   lastResortText: string;
   callDelayChoice: "now" | "5" | "30" | "60" | "custom";
   callDelayCustomText: string;
+  recurrencePattern: RecurrencePattern;
+  timezone: string;
 }
 
 export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
@@ -142,6 +148,10 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
       callDelayChoice:
         delay == null ? "now" : delay === 5 || delay === 30 || delay === 60 ? (String(delay) as "5" | "30" | "60") : "custom",
       callDelayCustomText: delay != null && ![5, 30, 60].includes(delay) ? String(delay) : "",
+      recurrencePattern:
+        (parent.recurrence_pattern as RecurrencePattern | null) ??
+        defaultRecurrencePattern(new Date(), (parent.timezone as string) ?? "UTC"),
+      timezone: (parent.timezone as string) ?? "UTC",
     });
   }
 
@@ -168,6 +178,25 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
       return;
     }
 
+    // Schedule: validate, and gate the timezone change (the server also blocks
+    // it while today's run is still active — that 409 surfaces as rowError).
+    const recErrors = validateRecurrencePattern(draft.recurrencePattern).errors;
+    if (recErrors.length > 0) {
+      setRowError({ id, message: recErrors[0] });
+      return;
+    }
+    const patternChanged =
+      JSON.stringify(draft.recurrencePattern) !== JSON.stringify(parent.recurrence_pattern ?? null);
+    const timezoneChanged = draft.timezone !== ((parent.timezone as string) ?? "UTC");
+    if (
+      timezoneChanged &&
+      !window.confirm(
+        "Change the timezone? Day boundaries and legal calling hours shift with it, from the next run. To call a different country, create a new campaign instead.",
+      )
+    ) {
+      return;
+    }
+
     setActionId(id);
     setRowError(null);
     try {
@@ -179,6 +208,8 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
         ...(parent.sms_consent_mode === "registered_optin"
           ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
           : {}),
+        ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
+        ...(timezoneChanged ? { timezone: draft.timezone } : {}),
       });
       localPatch(id, updated);
       setOpenSettingsId(null);
@@ -298,6 +329,28 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
 
               {settingsOpen && draft && (
                 <div className="mt-3 p-3.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] flex flex-col gap-3">
+                  {/* Schedule + timezone (inline, 2026-07-13). Applies from
+                      tomorrow's run; the timezone change is confirm-gated and
+                      the server blocks it while today's run is still active. */}
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[11px] font-medium text-[var(--text-2)]">Schedule</span>
+                    <RecurrenceEditor
+                      value={draft.recurrencePattern}
+                      onChange={(pattern) => setDraft({ ...draft, recurrencePattern: pattern })}
+                      campaignTimezone={draft.timezone}
+                      errors={validateRecurrencePattern(draft.recurrencePattern).errors}
+                      timezoneSlot={
+                        <StyledSelect
+                          value={draft.timezone}
+                          onChange={(value) => setDraft({ ...draft, timezone: value })}
+                          options={TIMEZONE_OPTIONS}
+                          icon={<Globe2 size={14} />}
+                          placeholder="Pick a timezone…"
+                        />
+                      }
+                    />
+                  </div>
+
                   <div className="flex flex-col gap-1.5" role="group" aria-label="Retry gap">
                     <span className="text-[11px] font-medium text-[var(--text-2)]">
                       Retry gap

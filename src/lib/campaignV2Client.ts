@@ -9,6 +9,7 @@
 // campaignV2Shared.ts (no supabase) — import those from there, not from here.
 
 import type { CampaignV2CreateInput } from "./campaignV2Shared";
+import type { RecurrencePattern } from "./types/recurrence";
 
 type Row = Record<string, unknown>;
 
@@ -140,6 +141,13 @@ export async function patchCampaignSettings(
     dailyCap?: number | null;
     smsLastResortTemplate?: string | null;
     callDelayMinutes?: number | null;
+    // Edit page + always-on drawer (2026-07-13). Server validates via
+    // buildParentEditUpdate; timezone change is guarded against double-spawn.
+    recurrencePattern?: RecurrencePattern;
+    timezone?: string;
+    segmentId?: number;
+    goalTarget?: number | null;
+    smsTemplate?: string | null;
   },
 ): Promise<Row> {
   const res = await fetch(`/api/campaigns-v2/${id}`, {
