@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideAdmission,
   diffNewMembers,
+  duePromotions,
   expectedCountryForTimezone,
   partitionRollover,
 } from "./realtimePoll";
@@ -125,5 +126,32 @@ describe("partitionRollover", () => {
       partitionRollover([{ id: "1", phone_e164: "+61400000001", attempt_count: 1, outcome: "sent_sms" }]),
     ).toEqual({ carry: [], closeIds: [] });
     expect(partitionRollover([])).toEqual({ carry: [], closeIds: [] });
+  });
+});
+
+describe("duePromotions", () => {
+  const NOW = new Date("2026-07-13T10:00:00Z");
+  const row = (id: string, minsAgo: number) => ({
+    cio_id: id,
+    phone_e164: "+61400000000",
+    first_seen_at: new Date(NOW.getTime() - minsAgo * 60_000).toISOString(),
+  });
+
+  it("due only when first_seen + delay has passed", () => {
+    const rows = [row("a", 31), row("b", 29)];
+    expect(duePromotions(rows, 30, NOW, 10).map((r) => r.cio_id)).toEqual(["a"]);
+  });
+
+  it("null delay = everything waiting is due (delay cleared mid-flight)", () => {
+    expect(duePromotions([row("a", 0), row("b", 500)], null, NOW, 10)).toHaveLength(2);
+  });
+
+  it("oldest first, sliced to cap room", () => {
+    const rows = [row("young", 40), row("old", 90), row("mid", 60)];
+    expect(duePromotions(rows, 30, NOW, 2).map((r) => r.cio_id)).toEqual(["old", "mid"]);
+  });
+
+  it("no room = nothing promotes", () => {
+    expect(duePromotions([row("a", 90)], 30, NOW, 0)).toEqual([]);
   });
 });

@@ -89,6 +89,32 @@ export function diffNewMembers(memberIds: string[], seenIds: ReadonlySet<string>
   return out;
 }
 
+export interface WaitingSeenRow {
+  cio_id: string;
+  phone_e164: string | null;
+  first_seen_at: string;
+}
+
+/**
+ * Which 'waiting' members get their dial row THIS tick (operator call delay):
+ * delay served (first_seen_at + delay <= now), oldest first, bounded by
+ * daily-cap room. delayMinutes null = no delay, everything waiting is due —
+ * covers a parent whose delay was cleared while members were still waiting.
+ */
+export function duePromotions(
+  rows: WaitingSeenRow[],
+  delayMinutes: number | null,
+  now: Date,
+  room: number,
+): WaitingSeenRow[] {
+  if (room <= 0) return [];
+  const cutoff = now.getTime() - (delayMinutes ?? 0) * 60_000;
+  return rows
+    .filter((r) => new Date(r.first_seen_at).getTime() <= cutoff)
+    .sort((a, b) => new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime())
+    .slice(0, room);
+}
+
 // ── Day rollover ──────────────────────────────────────────────────────────
 
 /**
