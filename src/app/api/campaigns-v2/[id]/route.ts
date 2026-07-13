@@ -4,6 +4,8 @@ import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { fetchCampaignV2 } from "@/lib/campaignV2Data";
 import { rejectIfCrossOriginStrict } from "@/lib/csrf";
 import { normalizeOperatorControls } from "@/lib/campaignV2Shared";
+import { buildParentEditUpdate } from "@/lib/parentEdit";
+import type { RecurrencePattern } from "@/lib/types/recurrence";
 
 /**
  * GET /api/campaigns-v2/[id]
@@ -38,7 +40,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * PATCH /api/campaigns-v2/[id]
- * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate?, callDelayMinutes? }
+ * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate?, callDelayMinutes?,
+ *         recurrencePattern?, timezone?, segmentId?, goalTarget?, smsTemplate? }
+ *
+ * The second line of fields (2026-07-13 edit page) validates via
+ * buildParentEditUpdate — invalid explicit input is a 400 the operator can
+ * read, never a silent drop. Timezone changes are additionally guarded: while
+ * a child spawned in the last 26h is still draft/running/paused, moving the
+ * day boundary could double-spawn today, so the edit is rejected until
+ * today's run completes (or is stopped).
  *
  * Always-on section's settings drawer (2026-07-10). Edits a RECURRING PARENT's
  * next-child knobs only — children copy the parent row at every spawn, so a
@@ -75,6 +85,11 @@ export async function PATCH(
     dailyCap?: unknown;
     smsLastResortTemplate?: unknown;
     callDelayMinutes?: unknown;
+    recurrencePattern?: unknown;
+    timezone?: unknown;
+    segmentId?: unknown;
+    goalTarget?: unknown;
+    smsTemplate?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -130,6 +145,46 @@ export async function PATCH(
   // poll tick — the poll reads the parent row live.
   if (body.callDelayMinutes === null) {
     update.call_delay_minutes = null;
+  }
+
+  // ── Edit-page fields (validated; invalid explicit input = readable 400) ──
+  const edit = buildParentEditUpdate({
+    ...(body.recurrencePattern !== undefined
+      ? { recurrencePattern: body.recurrencePattern as RecurrencePattern }
+      : {}),
+    ...(body.timezone !== undefined ? { timezone: body.timezone as string } : {}),
+    ...(body.segmentId !== undefined ? { segmentId: body.segmentId as number } : {}),
+    ...(body.goalTarget !== undefined ? { goalTarget: body.goalTarget as number | null } : {}),
+    ...(body.smsTemplate !== undefined ? { smsTemplate: body.smsTemplate as string | null } : {}),
+  });
+  if (edit.error) {
+    return NextResponse.json({ error: edit.error }, { status: 400 });
+  }
+  Object.assign(update, edit.update);
+
+  // Timezone-change guard: a live/imminent child spawned under the OLD
+  // timezone plus a shifted day boundary can double-spawn "today". Block the
+  // edit until today's run is completed or stopped. 26h covers every offset.
+  if (
+    typeof update.timezone === "string" &&
+    update.timezone !== (row.timezone as string | null)
+  ) {
+    const sinceIso = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+    const { count: activeKids } = await supabaseAdmin
+      .from("campaigns_v2")
+      .select("id", { count: "exact", head: true })
+      .eq("parent_campaign_id", id)
+      .in("status", ["draft", "running", "paused"])
+      .gte("start_at", sinceIso);
+    if ((activeKids ?? 0) > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Today's run is still active under the old timezone. Stop it first, or change the timezone after it completes.",
+        },
+        { status: 409 },
+      );
+    }
   }
 
   if (Object.keys(update).length === 0) {
