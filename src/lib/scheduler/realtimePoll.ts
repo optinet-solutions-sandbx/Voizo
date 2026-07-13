@@ -280,12 +280,16 @@ export interface RealtimeParentRow {
   name: string;
   timezone: string;
   segment_id: number | null;
+  /** Operator call delay: minutes between first sight and the dial row (null = right away). */
+  call_delay_minutes: number | null;
 }
 
 export interface PollSummary {
   result: "no_segment" | "no_child_today" | "membership_fetch_failed" | "polled";
   childId?: string;
   added?: number;
+  /** Waiting members whose call delay was served this tick (dial row created). */
+  promoted?: number;
   rejectedCountry?: number;
   capBlocked?: boolean;
   lookupFailed?: number;
@@ -329,7 +333,82 @@ export async function pollRealtimeParent(
   const childId = child.id as string;
   const dailyCap = (child.daily_cap as number | null) ?? null;
 
-  // 2) Membership ids — cheap (1 request per 1000 members). Transient fetch
+  // 2) Cap pre-check BEFORE any Cio spend (moved ahead of the membership
+  //    fetch with the call-delay feature: a capped day now skips that call
+  //    too). addedToday counts every row in today's child, including rollover
+  //    carries — the cap is a day-cost brake and carried players cost dials
+  //    today too.
+  const { count: addedToday, error: countErr } = await supabase
+    .from("campaign_numbers_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", childId);
+  if (countErr) {
+    console.error(`[realtimePoll] ${parent.name}: addedToday count failed:`, countErr);
+    return { result: "polled", childId, added: 0 };
+  }
+  if (dailyCap != null && (addedToday ?? 0) >= dailyCap) {
+    await alertCapOnce(supabase, childId, parent.name, dailyCap);
+    return { result: "polled", childId, added: 0, capBlocked: true };
+  }
+
+  // 2b) Promotion pass (operator call delay): flip due 'waiting' members to
+  //     'queued' and give them their dial row. Runs even with zero new
+  //     members, and when the delay was cleared (null -> everything is due).
+  //     ponytail: 500-row tick bound; far above any real daily cap.
+  let promoted = 0;
+  const { data: waitingRows, error: waitErr } = await supabase
+    .from("realtime_seen_members")
+    .select("cio_id, phone_e164, first_seen_at")
+    .eq("parent_campaign_id", parent.id)
+    .eq("status", "waiting")
+    .order("first_seen_at", { ascending: true })
+    .limit(500);
+  if (waitErr) {
+    console.error(`[realtimePoll] ${parent.name}: waiting query failed:`, waitErr);
+  } else if (waitingRows && waitingRows.length > 0) {
+    const room = dailyCap == null ? 500 : dailyCap - (addedToday ?? 0);
+    const due = duePromotions(waitingRows as WaitingSeenRow[], parent.call_delay_minutes, now, room);
+    for (const w of due) {
+      if (!w.phone_e164) continue; // impossible by construction; guards manual edits
+      // Race-proof flip: only the tick that wins the waiting->queued update
+      // inserts the dial row (mirror of the claim upsert's RETURNING rule).
+      const { data: flipped, error: flipErr } = await supabase
+        .from("realtime_seen_members")
+        .update({ status: "queued", child_campaign_id: childId })
+        .eq("parent_campaign_id", parent.id)
+        .eq("cio_id", w.cio_id)
+        .eq("status", "waiting")
+        .select("cio_id");
+      if (flipErr || !flipped || flipped.length === 0) continue;
+      const { error: promoteInsErr } = await supabase.from("campaign_numbers_v2").insert({
+        campaign_id: childId,
+        phone_e164: w.phone_e164,
+        outcome: "pending",
+      });
+      if (promoteInsErr) {
+        // Compensation: flip back so the next tick retries. first_seen_at is
+        // untouched — the delay clock never resets, no lookup is re-paid.
+        console.error(
+          `[realtimePoll] ${parent.name}: promotion insert failed for ${w.cio_id} — flipping back:`,
+          promoteInsErr,
+        );
+        await supabase
+          .from("realtime_seen_members")
+          .update({ status: "waiting", child_campaign_id: null })
+          .eq("parent_campaign_id", parent.id)
+          .eq("cio_id", w.cio_id);
+        continue;
+      }
+      promoted++;
+    }
+    if (promoted > 0) {
+      console.log(
+        `[realtimePoll] ${parent.name}: promoted ${promoted} delayed sign-up(s) into ${child.name}`,
+      );
+    }
+  }
+
+  // 3) Membership ids — cheap (1 request per 1000 members). Transient fetch
   //    failure → skip this minute, next tick retries (spec §4: "skip a minute
   //    and try again").
   const members = new Map<string, CustomerIOSegmentMember>();
@@ -347,7 +426,7 @@ export async function pollRealtimeParent(
     cursor = batch.data.next;
   }
 
-  // 3) Diff against the seen-table (already-called memory, spec item 1).
+  // 4) Diff against the seen-table (already-called memory, spec item 1).
   // ponytail: full seen-table scan per tick — fine for months at PoC volume;
   // filter by first_seen_at >= the segment-retention window when it grows.
   const seenRows = await fetchAllRows(supabase, "realtime_seen_members", "cio_id", "cio_id", {
@@ -358,23 +437,7 @@ export async function pollRealtimeParent(
     Array.from(members.keys()),
     new Set(seenRows.map((r) => r.cio_id as string)),
   );
-  if (fresh.length === 0) return { result: "polled", childId, added: 0 };
-
-  // 4) Cap pre-check BEFORE spending profile lookups. addedToday counts every
-  //    row in today's child, including rollover carries — the cap is a
-  //    day-cost brake and carried players cost dials today too.
-  const { count: addedToday, error: countErr } = await supabase
-    .from("campaign_numbers_v2")
-    .select("id", { count: "exact", head: true })
-    .eq("campaign_id", childId);
-  if (countErr) {
-    console.error(`[realtimePoll] ${parent.name}: addedToday count failed:`, countErr);
-    return { result: "polled", childId, added: 0 };
-  }
-  if (dailyCap != null && (addedToday ?? 0) >= dailyCap) {
-    await alertCapOnce(supabase, childId, parent.name, dailyCap);
-    return { result: "polled", childId, added: 0, capBlocked: true };
-  }
+  if (fresh.length === 0) return { result: "polled", childId, added: 0, promoted };
 
   // 5) Profile lookups for NEW members only, bounded per tick. No silent
   //    caps: log what was deferred.
@@ -391,8 +454,13 @@ export async function pollRealtimeParent(
   }));
 
   // 6) Admit → claim → insert, sequentially (the cap counter is shared state).
+  //    With a call delay active, admitted members claim as 'waiting' with NO
+  //    dial row: the promotion pass (2b) gives them one when the delay is
+  //    served, and the cap is enforced there instead.
   const expectedCountry = expectedCountryForTimezone(parent.timezone);
+  const delayActive = parent.call_delay_minutes != null;
   let admitted = 0;
+  let claimedWaiting = 0;
   let rejectedCountry = 0;
   let lookupFailed = 0;
   let capBlocked = false;
@@ -417,17 +485,18 @@ export async function pollRealtimeParent(
       const decision = decideAdmission({
         rawPhone: extractPhoneFromAttrs(lookup.data.attributes),
         expectedCountry,
-        addedToday: (addedToday ?? 0) + admitted,
-        dailyCap,
+        addedToday: (addedToday ?? 0) + promoted + admitted,
+        // Waiting claims are not dial rows, so the cap does not apply to them.
+        dailyCap: delayActive ? null : dailyCap,
       });
       if ("capBlocked" in decision) {
         capBlocked = true;
         break; // stop adding — nothing claimed, members retry on a later day
       }
       if (decision.admit) {
-        claimStatus = "queued";
+        claimStatus = delayActive ? "waiting" : "queued";
         phone = decision.phone;
-        admitThis = true;
+        admitThis = !delayActive;
       } else {
         claimStatus = decision.claimStatus;
         phone = decision.phone;
@@ -458,6 +527,7 @@ export async function pollRealtimeParent(
       continue; // not claimed → retried next tick
     }
     const won = Array.isArray(claimed) && claimed.length > 0;
+    if (won && claimStatus === "waiting") claimedWaiting++;
     if (!won || !admitThis) continue;
 
     const { error: insErr } = await supabase.from("campaign_numbers_v2").insert({
@@ -493,8 +563,14 @@ export async function pollRealtimeParent(
   if (admitted > 0) {
     console.log(`[realtimePoll] ${parent.name}: +${admitted} player(s) queued into ${child.name}`);
   }
+  if (claimedWaiting > 0) {
+    console.log(
+      `[realtimePoll] ${parent.name}: +${claimedWaiting} sign-up(s) holding for the ` +
+        `${parent.call_delay_minutes}-min call delay`,
+    );
+  }
 
-  return { result: "polled", childId, added: admitted, rejectedCountry, capBlocked, lookupFailed, truncated };
+  return { result: "polled", childId, added: admitted, promoted, rejectedCountry, capBlocked, lookupFailed, truncated };
 }
 
 /**

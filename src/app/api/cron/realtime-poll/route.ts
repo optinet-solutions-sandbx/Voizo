@@ -84,6 +84,7 @@ export async function GET(request: NextRequest) {
       name: p.name as string,
       timezone: p.timezone as string,
       segment_id: (p.segment_id as number | null) ?? null,
+      call_delay_minutes: (p.call_delay_minutes as number | null) ?? null,
     };
 
     let summary: PollSummary;
@@ -157,9 +158,15 @@ export async function GET(request: NextRequest) {
         .select("id", { count: "exact", head: true })
         .eq("campaign_id", summary.childId)
         .in("outcome", ["pending", "pending_retry"]);
+      const { count: held } = await supabaseAdmin
+        .from("realtime_seen_members")
+        .select("cio_id", { count: "exact", head: true })
+        .eq("parent_campaign_id", parent.id)
+        .eq("status", "waiting");
       await postSlackNote("Realtime hourly", [
         `${parent.name}: +${newThisHour ?? 0} new player(s) this hour, ` +
-          `${calledThisHour ?? 0} call(s) made, ${waiting ?? 0} waiting in the queue.`,
+          `${calledThisHour ?? 0} call(s) made, ${waiting ?? 0} waiting in the queue` +
+          `${(held ?? 0) > 0 ? `, ${held} held by the call delay` : ""}.`,
       ]);
     }
   }
