@@ -520,6 +520,11 @@ describe("deriveDisplayStatus (the 'Finished' rule)", () => {
   it("trusts a live running status (even past end_at)", () => {
     expect(deriveDisplayStatus({ rawStatus: "running", endAtMs: now - day, lastCallMs: now, nowMs: now })).toBe("running");
   });
+  it("an armed recurring PARENT (running) shows as 'scheduled', not 'running'", () => {
+    expect(deriveDisplayStatus({ rawStatus: "running", endAtMs: null, lastCallMs: null, nowMs: now, isRecurringParent: true })).toBe("scheduled");
+    // paused/finished recurring parents are unaffected — only 'running' maps to scheduled.
+    expect(deriveDisplayStatus({ rawStatus: "completed", endAtMs: null, lastCallMs: null, nowMs: now, isRecurringParent: true })).toBe("finished");
+  });
   // Completed + Ended folded into one "Finished" state (Jasiel 2026-07-03, Phase 1 vocab trim):
   // both mean "ran, now done" — the completed-vs-ended split wasn't operationally useful.
   it("paused past its scheduled end_at → finished", () => {

@@ -232,7 +232,9 @@ function CampaignsPageInner() {
   // Counts for filter pills
   const counts = useMemo(() => ({
     all: campaigns.length,
-    running: campaigns.filter((c) => c.status === "running").length,
+    // Display status: an armed recurring parent counts as "scheduled", not
+    // "running" (matches the row labels — it isn't dialing, its children are).
+    running: campaigns.filter((c) => displayStatusOf(c) === "running").length,
     paused: campaigns.filter((c) => c.status === "paused").length,
     completed: campaigns.filter((c) => c.status === "completed").length,
     draft: campaigns.filter((c) => c.status === "draft").length,
@@ -243,7 +245,10 @@ function CampaignsPageInner() {
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return campaigns.filter((c) => {
-      const status = (c.status as string) || "draft";
+      // Filter on display status so the "Running" pill matches the row labels
+      // (an armed recurring parent is "scheduled", surfaced in the always-on
+      // section + under "All", not under Running).
+      const status = displayStatusOf(c);
       const type = (c.campaign_type as string) === "recurring" ? "recurring" : "fixed";
       if (statusFilter !== "all" && status !== statusFilter) return false;
       if (typeFilter !== "all" && type !== typeFilter) return false;

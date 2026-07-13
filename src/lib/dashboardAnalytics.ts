@@ -123,10 +123,14 @@ export function deriveDisplayStatus(opts: {
   lastCallMs: number | null;
   nowMs: number;
   idleDays?: number;
+  // A recurring PARENT with status='running' is an armed SCHEDULE, not a
+  // dialing campaign (its day-children dial). Show it as "Scheduled" so the
+  // analytics tables match the campaigns list + always-on section.
+  isRecurringParent?: boolean;
 }): DisplayStatus {
-  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = FINISHED_IDLE_DAYS } = opts;
+  const { rawStatus, endAtMs, lastCallMs, nowMs, idleDays = FINISHED_IDLE_DAYS, isRecurringParent } = opts;
   const s = (rawStatus ?? "").toLowerCase();
-  if (s === "running") return "running"; // trust a live status
+  if (s === "running") return isRecurringParent ? "scheduled" : "running"; // trust a live status
   if (s === "inactive" || s === "draft") return "finished"; // never-ran folded into Finished (2026-07-03)
   if (s === "completed" || s === "archived") return "finished";
   if (endAtMs !== null && endAtMs <= nowMs) return "finished"; // reached its scheduled end
@@ -805,6 +809,7 @@ export function computeCampaignTable(
           lastCallMs,
           nowMs,
           idleDays,
+          isRecurringParent: c.campaign_type === "recurring",
         }),
         scheduleType: c.campaign_type === "recurring" ? "recurring" : "fixed",
         voiceId: c.voice_id ?? null,
