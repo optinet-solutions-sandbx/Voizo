@@ -13,7 +13,7 @@
 
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
-import { parsePhoneList, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
+import { parsePhoneList, resolveCallDelay, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
 import { allowedTimezonesForCountry, audienceTzGuard, detectAudienceCountry } from "@/lib/audienceCountry";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
 import { clockHHMMInTimezone, isWithinCallWindowAt, resolveStartAt } from "@/lib/scheduleWindow";
@@ -148,6 +148,10 @@ export interface WizardState {
   maxTries: number;
   /** Daily cap ("" = unset). Required for realtime campaigns — the cost brake. */
   dailyCapText: string;
+  /** "Call new sign-ups" pill (realtime only). "now" = right away (DB null). */
+  callDelayChoice: "now" | "5" | "30" | "60" | "custom";
+  /** Raw custom-minutes text; parsed by resolveCallDelay at submit. */
+  callDelayCustomText: string;
   scheduleRows: ScheduleRow[];
   startMode: StartMode;
   delayMinutes: number;
@@ -231,6 +235,8 @@ export type SchedulePayload = Partial<
     | "retryGapMinutes"
     | "maxTries"
     | "dailyCapText"
+    | "callDelayChoice"
+    | "callDelayCustomText"
     | "scheduleRows"
     | "startMode"
     | "delayMinutes"
@@ -383,6 +389,8 @@ export function createInitialState(): WizardState {
     retryGapMinutes: 90, // spec §7 default — mirrors the dialer/scheduler "?? 90"
     maxTries: 3,         // spec §7 default — mirrors "?? 3"
     dailyCapText: "",
+    callDelayChoice: "now",
+    callDelayCustomText: "",
     scheduleRows: initialScheduleRows(hours.start, hours.end),
     startMode: "now",
     delayMinutes: 60,
@@ -676,6 +684,9 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       realtime: state.realtime,
       // parseGoalTarget IS the house positive-int-or-null parser; reused here.
       dailyCap: state.realtime ? parseGoalTarget(state.dailyCapText) : null,
+      callDelayMinutes: state.realtime
+        ? resolveCallDelay(state.callDelayChoice, state.callDelayCustomText).minutes
+        : null,
       smsLastResortTemplate: composedLastResortTemplate(state),
     };
   }
@@ -758,6 +769,9 @@ export function validateBeforeSubmit(state: WizardState): string | null {
     }
     if (state.realtime && parseGoalTarget(state.dailyCapText) === null) {
       return "Real-time campaigns need a daily cap (whole number above 0).";
+    }
+    if (state.realtime && resolveCallDelay(state.callDelayChoice, state.callDelayCustomText).invalid) {
+      return "Custom call delay must be a whole number of minutes between 1 and 1440 (24 hours).";
     }
     return null;
   }
