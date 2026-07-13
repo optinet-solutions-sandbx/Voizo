@@ -34,6 +34,9 @@ interface Props {
   campaigns: CampaignRow[];
   /** The page's setCampaigns — local optimistic updates after actions. */
   onMutate: (updater: (prev: CampaignRow[]) => CampaignRow[]) => void;
+  /** Per-campaign analytics (keyed by id) so a parent row can show today's
+   *  child's contacted-of-players inline. Structural subset of CampaignAnalytics. */
+  analytics?: Record<string, { reach: number; targeted: number }>;
 }
 
 const RETRY_GAP_PRESETS = [30, 60, 90] as const;
@@ -57,7 +60,7 @@ interface SettingsDraft {
   timezone: string;
 }
 
-export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
+export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }: Props) {
   const rows = deriveAlwaysOnRows(campaigns);
   const [actionId, setActionId] = useState<string | null>(null);
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null);
@@ -241,6 +244,7 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
           const parentRunning = (parent.status as string) === "running";
           const child = row.latestChild;
           const childStatus = (child?.status as string) ?? null;
+          const childStats = child ? analytics[child.id as string] : undefined;
           const busy = actionId === parentId;
           const settingsOpen = openSettingsId === parentId;
 
@@ -279,6 +283,12 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                         >
                           {childStatus}
                         </Link>
+                        {childStats && childStats.targeted > 0 && (
+                          <span className="text-[var(--text-2)]">
+                            {" · "}
+                            {childStats.reach.toLocaleString()} of {childStats.targeted.toLocaleString()} players contacted
+                          </span>
+                        )}
                         {childStatus === "paused" && parentRunning && (
                           <span> (resume it from its page)</span>
                         )}

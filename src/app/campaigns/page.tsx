@@ -386,7 +386,7 @@ function CampaignsPageInner() {
           the first one exists, so today's prod sees no change. Owns the
           compound Stop (parent + today's child) and the next-child settings
           drawer. */}
-      <AlwaysOnSection campaigns={campaigns} onMutate={setCampaigns} />
+      <AlwaysOnSection campaigns={campaigns} onMutate={setCampaigns} analytics={analytics} />
 
       {/* KPI strip — shared StatBand; reflects the current search / filters / date window.
           Numbers CountUp (locale-formatted). The old StatCard hint tooltips are preserved as
