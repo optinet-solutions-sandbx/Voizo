@@ -429,6 +429,12 @@ export default function AlwaysOnSection({ campaigns, onMutate }: Props) {
                     <p className="text-[11px] text-[var(--text-3)]">
                       Takes effect from tomorrow&apos;s run.
                     </p>
+                    <Link
+                      href={`/campaigns/v2/${parentId}/edit`}
+                      className="ml-auto text-[11px] text-blue-400 hover:text-blue-300 transition"
+                    >
+                      Edit campaign (schedule, audience, more)
+                    </Link>
                   </div>
                 </div>
               )}
