@@ -652,6 +652,11 @@ export interface CloneResult {
   poolSlotId?: string;
   baseAssistantId: string;
   voiceId: string | null;
+  // VOZ-160 (script mode): the DUPLICATED, campaign-owned script the clone was
+  // composed from. The campaign persists this — NOT the operator's original —
+  // so editing the original later never touches a running campaign.
+  scriptId?: string;
+  scriptName?: string;
 }
 
 /** Request body for POST /api/vapi/clone-assistant (Fixed path only). */
@@ -663,6 +668,7 @@ export function buildCloneRequest(state: WizardState) {
     return {
       agentMode: "script" as const,
       scriptId: state.scriptId,
+      scriptName: state.scriptName || undefined,
       persona: state.systemPrompt || undefined,
       campaignName: state.name.trim(),
     };
@@ -737,8 +743,10 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     name: state.name.trim(),
     systemPrompt: state.systemPrompt,
     agentMode: state.agentMode,
-    scriptId: state.agentMode === "script" ? state.scriptId : undefined,
-    scriptName: state.agentMode === "script" ? state.scriptName : undefined,
+    // Persist the DUPLICATED campaign-owned script the clone returned (falls
+    // back to the picked one only if the clone didn't duplicate).
+    scriptId: state.agentMode === "script" ? (clone.scriptId ?? state.scriptId) : undefined,
+    scriptName: state.agentMode === "script" ? (clone.scriptName ?? state.scriptName) : undefined,
     vapiAssistantId: clone.assistantId,
     vapiAssistantName: clone.assistantName,
     vapiSipUri: clone.sipUri,
