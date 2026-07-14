@@ -72,6 +72,10 @@ export async function POST(request: NextRequest) {
   // mode this is the designated script-base assistant, not an operator pick.
   let clonedFromBase = baseAssistantId ?? null;
 
+  // Set when a per-campaign script copy is made below, so the response can echo
+  // it (the campaign persists the COPY, not the operator's original).
+  let campaignScript: { id: string; name: string } | null = null;
+
   let cloneResult;
   if (agentMode === "script") {
     if (!scriptId) {
@@ -85,14 +89,37 @@ export async function POST(request: NextRequest) {
         { status: 500 },
       );
     }
+    // ── Duplicate the script (VOZ-160) ──
+    // Same isolation principle as the agent clone: the campaign runs a FROZEN
+    // per-campaign copy of the script graph, so the operator can keep editing
+    // the original in the Script Builder without disturbing a live campaign or
+    // the original's pipeline. Deep-copies nodes + edges (fresh ids).
+    const scriptName = body.scriptName as string | undefined;
+    const { duplicateScript, deleteScript } = await import("@/lib/scriptEngine/lab-db");
+    const copyName = `${scriptName ?? "Script"} — campaign: ${campaignName ?? "untitled"}`.slice(0, 200);
+    let copy;
+    try {
+      copy = await duplicateScript(scriptId, copyName);
+    } catch (e) {
+      return NextResponse.json(
+        { error: `Failed to duplicate script: ${e instanceof Error ? e.message : "unknown"}` },
+        { status: 502 },
+      );
+    }
+    campaignScript = { id: copy.id, name: copy.name };
+
     // Point the clone's webhook at the script-call route (derived from the
     // end-of-call default so preview deployments route correctly too).
     const eocUrl = process.env.VAPI_WEBHOOK_URL ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
     const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
     const { composeScriptClone } = await import("@/lib/scriptEngine/composeAssistant");
     const persona = (body.persona as string | undefined) ?? systemPrompt;
-    const scriptClone = await composeScriptClone({ scriptId, persona });
+    const scriptClone = await composeScriptClone({ scriptId: copy.id, persona });
     cloneResult = await createClone(key, scriptBase, { voiceId, campaignName, scriptClone, serverUrl });
+    // Clone failed → the script copy is orphaned; best-effort remove it.
+    if (!cloneResult.ok) {
+      await deleteScript(copy.id).catch(() => {});
+    }
   } else {
     // ── 1-3. Validate input + fetch base + build & POST clone (via helper) ──
     // The helper enforces the same input validation that used to live here
@@ -174,6 +201,7 @@ export async function POST(request: NextRequest) {
       poolSlotId: slot.id,
       baseAssistantId: clonedFromBase,
       voiceId: voiceId ?? null,
+      ...(campaignScript ? { scriptId: campaignScript.id, scriptName: campaignScript.name } : {}),
     });
   }
 
@@ -231,5 +259,6 @@ export async function POST(request: NextRequest) {
     sipUri: phone.sipUri ?? sipUri,
     baseAssistantId: clonedFromBase,
     voiceId: voiceId ?? null,
+    ...(campaignScript ? { scriptId: campaignScript.id, scriptName: campaignScript.name } : {}),
   });
 }
