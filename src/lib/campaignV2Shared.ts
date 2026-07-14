@@ -19,6 +19,12 @@ export type CallWindow = {
 export interface CampaignV2CreateInput {
   name: string;
   systemPrompt: string;
+  // VOZ-160 (Script Engine). 'assistant' (default) = pick a Vapi assistant
+  // (today's flow). 'script' = run a Script Engine flow; the clone is composed
+  // from scriptId at launch. scriptId/scriptName only meaningful in script mode.
+  agentMode?: "assistant" | "script";
+  scriptId?: string | null;
+  scriptName?: string | null;
   vapiAssistantId?: string; // Optional: recurring parents are created without a clone (no worker leased). Required for Fixed campaigns.
   vapiAssistantName?: string;
   vapiSipUri?: string;

@@ -60,15 +60,50 @@ export async function POST(request: NextRequest) {
   const systemPrompt = body.systemPrompt as string | undefined;
   const campaignName = body.campaignName as string | undefined;
 
-  // ── 1-3. Validate input + fetch base + build & POST clone (via helper) ──
-  // The helper enforces the same input validation that used to live here
-  // (baseAssistantId length, voiceId allowlist, systemPrompt length, voice
-  // provider mismatch). Behavior is bit-exact with the pre-2026-05-18 route.
-  const cloneResult = await createClone(key, baseAssistantId ?? "", {
-    voiceId,
-    systemPrompt,
-    campaignName,
-  });
+  // VOZ-160: script-mode clone. Composes the prompt/config from scriptId and
+  // clones the DESIGNATED script-base assistant (VAPI_SCRIPT_BASE_ASSISTANT_ID)
+  // — the operator picked a Script, not an assistant. Everything downstream
+  // (SIP binding, response) is identical to agent mode.
+  const agentMode = body.agentMode as string | undefined;
+  const scriptId = body.scriptId as string | undefined;
+
+  // The base assistant actually cloned — echoed in the response so the campaign
+  // row persists it (rebind/resume re-clone from base_assistant_id). For script
+  // mode this is the designated script-base assistant, not an operator pick.
+  let clonedFromBase = baseAssistantId ?? null;
+
+  let cloneResult;
+  if (agentMode === "script") {
+    if (!scriptId) {
+      return NextResponse.json({ error: "scriptId required for script mode" }, { status: 400 });
+    }
+    const scriptBase = baseAssistantId || process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+    clonedFromBase = scriptBase ?? null;
+    if (!scriptBase) {
+      return NextResponse.json(
+        { error: "VAPI_SCRIPT_BASE_ASSISTANT_ID is not set (the base assistant to clone for script campaigns)" },
+        { status: 500 },
+      );
+    }
+    // Point the clone's webhook at the script-call route (derived from the
+    // end-of-call default so preview deployments route correctly too).
+    const eocUrl = process.env.VAPI_WEBHOOK_URL ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
+    const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
+    const { composeScriptClone } = await import("@/lib/scriptEngine/composeAssistant");
+    const persona = (body.persona as string | undefined) ?? systemPrompt;
+    const scriptClone = await composeScriptClone({ scriptId, persona });
+    cloneResult = await createClone(key, scriptBase, { voiceId, campaignName, scriptClone, serverUrl });
+  } else {
+    // ── 1-3. Validate input + fetch base + build & POST clone (via helper) ──
+    // The helper enforces the same input validation that used to live here
+    // (baseAssistantId length, voiceId allowlist, systemPrompt length, voice
+    // provider mismatch). Behavior is bit-exact with the pre-2026-05-18 route.
+    cloneResult = await createClone(key, baseAssistantId ?? "", {
+      voiceId,
+      systemPrompt,
+      campaignName,
+    });
+  }
 
   if (!cloneResult.ok) {
     return NextResponse.json(
@@ -137,7 +172,7 @@ export async function POST(request: NextRequest) {
       assistantName: clone.name,
       sipUri: slot.sip_uri,
       poolSlotId: slot.id,
-      baseAssistantId,
+      baseAssistantId: clonedFromBase,
       voiceId: voiceId ?? null,
     });
   }
@@ -194,7 +229,7 @@ export async function POST(request: NextRequest) {
     assistantId: clone.id,
     assistantName: clone.name,
     sipUri: phone.sipUri ?? sipUri,
-    baseAssistantId,
+    baseAssistantId: clonedFromBase,
     voiceId: voiceId ?? null,
   });
 }
