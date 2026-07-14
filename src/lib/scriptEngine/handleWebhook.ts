@@ -40,7 +40,7 @@ const SPECIAL_INTENTS = new Set(["first_message", "identity"]);
 
 export type VapiMessage = {
   type?: string;
-  call?: { id?: string; monitor?: { controlUrl?: string } };
+  call?: { id?: string; assistantId?: string; monitor?: { controlUrl?: string } };
   // transcript events
   role?: string;
   transcriptType?: string;

@@ -22,27 +22,34 @@ import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { processEndOfCall } from "@/lib/webhooks/processEndOfCall";
 import { handleWebhook, type VapiMessage } from "@/lib/scriptEngine/handleWebhook";
+import { decideScriptSeed, type CampaignScriptRow } from "@/lib/scriptEngine/resolveScript";
 
 // The engine can hold the line a while (speaking lock + classification + inject).
 export const maxDuration = 60;
 
 /**
- * Ensure lab_call_flow_state.script_id is set for this call before the engine
- * runs, so it walks the campaign's script (not a global default).
+ * Seed lab_call_flow_state.script_id for this call BEFORE the engine runs, so
+ * it walks the campaign's script (not a global default). Resolution ladder
+ * (spec: docs/superpowers/specs/2026-07-14-script-resolution-hardening-design.md):
  *
- * Deterministic path: vapi_call_id -> calls_v2.campaign_id ->
- * campaigns_v2.script_id. Idempotent: only seeds when the row is missing (the
- * engine owns the row from the first turn onward).
+ *  0. row already seeded → return (the engine owns the row from turn 1)
+ *  1. message.call.assistantId → campaigns_v2.vapi_assistant_id — available on
+ *     the FIRST message of the call (same field the voicemail auto-hangup path
+ *     reads in end-of-call/route.ts). No .limit(1): assistant ids can recur
+ *     (pool rotations, legacy shared voizo-poc). decideScriptSeed dedups by
+ *     DISTINCT script_id; genuine ambiguity falls through — a wrong seed here
+ *     would be permanent, since leg 0 returns early on any seeded row.
+ *  2. calls_v2.vapi_call_id → campaign → script_id — the exact key; matched
+ *     LATE by the SIP bridge, so it can miss early turns (kept as backstop).
+ *  3. loud miss log — the engine will fall back to lab_settings' default;
+ *     that must be visible, never silent. Fires per turn until seeded
+ *     (bounded by call length; acceptable pilot noise).
  *
- * LIVE-HARDENING CAVEAT (plan §2.4): calls_v2.vapi_call_id is matched LATE
- * (the SIP bridge doesn't know the VAPI call id at dial time), so mid-call
- * this lookup can miss. TODO(VOZ-160/live): stamp script_id at dial time, or
- * fall back to SIP-URI-suffix matching + "the one running script campaign on
- * that slot" (concurrency is per-slot sequential, so that's deterministic in
- * practice). Until then, a miss means the engine falls back to its own
- * lab_settings default — acceptable for the attended pilot, not for prod.
+ * NOTE: lab_settings.active_script_id remains the ENGAGEMENT GATE for the
+ * scripted runtime (handleWebhook.ts:738, lab-watchdog.ts:41) — this ladder
+ * de-globalizes script IDENTITY only. De-globalizing the gate is workstream C.
  */
-async function resolveScriptForCall(vapiCallId: string): Promise<void> {
+async function resolveScriptForCall(vapiCallId: string, assistantId: string | null): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
       .from("lab_call_flow_state")
@@ -51,23 +58,63 @@ async function resolveScriptForCall(vapiCallId: string): Promise<void> {
       .maybeSingle();
     if (existing?.script_id) return; // engine already knows this call's script
 
+    // ── Leg 1: assistantId → campaign (deterministic from the first message) ──
+    if (assistantId) {
+      const { data: camps } = await supabaseAdmin
+        .from("campaigns_v2")
+        .select("id, script_id, agent_mode")
+        .eq("vapi_assistant_id", assistantId);
+      const decision = decideScriptSeed((camps ?? []) as CampaignScriptRow[]);
+      if (decision.kind === "seed") {
+        await supabaseAdmin
+          .from("lab_call_flow_state")
+          .upsert({ call_id: vapiCallId, script_id: decision.scriptId }, { onConflict: "call_id" });
+        await supabaseAdmin.from("lab_call_events").insert({
+          call_id: vapiCallId,
+          event_type: "status",
+          content: "script resolved via assistantId",
+          meta: { assistantId, campaignId: decision.campaignId, scriptId: decision.scriptId },
+        });
+        return;
+      }
+      if (decision.kind === "ambiguous") {
+        await supabaseAdmin.from("lab_call_events").insert({
+          call_id: vapiCallId,
+          event_type: "error",
+          content: `assistantId ambiguous — ${decision.campaignIds.length} campaigns, fell through`,
+          meta: { assistantId, campaignIds: decision.campaignIds, scriptIds: decision.scriptIds },
+        });
+        // fall through to leg 2 (exact key) — never guess
+      }
+    }
+
+    // ── Leg 2: exact key — vapi_call_id -> calls_v2 -> campaign (backstop) ──
     const { data: call } = await supabaseAdmin
       .from("calls_v2")
       .select("campaign_id")
       .eq("vapi_call_id", vapiCallId)
       .maybeSingle();
-    if (!call?.campaign_id) return; // late-matching miss — see caveat above
+    if (call?.campaign_id) {
+      const { data: camp } = await supabaseAdmin
+        .from("campaigns_v2")
+        .select("script_id")
+        .eq("id", call.campaign_id)
+        .maybeSingle();
+      if (camp?.script_id) {
+        await supabaseAdmin
+          .from("lab_call_flow_state")
+          .upsert({ call_id: vapiCallId, script_id: camp.script_id }, { onConflict: "call_id" });
+        return;
+      }
+    }
 
-    const { data: camp } = await supabaseAdmin
-      .from("campaigns_v2")
-      .select("script_id")
-      .eq("id", call.campaign_id)
-      .maybeSingle();
-    if (!camp?.script_id) return;
-
-    await supabaseAdmin
-      .from("lab_call_flow_state")
-      .upsert({ call_id: vapiCallId, script_id: camp.script_id }, { onConflict: "call_id" });
+    // ── Leg 3: loud miss — fallback usage must be visible, never silent ──
+    await supabaseAdmin.from("lab_call_events").insert({
+      call_id: vapiCallId,
+      event_type: "error",
+      content: "script resolution missed — engine will use lab default",
+      meta: { assistantId },
+    });
   } catch (err) {
     // Never block the turn on resolution — the engine still runs.
     console.warn(`[script-call] script resolution failed for ${vapiCallId}:`, err);
@@ -114,7 +161,7 @@ export async function POST(request: NextRequest) {
   // this campaign's flow, then hand the message to the ported runtime.
   if (type === "transcript" || type === "speech-update" || type === "status-update" || type === "tool-calls") {
     const callId = message.call?.id;
-    if (callId) await resolveScriptForCall(callId);
+    if (callId) await resolveScriptForCall(callId, message.call?.assistantId ?? null);
     return handleWebhook(message);
   }
 
