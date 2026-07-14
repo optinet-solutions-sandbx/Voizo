@@ -10,12 +10,18 @@ export async function GET() {
   try {
     const scripts = await listScripts();
     return NextResponse.json({
-      scripts: scripts.map((s) => ({
-        id: s.id,
-        name: s.name,
-        description: s.description,
-        updatedAt: s.updated_at,
-      })),
+      // Hide per-campaign script copies (named "… — campaign: …" by the launch
+      // path, VOZ-160) so operators only pick ORIGINAL scripts as a base.
+      // TODO(VOZ-169): replace this naming-convention filter with a proper
+      // is_campaign_copy flag column.
+      scripts: scripts
+        .filter((s) => !/ — campaign: /.test(s.name))
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          updatedAt: s.updated_at,
+        })),
     });
   } catch (e) {
     return NextResponse.json(
