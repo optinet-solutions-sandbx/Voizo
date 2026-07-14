@@ -128,10 +128,20 @@ export interface WizardState {
   isTest: boolean;                 // Marks the campaign as a test; excludes from /audience suggestions. Defaults false.
 
   // Step 2 — Agent
+  /**
+   * VOZ-159: which kind of caller. 'assistant' (default) = pick a Vapi
+   * assistant (today's flow, untouched). 'script' = pick a Script; the clone
+   * is composed from the graph at launch (VOZ-160). Existing behavior is the
+   * default, so agent-mode campaigns see no change.
+   */
+  agentMode: "assistant" | "script";
   vapiAssistantId: string;
   baseVoiceId: string | null;      // read-only display; voice lock per R3
   voiceId: string;                 // R3: always "" in classic; never set by any UI; kept to make `voiceId || undefined` math identical in buildCloneRequest
   systemPrompt: string;
+  /** Script-mode: the chosen listener_scripts id + display name. */
+  scriptId: string;
+  scriptName: string;
 
   // Step 3 — Schedule (Run-once branch)
   campaignType: "fixed" | "recurring";
@@ -219,7 +229,7 @@ export interface ImportSegmentPayload {
  * clone request relies on its undefined-ness to inherit from base.
  */
 export type AgentPayload = Partial<
-  Pick<WizardState, "vapiAssistantId" | "baseVoiceId" | "systemPrompt">
+  Pick<WizardState, "agentMode" | "vapiAssistantId" | "baseVoiceId" | "systemPrompt" | "scriptId" | "scriptName">
 >;
 
 /**
@@ -379,10 +389,13 @@ export function createInitialState(): WizardState {
     segmentName: null,
     isTest: false,
 
+    agentMode: "assistant",
     vapiAssistantId: "",
     baseVoiceId: null,
     voiceId: "",
     systemPrompt: "",
+    scriptId: "",
+    scriptName: "",
 
     campaignType: "fixed",
     realtime: false,
@@ -740,7 +753,12 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
  */
 export function validateBeforeSubmit(state: WizardState): string | null {
   if (!state.name.trim()) return "Campaign name is required.";
-  if (!state.vapiAssistantId.trim()) return "Pick a Vapi assistant.";
+  // VOZ-159: script mode requires a Script; assistant mode requires an assistant.
+  if (state.agentMode === "script") {
+    if (!state.scriptId.trim()) return "Pick a Script.";
+  } else if (!state.vapiAssistantId.trim()) {
+    return "Pick a Vapi assistant.";
+  }
 
   // Optional campaign goal target. Empty is always valid; a non-empty value
   // that isn't a positive whole number is rejected (mirrors the DB CHECK
