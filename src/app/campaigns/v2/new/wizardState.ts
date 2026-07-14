@@ -656,6 +656,17 @@ export interface CloneResult {
 
 /** Request body for POST /api/vapi/clone-assistant (Fixed path only). */
 export function buildCloneRequest(state: WizardState) {
+  // VOZ-160 script mode: no operator-picked base assistant — the route clones
+  // the designated script-base assistant (VAPI_SCRIPT_BASE_ASSISTANT_ID) and
+  // composes the prompt from scriptId. persona is saved as system_prompt.
+  if (state.agentMode === "script") {
+    return {
+      agentMode: "script" as const,
+      scriptId: state.scriptId,
+      persona: state.systemPrompt || undefined,
+      campaignName: state.name.trim(),
+    };
+  }
   return {
     baseAssistantId: state.vapiAssistantId.trim(),
     voiceId: state.voiceId || undefined,         // R3: state.voiceId is "" in practice
@@ -675,6 +686,9 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     return {
       name: state.name.trim(),
       systemPrompt: state.systemPrompt,
+      agentMode: state.agentMode,
+      scriptId: state.agentMode === "script" ? state.scriptId : undefined,
+      scriptName: state.agentMode === "script" ? state.scriptName : undefined,
       // vapiAssistantId omitted — recurring parents have no clone.
       baseAssistantId: state.vapiAssistantId.trim(),
       voiceId: state.voiceId || undefined,
@@ -722,6 +736,9 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
   return {
     name: state.name.trim(),
     systemPrompt: state.systemPrompt,
+    agentMode: state.agentMode,
+    scriptId: state.agentMode === "script" ? state.scriptId : undefined,
+    scriptName: state.agentMode === "script" ? state.scriptName : undefined,
     vapiAssistantId: clone.assistantId,
     vapiAssistantName: clone.assistantName,
     vapiSipUri: clone.sipUri,

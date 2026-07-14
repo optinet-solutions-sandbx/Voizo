@@ -69,6 +69,17 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       ...(typeof input.voicemailAutohangup === "boolean"
         ? { voicemail_autohangup: input.voicemailAutohangup }
         : {}),
+      // Script mode (VOZ-160): conditional keys — only script campaigns send
+      // them, so agent-mode creates work whether or not
+      // supabase-migration-campaign-agent-mode.sql is applied (absent key → DB
+      // default agent_mode='assistant'). script_id/script_name identify the flow.
+      ...(input.agentMode === "script"
+        ? {
+            agent_mode: "script",
+            script_id: input.scriptId ?? null,
+            script_name: input.scriptName ?? null,
+          }
+        : {}),
       // Operator controls + realtime mode (VOZ-132): validated/whitelisted by
       // the pure normalizer; conditional keys throughout (see its docblock).
       ...normalizeOperatorControls(input),
