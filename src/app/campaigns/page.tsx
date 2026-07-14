@@ -356,7 +356,9 @@ function CampaignsPageInner() {
   }
 
   const activeCount = campaigns.filter((c) => (c.status as string) !== "archived").length;
-  const runningCount = campaigns.filter((c) => (c.status as string) === "running").length;
+  // Display status: an armed recurring parent shows as "Scheduled", so it must
+  // not be tallied here (mirrors counts.running / the row labels — VOZ-145).
+  const runningCount = counts.running;
 
   return (
     // Shell — SectionTick + 18px header, p-4/gap-4 console density (design-system rollout,
