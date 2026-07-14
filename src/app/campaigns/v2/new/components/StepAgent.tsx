@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Loader2, Megaphone, Phone } from "lucide-react";
+import { Bot, FileText, Loader2, Megaphone, Phone } from "lucide-react";
 import type { Dispatch } from "react";
 
 import type { WizardAction, WizardState } from "../wizardState";
@@ -16,15 +16,25 @@ export interface Assistant {
   firstMessage: string | null;
 }
 
+/** Shape of an entry in GET /api/scripts (VOZ-159). */
+export interface ScriptOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
 interface Props {
   state: WizardState;
   dispatch: Dispatch<WizardAction>;
   assistants: Assistant[] | null;
   assistantsError: string | null;
+  scripts: ScriptOption[] | null;
+  scriptsError: string | null;
 }
 
-export default function StepAgent({ state, dispatch, assistants, assistantsError }: Props) {
+export default function StepAgent({ state, dispatch, assistants, assistantsError, scripts, scriptsError }: Props) {
   const selected = assistants?.find((a) => a.id === state.vapiAssistantId) ?? null;
+  const isScript = state.agentMode === "script";
 
   /**
    * Atomic pick: when an assistant is selected, set vapiAssistantId +
@@ -46,10 +56,98 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
     <div className="flex-1 flex flex-col">
       <h1 className="text-[22px] font-bold tracking-tight">Who&apos;s making the call?</h1>
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
-        Pick the Vapi assistant. Voice is locked to the assistant&apos;s default. Change it in
-        Vapi if you need a different one.
+        {isScript
+          ? "Pick a Script — a call flow you built in the Script Builder. At launch a dedicated agent is composed from the script's boxes and answers."
+          : "Pick the Vapi assistant. Voice is locked to the assistant's default. Change it in Vapi if you need a different one."}
       </p>
 
+      {/* VOZ-159: Agent vs Script mode selector */}
+      <div className="mt-6 grid grid-cols-2 gap-2.5">
+        {([
+          { mode: "assistant" as const, icon: Bot, label: "Vapi Agent", sub: "A prompt-driven assistant" },
+          { mode: "script" as const, icon: FileText, label: "Script", sub: "A flow from the Script Builder" },
+        ]).map(({ mode, icon: Icon, label, sub }) => {
+          const active = state.agentMode === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => dispatch({ type: "SET_AGENT_FIELDS", payload: { agentMode: mode } })}
+              className={`text-left flex items-start gap-3 px-3.5 py-3 rounded-xl border-[1.5px] transition-all ${
+                active ? "border-blue-500 bg-blue-500/[0.08]" : "border-[var(--border)] bg-[var(--bg-app)] hover:border-blue-500/40"
+              }`}
+            >
+              <div className={`w-9 h-9 rounded-lg grid place-items-center flex-shrink-0 ${active ? "bg-blue-500 text-white" : "bg-[var(--bg-elevated)] text-[var(--text-3)]"}`}>
+                <Icon size={15} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-[var(--text-1)]">{label}</div>
+                <div className="text-[12px] text-[var(--text-3)] mt-0.5">{sub}</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {isScript ? (
+        <div className="mt-7 flex flex-col gap-[18px]">
+          {/* Script picker */}
+          <div className="flex flex-col gap-2">
+            <label htmlFor="wizard-script" className="text-xs font-medium text-[var(--text-2)]">
+              Script <span className="text-red-400">*</span>
+            </label>
+            {scriptsError ? (
+              <div className="px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">{scriptsError}</div>
+            ) : scripts === null ? (
+              <div className="px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-sm text-[var(--text-3)] inline-flex items-center gap-2">
+                <Loader2 size={14} className="animate-spin" />
+                Loading scripts…
+              </div>
+            ) : scripts.length === 0 ? (
+              <div className="px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-sm text-[var(--text-3)]">
+                No scripts yet. Build one in the Script Builder first.
+              </div>
+            ) : (
+              <select
+                id="wizard-script"
+                value={state.scriptId}
+                onChange={(e) => {
+                  const s = scripts.find((x) => x.id === e.target.value);
+                  dispatch({ type: "SET_AGENT_FIELDS", payload: { scriptId: s?.id ?? "", scriptName: s?.name ?? "" } });
+                }}
+                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm [color-scheme:dark]"
+              >
+                <option value="">Select a script…</option>
+                {scripts.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+            <a href="/script-builder" target="_blank" rel="noreferrer" className="text-[12px] text-blue-400 hover:text-blue-300 w-fit">
+              Edit in Script Builder →
+            </a>
+          </div>
+
+          {/* Persona (who the agent is) — saved to system_prompt */}
+          <div className="flex flex-col gap-2">
+            <label htmlFor="wizard-persona" className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
+              Persona
+              <span className="text-[11px] text-[var(--text-3)] font-normal">who the agent is — name, brand, tone</span>
+            </label>
+            <textarea
+              id="wizard-persona"
+              value={state.systemPrompt}
+              onChange={(e) => dispatch({ type: "SET_AGENT_FIELDS", payload: { systemPrompt: e.target.value } })}
+              rows={6}
+              className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y text-sm leading-relaxed"
+              placeholder="You are Tom — a warm, natural-sounding agent for Lucky Seven Casino…"
+            />
+            <p className="text-[11px] text-[var(--text-3)]">
+              The script supplies WHAT to say and when; the persona sets WHO is saying it. Blank falls back to the engine default.
+            </p>
+          </div>
+        </div>
+      ) : (
       <div className="mt-7 flex flex-col gap-[18px]">
         {/* Assistant picker */}
         <div className="flex flex-col gap-2">
@@ -168,6 +266,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
