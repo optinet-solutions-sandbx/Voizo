@@ -1,9 +1,9 @@
 /**
  * HMAC-SHA256 signature validation for FreeSWITCH webhook events.
  *
- * STATUS: Phase 0 (2026-04-15). Mirrors the validation patterns used by the
- * existing Twilio (`twilioClient.validateTwilioSignature`) and Vapi
- * (`/api/webhooks/vapi/end-of-call`) handlers so the security model is uniform.
+ * STATUS: Phase 0 (2026-04-15). Mirrors the validation pattern used by the
+ * Vapi (`/api/webhooks/vapi/end-of-call`) handler so the security model is
+ * uniform.
  *
  * Why HMAC and not SIP signatures: FreeSWITCH itself doesn't sign events — we
  * own the webhook shim that translates FS events into HTTP POSTs to the Voizo

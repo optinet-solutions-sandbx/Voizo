@@ -1,14 +1,5 @@
 import { supabaseAdmin } from "./supabaseServer";
-import { twilioClient, twilioPhoneNumber } from "./twilioClient";
 import { originateCall } from "./freeswitch/originate";
-
-/**
- * Dialer provider selection. `twilio` keeps the legacy path (still deployed in
- * Vercel at time of writing). `freeswitch` routes outbound through the EC2
- * FreeSWITCH + SquareTalk stack. Default is `twilio` so production stays on
- * the known-working path until FS is verified end-to-end.
- */
-const DIALER_PROVIDER = (process.env.DIALER_PROVIDER || "twilio").toLowerCase();
 
 /**
  * Check if the current time falls within the campaign's call windows.
@@ -172,8 +163,8 @@ export async function findNextNumber(campaignId: string) {
 }
 
 /**
- * Fire an outbound call for the given campaign number. Dispatches to Twilio or
- * FreeSWITCH based on DIALER_PROVIDER. Returns the created calls_v2 row.
+ * Fire an outbound call for the given campaign number via FreeSWITCH +
+ * SquareTalk. Returns the created calls_v2 row.
  *
  * Manifesto §6: state written to DB before calling provider.
  */
@@ -184,8 +175,6 @@ export async function fireCall(
   baseUrl: string,
   vapiSipUri?: string,
 ) {
-  const provider = DIALER_PROVIDER === "freeswitch" ? "freeswitch" : "twilio";
-
   // Mark number as in_progress
   await supabaseAdmin
     .from("campaign_numbers_v2")
@@ -198,7 +187,7 @@ export async function fireCall(
     .insert({
       campaign_id: campaignId,
       campaign_number_id: campaignNumber.id,
-      provider,
+      provider: "freeswitch",
       status: "initiated",
     })
     .select()
@@ -207,39 +196,20 @@ export async function fireCall(
   if (callErr || !callRow) throw new Error("Failed to create call record");
 
   try {
-    let providerCallId: string;
-
-    if (provider === "freeswitch") {
-      const callerId = process.env.FREESWITCH_CALLER_ID;
-      if (!callerId) {
-        throw new Error(
-          "FREESWITCH_CALLER_ID not set. Required when DIALER_PROVIDER=freeswitch.",
-        );
-      }
-      const result = await originateCall({
-        to: campaignNumber.phone_e164,
-        callerId,
-        callId: callRow.id,
-        vapiAssistantId,
-        vapiSipUri,
-        campaignId,
-        numberId: campaignNumber.id,
-      });
-      providerCallId = result.providerCallId;
-    } else {
-      const twimlUrl = `${baseUrl}/api/twiml/vapi-bridge?assistantId=${encodeURIComponent(vapiAssistantId)}`;
-      const statusCallback = `${baseUrl}/api/webhooks/twilio/voice-status?callId=${callRow.id}&campaignId=${campaignId}&numberId=${campaignNumber.id}`;
-
-      const twilioCall = await twilioClient.calls.create({
-        to: campaignNumber.phone_e164,
-        from: twilioPhoneNumber,
-        url: twimlUrl,
-        statusCallback,
-        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-        statusCallbackMethod: "POST",
-      });
-      providerCallId = twilioCall.sid;
+    const callerId = process.env.FREESWITCH_CALLER_ID;
+    if (!callerId) {
+      throw new Error("FREESWITCH_CALLER_ID not set. Required for outbound dialing.");
     }
+    const result = await originateCall({
+      to: campaignNumber.phone_e164,
+      callerId,
+      callId: callRow.id,
+      vapiAssistantId,
+      vapiSipUri,
+      campaignId,
+      numberId: campaignNumber.id,
+    });
+    const providerCallId = result.providerCallId;
 
     await supabaseAdmin
       .from("calls_v2")

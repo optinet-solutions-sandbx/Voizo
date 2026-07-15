@@ -18,7 +18,7 @@
  */
 
 // ── Env var validation (manifesto §2: "Throw loud if a required var is missing") ──
-// Unlike Twilio/FreeSWITCH, Mobivate vars are optional at startup — the system
+// Unlike FreeSWITCH, Mobivate vars are optional at startup — the system
 // runs without SMS capability until the API key is provided. We validate at
 // SEND TIME instead of module-load time so the dashboard doesn't crash on boot
 // just because Mobivate isn't configured yet.

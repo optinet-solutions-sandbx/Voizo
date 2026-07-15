@@ -4,7 +4,7 @@
  * Receives CHANNEL_HANGUP_COMPLETE events from the FreeSWITCH webhook-shim
  * (infra/freeswitch/webhook-shim/) running on the EC2 box alongside FS.
  *
- * The shim only emits terminal (hangup) events — unlike Twilio which sends
+ * The shim only emits terminal (hangup) events, not per-status
  * initiated/ringing/answered/completed. So this handler treats every event
  * as terminal: update calls_v2, update campaign_numbers_v2, chain next call.
  *
@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true, idempotent: "already processed" });
   }
 
-  // Update campaign_numbers_v2 — mirrors the Twilio handler's outcome logic
+  // Update campaign_numbers_v2 — apply terminal outcome logic
   const { data: numRow } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("attempt_count, outcome")
