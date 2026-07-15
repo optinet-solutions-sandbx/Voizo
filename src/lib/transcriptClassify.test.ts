@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isVoicemail, isConclusiveVoicemail, hasRealConversation, hasGenuineCustomerConsent,
-  agentMentionedSms, customerDeclinedSms, substantiveUserTurnCount,
+  agentMentionedSms, customerDeclinedSms, substantiveUserTurnCount, customerRequestedCallback,
 } from "./transcriptClassify";
 
 // Real AU "message bank" voicemails the filter MISSED (campaign 9df71cd3, 2026-06-03).
@@ -355,6 +355,62 @@ describe("customerDeclinedSms (explicit text-directed refusal)", () => {
     expect(customerDeclinedSms("AI: Don't worry, I won't text you twice.\nUser: Okay.")).toBe(false);
     expect(customerDeclinedSms("don't text me")).toBe(false);
     expect(customerDeclinedSms(null)).toBe(false);
+  });
+});
+
+// ── customerRequestedCallback — callback-request lexicon (VOZ-127, 2026-07-15) ──
+// A reached human asking to be called back later routes to pending_retry instead of the
+// terminal not_interested. User turns only; opt-out ("don't call me again") and
+// customer-is-caller ("I'll call you") framings must NEVER read as a callback.
+describe("customerRequestedCallback — routes callback asks to retry", () => {
+  const offer = "AI: Have you had a chance to log in recently?";
+  it("true on explicit call-me-later / call-me-back asks", () => {
+    expect(customerRequestedCallback(`${offer}\nUser: Can you call me tomorrow?`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Can you ring me this afternoon?`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: I'm busy, call later.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Call me back.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Call me some other time.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Give me a call later on.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Phone me tonight, I'm at work.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Ring me back next week.`)).toBe(true);
+    expect(customerRequestedCallback(`${offer}\nUser: Call me in an hour.`)).toBe(true);
+    // "call me …" is unambiguous even when the turn also says "I'll" (the caller-guard
+    // only gates the bare "call later" shape, never an explicit "call me").
+    expect(customerRequestedCallback(`${offer}\nUser: I'll be out this morning, so call me later.`)).toBe(true);
+    // the REAL_BRUSHOFF fixture is exactly a callback ask
+    expect(customerRequestedCallback(REAL_BRUSHOFF)).toBe(true);
+  });
+
+  it("FALSE on opt-out / DNC framing (must stay not_interested / suppressed)", () => {
+    expect(customerRequestedCallback(`${offer}\nUser: Don't call me again.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: Stop calling me.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: Never call this number again.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: No need to call, take me off your list.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: Don't ever call back.`)).toBe(false);
+  });
+
+  it("FALSE on plain not-interested with no callback ask", () => {
+    expect(customerRequestedCallback(`${offer}\nUser: No thanks, not interested. Goodbye.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: I'm not interested at all.`)).toBe(false);
+  });
+
+  it("FALSE when the CUSTOMER offers to call US (not a re-dial request)", () => {
+    expect(customerRequestedCallback(`${offer}\nUser: I'll call you later.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: Let me call you back sometime.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: I'll call you back tomorrow.`)).toBe(false);
+  });
+
+  it("FALSE on incidental / past-tense / third-party 'call' mentions", () => {
+    expect(customerRequestedCallback(`${offer}\nUser: You called me earlier today.`)).toBe(false);
+    expect(customerRequestedCallback(`${offer}\nUser: Call the office, not my mobile.`)).toBe(false);
+    expect(customerRequestedCallback(GENUINE)).toBe(false); // consented conversation, no callback ask
+  });
+
+  it("ignores AI turns and label-less transcripts (conservative)", () => {
+    expect(customerRequestedCallback("AI: I'll call you back tomorrow.\nUser: Okay.")).toBe(false);
+    expect(customerRequestedCallback("call me tomorrow")).toBe(false); // no user turn to attribute
+    expect(customerRequestedCallback(null)).toBe(false);
+    expect(customerRequestedCallback("")).toBe(false);
   });
 });
 

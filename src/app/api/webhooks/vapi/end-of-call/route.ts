@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms } from "@/lib/transcriptClassify";
+import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
 import { decideSmsDispatch, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 import { getKillableVoicemailUtterance, resolveControlUrl, endCallViaControlUrl } from "@/lib/vapi/liveCallControl";
 import crypto from "crypto";
@@ -573,11 +573,36 @@ export async function POST(request: NextRequest) {
   // `voicemailDetected` was computed earlier in this function so it's reused here.
   const skipOutcomeForVoicemail = voicemailDetected && !goalReached && !optedOut;
 
+  // Callback-request routing (VOZ-127): a reached human who asked to be called
+  // back later ("call me tomorrow", "ring me this afternoon", "busy, call
+  // later") would otherwise fall to the terminal `not_interested` below and be
+  // dropped. Gated to EXACTLY that class — `!voicemailDetected` (voicemail has
+  // its own skip), `!goalReached`/`!optedOut`/`!registeredDispatchIntent` (those
+  // produce sent_sms/declined_offer, never not_interested) — so this only ever
+  // converts a would-be not_interested into a retry. Same mechanism as the
+  // voicemail skip: park at in_progress, let the sweeper resolve to
+  // pending_retry under the campaign's max_attempts cap. No SMS is dispatched
+  // for this class (decision.attempt is false whenever registeredDispatchIntent
+  // is false and goalReached is false — see the SMS block below).
+  const callbackRequested =
+    !skipOutcomeForVoicemail &&
+    !goalReached &&
+    !optedOut &&
+    !registeredDispatchIntent &&
+    Boolean(transcript) &&
+    customerRequestedCallback(transcript);
+
   if (skipOutcomeForVoicemail) {
     console.log(
       `[vapi end-of-call] voicemail detected — skipping outcome update so the ` +
       `scheduler stale-in_progress sweeper resolves to pending_retry. ` +
       `vapiCallId=${vapiCallId}`,
+    );
+  } else if (callbackRequested) {
+    console.log(
+      `[vapi end-of-call] callback requested (VOZ-127) — skipping outcome update so ` +
+      `the scheduler stale-in_progress sweeper resolves to pending_retry (capped by ` +
+      `max_attempts). vapiCallId=${vapiCallId}`,
     );
   } else {
     // Mode-aware label (2026-06-11): in registered_optin, an announced+configured
