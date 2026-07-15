@@ -20,10 +20,15 @@ function tipsFor(state: WizardState): string[] {
         "Test campaigns stay out of audience suggestions.",
       ];
     case 2:
-      return [
-        "The script is locked in at launch. Changing it later means a new campaign.",
-        "The agent's voice comes from the base agent you pick.",
-      ];
+      return state.agentMode === "script"
+        ? [
+            "The script is locked in at launch. Changing it later means a new campaign.",
+            "The script decides WHAT gets said; the persona sets WHO is saying it.",
+          ]
+        : [
+            "Prompt edits apply only to this campaign's own copy of the agent.",
+            "The agent's voice comes from the base agent you pick.",
+          ];
     case 3: {
       const tips: string[] = ["All times are the customer's local time."];
       if (state.campaignType === "recurring") {

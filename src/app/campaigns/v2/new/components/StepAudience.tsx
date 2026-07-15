@@ -355,7 +355,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
       {/* Spacer so the dashed line / footer don't crowd the last field */}
       <div className="mt-4 text-[11px] text-[var(--text-3)] inline-flex items-center gap-1.5">
         <Clock size={11} />
-        Next: pick the AI assistant.
+        Next: pick the agent or script.
       </div>
     </div>
   );

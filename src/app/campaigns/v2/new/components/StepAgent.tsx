@@ -5,6 +5,7 @@ import type { Dispatch } from "react";
 
 import type { WizardAction, WizardState } from "../wizardState";
 import { VOICE_OPTIONS } from "@/lib/voiceOptions";
+import StyledSelect from "@/components/StyledSelect";
 
 /** Shape of an entry in GET /api/vapi/assistants — same as classic page-classic.tsx:111-118. */
 export interface Assistant {
@@ -93,7 +94,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
         <div className="mt-7 flex flex-col gap-[18px]">
           {/* Script picker */}
           <div className="flex flex-col gap-2">
-            <label htmlFor="wizard-script" className="text-xs font-medium text-[var(--text-2)]">
+            <label className="text-xs font-medium text-[var(--text-2)]">
               Script <span className="text-red-400">*</span>
             </label>
             {scriptsError ? (
@@ -108,20 +109,16 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
                 No scripts yet. Build one in the Script Builder first.
               </div>
             ) : (
-              <select
-                id="wizard-script"
+              <StyledSelect
+                icon={<FileText size={14} />}
                 value={state.scriptId}
-                onChange={(e) => {
-                  const s = scripts.find((x) => x.id === e.target.value);
+                onChange={(value) => {
+                  const s = scripts.find((x) => x.id === value);
                   dispatch({ type: "SET_AGENT_FIELDS", payload: { scriptId: s?.id ?? "", scriptName: s?.name ?? "" } });
                 }}
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm [color-scheme:dark]"
-              >
-                <option value="">Select a script…</option>
-                {scripts.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                options={scripts.map((s) => ({ value: s.id, label: s.name }))}
+                placeholder="Select a script…"
+              />
             )}
             <a href="/script-builder" target="_blank" rel="noreferrer" className="text-[12px] text-blue-400 hover:text-blue-300 w-fit">
               Edit in Script Builder →
@@ -136,8 +133,8 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
             </label>
             <textarea
               id="wizard-persona"
-              value={state.systemPrompt}
-              onChange={(e) => dispatch({ type: "SET_AGENT_FIELDS", payload: { systemPrompt: e.target.value } })}
+              value={state.persona}
+              onChange={(e) => dispatch({ type: "SET_AGENT_FIELDS", payload: { persona: e.target.value } })}
               rows={6}
               className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y text-sm leading-relaxed"
               placeholder="You are Tom — a warm, natural-sounding agent for Lucky Seven Casino…"
@@ -151,7 +148,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
       <div className="mt-7 flex flex-col gap-[18px]">
         {/* Agent picker */}
         <div className="flex flex-col gap-2">
-          <label htmlFor="wizard-agent" className="text-xs font-medium text-[var(--text-2)]">
+          <label className="text-xs font-medium text-[var(--text-2)]">
             Agent <span className="text-red-400">*</span>
           </label>
 
@@ -169,20 +166,16 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               No agents found. Create one in Vapi first.
             </div>
           ) : (
-            <select
-              id="wizard-agent"
+            <StyledSelect
+              icon={<Bot size={14} />}
               value={state.vapiAssistantId}
-              onChange={(e) => {
-                const a = assistants.find((x) => x.id === e.target.value);
+              onChange={(value) => {
+                const a = assistants.find((x) => x.id === value);
                 if (a) pickAssistant(a);
               }}
-              className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm [color-scheme:dark]"
-            >
-              <option value="">Select an agent…</option>
-              {assistants.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
+              options={assistants.map((a) => ({ value: a.id, label: a.name }))}
+              placeholder="Select an agent…"
+            />
           )}
         </div>
 

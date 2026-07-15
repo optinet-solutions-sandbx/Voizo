@@ -132,12 +132,12 @@ export default function StepReview({ state, dispatch }: Props) {
               }
             />
           )}
-          {state.systemPrompt && (
+          {(state.agentMode === "script" ? state.persona : state.systemPrompt) && (
             <ReviewRow
-              label="Prompt"
+              label={state.agentMode === "script" ? "Persona" : "Prompt"}
               value={
                 <span className="text-[12px] text-[var(--text-2)] leading-relaxed line-clamp-2">
-                  {state.systemPrompt}
+                  {state.agentMode === "script" ? state.persona : state.systemPrompt}
                 </span>
               }
             />

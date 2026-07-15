@@ -139,6 +139,10 @@ export interface WizardState {
   baseVoiceId: string | null;      // read-only display; voice lock per R3
   voiceId: string;                 // R3: always "" in classic; never set by any UI; kept to make `voiceId || undefined` math identical in buildCloneRequest
   systemPrompt: string;
+  /** Script-mode persona (WHO the agent is). Separate from the agent-mode
+   *  systemPrompt so picking an assistant never bleeds its full prompt into
+   *  the Persona box; persisted to system_prompt at launch for script mode. */
+  persona: string;
   /** Script-mode: the chosen listener_scripts id + display name. */
   scriptId: string;
   scriptName: string;
@@ -229,7 +233,7 @@ export interface ImportSegmentPayload {
  * clone request relies on its undefined-ness to inherit from base.
  */
 export type AgentPayload = Partial<
-  Pick<WizardState, "agentMode" | "vapiAssistantId" | "baseVoiceId" | "systemPrompt" | "scriptId" | "scriptName">
+  Pick<WizardState, "agentMode" | "vapiAssistantId" | "baseVoiceId" | "systemPrompt" | "persona" | "scriptId" | "scriptName">
 >;
 
 /**
@@ -394,6 +398,7 @@ export function createInitialState(): WizardState {
     baseVoiceId: null,
     voiceId: "",
     systemPrompt: "",
+    persona: "",
     scriptId: "",
     scriptName: "",
 
@@ -669,7 +674,7 @@ export function buildCloneRequest(state: WizardState) {
       agentMode: "script" as const,
       scriptId: state.scriptId,
       scriptName: state.scriptName || undefined,
-      persona: state.systemPrompt || undefined,
+      persona: state.persona || undefined,
       campaignName: state.name.trim(),
     };
   }
@@ -691,7 +696,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
   if (state.campaignType === "recurring") {
     return {
       name: state.name.trim(),
-      systemPrompt: state.systemPrompt,
+      systemPrompt: state.agentMode === "script" ? state.persona : state.systemPrompt,
       agentMode: state.agentMode,
       scriptId: state.agentMode === "script" ? state.scriptId : undefined,
       scriptName: state.agentMode === "script" ? state.scriptName : undefined,
@@ -741,7 +746,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
 
   return {
     name: state.name.trim(),
-    systemPrompt: state.systemPrompt,
+    systemPrompt: state.agentMode === "script" ? state.persona : state.systemPrompt,
     agentMode: state.agentMode,
     // Persist the DUPLICATED campaign-owned script the clone returned (falls
     // back to the picked one only if the clone didn't duplicate).
@@ -906,7 +911,7 @@ export function validateBeforeSubmit(state: WizardState): string | null {
  */
 export const STEPS: Array<{ step: Step; label: string; name: string; defaultSummary: string }> = [
   { step: 1, label: "Step 1", name: "Audience",          defaultSummary: "Who you're calling" },
-  { step: 2, label: "Step 2", name: "Agent",             defaultSummary: "Pick the AI assistant" },
+  { step: 2, label: "Step 2", name: "Agent",             defaultSummary: "Pick the agent or script" },
   { step: 3, label: "Step 3", name: "Schedule",          defaultSummary: "When to call" },
   { step: 4, label: "Step 4", name: "Follow-up",         defaultSummary: "Post-call SMS · optional" },
   { step: 5, label: "Final",  name: "Review & launch",   defaultSummary: "Final check" },
