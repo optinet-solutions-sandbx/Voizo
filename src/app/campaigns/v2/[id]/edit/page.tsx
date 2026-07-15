@@ -17,13 +17,14 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Globe2, Loader2, Save, Target, Users, Zap } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Globe2, Loader2, Save, Target, Users, Zap } from "lucide-react";
 
 import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import SegmentImporter from "@/components/SegmentImporter";
 import StyledSelect from "@/components/StyledSelect";
 import { patchCampaignSettings } from "@/lib/campaignV2Client";
 import { resolveCallDelay } from "@/lib/campaignV2Shared";
+import { resolveSegmentPresence } from "@/lib/segmentPresence";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "../../new/wizardState";
 
@@ -85,6 +86,7 @@ export default function EditAlwaysOnCampaignPage() {
   const [row, setRow] = useState<Row | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [segmentMissing, setSegmentMissing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -92,12 +94,31 @@ export default function EditAlwaysOnCampaignPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/campaigns-v2/${id}`);
-        if (!res.ok) throw new Error(`Campaign not found (${res.status})`);
-        const data = (await res.json()) as Row;
+        // Fetch the campaign row and the live Customer.io segment list together
+        // so the Audience header can show the segment's name (not just #id) and
+        // flag it when it was deleted in Customer.io after creation.
+        const [campRes, segRes] = await Promise.all([
+          fetch(`/api/campaigns-v2/${id}`),
+          fetch(`/api/customerio/segments`),
+        ]);
+        if (!campRes.ok) throw new Error(`Campaign not found (${campRes.status})`);
+        const data = (await campRes.json()) as Row;
+
+        let segList: { id: number; name: string }[] = [];
+        if (segRes.ok) {
+          const segBody = (await segRes.json()) as { segments?: { id: number; name: string }[] };
+          segList = segBody.segments ?? [];
+        }
+        const presence = resolveSegmentPresence(
+          (data.segment_id as number | null) ?? null,
+          segRes.ok,
+          segList,
+        );
+
         if (cancelled) return;
         setRow(data);
-        setDraft(draftFromRow(data));
+        setDraft({ ...draftFromRow(data), segmentName: presence.name });
+        if (presence.missing) setSegmentMissing(true);
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load campaign.");
       }
@@ -257,18 +278,27 @@ export default function EditAlwaysOnCampaignPage() {
 
         {/* ── Audience ── */}
         <Section title="Audience">
-          <p className="text-xs text-[var(--text-3)] mb-3 inline-flex items-center gap-1.5">
+          <p className="text-xs text-[var(--text-3)] mb-3 inline-flex items-center gap-1.5 flex-wrap">
             <Users size={13} />
             Current segment:{" "}
             <span className="text-[var(--text-1)] font-medium">
               {draft.segmentName ? `${draft.segmentName} (#${draft.segmentId})` : `#${draft.segmentId ?? "none"}`}
             </span>
-            <span className="text-[var(--text-3)]">· pick a row below to switch</span>
+            {segmentMissing ? (
+              <span className="text-amber-400 font-medium inline-flex items-center gap-1">
+                <AlertTriangle size={12} /> no longer exists in Customer.io. Pick a new one below.
+              </span>
+            ) : (
+              <span className="text-[var(--text-3)]">· pick a row below to switch</span>
+            )}
           </p>
           <SegmentImporter
             singleSelectOnly
             onImport={(_phones, segmentId, segmentName) => {
-              if (segmentId != null) setDraft({ ...draft, segmentId, segmentName });
+              if (segmentId != null) {
+                setDraft({ ...draft, segmentId, segmentName });
+                setSegmentMissing(false);
+              }
             }}
           />
         </Section>
