@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, FileText, Loader2, Megaphone, Phone } from "lucide-react";
+import { Bot, FileText, Loader2, Megaphone } from "lucide-react";
 import type { Dispatch } from "react";
 
 import type { WizardAction, WizardState } from "../wizardState";
@@ -58,14 +58,14 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
         {isScript
           ? "Pick a Script — a call flow you built in the Script Builder. At launch a dedicated agent is composed from the script's boxes and answers."
-          : "Pick the Vapi assistant. Voice is locked to the assistant's default. Change it in Vapi if you need a different one."}
+          : "Pick the agent that runs the call, then tweak its instructions for this campaign. Its voice stays fixed to the agent's default."}
       </p>
 
       {/* VOZ-159: Agent vs Script mode selector */}
       <div className="mt-6 grid grid-cols-2 gap-2.5">
         {([
-          { mode: "assistant" as const, icon: Bot, label: "Vapi Agent", sub: "A prompt-driven assistant" },
-          { mode: "script" as const, icon: FileText, label: "Script", sub: "A flow from the Script Builder" },
+          { mode: "assistant" as const, icon: Bot, label: "Agent", sub: "Prompt-driven voice agent" },
+          { mode: "script" as const, icon: FileText, label: "Script", sub: "A guided flow from the Script Builder" },
         ]).map(({ mode, icon: Icon, label, sub }) => {
           const active = state.agentMode === mode;
           return (
@@ -149,10 +149,10 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
         </div>
       ) : (
       <div className="mt-7 flex flex-col gap-[18px]">
-        {/* Assistant picker */}
+        {/* Agent picker */}
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-[var(--text-2)]">
-            Vapi assistant <span className="text-red-400">*</span>
+          <label htmlFor="wizard-agent" className="text-xs font-medium text-[var(--text-2)]">
+            Agent <span className="text-red-400">*</span>
           </label>
 
           {assistantsError ? (
@@ -162,83 +162,43 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
           ) : assistants === null ? (
             <div className="px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-sm text-[var(--text-3)] inline-flex items-center gap-2">
               <Loader2 size={14} className="animate-spin" />
-              Loading assistants…
+              Loading agents…
             </div>
           ) : assistants.length === 0 ? (
             <div className="px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-app)] text-sm text-[var(--text-3)]">
-              No assistants found. Create one in Vapi first.
+              No agents found. Create one in Vapi first.
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
-              {assistants.map((a) => {
-                const isActive = a.id === state.vapiAssistantId;
-                const voiceName = a.voiceId
-                  ? VOICE_OPTIONS.find((v) => v.id === a.voiceId)?.name ?? "Custom voice"
-                  : "Assistant default";
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => pickAssistant(a)}
-                    className={`text-left flex items-center gap-3 px-3.5 py-3 rounded-xl border-[1.5px] transition-all ${
-                      isActive
-                        ? "border-blue-500 bg-blue-500/[0.08]"
-                        : "border-[var(--border)] bg-[var(--bg-app)] hover:border-blue-500/40"
-                    }`}
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-lg grid place-items-center flex-shrink-0 transition-colors ${
-                        isActive
-                          ? "bg-blue-500 text-white"
-                          : "bg-[var(--bg-elevated)] text-[var(--text-3)]"
-                      }`}
-                    >
-                      <Bot size={15} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-[var(--text-1)] truncate">
-                        {a.name}
-                      </div>
-                      <div className="text-[12px] text-[var(--text-3)] truncate mt-0.5">
-                        Voice · {voiceName}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            <select
+              id="wizard-agent"
+              value={state.vapiAssistantId}
+              onChange={(e) => {
+                const a = assistants.find((x) => x.id === e.target.value);
+                if (a) pickAssistant(a);
+              }}
+              className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm [color-scheme:dark]"
+            >
+              <option value="">Select an agent…</option>
+              {assistants.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
           )}
         </div>
 
-        {/* Selected-assistant detail strip (voice lock + prompt name) */}
+        {/* Selected agent — one quiet locked-voice line */}
         {selected && (
-          <div className="px-4 py-3 rounded-xl bg-blue-500/[0.06] border border-blue-500/20">
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-              <div className="flex items-center gap-2">
-                <Phone size={12} className="text-blue-400" />
-                <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-3)]">
-                  Prompt
-                </span>
-                <span className="text-[var(--text-1)] font-semibold">{selected.name}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Megaphone size={12} className="text-[var(--text-3)]" />
-                <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-3)]">
-                  Voice
-                </span>
-                <span className="text-[var(--text-1)] font-semibold">
-                  {(state.baseVoiceId && VOICE_OPTIONS.find((v) => v.id === state.baseVoiceId)?.name) ||
-                    "Assistant default"}
-                </span>
-                <span className="text-[10px] uppercase tracking-wide text-[var(--text-3)] bg-[var(--bg-app)] px-1.5 py-0.5 rounded font-medium">
-                  Locked
-                </span>
-              </div>
-            </div>
-            <p className="text-xs text-[var(--text-3)] mt-2">
-              Voice is locked to the assistant&apos;s default to prevent performance drift. To
-              change the voice, update the base assistant in Vapi.
-            </p>
+          <div className="flex items-center gap-2 text-[13px] text-[var(--text-3)]">
+            <Megaphone size={13} />
+            <span>
+              Voice:{" "}
+              <span className="text-[var(--text-2)]">
+                {(state.baseVoiceId && VOICE_OPTIONS.find((v) => v.id === state.baseVoiceId)?.name) || "agent default"}
+              </span>
+            </span>
+            <span className="text-[10px] uppercase tracking-wide text-[var(--text-3)] bg-[var(--bg-app)] px-1.5 py-0.5 rounded font-medium">
+              locked
+            </span>
           </div>
         )}
 
@@ -257,11 +217,11 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               }
               rows={8}
               className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y text-sm leading-relaxed"
-              placeholder="Inherits from selected assistant…"
+              placeholder="Inherits from the selected agent…"
             />
             <p className="text-[11px] text-[var(--text-3)]">
-              A dedicated clone of this assistant will be provisioned for this campaign, so
-              prompt edits don&apos;t affect other campaigns.
+              A dedicated copy of this agent is created for this campaign, so prompt edits
+              don&apos;t affect other campaigns.
             </p>
           </div>
         )}

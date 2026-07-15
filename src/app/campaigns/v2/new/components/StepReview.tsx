@@ -110,10 +110,17 @@ export default function StepReview({ state, dispatch }: Props) {
 
         {/* AGENT */}
         <ReviewCard title="Agent" icon={<Bot size={13} />} onEdit={() => jump(2)}>
-          <ReviewRow
-            label="Assistant"
-            value={state.vapiAssistantId ? <span className="font-mono text-[12px]">{state.vapiAssistantId}</span> : <em className="text-amber-300">required</em>}
-          />
+          {state.agentMode === "script" ? (
+            <ReviewRow
+              label="Script"
+              value={state.scriptName ? <span className="text-[12px] text-[var(--text-2)]">{state.scriptName}</span> : <em className="text-amber-300">required</em>}
+            />
+          ) : (
+            <ReviewRow
+              label="Assistant"
+              value={state.vapiAssistantId ? <span className="font-mono text-[12px]">{state.vapiAssistantId}</span> : <em className="text-amber-300">required</em>}
+            />
+          )}
           {state.baseVoiceId && (
             <ReviewRow
               label="Voice"
