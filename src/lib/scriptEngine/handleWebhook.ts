@@ -22,7 +22,7 @@ import {
   getFlowState,
   persistFlowStateGuarded,
 } from "@/lib/scriptEngine/lab-db";
-import { checkDelivery } from "@/lib/scriptEngine/lab-watchdog";
+import { checkDelivery, checkWaitTimeout } from "@/lib/scriptEngine/lab-watchdog";
 import { composeArmedBriefing } from "@/lib/scriptEngine/lab-briefing";
 import { findEntryNode, nodeById, pickNextEdge, contentTypeOf } from "@/lib/scriptEngine/lab-flow";
 import { classifyUtterance, type Classification } from "@/lib/scriptEngine/lab-router";
@@ -369,7 +369,14 @@ export async function handleWebhook(message: VapiMessage): Promise<NextResponse>
         content: message.status ?? null,
         meta: { controlUrl: controlUrlHint, endedReason: message.endedReason ?? null },
       });
-      if (message.status !== "ended") after(() => checkDelivery(callId, controlUrlHint));
+      // D-lite (VOZ-162): checkWaitTimeout rides the same live-request clock as
+      // checkDelivery — on browserless campaign calls the Vapi idle nudges
+      // (12s/24s) tick it during total silence, so Wait-box authored silence
+      // paths fire without the Builder's poll.
+      // ponytail: tick granularity = nudge cadence (~12s); an external ticker
+      // (QStash/EC2) only if a script ever needs sub-5s silence routing.
+      if (message.status !== "ended")
+        after(() => Promise.all([checkDelivery(callId, controlUrlHint), checkWaitTimeout(callId, controlUrlHint)]));
       return NextResponse.json({});
 
     case "speech-update":
@@ -383,7 +390,8 @@ export async function handleWebhook(message: VapiMessage): Promise<NextResponse>
       // delivery watchdog rides them instead of trusting serverless
       // background timers. User transitions are excluded: a retrigger there
       // would talk over the customer, whose imminent transcript owns the turn.
-      if (message.role === "assistant") after(() => checkDelivery(callId, controlUrlHint));
+      if (message.role === "assistant")
+        after(() => Promise.all([checkDelivery(callId, controlUrlHint), checkWaitTimeout(callId, controlUrlHint)]));
       return NextResponse.json({});
 
     case "end-of-call-report":
