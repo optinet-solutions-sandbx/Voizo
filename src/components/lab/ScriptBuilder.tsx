@@ -43,7 +43,7 @@ import {
   listScriptRuns,
   utteranceCounts,
   insertLabEvent,
-} from "@/lib/scriptEngine/lab-db";
+} from "@/lib/scriptEngine/lab-db-client";
 import { getVapi, vapiErrorText } from "@/lib/scriptEngine/vapi";
 import LabConfigForm from "@/components/lab/LabConfigForm";
 import type { ListenerScript, ListenerHandler, ListenerCollection, LabCallEvent } from "@/lib/scriptEngine/database.types";

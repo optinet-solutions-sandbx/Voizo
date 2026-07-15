@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { VOICE_OPTIONS } from "@/lib/scriptEngine/voices";
 import { DEFAULT_SHORT_PROMPT } from "@/lib/scriptEngine/lab-tools";
-import { getLabSettings, saveLabSettings } from "@/lib/scriptEngine/lab-db";
+import { getLabSettings, saveLabSettings } from "@/lib/scriptEngine/lab-db-client";
 
 const inputCls =
   "w-full rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none disabled:opacity-50";

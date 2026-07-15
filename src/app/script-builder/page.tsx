@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ScriptBuilder from "@/components/lab/ScriptBuilder";
-import { listScripts, createScript, deleteScript, getLabSettings } from "@/lib/scriptEngine/lab-db";
+import { listScripts, createScript, deleteScript, getLabSettings } from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerScript } from "@/lib/scriptEngine/database.types";
 
 const PAGE_SIZE = 10;

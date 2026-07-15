@@ -6,7 +6,7 @@ import {
   createHandler,
   updateHandler,
   deleteHandler,
-} from "@/lib/scriptEngine/lab-db";
+} from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerHandler } from "@/lib/scriptEngine/database.types";
 
 const inputCls =

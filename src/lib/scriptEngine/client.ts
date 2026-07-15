@@ -1,14 +1,24 @@
-import { createClient } from "@supabase/supabase-js";
+// Server-only Supabase client for the Script Engine (workstream E, VOZ-116).
+//
+// Was the isomorphic ANON client — the Builder UIs read Supabase straight
+// from the browser, which forced the lab tables' RLS to allow-all (public
+// anon key could read the whole playbook + call transcripts off REST).
+// Now: the engine runs on the service-role client, and browsers go through
+// the Basic-Auth-gated /api/lab/db RPC (see lab-db-client.ts). This makes a
+// default-deny RLS migration on the lab tables safe to apply.
+//
+// UNTYPED like src/lib/supabase.ts (the codebase carries no generated
+// Database generic; row shapes are asserted at the lab-db.ts boundary via
+// ./database.types).
+import { supabaseAdmin } from "@/lib/supabaseServer";
 
-// Isomorphic anon Supabase client for the Script Engine (browser + server).
-// Mirrors Voizo's app-wide src/lib/supabase.ts: env-driven and UNTYPED (the
-// codebase does not carry a generated Database generic; typed query inference
-// under @supabase/supabase-js v2.99 resolves hand-written schemas to `{}`).
-// Row shapes are asserted at the lab-db.ts boundary via the aliases in
-// ./database.types. This is intentionally the ANON client — the engine is
-// anon-only by design (plan §5); never import the service-role client
-// (src/lib/supabaseServer.ts) into scriptEngine/*.
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Tripwire instead of the `server-only` package (not a dependency): any
+// client-bundle import of the lab-db chain explodes immediately on page load
+// in dev/preview rather than silently failing on a missing env var.
+if (typeof window !== "undefined") {
+  throw new Error(
+    "scriptEngine/client is server-only — browser code must use lab-db-client (the /api/lab/db RPC)."
+  );
+}
 
-export const supabase = createClient(url, anonKey);
+export const supabase = supabaseAdmin;

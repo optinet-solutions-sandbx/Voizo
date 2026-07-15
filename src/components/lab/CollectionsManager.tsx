@@ -11,7 +11,7 @@ import {
   listHandlers,
   getLabSettings,
   saveLabSettings,
-} from "@/lib/scriptEngine/lab-db";
+} from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerCollection, ListenerHandler } from "@/lib/scriptEngine/database.types";
 
 const inputCls =
