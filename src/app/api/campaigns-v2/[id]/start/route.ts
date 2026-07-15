@@ -19,7 +19,7 @@ export const maxDuration = 60;
  * - Call window checked before first dial
  * - Suppression checked inside findNextNumber
  * - Concurrency guard: only draft/paused → running transition allowed
- * - State written to DB before calling Twilio
+ * - State written to DB before calling the dialer
  */
 export async function POST(
   request: NextRequest,

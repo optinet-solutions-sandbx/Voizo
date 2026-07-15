@@ -19,7 +19,7 @@ export const maxDuration = 30;
  * have been created in the last 30 minutes AND there are still pending /
  * pending_retry numbers on the campaign. Common causes:
  *   - FreeSWITCH origination silently failing (no error path back to us)
- *   - Twilio voice-status webhook never firing for the most recent call,
+ *   - FreeSWITCH voice-status webhook never firing for the most recent call,
  *     so chainNextCall was never called and the dialer stalled
  *   - Vapi end-of-call webhook lost, leaving a call in_progress forever
  *   - Mobivate-dependent SMS step blocking, halting the chain

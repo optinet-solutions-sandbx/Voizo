@@ -16,11 +16,10 @@ import { NextRequest, NextResponse } from "next/server";
  *   (no login UI needed), one env var pair gates everything.
  *
  * Excluded paths (handled elsewhere):
- *   /api/webhooks/*               — signed by Vapi/Twilio/Mobivate-side
+ *   /api/webhooks/*               — signed by Vapi/Mobivate-side
  *                                   (HMAC, x-vapi-secret, reference UUID)
  *   /api/cron/*                   — Bearer CRON_SECRET (Vercel-injected)
  *   /api/freeswitch/originate     — own x-auth-secret header (Phase 0 PoC)
- *   /api/twiml/*                  — Twilio public-callable webhook
  *   /_next/*, /favicon, /icon     — static assets
  *
  * Env behavior:
@@ -43,7 +42,6 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/webhooks/",
   "/api/cron/",
   "/api/freeswitch/originate",
-  "/api/twiml/",
 ];
 
 function isPublicPath(pathname: string): boolean {

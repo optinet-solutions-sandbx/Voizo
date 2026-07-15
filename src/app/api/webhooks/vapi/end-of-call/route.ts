@@ -22,7 +22,7 @@ export const maxDuration = 30;
  *   (client-attested registration opt-in, Val 2026-06-11) sends when the agent announced an SMS.
  *   On-call decline / opt-out / suppression_list veto in BOTH modes; voicemail vetoes
  *   verbal_yes and TRIGGERS the registered_optin missed-call follow-up (2026-06-11).
- * - Call matching uses Vapi's phoneCallProviderId (Twilio SID) — no fragile fallback
+ * - Call matching uses Vapi's phoneCallProviderId (provider call id) — no fragile fallback
  */
 export async function POST(request: NextRequest) {
   // ── Read raw body for signature validation ──
@@ -245,7 +245,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Match to our calls_v2 record (H1 fix: reliable matching) ──
-  // Strategy: match by vapi_call_id first, then by phoneCallProviderId (Twilio SID)
+  // Strategy: match by vapi_call_id first, then by phoneCallProviderId (provider call id)
   let callRow: Record<string, unknown> | null = null;
 
   // 1. Try vapi_call_id (if we already stored it)
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
     callRow = data;
   }
 
-  // 2. Try Twilio SID from Vapi's phoneCallProviderId
+  // 2. Try provider call id from Vapi's phoneCallProviderId
   if (!callRow) {
     const providerCallId = vapiCall?.phoneCallProviderId as string | undefined;
     if (providerCallId) {
