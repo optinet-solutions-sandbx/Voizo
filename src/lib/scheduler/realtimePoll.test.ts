@@ -154,4 +154,78 @@ describe("duePromotions", () => {
   it("no room = nothing promotes", () => {
     expect(duePromotions([row("a", 90)], 30, NOW, 0)).toEqual([]);
   });
+
+  it("cutoff is inclusive: a member seen EXACTLY delay-minutes ago is due", () => {
+    // first_seen + delay == now → getTime() <= cutoff, so it promotes. Pins the
+    // <= boundary against an off-by-one that would hold a fully-served signup.
+    expect(duePromotions([row("edge", 30)], 30, NOW, 10).map((r) => r.cio_id)).toEqual(["edge"]);
+  });
+
+  it("delay of 0 promotes immediately (cutoff = now, distinct input from null)", () => {
+    // call_delay_minutes can be 0 (routes through the promotion pass, unlike
+    // null which queues directly); a 0-minute delay is served on the next tick.
+    expect(duePromotions([row("a", 0), row("b", 1)], 0, NOW, 10)).toHaveLength(2);
+  });
+
+  it("negative room promotes nothing (room = cap - addedToday after a soft overshoot)", () => {
+    // A soft-cap breach (see decideAdmission suite) leaves addedToday > cap, so
+    // room goes negative; the guard must reject it, not slice(0, -n) the queue.
+    expect(duePromotions([row("a", 90), row("b", 91)], 30, NOW, -5)).toEqual([]);
+  });
+});
+
+describe("decideAdmission — daily cap boundary + overlap semantics", () => {
+  const valid = (addedToday: number, dailyCap: number | null) =>
+    decideAdmission({ rawPhone: "+61412345678", expectedCountry: "AU", addedToday, dailyCap });
+
+  it("admits at cap-1, blocks exactly at cap (>= boundary)", () => {
+    expect(valid(99, 100).admit).toBe(true);
+    expect(valid(100, 100)).toEqual({ admit: false, capBlocked: true });
+  });
+
+  it("dailyCap of 0 blocks the very first member", () => {
+    expect(valid(0, 0)).toEqual({ admit: false, capBlocked: true });
+  });
+
+  it("blocks when already over cap (addedToday > cap)", () => {
+    expect(valid(150, 100)).toEqual({ admit: false, capBlocked: true });
+  });
+
+  // The two invariants the supervised real-money trial hinges on. Mirrors
+  // pollRealtimeParent step 6: one addedToday SNAPSHOT per tick, then a loop
+  // that feeds each decision the running total (addedToday + admitted).
+  const runTick = (startCount: number, cap: number, candidates: number): number => {
+    let admitted = 0;
+    for (let i = 0; i < candidates; i++) {
+      const d = decideAdmission({
+        rawPhone: "+61412345678",
+        expectedCountry: "AU",
+        addedToday: startCount + admitted, // running total, exactly as the loop does
+        dailyCap: cap,
+      });
+      if ("capBlocked" in d) break;
+      if (d.admit) admitted++;
+    }
+    return admitted;
+  };
+
+  it("cap is HARD within a single tick (running total is respected, never overshoots)", () => {
+    expect(runTick(90, 100, 50)).toBe(10); // 90 in, 10 room, 50 eager → exactly 10
+    expect(runTick(0, 100, 250)).toBe(100); // stops dead at the cap
+  });
+
+  it("cap is SOFT across overlapping ticks (known limit — stateless, snapshot per tick)", () => {
+    // Two ticks fire before either commits, so BOTH read the same stale count.
+    const snapshot = 90;
+    const cap = 100;
+    const tickA = runTick(snapshot, cap, 50);
+    const tickB = runTick(snapshot, cap, 50); // same snapshot → overlap
+    expect(tickA).toBe(10);
+    expect(tickB).toBe(10);
+    // Combined the child lands at 110 — 10 over cap. This pins the documented
+    // "cap is soft under overlapping ticks" behavior: decideAdmission keeps no
+    // cross-call memory, so a future change that assumes a hard cap trips here.
+    expect(snapshot + tickA + tickB).toBe(110);
+    expect(snapshot + tickA + tickB).toBeGreaterThan(cap);
+  });
 });
