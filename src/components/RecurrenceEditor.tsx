@@ -17,7 +17,11 @@ const DAYS: Array<{ key: DayOfWeek; label: string; letter: string }> = [
   { key: "sat", label: "Saturday", letter: "S" },
 ];
 
-const DEFAULT_HOURS = { start: "09:00", end: "21:00" };
+// VOZ-129: default recurring call window ends at 20:00 (8pm), the strictest
+// legal calling cap across all supported timezones (AU/NZ/JP/EU-strict end at
+// 8pm; US/CA/UK allow 9pm). 9-20 is conservative everywhere and never exceeds a
+// legal window; operators can widen per-day for 9pm jurisdictions.
+const DEFAULT_HOURS = { start: "09:00", end: "20:00" };
 
 export interface RecurrenceEditorProps {
   value: RecurrencePattern;
