@@ -93,7 +93,7 @@ export async function POST(
   // ── 1. Read campaign + validate status + base_assistant_id ──
   const { data: campaign, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, status, base_assistant_id, voice_id, system_prompt")
+    .select("id, name, status, base_assistant_id, voice_id, system_prompt, agent_mode, script_id")
     .eq("id", id)
     .single();
 
@@ -142,6 +142,8 @@ export async function POST(
     base_assistant_id: campaign.base_assistant_id as string,
     voice_id: (campaign.voice_id as string | null) ?? null,
     system_prompt: campaign.system_prompt as string,
+    agent_mode: (campaign.agent_mode as "assistant" | "script" | null) ?? null,
+    script_id: (campaign.script_id as string | null) ?? null,
   });
 
   if (!result.ok) {

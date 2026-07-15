@@ -34,7 +34,7 @@ import Stepper from "./components/Stepper";
 import FooterNav from "./components/FooterNav";
 import PreviewRail from "./components/PreviewRail";
 import StepAudience from "./components/StepAudience";
-import StepAgent, { type Assistant } from "./components/StepAgent";
+import StepAgent, { type Assistant, type ScriptOption } from "./components/StepAgent";
 import StepSchedule from "./components/StepSchedule";
 import StepFollowup from "./components/StepFollowup";
 import StepReview from "./components/StepReview";
@@ -376,6 +376,30 @@ function WizardPage({
     })();
   }, []);
 
+  // Scripts list (VOZ-159) — same once-on-mount pattern as assistants, for the
+  // Step-2 Script-mode dropdown.
+  const [scripts, setScripts] = useState<ScriptOption[] | null>(null);
+  const [scriptsError, setScriptsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/scripts");
+        if (!res.ok) {
+          const body = await parseJsonBody(res);
+          setScriptsError(body.error || `Failed to load scripts (${res.status})`);
+          setScripts([]);
+          return;
+        }
+        const body = await res.json();
+        setScripts(body.scripts ?? []);
+      } catch (err) {
+        setScriptsError(err instanceof Error ? err.message : "Network error");
+        setScripts([]);
+      }
+    })();
+  }, []);
+
   /**
    * Submit — porting classic page-classic.tsx::handleSubmit (310-440)
    * verbatim through `buildCloneRequest` + `buildCreateInput` helpers, so
@@ -503,6 +527,8 @@ function WizardPage({
               dispatch={dispatch}
               assistants={assistants}
               assistantsError={assistantsError}
+              scripts={scripts}
+              scriptsError={scriptsError}
             />
           )}
           {state.step === 3 && <StepSchedule state={state} dispatch={dispatch} />}

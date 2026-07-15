@@ -128,10 +128,20 @@ export interface WizardState {
   isTest: boolean;                 // Marks the campaign as a test; excludes from /audience suggestions. Defaults false.
 
   // Step 2 — Agent
+  /**
+   * VOZ-159: which kind of caller. 'assistant' (default) = pick a Vapi
+   * assistant (today's flow, untouched). 'script' = pick a Script; the clone
+   * is composed from the graph at launch (VOZ-160). Existing behavior is the
+   * default, so agent-mode campaigns see no change.
+   */
+  agentMode: "assistant" | "script";
   vapiAssistantId: string;
   baseVoiceId: string | null;      // read-only display; voice lock per R3
   voiceId: string;                 // R3: always "" in classic; never set by any UI; kept to make `voiceId || undefined` math identical in buildCloneRequest
   systemPrompt: string;
+  /** Script-mode: the chosen listener_scripts id + display name. */
+  scriptId: string;
+  scriptName: string;
 
   // Step 3 — Schedule (Run-once branch)
   campaignType: "fixed" | "recurring";
@@ -219,7 +229,7 @@ export interface ImportSegmentPayload {
  * clone request relies on its undefined-ness to inherit from base.
  */
 export type AgentPayload = Partial<
-  Pick<WizardState, "vapiAssistantId" | "baseVoiceId" | "systemPrompt">
+  Pick<WizardState, "agentMode" | "vapiAssistantId" | "baseVoiceId" | "systemPrompt" | "scriptId" | "scriptName">
 >;
 
 /**
@@ -379,10 +389,13 @@ export function createInitialState(): WizardState {
     segmentName: null,
     isTest: false,
 
+    agentMode: "assistant",
     vapiAssistantId: "",
     baseVoiceId: null,
     voiceId: "",
     systemPrompt: "",
+    scriptId: "",
+    scriptName: "",
 
     campaignType: "fixed",
     realtime: false,
@@ -639,10 +652,27 @@ export interface CloneResult {
   poolSlotId?: string;
   baseAssistantId: string;
   voiceId: string | null;
+  // VOZ-160 (script mode): the DUPLICATED, campaign-owned script the clone was
+  // composed from. The campaign persists this — NOT the operator's original —
+  // so editing the original later never touches a running campaign.
+  scriptId?: string;
+  scriptName?: string;
 }
 
 /** Request body for POST /api/vapi/clone-assistant (Fixed path only). */
 export function buildCloneRequest(state: WizardState) {
+  // VOZ-160 script mode: no operator-picked base assistant — the route clones
+  // the designated script-base assistant (VAPI_SCRIPT_BASE_ASSISTANT_ID) and
+  // composes the prompt from scriptId. persona is saved as system_prompt.
+  if (state.agentMode === "script") {
+    return {
+      agentMode: "script" as const,
+      scriptId: state.scriptId,
+      scriptName: state.scriptName || undefined,
+      persona: state.systemPrompt || undefined,
+      campaignName: state.name.trim(),
+    };
+  }
   return {
     baseAssistantId: state.vapiAssistantId.trim(),
     voiceId: state.voiceId || undefined,         // R3: state.voiceId is "" in practice
@@ -662,6 +692,9 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     return {
       name: state.name.trim(),
       systemPrompt: state.systemPrompt,
+      agentMode: state.agentMode,
+      scriptId: state.agentMode === "script" ? state.scriptId : undefined,
+      scriptName: state.agentMode === "script" ? state.scriptName : undefined,
       // vapiAssistantId omitted — recurring parents have no clone.
       baseAssistantId: state.vapiAssistantId.trim(),
       voiceId: state.voiceId || undefined,
@@ -709,6 +742,11 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
   return {
     name: state.name.trim(),
     systemPrompt: state.systemPrompt,
+    agentMode: state.agentMode,
+    // Persist the DUPLICATED campaign-owned script the clone returned (falls
+    // back to the picked one only if the clone didn't duplicate).
+    scriptId: state.agentMode === "script" ? (clone.scriptId ?? state.scriptId) : undefined,
+    scriptName: state.agentMode === "script" ? (clone.scriptName ?? state.scriptName) : undefined,
     vapiAssistantId: clone.assistantId,
     vapiAssistantName: clone.assistantName,
     vapiSipUri: clone.sipUri,
@@ -740,7 +778,12 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
  */
 export function validateBeforeSubmit(state: WizardState): string | null {
   if (!state.name.trim()) return "Campaign name is required.";
-  if (!state.vapiAssistantId.trim()) return "Pick a Vapi assistant.";
+  // VOZ-159: script mode requires a Script; assistant mode requires an assistant.
+  if (state.agentMode === "script") {
+    if (!state.scriptId.trim()) return "Pick a Script.";
+  } else if (!state.vapiAssistantId.trim()) {
+    return "Pick a Vapi assistant.";
+  }
 
   // Optional campaign goal target. Empty is always valid; a non-empty value
   // that isn't a positive whole number is rejected (mirrors the DB CHECK

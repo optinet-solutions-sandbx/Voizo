@@ -25,6 +25,8 @@
  * clones and freshly-created clones must be identical post-refactor.
  */
 
+import type { ScriptCloneConfig } from "@/lib/scriptEngine/composeAssistant";
+
 /**
  * ElevenLabs voice catalog the operator can pick from. Used as both an allowlist
  * (request validation) and a display-name source (clone naming). When voiceId is
@@ -139,6 +141,7 @@ export interface CreateCloneOverrides {
   /**
    * Agent-prompt override. When unset, the base's existing system message
    * content is used. The Voizo platform prefix is always prepended.
+   * Ignored when `scriptClone` is set (the composed prompt is used instead).
    */
   systemPrompt?: string;
   /**
@@ -146,6 +149,20 @@ export interface CreateCloneOverrides {
    * chars), with an optional " (Voice)" suffix when voiceId is set.
    */
   campaignName?: string;
+  /**
+   * Override the pinned webhook URL. Defaults to VAPI_WEBHOOK_URL / the prod
+   * end-of-call URL. Script clones pass the script-call webhook route.
+   */
+  serverUrl?: string;
+  /**
+   * SCRIPT-MODE clone config (VOZ-156, from composeScriptClone). When present,
+   * the clone runs the Script Engine: its composed prompt replaces the
+   * VOIZO_SYSTEM_PREFIX + agent-prompt concatenation, tools are dropped, and
+   * the engine's serverMessages / speech plans / messagePlan / monitorPlan /
+   * firstMessage are applied. When ABSENT, this whole path is skipped and the
+   * clone is byte-for-byte the current agent-mode clone.
+   */
+  scriptClone?: ScriptCloneConfig;
 }
 
 export interface VapiClone {
@@ -172,7 +189,7 @@ export async function createClone(
     return { ok: false, status: 400, error: "baseAssistantId is required" };
   }
 
-  const { voiceId, systemPrompt, campaignName } = overrides;
+  const { voiceId, systemPrompt, campaignName, serverUrl, scriptClone } = overrides;
 
   if (voiceId && !KNOWN_VOICES[voiceId]) {
     return { ok: false, status: 400, error: "Unknown voiceId" };
@@ -246,13 +263,52 @@ export async function createClone(
     : "";
   const agentPrompt = systemPrompt || baseSystemContent;
 
-  // Combine: Voizo system prefix + agent prompt
-  const finalSystemContent = VOIZO_SYSTEM_PREFIX + agentPrompt;
+  // Combine: Voizo system prefix + agent prompt.
+  // SCRIPT MODE: the engine's composed prompt replaces both — it carries its
+  // own rules (which supersede VOIZO_SYSTEM_PREFIX; plan §2.3), so the prefix
+  // is NOT prepended.
+  const finalSystemContent = scriptClone
+    ? scriptClone.composedPrompt
+    : VOIZO_SYSTEM_PREFIX + agentPrompt;
 
   if (sysIdx >= 0) {
     cloneMessages[sysIdx] = { role: "system", content: finalSystemContent };
   } else {
     cloneMessages.unshift({ role: "system", content: finalSystemContent });
+  }
+
+  // ── Script-mode runtime overrides (empty {} for agent mode → no change) ──
+  // Spread into the payload right after VOIZO_RUNTIME_POLICY so it overrides
+  // the runtime floor (stopSpeakingPlan, firstMessageMode) but is itself
+  // overridden by nothing that follows (name/voice/model/cost-guardrails/
+  // server/metadata don't share these keys). transcriber/firstMessage are set
+  // only here for scripts; agent-mode inherits them from base.
+  let scriptRuntimeOverrides: Record<string, unknown> = {};
+  if (scriptClone) {
+    const baseTr = (base.transcriber ?? {}) as Record<string, unknown>;
+    const isDeepgram = ((baseTr.provider as string) ?? "deepgram") === "deepgram";
+    scriptRuntimeOverrides = {
+      serverMessages: scriptClone.serverMessages,
+      stopSpeakingPlan: scriptClone.stopSpeakingPlan,
+      startSpeakingPlan: scriptClone.startSpeakingPlan,
+      messagePlan: scriptClone.messagePlan,
+      monitorPlan: scriptClone.monitorPlan,
+      ...(scriptClone.firstMessageMode ? { firstMessageMode: scriptClone.firstMessageMode } : {}),
+      ...(scriptClone.firstMessage != null ? { firstMessage: scriptClone.firstMessage } : {}),
+      ...(isDeepgram
+        ? {
+            transcriber: {
+              ...baseTr,
+              keyterm: [
+                ...new Set([
+                  ...(Array.isArray(baseTr.keyterm) ? (baseTr.keyterm as string[]) : []),
+                  ...scriptClone.transcriberKeyterms,
+                ]),
+              ],
+            },
+          }
+        : {}),
+    };
   }
 
   // ── Clone payload: spread-base, override surgically ──
@@ -275,6 +331,10 @@ export async function createClone(
     // voice/model overrides still win for their own fields, but the safety
     // floor wins over base for firstMessageMode and stopSpeakingPlan.
     ...VOIZO_RUNTIME_POLICY,
+    // ── Script-mode runtime (empty for agent mode). Must sit AFTER
+    //    VOIZO_RUNTIME_POLICY (to override stopSpeakingPlan/firstMessageMode)
+    //    and BEFORE the per-campaign overrides below (which own their keys). ──
+    ...scriptRuntimeOverrides,
     // ── Per-campaign overrides ──
     name: cloneName,
     voice: cloneVoice,
@@ -285,6 +345,9 @@ export async function createClone(
       provider: base.model?.provider ?? "openai",
       model: base.model?.model ?? "gpt-4o",
       maxTokens: base.model?.maxTokens ?? 150,
+      // Script mode: NO tools — the engine drives everything and tool
+      // announcements ("just a sec…") were the last source of wait-phrases.
+      ...(scriptClone?.noTools ? { tools: [] } : {}),
     },
     // ── Voizo-mandated runtime knobs ──
     // silenceTimeoutSeconds=30 (lowered from 60 on 2026-05-11). The 60-second
@@ -441,7 +504,10 @@ export async function createClone(
     // via the explicit default below).
     server: (() => {
       const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
+      // Script clones pass serverUrl (the script-call route); agent clones use
+      // the env-driven default. Both keep Voizo as the sole webhook authority.
       const webhookUrl =
+        serverUrl ??
         process.env.VAPI_WEBHOOK_URL ??
         "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
       return {
@@ -454,7 +520,7 @@ export async function createClone(
     // Previously wholesale-replaced base.metadata, dropping any team/lifecycle
     // tags Maria set on the base. Merge preserves base.metadata while ensuring
     // our voizoClone marker is always present for the assistant-picker filter.
-    metadata: { ...(base.metadata ?? {}), voizoClone: true },
+    metadata: { ...(base.metadata ?? {}), voizoClone: true, ...(scriptClone ? { scriptEngine: true } : {}) },
     // ── Strip Vapi-server-set fields (POST /assistant rejects these) ──
     id: undefined,
     orgId: undefined,

@@ -46,6 +46,10 @@ export interface RebindCoreCampaign {
   base_assistant_id: string;
   voice_id: string | null;
   system_prompt: string;
+  // VOZ-160: script campaigns re-compose from the graph on rebind (picking up
+  // any script edits since the last spawn). Absent/'assistant' → agent rebind.
+  agent_mode?: "assistant" | "script" | null;
+  script_id?: string | null;
 }
 
 export interface RebindCoreSuccess {
@@ -77,11 +81,28 @@ export async function executeRebindCore(
   // ── 1. Re-clone via shared helper ──
   // voice_id NULL on the row → undefined override → clone inherits base.voice
   // (same fallback as create flow when operator skips the voice picker).
-  const cloneResult = await createClone(vapiPrivateKey, campaign.base_assistant_id, {
-    voiceId: campaign.voice_id ?? undefined,
-    systemPrompt: campaign.system_prompt ?? undefined,
-    campaignName: campaign.name ?? undefined,
-  });
+  // VOZ-160: script campaigns RE-COMPOSE from the graph so a rebind (and each
+  // recurring spawn) picks up script edits since the last run — same shape as
+  // the create-time script clone, base_assistant_id = the script-base assistant.
+  let cloneResult;
+  if (campaign.agent_mode === "script" && campaign.script_id) {
+    const eocUrl = process.env.VAPI_WEBHOOK_URL ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
+    const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
+    const { composeScriptClone } = await import("@/lib/scriptEngine/composeAssistant");
+    const scriptClone = await composeScriptClone({ scriptId: campaign.script_id, persona: campaign.system_prompt });
+    cloneResult = await createClone(vapiPrivateKey, campaign.base_assistant_id, {
+      voiceId: campaign.voice_id ?? undefined,
+      campaignName: campaign.name ?? undefined,
+      scriptClone,
+      serverUrl,
+    });
+  } else {
+    cloneResult = await createClone(vapiPrivateKey, campaign.base_assistant_id, {
+      voiceId: campaign.voice_id ?? undefined,
+      systemPrompt: campaign.system_prompt ?? undefined,
+      campaignName: campaign.name ?? undefined,
+    });
+  }
 
   if (!cloneResult.ok) {
     return { ok: false, status: cloneResult.status, error: cloneResult.error };
