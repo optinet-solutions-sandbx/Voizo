@@ -277,6 +277,66 @@ export function customerDeclinedSms(transcript: string | null | undefined): bool
   return turns.some((t) => t.speaker === "user" && SMS_DECLINE_PATTERNS.some((p) => p.test(t.text)));
 }
 
+// ── Callback-request lexicon (VOZ-127, 2026-07-15) ──────────────────────────
+// A REACHED human asking to be contacted again later ("call me tomorrow", "ring
+// me this afternoon", "I'm busy, call later") must be RE-DIALED, not dropped as
+// not_interested. The end-of-call webhook treats a match like the voicemail
+// skip: it leaves the number at outcome='in_progress' so the scheduler sweeper
+// resolves it to pending_retry under the SAME max_attempts cap + retry window
+// (no new retry mechanism, no migration).
+//
+// User turns only (speaker-aware, like customerDeclinedSms) + guarded:
+//   • CALLBACK_OPTOUT_GUARD drops opt-out framing ("don't call me again",
+//     "stop calling") — that is DNC / not-interested, NEVER a callback.
+//   • CALLBACK_CALLER_IS_CUSTOMER drops the customer offering to ring US
+//     ("I'll call you later") — only the ambiguous bare "call later" needs it;
+//     the "call me …" shapes are unambiguous and matched directly.
+// "try again later" is deliberately absent — it is voicemail-greeting
+// boilerplate (see VOICEMAIL_* above) and voicemail already routes to retry.
+const CALLBACK_LATER_CUE =
+  "later|again later|tomorrow|tonight|this (?:afternoon|evening|morning)|some other time|another time|next (?:week|time|month|day)|in (?:an? (?:hour|bit|while|sec|second|minute|moment)|a (?:few|couple)|the (?:morning|afternoon|evening))|after (?:lunch|work|a bit|\\d)|when i'?m (?:free|back|done|available|less busy|not busy)";
+
+// Unambiguous asks — the customer names US as the caller ("me"/"us") or asks
+// for a call ("give me a call"). Matched directly (opt-out guard only).
+const CALLBACK_DIRECT_PATTERNS: RegExp[] = [
+  /\b(?:call|ring|phone|buzz)\s+(?:me|us)?\s*back\b/i, // call me back / call back / ring us back
+  new RegExp(
+    `\\b(?:call|ring|phone|buzz)\\s+(?:me|us)\\b[^.?!]{0,20}\\b(?:${CALLBACK_LATER_CUE})\\b`,
+    "i",
+  ), // call me tomorrow / ring me this afternoon / call me some other time
+  /\bgive me a (?:call|ring|buzz)\b/i, // give me a call/ring (later)
+];
+
+// Bare "call later" with no me/us/back — a callback ask ("I'm busy, call later")
+// UNLESS the customer is the one offering to call ("I'll call you later").
+const CALLBACK_BARE_LATER = new RegExp(
+  `\\b(?:call|ring|phone|buzz)\\b[^.?!]{0,12}\\b(?:${CALLBACK_LATER_CUE})\\b`,
+  "i",
+);
+const CALLBACK_CALLER_IS_CUSTOMER =
+  /\b(?:i'?ll|i will|i'?d|i can|i could|i might|let me|we'?ll|we will)\b[^.?!]{0,12}\b(?:call|ring|phone|buzz|get back)\b/i;
+
+// Opt-out / refusal framing — must NEVER read as a callback (it is DNC).
+const CALLBACK_OPTOUT_GUARD =
+  /\b(?:don'?t|do not|never|stop|quit|no need to|no more)\b[^.?!]{0,15}\b(?:call|ring|phone|contact|calling)\b/i;
+
+/**
+ * Did the CUSTOMER ask to be called back later? User turns only, opt-out- and
+ * caller-guarded (see lexicon notes above). Conservative (false) on label-less
+ * transcripts — no `user` turn to attribute the request to.
+ */
+export function customerRequestedCallback(transcript: string | null | undefined): boolean {
+  if (!transcript) return false;
+  const turns = parseTranscriptTurns(transcript.slice(0, TRANSCRIPT_CAP));
+  return turns.some((t) => {
+    if (t.speaker !== "user") return false;
+    const s = t.text;
+    if (CALLBACK_OPTOUT_GUARD.test(s)) return false; // "don't call me again" — DNC, not a callback
+    if (CALLBACK_DIRECT_PATTERNS.some((p) => p.test(s))) return true;
+    return CALLBACK_BARE_LATER.test(s) && !CALLBACK_CALLER_IS_CUSTOMER.test(s);
+  });
+}
+
 // ── #5 (2026-06-08): machine "hold / leave-a-message / IVR" greetings ───────────
 // Phrases a live customer never utters on a cold sales call, which slipped the voicemail
 // tiers above and surfaced as fake "real conversations" in /reviews (campaign
