@@ -23,6 +23,7 @@ import {
 import { getControlUrl, injectStaffNote, injectSay, endCall } from "./lab-control";
 import { contentTypeOf } from "./lab-flow";
 import { composeArmedBriefing } from "./lab-briefing";
+import { resolveCallScriptId } from "./resolveScript";
 
 // The idle nudges configure-assistant installs — spoken by VAPI itself, so
 // they must never count as the briefed line having been delivered.
@@ -37,11 +38,15 @@ const IDLE_NUDGES = ["Take your time — I'm still here.", "Are you still with m
  *  optimistic lock makes concurrent poll ticks single-fire. */
 export async function checkWaitTimeout(callId: string, controlUrlHint: string | null): Promise<void> {
   try {
-    const settings = await getLabSettings().catch(() => null);
-    if (!settings?.active_script_id) return;
-    const state = await getFlowState(callId).catch(() => null);
+    // Workstream C: gate on THIS call's script (seeded campaign calls keep
+    // their silence timeouts even when the global Active toggle is null/other).
+    const [settings, state] = await Promise.all([
+      getLabSettings().catch(() => null),
+      getFlowState(callId).catch(() => null),
+    ]);
     if (!state?.current_node_id) return;
-    const scriptId = state.script_id ?? settings.active_script_id;
+    const scriptId = resolveCallScriptId(state, settings);
+    if (!scriptId) return;
     const graph = await getScriptGraph(scriptId);
     const node = graph.nodes.find((n) => n.id === state.current_node_id);
     if (!node || contentTypeOf(node) !== "wait") return;

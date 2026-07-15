@@ -26,6 +26,7 @@ import { checkDelivery } from "@/lib/scriptEngine/lab-watchdog";
 import { composeArmedBriefing } from "@/lib/scriptEngine/lab-briefing";
 import { findEntryNode, nodeById, pickNextEdge, contentTypeOf } from "@/lib/scriptEngine/lab-flow";
 import { classifyUtterance, type Classification } from "@/lib/scriptEngine/lab-router";
+import { resolveCallScriptId } from "@/lib/scriptEngine/resolveScript";
 import {
   getControlUrl,
   injectStaffNote,
@@ -243,17 +244,21 @@ function speculate(callId: string, text: string): Promise<void> | undefined {
   const cur = speculativeCls.get(callId);
   if (cur && (cur.text === text || now - cur.at < 1000)) return; // throttle
   const work = (async () => {
-    const [settings, hs, turns] = await Promise.all([
+    const [settings, hs, turns, flowState] = await Promise.all([
       getLabSettings(),
       listHandlers(),
       getRecentTurns(callId, 6).catch(() => []),
+      getFlowState(callId).catch(() => null),
     ]);
+    // Workstream C: per-call resolution — a seeded campaign call classifies
+    // against ITS script's vocabulary, not whichever script is globally Active.
+    const callScriptId = resolveCallScriptId(flowState, settings);
     const eligible = hs.filter(
       (h) => h.enabled && !SPECIAL_INTENTS.has(h.intent_key) && (h.mode === "listener" || h.mode === "both")
     );
     let scoped = await scopeToActiveCollection(eligible, settings?.active_collection_id);
-    scoped = await withScriptVocabulary(scoped, eligible, settings?.active_script_id);
-    const expected = await expectedIntentKeys(callId, scoped, settings?.active_script_id ?? null).catch(() => [] as string[]);
+    scoped = await withScriptVocabulary(scoped, eligible, callScriptId);
+    const expected = await expectedIntentKeys(callId, scoped, callScriptId).catch(() => [] as string[]);
     const { cls } = await classifyTiered(text, turns, scoped, settings?.router_model ?? "gpt-5.4-mini", expected);
     return { cls, expected };
   })();
@@ -410,7 +415,11 @@ async function handleToolCalls(
   let routerModel = "gpt-5.4-mini";
   let activeScriptId: string | null = null;
   try {
-    const [hs, settings] = await Promise.all([listHandlers(), getLabSettings()]);
+    const [hs, settings, flowState] = await Promise.all([
+      listHandlers(),
+      getLabSettings(),
+      getFlowState(callId).catch(() => null),
+    ]);
     handlers = hs.filter(
       (h) =>
         h.enabled &&
@@ -419,7 +428,10 @@ async function handleToolCalls(
     );
     handlers = await scopeToActiveCollection(handlers, settings?.active_collection_id);
     if (settings?.router_model) routerModel = settings.router_model;
-    activeScriptId = settings?.active_script_id ?? null;
+    // Workstream C: the tool guards key on THIS call's script (seeded by the
+    // script-call route), falling back to the global only for unseeded
+    // Builder test calls — so campaign calls survive a null/foreign global.
+    activeScriptId = resolveCallScriptId(flowState, settings);
   } catch (e) {
     console.error("[lab webhook] failed to load handlers/settings:", e);
   }
@@ -565,6 +577,7 @@ async function handleTranscript(
   const settingsP = getLabSettings();
   const handlersP = listHandlers();
   const lastInjectedP = getLastInjectedEvent(callId).catch(() => null);
+  const flowStateP = getFlowState(callId).catch(() => null);
 
   // Prior turns are read BEFORE logging this one, so the router classifies the
   // utterance in conversational context (prevents keyword-only mismatches).
@@ -594,8 +607,13 @@ async function handleTranscript(
 
   let settings;
   let handlers: ListenerHandler[] = [];
+  // Workstream C: ONE per-call resolution for gate + vocabulary + identity.
+  // Seeded campaign calls are immune to the global Active toggle; unseeded
+  // Builder test calls keep the global fallback.
+  let callScriptId: string | null = null;
   try {
     settings = await settingsP;
+    callScriptId = resolveCallScriptId(await flowStateP, settings);
     const eligible = (await handlersP).filter(
       (h) =>
         h.enabled &&
@@ -603,7 +621,7 @@ async function handleTranscript(
         (h.mode === "listener" || h.mode === "both")
     );
     handlers = await scopeToActiveCollection(eligible, settings?.active_collection_id);
-    handlers = await withScriptVocabulary(handlers, eligible, settings?.active_script_id);
+    handlers = await withScriptVocabulary(handlers, eligible, callScriptId);
   } catch (e) {
     await log({
       call_id: callId,
@@ -626,7 +644,7 @@ async function handleTranscript(
 
   // Observer navigation priors for the fresh-classify fallback — started now
   // so the flow-position lookup runs while the speculative checks happen.
-  const expectedPromise = expectedIntentKeys(callId, handlers, settings.active_script_id ?? null).catch(
+  const expectedPromise = expectedIntentKeys(callId, handlers, callScriptId).catch(
     () => [] as string[]
   );
 
@@ -636,7 +654,7 @@ async function handleTranscript(
   let cls;
   let speculativeHit = false;
   let tier: "instant" | "speculative" | "fast" | "full" | null = null;
-  const quick = await quickMatch(callId, turnText, settings.active_script_id ?? null).catch(() => null);
+  const quick = await quickMatch(callId, turnText, callScriptId).catch(() => null);
   if (quick) {
     cls = { intent: quick, confidence: 0.99, intents: [{ intent: quick, confidence: 0.99 }], raw: "quick-word match" };
     tier = "instant";
@@ -735,7 +753,7 @@ async function handleTranscript(
   //    would double-speak on top of the model's own reply. reactiveCanHandle
   //    is forced false so the flow never defers to a layer that no longer
   //    answers.
-  if (settings.active_script_id) {
+  if (callScriptId) {
     // Backchannel gate: a live run raced three stages ahead on "Hello." /
     // "understood" / "not hearing me" — channel noise firing catch-all
     // arrows while the agent was still mid-delivery. Two noise classes for
@@ -795,7 +813,7 @@ async function handleTranscript(
       const advanced = await runScriptFlow(
         callId,
         controlUrlHint,
-        settings.active_script_id,
+        callScriptId,
         flowIntent,
         intents,
         turnText,
@@ -970,10 +988,10 @@ async function handleTranscript(
     // Ground the briefing in the customer's actual words so the reply connects
     // to the conversation instead of reading like a recital. In script mode,
     // clamp the tail — the model otherwise appends invented follow-ups.
-    const scriptClamp = settings.active_script_id
+    const scriptClamp = callScriptId
       ? " Deliver ONLY that, then stop — no added follow-up question of your own; the script decides what comes next."
       : "";
-    const reactPhrase = settings.active_script_id
+    const reactPhrase = callScriptId
       ? "open with at most ONE filler from your approved list (or none), then deliver:"
       : "react to that naturally in your own words, then:";
     const brief = (t: string) =>

@@ -18,6 +18,19 @@ export type ScriptSeedDecision =
   | { kind: "ambiguous"; scriptIds: string[]; campaignIds: string[] }
   | { kind: "none" };
 
+/** Workstream C: the ONE per-call resolution rule for the engine's gate,
+ *  classifier vocabulary, and script identity. Seeded campaign calls
+ *  (lab_call_flow_state.script_id, written by the script-call route's ladder)
+ *  are fully self-contained — the Builder's global Active toggle can change or
+ *  go null without touching them. Unseeded calls (Builder browser test calls,
+ *  ladder leg-3 misses) keep the global fallback. */
+export function resolveCallScriptId(
+  state: { script_id?: string | null } | null | undefined,
+  settings: { active_script_id?: string | null } | null | undefined
+): string | null {
+  return state?.script_id ?? settings?.active_script_id ?? null;
+}
+
 export function decideScriptSeed(rows: CampaignScriptRow[]): ScriptSeedDecision {
   const scriptRows = rows.filter((r) => r.agent_mode === "script" && r.script_id);
   const distinct = [...new Set(scriptRows.map((r) => r.script_id as string))];

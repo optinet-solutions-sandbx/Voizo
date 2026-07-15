@@ -45,9 +45,11 @@ export const maxDuration = 60;
  *     that must be visible, never silent. Fires per turn until seeded
  *     (bounded by call length; acceptable pilot noise).
  *
- * NOTE: lab_settings.active_script_id remains the ENGAGEMENT GATE for the
- * scripted runtime (handleWebhook.ts:738, lab-watchdog.ts:41) — this ladder
- * de-globalizes script IDENTITY only. De-globalizing the gate is workstream C.
+ * NOTE (workstream C, done): the engine's engagement gate, tool guards,
+ * classifier vocabulary and watchdog all resolve per-call now via
+ * resolveCallScriptId (state.script_id ?? lab_settings.active_script_id) —
+ * a seeded campaign call is fully self-contained; the global remains only as
+ * the fallback for unseeded Builder test calls and ladder misses.
  */
 async function resolveScriptForCall(vapiCallId: string, assistantId: string | null): Promise<void> {
   try {
