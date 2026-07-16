@@ -1,7 +1,9 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { BookOpen } from "lucide-react";
 import ScriptBuilder from "@/components/lab/ScriptBuilder";
 import { listScripts, createScript, deleteScript, getLabSettings } from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerScript } from "@/lib/scriptEngine/database.types";
@@ -107,6 +109,13 @@ function ScriptBuilderInner() {
             call flow, or create a new one.
           </p>
         </div>
+        <Link
+          href="/playbook"
+          className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-gray-600 px-3 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-700 hover:text-white"
+        >
+          <BookOpen className="h-4 w-4" />
+          Playbook
+        </Link>
       </header>
 
       {/* Create + search */}

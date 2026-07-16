@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import OrganizerTable from "@/components/lab/OrganizerTable";
 import CollectionsManager from "@/components/lab/CollectionsManager";
 
@@ -17,6 +19,13 @@ export default function PlaybookPage() {
 
   return (
     <div className="flex flex-col px-4 py-6 pb-[env(safe-area-inset-bottom)] sm:px-6 sm:py-8 space-y-5">
+      <Link
+        href="/script-builder"
+        className="inline-flex w-fit items-center gap-1.5 text-sm text-gray-400 transition hover:text-gray-200"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Script Builder
+      </Link>
       <header>
         <h1 className="text-2xl font-bold tracking-tight text-white">Playbook</h1>
         <p className="mt-1 max-w-3xl text-sm text-gray-500">

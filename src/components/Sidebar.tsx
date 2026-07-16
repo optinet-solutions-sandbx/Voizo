@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useRef, useState, useSyncExternalStore } from "react";
 import {
   PhoneOff, BookOpen, LayoutDashboard, Sun, Moon, Globe2,
-  Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone,
+  Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone, Workflow,
 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
 import NotificationBell from "@/components/NotificationBell";
@@ -20,6 +20,7 @@ import { UsersIcon } from "@/components/icons/animated/users";
 import { PhoneMissedIcon } from "@/components/icons/animated/phone-missed";
 import { BookTextIcon } from "@/components/icons/animated/book-text";
 import { ClipboardCheckIcon } from "@/components/icons/animated/clipboard-check";
+import { WorkflowIcon } from "@/components/icons/animated/workflow";
 import type { AnimatedIcon, AnimatedIconHandle } from "@/components/icons/animated/types";
 
 // Hybrid nav (2026-06-16): the sidebar is now NAV-ONLY (search + notifications moved to the
@@ -52,6 +53,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
   {
     label: "Data",
     items: [
+      { label: "Script Builder", href: "/script-builder", icon: Workflow, animatedIcon: WorkflowIcon,   ...NEUTRAL },
       { label: "Reviews",  href: "/reviews",  icon: ClipboardCheck, animatedIcon: ClipboardCheckIcon, ...NEUTRAL },
       { label: "Audience", href: "/audience", icon: Users,          animatedIcon: UsersIcon,          ...NEUTRAL },
     ],
