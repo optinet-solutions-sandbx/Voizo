@@ -136,6 +136,9 @@ export interface WizardState {
    */
   agentMode: "assistant" | "script";
   vapiAssistantId: string;
+  /** Display name of the picked assistant/base agent (review card shows this,
+   *  not the raw id). Empty on prefill flows that only know the id. */
+  vapiAssistantName: string;
   baseVoiceId: string | null;      // read-only display; voice lock per R3
   voiceId: string;                 // R3: always "" in classic; never set by any UI; kept to make `voiceId || undefined` math identical in buildCloneRequest
   systemPrompt: string;
@@ -233,7 +236,7 @@ export interface ImportSegmentPayload {
  * clone request relies on its undefined-ness to inherit from base.
  */
 export type AgentPayload = Partial<
-  Pick<WizardState, "agentMode" | "vapiAssistantId" | "baseVoiceId" | "systemPrompt" | "persona" | "scriptId" | "scriptName">
+  Pick<WizardState, "agentMode" | "vapiAssistantId" | "vapiAssistantName" | "baseVoiceId" | "systemPrompt" | "persona" | "scriptId" | "scriptName">
 >;
 
 /**
@@ -395,6 +398,7 @@ export function createInitialState(): WizardState {
 
     agentMode: "assistant",
     vapiAssistantId: "",
+    vapiAssistantName: "",
     baseVoiceId: null,
     voiceId: "",
     systemPrompt: "",
@@ -664,27 +668,10 @@ export interface CloneResult {
   scriptName?: string;
 }
 
-/** Request body for POST /api/vapi/clone-assistant (Fixed path only). */
-export function buildCloneRequest(state: WizardState) {
-  // VOZ-160 script mode: no operator-picked base assistant — the route clones
-  // the designated script-base assistant (VAPI_SCRIPT_BASE_ASSISTANT_ID) and
-  // composes the prompt from scriptId. persona is saved as system_prompt.
-  if (state.agentMode === "script") {
-    return {
-      agentMode: "script" as const,
-      scriptId: state.scriptId,
-      scriptName: state.scriptName || undefined,
-      persona: state.persona || undefined,
-      campaignName: state.name.trim(),
-    };
-  }
-  return {
-    baseAssistantId: state.vapiAssistantId.trim(),
-    voiceId: state.voiceId || undefined,         // R3: state.voiceId is "" in practice
-    systemPrompt: state.systemPrompt || undefined,
-    campaignName: state.name.trim(),
-  };
-}
+/** Request body for POST /api/vapi/clone-assistant — moved to ./cloneRequest
+ *  (pure module, type-only import) so vitest can lock the contract without
+ *  evaluating this file's runtime `@/` imports. Re-exported for callers. */
+export { buildCloneRequest } from "./cloneRequest";
 
 /**
  * The single point of truth for what we POST to createCampaignV2. Fixed

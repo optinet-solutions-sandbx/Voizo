@@ -6,6 +6,7 @@ import type { Dispatch } from "react";
 import type { WizardAction, WizardState } from "../wizardState";
 import { VOICE_OPTIONS } from "@/lib/voiceOptions";
 import StyledSelect from "@/components/StyledSelect";
+import { DEFAULT_SHORT_PROMPT } from "@/lib/scriptEngine/lab-tools";
 
 /** Shape of an entry in GET /api/vapi/assistants — same as classic page-classic.tsx:111-118. */
 export interface Assistant {
@@ -47,6 +48,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
       type: "SET_AGENT_FIELDS",
       payload: {
         vapiAssistantId: a.id,
+        vapiAssistantName: a.name,
         baseVoiceId: a.voiceId,
         systemPrompt: a.systemPrompt ?? "",
       },
@@ -125,6 +127,53 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
             </a>
           </div>
 
+          {/* Base agent (VOZ-168-lite, optional): which agent the script clone is
+              composed FROM. Supplies the VOICE + call setup only — the script
+              still decides everything that's said. Empty = the standard script
+              base (VAPI_SCRIPT_BASE_ASSISTANT_ID), byte-identical to before. */}
+          {assistants !== null && !assistantsError && assistants.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
+                Base agent
+                <span className="text-[11px] text-[var(--text-3)] font-normal">optional — sets the voice and call setup</span>
+              </label>
+              <StyledSelect
+                icon={<Bot size={14} />}
+                value={state.vapiAssistantId}
+                onChange={(value) => {
+                  const a = assistants.find((x) => x.id === value);
+                  dispatch({
+                    type: "SET_AGENT_FIELDS",
+                    payload: { vapiAssistantId: a?.id ?? "", vapiAssistantName: a?.name ?? "", baseVoiceId: a?.voiceId ?? null },
+                  });
+                }}
+                options={[
+                  { value: "", label: "Standard script base (default)" },
+                  ...assistants.map((a) => ({ value: a.id, label: a.name })),
+                ]}
+              />
+              {selected ? (
+                <div className="flex items-center gap-2 text-[13px] text-[var(--text-3)]">
+                  <Megaphone size={13} />
+                  <span>
+                    Voice:{" "}
+                    <span className="text-[var(--text-2)]">
+                      {VOICE_OPTIONS.find((v) => v.id === state.baseVoiceId)?.name ??
+                        (state.baseVoiceId ? "Custom voice" : "agent default")}
+                    </span>
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wide text-[var(--text-3)] bg-[var(--bg-app)] px-1.5 py-0.5 rounded font-medium">
+                    locked
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[11px] text-[var(--text-3)]">
+                  The script decides what&apos;s said either way — this only changes who it sounds like.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Persona (who the agent is) — saved to system_prompt */}
           <div className="flex flex-col gap-2">
             <label htmlFor="wizard-persona" className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
@@ -137,10 +186,12 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               onChange={(e) => dispatch({ type: "SET_AGENT_FIELDS", payload: { persona: e.target.value } })}
               rows={6}
               className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y text-sm leading-relaxed"
-              placeholder="You are Tom — a warm, natural-sounding agent for Lucky Seven Casino…"
+              placeholder={DEFAULT_SHORT_PROMPT}
             />
             <p className="text-[11px] text-[var(--text-3)]">
-              The script supplies WHAT to say and when; the persona sets WHO is saying it. Blank falls back to the engine default.
+              The script supplies WHAT to say and when; the persona sets WHO is saying it. Blank runs
+              exactly the default shown above. (The base agent&apos;s own prompt is never used in
+              script mode — it supplies only the voice.)
             </p>
           </div>
         </div>

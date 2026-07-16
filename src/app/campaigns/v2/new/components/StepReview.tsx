@@ -12,6 +12,7 @@ import {
   validateBeforeSubmit,
   type Step, type WizardAction, type WizardState,
 } from "../wizardState";
+import { VOICE_OPTIONS } from "@/lib/voiceOptions";
 
 interface Props {
   state: WizardState;
@@ -108,25 +109,63 @@ export default function StepReview({ state, dispatch }: Props) {
           />
         </ReviewCard>
 
-        {/* AGENT */}
-        <ReviewCard title="Agent" icon={<Bot size={13} />} onEdit={() => jump(2)}>
+        {/* AGENT / SCRIPT */}
+        <ReviewCard title={state.agentMode === "script" ? "Script" : "Agent"} icon={<Bot size={13} />} onEdit={() => jump(2)}>
           {state.agentMode === "script" ? (
-            <ReviewRow
-              label="Script"
-              value={state.scriptName ? <span className="text-[12px] text-[var(--text-2)]">{state.scriptName}</span> : <em className="text-amber-300">required</em>}
-            />
+            <>
+              <ReviewRow
+                label="Script"
+                value={state.scriptName ? <span className="text-[12px] text-[var(--text-2)]">{state.scriptName}</span> : <em className="text-amber-300">required</em>}
+              />
+              <ReviewRow
+                label="Base agent"
+                value={
+                  state.vapiAssistantId.trim() ? (
+                    state.vapiAssistantName ? (
+                      <span className="text-[12px] text-[var(--text-2)]">{state.vapiAssistantName}</span>
+                    ) : (
+                      <span className="font-mono text-[12px]">{state.vapiAssistantId}</span>
+                    )
+                  ) : (
+                    <span className="text-[12px] text-[var(--text-3)]">Standard (default)</span>
+                  )
+                }
+              />
+            </>
           ) : (
             <ReviewRow
               label="Assistant"
-              value={state.vapiAssistantId ? <span className="font-mono text-[12px]">{state.vapiAssistantId}</span> : <em className="text-amber-300">required</em>}
+              value={
+                state.vapiAssistantId ? (
+                  state.vapiAssistantName ? (
+                    <span className="text-[12px] text-[var(--text-2)]">{state.vapiAssistantName}</span>
+                  ) : (
+                    <span className="font-mono text-[12px]">{state.vapiAssistantId}</span>
+                  )
+                ) : (
+                  <em className="text-amber-300">required</em>
+                )
+              }
             />
           )}
-          {state.baseVoiceId && (
+          {/* Voice provenance is mode-specific: in script mode the voice row is
+              truthful ONLY when a base agent is explicitly picked (VOZ-168 —
+              the pick rides the clone request, so its voice is what launches).
+              Unpicked script mode clones the standard base; no row. */}
+          {(state.agentMode !== "script" || Boolean(state.vapiAssistantId.trim())) && state.baseVoiceId && (
             <ReviewRow
               label="Voice"
               value={
                 <>
-                  <span className="font-mono text-[12px]">{state.baseVoiceId}</span>
+                  {VOICE_OPTIONS.find((v) => v.id === state.baseVoiceId)?.name ? (
+                    <span className="text-[12px] text-[var(--text-2)]">
+                      {VOICE_OPTIONS.find((v) => v.id === state.baseVoiceId)?.name}
+                    </span>
+                  ) : (
+                    <span className="text-[12px] text-[var(--text-2)]">
+                      Custom voice <span className="font-mono text-[11px] text-[var(--text-3)]">({state.baseVoiceId})</span>
+                    </span>
+                  )}
                   <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--text-3)] bg-[var(--bg-app)] px-1.5 py-0.5 rounded font-medium">Locked</span>
                 </>
               }
