@@ -331,6 +331,21 @@ export async function createClone(
     // voice/model overrides still win for their own fields, but the safety
     // floor wins over base for firstMessageMode and stopSpeakingPlan.
     ...VOIZO_RUNTIME_POLICY,
+    // ── VOZ-128: keep base's tuned turn-taking phrase lists ──
+    // The bare VOIZO_RUNTIME_POLICY spread above replaces the WHOLE
+    // stopSpeakingPlan, dropping base.acknowledgementPhrases /
+    // interruptionPhrases (Val carries 20 + 7 tuned entries). Losing them made
+    // customer backchannels ("okay", "yeah", "are you there") register as a
+    // barge-in and restart the agent — the weakest judge axis, natural_flow
+    // 2.68/5 (n=475). Merge instead: base's phrase lists survive while Voizo's
+    // numWords / voiceSeconds / backoffSeconds floor still wins. Sits BEFORE
+    // ...scriptRuntimeOverrides so script mode (which sets its own
+    // stopSpeakingPlan) is unaffected; a base with no stopSpeakingPlan gets the
+    // floor unchanged (byte-identical to pre-VOZ-128 clones).
+    stopSpeakingPlan: {
+      ...(base.stopSpeakingPlan ?? {}),
+      ...VOIZO_RUNTIME_POLICY.stopSpeakingPlan,
+    },
     // ── Script-mode runtime (empty for agent mode). Must sit AFTER
     //    VOIZO_RUNTIME_POLICY (to override stopSpeakingPlan/firstMessageMode)
     //    and BEFORE the per-campaign overrides below (which own their keys). ──
