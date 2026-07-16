@@ -22,8 +22,8 @@ function tipsFor(state: WizardState): string[] {
     case 2:
       return state.agentMode === "script"
         ? [
-            "The script is locked in at launch. Changing it later means a new campaign.",
-            "The script decides WHAT gets said; the persona sets WHO is saying it.",
+            "The Script is locked when you launch. To change it later, make a new campaign.",
+            "The Script decides what gets said. The persona sets who is saying it.",
           ]
         : [
             "Prompt edits apply only to this campaign's own copy of the agent.",

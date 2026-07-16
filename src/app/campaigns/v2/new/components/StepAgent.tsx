@@ -60,15 +60,15 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
       <h1 className="text-[22px] font-bold tracking-tight">Who&apos;s making the call?</h1>
       <p className="text-sm text-[var(--text-3)] mt-1.5 leading-relaxed">
         {isScript
-          ? "Pick a Script — a call flow you built in the Script Builder. At launch a dedicated agent is composed from the script's boxes and answers."
+          ? "Pick a Script you built in the Script Builder. A Script is the step by step plan for the call. When you launch, the calling agent is built from it."
           : "Pick the agent that runs the call, then tweak its instructions for this campaign. Its voice stays fixed to the agent's default."}
       </p>
 
       {/* VOZ-159: Agent vs Script mode selector */}
       <div className="mt-6 grid grid-cols-2 gap-2.5">
         {([
-          { mode: "assistant" as const, icon: Bot, label: "Agent", sub: "Prompt-driven voice agent" },
-          { mode: "script" as const, icon: FileText, label: "Script", sub: "A guided flow from the Script Builder" },
+          { mode: "assistant" as const, icon: Bot, label: "Agent", sub: "Runs from written instructions" },
+          { mode: "script" as const, icon: FileText, label: "Script", sub: "Runs from a step by step flow you built" },
         ]).map(({ mode, icon: Icon, label, sub }) => {
           const active = state.agentMode === mode;
           return (
@@ -133,9 +133,9 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               base (VAPI_SCRIPT_BASE_ASSISTANT_ID), byte-identical to before. */}
           {assistants !== null && !assistantsError && assistants.length > 0 && (
             <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
+              <label className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
                 Base agent
-                <span className="text-[11px] text-[var(--text-3)] font-normal">optional — sets the voice and call setup</span>
+                <span className="text-[11px] text-[var(--text-3)] font-normal">optional</span>
               </label>
               <StyledSelect
                 icon={<Bot size={14} />}
@@ -148,7 +148,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
                   });
                 }}
                 options={[
-                  { value: "", label: "Standard script base (default)" },
+                  { value: "", label: "Default voice" },
                   ...assistants.map((a) => ({ value: a.id, label: a.name })),
                 ]}
               />
@@ -168,7 +168,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
                 </div>
               ) : (
                 <p className="text-[11px] text-[var(--text-3)]">
-                  The script decides what&apos;s said either way — this only changes who it sounds like.
+                  The Script decides what gets said. This only changes the voice.
                 </p>
               )}
             </div>
@@ -176,9 +176,8 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
 
           {/* Persona (who the agent is) — saved to system_prompt */}
           <div className="flex flex-col gap-2">
-            <label htmlFor="wizard-persona" className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
+            <label htmlFor="wizard-persona" className="text-xs font-medium text-[var(--text-2)]">
               Persona
-              <span className="text-[11px] text-[var(--text-3)] font-normal">who the agent is — name, brand, tone</span>
             </label>
             <textarea
               id="wizard-persona"
@@ -189,9 +188,9 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               placeholder={DEFAULT_SHORT_PROMPT}
             />
             <p className="text-[11px] text-[var(--text-3)]">
-              The script supplies WHAT to say and when; the persona sets WHO is saying it. Blank runs
-              exactly the default shown above. (The base agent&apos;s own prompt is never used in
-              script mode — it supplies only the voice.)
+              The Script sets what to say and when. The persona sets who says it, like the name, brand,
+              and tone. Leave it blank to use the default shown above. The base agent only sets the
+              voice, so its own instructions are not used here.
             </p>
           </div>
         </div>
@@ -249,7 +248,7 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
         {/* System prompt textarea */}
         {selected && (
           <div className="flex flex-col gap-2">
-            <label htmlFor="wizard-prompt" className="text-xs font-medium text-[var(--text-2)] flex items-center gap-1.5">
+            <label htmlFor="wizard-prompt" className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
               System prompt
               <span className="text-[11px] text-[var(--text-3)] font-normal">tweak for this campaign only</span>
             </label>
