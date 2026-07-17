@@ -45,13 +45,15 @@ export interface ReviewCampaign {
   labeledCount: number; // among those, labeled by this reviewer
 }
 
-const VAPI_STORAGE_PREFIX = "https://storage.vapi.ai/";
-
-// Build the same-origin proxy URL for a Vapi recording (CORS workaround +
-// SSRF-guarded in the proxy route). null when there's no usable recording.
+// Build the same-origin proxy URL for a Vapi recording. null when there's no
+// usable recording. Any http(s) recording_url counts: stored URLs went dead
+// when Vapi moved storage to private R2 (2026-07-16), so the proxy re-resolves
+// a fresh presigned link from Vapi's API at play time — the stored value is
+// just the existence marker + call-id/extension carrier (see
+// src/lib/recordingProxy.ts). Mirrored in ghost/ghostLabelData.ts.
 // Exported for reuse by /api/dashboard/call-detail (per-contact modal, 2026-07-01).
 export function audioUrlFor(recordingUrl: unknown): string | null {
-  if (typeof recordingUrl === "string" && recordingUrl.startsWith(VAPI_STORAGE_PREFIX)) {
+  if (typeof recordingUrl === "string" && /^https?:\/\//.test(recordingUrl)) {
     return `/api/recordings/proxy?url=${encodeURIComponent(recordingUrl)}`;
   }
   return null;

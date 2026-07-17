@@ -10,12 +10,12 @@ import { hasRealConversation } from "../transcriptClassify";
 
 export type GhostVerdict = "good" | "bad" | "unsure";
 
-const VAPI_STORAGE_PREFIX = "https://storage.vapi.ai/";
-
-// Same-origin proxy URL for a Vapi recording (CORS + SSRF-guarded in the proxy
-// route). null when there's no usable recording. Mirrors labelData.audioUrlFor.
+// Same-origin proxy URL for a Vapi recording. null when there's no usable
+// recording. Any http(s) URL counts — the proxy re-resolves a fresh presigned
+// link at play time since Vapi's storage went private (2026-07-16; see
+// src/lib/recordingProxy.ts). Mirrors labelData.audioUrlFor.
 function audioUrlFor(recordingUrl: unknown): string | null {
-  return typeof recordingUrl === "string" && recordingUrl.startsWith(VAPI_STORAGE_PREFIX)
+  return typeof recordingUrl === "string" && /^https?:\/\//.test(recordingUrl)
     ? `/api/recordings/proxy?url=${encodeURIComponent(recordingUrl)}`
     : null;
 }

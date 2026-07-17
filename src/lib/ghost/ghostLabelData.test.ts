@@ -61,6 +61,22 @@ describe("listGhostRunCalls", () => {
     expect(out[0].yourLabel?.verdict).toBe("good");
   });
 
+  it("mints the proxy URL for post-migration R2-host recordings too", async () => {
+    // Vapi moved recording storage to private R2 (2026-07-16); recording_url now
+    // looks like this. The proxy resolves a fresh presigned link at play time —
+    // the gate must accept any http(s) URL, not just the dead storage.vapi.ai host.
+    const rows = [
+      { id: "c1", created_at: "t1", duration_seconds: 60, status: "completed", goal_reached: true,
+        transcript: { text: "AI: Hello, is this Jo?\nUser: Yes, tell me more about the offer." },
+        recording_url: "https://94bdb67bb98da30b06bdd917725c037d.r2.cloudflarestorage.com/hipaa-recordings/019f6f9d-b49f-7775-accd-4150968ca909-1784284043732-ebc59e10-mono.wav",
+        campaign_numbers_v2: { phone_e164: "+15551110000" } },
+    ];
+    const { supabase } = fakeDb({ rows, labels: [] });
+    const out = await listGhostRunCalls(supabase, "camp1", "op");
+    expect(out[0].audioUrl).toContain("/api/recordings/proxy?url=");
+    expect(out[0].audioUrl).toContain(encodeURIComponent("r2.cloudflarestorage.com"));
+  });
+
   it("returns calls with no label as yourLabel=null", async () => {
     const rows = [
       { id: "c1", created_at: "t1", duration_seconds: 60, status: "completed", goal_reached: false,
