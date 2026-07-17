@@ -2,10 +2,12 @@
 
 // Per-contact call-detail modal (2026-07-01) — opened by clicking a phone number in the shared
 // RecordsTable. Fetches every call ATTEMPT for the contact (/api/dashboard/call-detail) and shows,
-// per attempt, an audio player + transcript + an audio download. Reuses the shared CallTranscript
-// renderer; audio is the same-origin recordings proxy (reused from /reviews), so the download is a
-// plain <a download>. Attempts are CACHED per contact key so the fetch effect never setState-syncs to
-// the `record` prop — loading/error/attempts are DERIVED (mirrors RangedRecordsDrawer, which avoids
+// per attempt, an audio player + transcript + an audio download — plus the contact's CAMPAIGN
+// CONTEXT strip (campaign/agent/voice, script name for script-mode, collapsible prompt/persona;
+// 2026-07-17). Reuses the shared CallTranscript renderer; audio is the same-origin recordings
+// proxy (reused from /reviews), so the download is a plain <a download>. The payload (attempts +
+// campaign) is CACHED per contact key so the fetch effect never setState-syncs to the `record`
+// prop — loading/error/attempts are DERIVED (mirrors RangedRecordsDrawer, which avoids
 // react-doctor's state-synced-to-prop error). Modal chrome follows PromptModal (backdrop / Esc / ✕).
 
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +27,25 @@ interface Attempt {
   audioUrl: string | null;
 }
 
+// Campaign context (additive, 2026-07-17) — which campaign/agent/voice made these
+// calls, script name for script-mode campaigns, and the campaign prompt (persona in
+// script mode). Mirrors lib/campaignContext.CampaignContext.
+interface CampaignInfo {
+  name: string;
+  agentName: string | null;
+  mode: string;
+  scriptName: string | null;
+  voiceName: string | null;
+  prompt: string | null;
+}
+
+interface DetailPayload {
+  attempts: Attempt[];
+  campaign: CampaignInfo | null;
+  /** Imported player name (raw, as Customer.io gave it) — greet-by-name Ramp 1. */
+  contactName: string | null;
+}
+
 // The proxied audio URL (/api/recordings/proxy?url=<encoded storage url>) carries the original file
 // extension. Recordings are mixed WAV/MP3 (Vapi format flip), so derive it for the download name
 // instead of hardcoding .mp3.
@@ -40,21 +61,29 @@ function audioExt(proxyUrl: string): string {
 
 export default function CallDetailModal({ record, onClose }: { record: CallRecord | null; onClose: () => void }) {
   const numberId = record?.campaignNumberId ?? null;
-  const [cache, setCache] = useState<Record<string, Attempt[]>>({});
+  const [cache, setCache] = useState<Record<string, DetailPayload>>({});
   const [error, setError] = useState<{ key: string; msg: string } | null>(null);
 
-  const attempts = numberId ? cache[numberId] : undefined;
+  const entry = numberId ? cache[numberId] : undefined;
+  const attempts = entry?.attempts;
+  const campaign = entry?.campaign ?? null;
+  const contactName = entry?.contactName ?? null;
   const errMsg = error?.key === numberId ? error.msg : null;
   const loading = !!numberId && attempts === undefined && !errMsg;
 
-  // Fetch the contact's attempts once per key (lazy, cache-guarded, AbortController). No synchronous
-  // setState — only setCache/setError inside the promise, keyed, so nothing syncs to the prop.
+  // Fetch the contact's attempts + campaign context once per key (lazy, cache-guarded,
+  // AbortController). No synchronous setState — only setCache/setError inside the promise,
+  // keyed, so nothing syncs to the prop.
   useEffect(() => {
     if (!numberId || cache[numberId]) return;
     const controller = new AbortController();
     fetch(`/api/dashboard/call-detail?numberId=${encodeURIComponent(numberId)}`, { cache: "no-store", signal: controller.signal })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((j: { attempts: Attempt[] }) => setCache((c) => ({ ...c, [numberId]: j.attempts ?? [] })))
+      .then((j: { attempts: Attempt[]; campaign: CampaignInfo | null; contactName: string | null }) =>
+        setCache((c) => ({
+          ...c,
+          [numberId]: { attempts: j.attempts ?? [], campaign: j.campaign ?? null, contactName: j.contactName ?? null },
+        })))
       .catch((e: unknown) => {
         if (e instanceof Error && e.name === "AbortError") return;
         setError({ key: numberId, msg: e instanceof Error ? e.message : "Failed to load call detail" });
@@ -85,9 +114,14 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
       >
         <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-[var(--border)]">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[var(--text-1)]">
+            <div className="flex items-center gap-2 text-[var(--text-1)] min-w-0">
               <Phone size={15} className="shrink-0" />
               <span className="font-semibold font-mono truncate">{record.phone ?? "Contact"}</span>
+              {contactName && (
+                <span className="text-xs text-[var(--text-2)] truncate" title={contactName}>
+                  · {contactName}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-[var(--text-3)] mt-1">Call recordings &amp; transcripts, one block per attempt.</p>
           </div>
@@ -97,6 +131,49 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
         </div>
 
         <div className="px-5 py-4 overflow-y-auto grid gap-4">
+          {campaign && (
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-app)] p-4">
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] font-mono min-w-0">
+                <span className="text-[var(--text-3)]">Campaign</span>
+                <span className="text-[var(--text-2)] truncate" title={campaign.name}>{campaign.name}</span>
+                {campaign.agentName && (
+                  <>
+                    <span className="text-[var(--text-3)]">Agent</span>
+                    <span className="text-[var(--text-2)] truncate" title={campaign.agentName}>{campaign.agentName}</span>
+                  </>
+                )}
+                {campaign.mode === "script" && (
+                  <>
+                    <span className="text-[var(--text-3)]">Script</span>
+                    <span className="text-[var(--text-2)] truncate" title={campaign.scriptName ?? undefined}>
+                      {campaign.scriptName ?? "—"}
+                    </span>
+                  </>
+                )}
+                {campaign.voiceName && (
+                  <>
+                    <span className="text-[var(--text-3)]">Voice</span>
+                    <span className="text-[var(--text-2)]">{campaign.voiceName}</span>
+                  </>
+                )}
+              </div>
+              {campaign.prompt && (
+                <details className="mt-2.5">
+                  <summary className="cursor-pointer select-none text-[11px] text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors">
+                    {campaign.mode === "script" ? "View persona" : "View campaign prompt"}
+                  </summary>
+                  {campaign.mode === "script" && (
+                    <p className="text-[10px] text-[var(--text-3)] mt-1.5">
+                      The script drives what the agent says on the call. This persona is who the agent presents as.
+                    </p>
+                  )}
+                  <pre className="mt-1.5 text-[11px] text-[var(--text-2)] whitespace-pre-wrap font-mono max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3">
+                    {campaign.prompt}
+                  </pre>
+                </details>
+              )}
+            </section>
+          )}
           {loading ? (
             <BlockSkeleton lines={5} />
           ) : errMsg ? (
