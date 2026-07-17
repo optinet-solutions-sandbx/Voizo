@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
-import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { parsePhoneList, nameByE164 } from "@/lib/campaignV2Shared";
 import { rejectIfCrossOrigin } from "@/lib/csrf";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 import { MAX_CANDIDATES } from "@/lib/audienceLimits";
@@ -103,6 +103,9 @@ export async function GET(
   // path is a safety net for legacy campaigns without segment_id.
   let candidatePhones: string[];
   let candidateSource: "segment_refresh" | "source_pending";
+  // Greet-by-name Ramp 1 (review finding 2026-07-17): duplicated campaigns must
+  // KEEP player names — E.164 → raw name, riding the prefill to the wizard.
+  let candidateNames = new Map<string, string>();
 
   if (refreshSegment && source.segment_id != null) {
     const segmentResult = await fetchSegmentPhones(source.segment_id as number);
@@ -113,17 +116,22 @@ export async function GET(
       );
     }
     candidatePhones = parsePhoneList(segmentResult.phones.join("\n"));
+    candidateNames = nameByE164(segmentResult.entries);
     candidateSource = "segment_refresh";
   } else {
     const { data: sourceNumbers, error: numbersErr } = await supabaseAdmin
       .from("campaign_numbers_v2")
-      .select("phone_e164")
+      .select("phone_e164, display_name")
       .eq("campaign_id", id)
       .in("outcome", ["pending", "pending_retry"]);
     if (numbersErr) {
       return NextResponse.json({ error: "Failed to read source numbers" }, { status: 500 });
     }
     candidatePhones = (sourceNumbers ?? []).map((r) => r.phone_e164 as string);
+    for (const r of sourceNumbers ?? []) {
+      const name = r.display_name as string | null;
+      if (name && !candidateNames.has(r.phone_e164 as string)) candidateNames.set(r.phone_e164 as string, name);
+    }
     candidateSource = "source_pending";
   }
 
@@ -232,6 +240,8 @@ export async function GET(
       recentlyCalled: sortedBucket(recentSet),
       phones: filteredPhones,          // pre-filtered per skipFlags
       appliedSkips: Array.from(skipFlags),
+      // Greet-by-name Ramp 1: keyed map — unaffected by client-side re-filtering.
+      names: Object.fromEntries(candidateNames),
     },
   });
 }

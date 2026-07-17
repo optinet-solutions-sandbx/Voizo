@@ -225,6 +225,19 @@ export function extractPhoneFromAttrs(attrs: Record<string, unknown>): string | 
   return null;
 }
 
+/** Same idea for the player's name (greet-by-name Ramp 1, 2026-07-17): prefer a
+ *  full-name attribute, else compose first + last. Returned RAW — hygiene for
+ *  speech happens at the boundary (playerName.cleanFirstName). Mirrors the
+ *  members route's inline extractName (kept separate there by its own comment). */
+export function extractNameFromAttrs(attrs: Record<string, unknown>): string | null {
+  const full = attrs.full_name ?? attrs.name;
+  if (typeof full === "string" && full.trim().length > 0) return full.trim();
+  const parts = [attrs.first_name, attrs.last_name]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 /**
  * Throttled fan-out to respect customer.io's 10 req/sec per-workspace rate
  * limit. 8 calls per chunk with 150ms pauses keeps worst-case burst safely
@@ -291,11 +304,16 @@ export async function lookupMemberProfileWithFallback(
  * (Resume-diff segment-membership check) will be the third caller.
  */
 export async function fetchSegmentPhones(segmentId: number): Promise<
-  | { ok: true; phones: string[]; sampled: number }
+  | { ok: true; phones: string[]; entries: Array<{ phone: string; name: string | null }>; sampled: number }
   | { ok: false; status: number; error: string }
 > {
   const PAGE_CAP = 10;
   const allRawPhones: string[] = [];
+  // Raw {phone, name} pairs (greet-by-name Ramp 1): the profile payload we
+  // already fetch carries the name — zero extra Customer.io calls. `phones`
+  // is kept unchanged for existing callers; name-aware callers join entries
+  // to their normalized inserts via nameByE164 (campaignV2Shared).
+  const allEntries: Array<{ phone: string; name: string | null }> = [];
   let cursor: string | undefined;
   let pages = 0;
 
@@ -318,7 +336,10 @@ export async function fetchSegmentPhones(segmentId: number): Promise<
     for (const profile of profiles) {
       if (!profile.success) continue;
       const phone = extractPhoneFromAttrs(profile.data.attributes);
-      if (phone) allRawPhones.push(phone);
+      if (phone) {
+        allRawPhones.push(phone);
+        allEntries.push({ phone, name: extractNameFromAttrs(profile.data.attributes) });
+      }
     }
 
     pages++;
@@ -326,5 +347,5 @@ export async function fetchSegmentPhones(segmentId: number): Promise<
     cursor = batchResult.data.next;
   }
 
-  return { ok: true, phones: allRawPhones, sampled: allRawPhones.length };
+  return { ok: true, phones: allRawPhones, entries: allEntries, sampled: allRawPhones.length };
 }

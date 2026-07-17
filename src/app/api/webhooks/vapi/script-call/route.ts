@@ -23,6 +23,8 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { processEndOfCall } from "@/lib/webhooks/processEndOfCall";
 import { handleWebhook, type VapiMessage } from "@/lib/scriptEngine/handleWebhook";
 import { decideScriptSeed, type CampaignScriptRow } from "@/lib/scriptEngine/resolveScript";
+import { cleanFirstName } from "@/lib/playerName";
+import { parsePhoneList } from "@/lib/campaignV2Shared";
 
 // The engine can hold the line a while (speaking lock + classification + inject).
 export const maxDuration = 60;
@@ -51,7 +53,54 @@ export const maxDuration = 60;
  * a seeded campaign call is fully self-contained; the global remains only as
  * the fallback for unseeded Builder test calls and ladder misses.
  */
-async function resolveScriptForCall(vapiCallId: string, assistantId: string | null): Promise<void> {
+/**
+ * Greet-by-name Ramp 2 (2026-07-17): resolve the callee's spoken first name
+ * for lab_call_flow_state.variables. Primary key = the campaign contact row
+ * matching the call's customer number; backstop = the campaign's single
+ * in_progress number (campaigns dial one number at a time — used only when
+ * EXACTLY one row is mid-flight, since SIP caller-id may not carry the player).
+ * Hygiene via cleanFirstName; any doubt → null → the nameless greeting.
+ */
+async function playerVariables(
+  campaignId: string,
+  customerNumber: string | null,
+): Promise<Record<string, string> | null> {
+  try {
+    let displayName: string | null = null;
+    // Normalize whatever Vapi/SIP reports ("61402294427", "sip:+61...", spaces)
+    // to the same E.164 the rows store — an exact-string eq would silently miss
+    // (review finding 2026-07-17). Unparseable → rely on the backstop below.
+    const e164 = customerNumber ? (parsePhoneList(customerNumber)[0] ?? null) : null;
+    if (e164) {
+      const { data } = await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .select("display_name")
+        .eq("campaign_id", campaignId)
+        .eq("phone_e164", e164)
+        .maybeSingle();
+      displayName = (data?.display_name as string | null) ?? null;
+    }
+    if (!displayName) {
+      const { data } = await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .select("display_name")
+        .eq("campaign_id", campaignId)
+        .eq("outcome", "in_progress")
+        .limit(2);
+      if (data && data.length === 1) displayName = (data[0].display_name as string | null) ?? null;
+    }
+    const playerName = cleanFirstName(displayName);
+    return playerName ? { playerName } : null;
+  } catch {
+    return null; // never block the turn on a name
+  }
+}
+
+async function resolveScriptForCall(
+  vapiCallId: string,
+  assistantId: string | null,
+  customerNumber: string | null,
+): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
       .from("lab_call_flow_state")
@@ -68,9 +117,13 @@ async function resolveScriptForCall(vapiCallId: string, assistantId: string | nu
         .eq("vapi_assistant_id", assistantId);
       const decision = decideScriptSeed((camps ?? []) as CampaignScriptRow[]);
       if (decision.kind === "seed") {
+        const vars = await playerVariables(decision.campaignId, customerNumber);
         await supabaseAdmin
           .from("lab_call_flow_state")
-          .upsert({ call_id: vapiCallId, script_id: decision.scriptId }, { onConflict: "call_id" });
+          .upsert(
+            { call_id: vapiCallId, script_id: decision.scriptId, ...(vars ? { variables: vars } : {}) },
+            { onConflict: "call_id" },
+          );
         await supabaseAdmin.from("lab_call_events").insert({
           call_id: vapiCallId,
           event_type: "status",
@@ -93,7 +146,7 @@ async function resolveScriptForCall(vapiCallId: string, assistantId: string | nu
     // ── Leg 2: exact key — vapi_call_id -> calls_v2 -> campaign (backstop) ──
     const { data: call } = await supabaseAdmin
       .from("calls_v2")
-      .select("campaign_id")
+      .select("campaign_id, campaign_number_id")
       .eq("vapi_call_id", vapiCallId)
       .maybeSingle();
     if (call?.campaign_id) {
@@ -103,9 +156,23 @@ async function resolveScriptForCall(vapiCallId: string, assistantId: string | nu
         .eq("id", call.campaign_id)
         .maybeSingle();
       if (camp?.script_id) {
+        // Exact contact row in hand → precise name, no backstop guessing.
+        let vars: Record<string, string> | null = null;
+        if (call.campaign_number_id) {
+          const { data: num } = await supabaseAdmin
+            .from("campaign_numbers_v2")
+            .select("display_name")
+            .eq("id", call.campaign_number_id)
+            .maybeSingle();
+          const playerName = cleanFirstName((num?.display_name as string | null) ?? null);
+          if (playerName) vars = { playerName };
+        }
         await supabaseAdmin
           .from("lab_call_flow_state")
-          .upsert({ call_id: vapiCallId, script_id: camp.script_id }, { onConflict: "call_id" });
+          .upsert(
+            { call_id: vapiCallId, script_id: camp.script_id, ...(vars ? { variables: vars } : {}) },
+            { onConflict: "call_id" },
+          );
         return;
       }
     }
@@ -163,7 +230,16 @@ export async function POST(request: NextRequest) {
   // this campaign's flow, then hand the message to the ported runtime.
   if (type === "transcript" || type === "speech-update" || type === "status-update" || type === "tool-calls") {
     const callId = message.call?.id;
-    if (callId) await resolveScriptForCall(callId, message.call?.assistantId ?? null);
+    if (callId) {
+      // Customer number rides the RAW payload (the shared VapiMessage type
+      // doesn't model it) — used to key the greet-by-name variables seed.
+      const rawCall = (body.message as Record<string, unknown> | undefined)?.call as
+        | Record<string, unknown>
+        | undefined;
+      const customer = rawCall?.customer as Record<string, unknown> | undefined;
+      const customerNumber = typeof customer?.number === "string" ? customer.number : null;
+      await resolveScriptForCall(callId, message.call?.assistantId ?? null, customerNumber);
+    }
     return handleWebhook(message);
   }
 

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check, Star } from "lucide-react";
 import { usePinnedSegments } from "@/lib/pinnedSegments";
 import { parseJsonBody } from "@/lib/jsonBody";
+import { nameByE164 } from "@/lib/campaignV2Shared";
 
 interface Segment {
   id: number;
@@ -35,6 +36,8 @@ interface Props {
     phones: string[],
     segmentId: number | null,
     segmentName: string | null,
+    /** E.164 → raw member name for the imported phones (greet-by-name Ramp 1). */
+    names: Record<string, string>,
   ) => void;
   /**
    * When true, hides the per-row multi-select checkboxes — operator can
@@ -236,7 +239,16 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     // campaign row; multi-segment imports do not (no single source segment).
     const segmentId = isMultiMode ? null : singleSelectedId;
     const segmentName = isMultiMode ? null : singleSelectedName;
-    onImport(phones, segmentId, segmentName);
+    // Greet-by-name Ramp 1: member names keyed by the SAME normalization the
+    // insert pipeline stores (nameByE164 ⇄ parsePhoneList), raw as CIO gave them.
+    const names = Object.fromEntries(
+      nameByE164(
+        displayMembers
+          .filter((m): m is typeof m & { phone: string } => typeof m.phone === "string" && m.phone.length > 0)
+          .map((m) => ({ phone: m.phone, name: m.name ?? null })),
+      ),
+    );
+    onImport(phones, segmentId, segmentName, names);
     setExpanded(false);
     setCheckedIds(new Set());
     setSingleSelectedId(null);
@@ -277,7 +289,15 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
         setMembersError("Segment has no phone numbers");
         return;
       }
-      onImport(phones, segmentId, segmentName);
+      // Greet-by-name Ramp 1: same E.164-keyed name map as handleImport.
+      const names = Object.fromEntries(
+        nameByE164(
+          members
+            .filter((m): m is Member & { phone: string } => typeof m.phone === "string" && m.phone.length > 0)
+            .map((m) => ({ phone: m.phone, name: m.name ?? null })),
+        ),
+      );
+      onImport(phones, segmentId, segmentName, names);
     } catch (err) {
       setMembersError(err instanceof Error ? err.message : "Network error");
     } finally {

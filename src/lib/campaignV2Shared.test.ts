@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parsePhoneList,
+  nameByE164,
   defaultCallWindows,
   formatDefaultCallWindowsJson,
   normalizeOperatorControls,
@@ -12,6 +13,33 @@ import {
 // into the neutral, supabase-free campaignV2Shared module (RLS Phase A). The
 // extraction must preserve behaviour byte-for-byte — client components value-
 // import these and must NOT drag the server-only admin client into the bundle.
+
+// nameByE164: joins raw Customer.io {phone, name} entries to the E.164 keys the
+// insert pipeline actually stores (greet-by-name Ramp 1, 2026-07-17). Must use
+// the SAME normalization as parsePhoneList so the map keys line up with
+// campaign_numbers_v2.phone_e164 rows.
+describe("nameByE164", () => {
+  it("keys names by the parsePhoneList-normalized phone", () => {
+    const map = nameByE164([
+      { phone: "+1 (587) 208-3253", name: "kassandra sergerie lefrancois" },
+      { phone: "12046511386", name: "Vicky Seavers" },
+    ]);
+    expect(map.get("+15872083253")).toBe("kassandra sergerie lefrancois");
+    expect(map.get("+12046511386")).toBe("Vicky Seavers");
+  });
+
+  it("skips nameless and unparseable-phone entries; first name for a phone wins", () => {
+    const map = nameByE164([
+      { phone: "+15872083253", name: null },
+      { phone: "not-a-phone", name: "Ghost" },
+      { phone: "+12046511386", name: "First Wins" },
+      { phone: "+12046511386", name: "Second Loses" },
+    ]);
+    expect(map.has("+15872083253")).toBe(false);
+    expect(map.size).toBe(1);
+    expect(map.get("+12046511386")).toBe("First Wins");
+  });
+});
 
 describe("parsePhoneList", () => {
   it("normalizes a single E.164 number unchanged", () => {

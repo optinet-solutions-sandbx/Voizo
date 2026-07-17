@@ -119,6 +119,10 @@ export interface WizardState {
   numbersText: string;             // Derived: mirrors the active source's phone cache. Operator-facing single source of truth for downstream consumers (buildCreateInput etc.).
   audienceSource: AudienceSource;  // 2026-05-22 — replaces manualPasteMode
   cioPhones: string;               // CIO source cache (newline-joined)
+  /** CIO import names keyed by E.164 phone (greet-by-name Ramp 1, 2026-07-17).
+   *  Raw as Customer.io gave them; harmless when stale (insert looks up by the
+   *  final parsed phones only). Rides buildCreateInput as namesByPhone. */
+  cioNames: Record<string, string>;
   voizoSegmentId: string | null;   // local_segments UUID (Voizo source)
   voizoSegmentName: string | null; // Voizo segment display name
   voizoPhones: string;             // Voizo source cache (newline-joined)
@@ -219,12 +223,14 @@ export interface WizardState {
  * `timezoneTouched = true` so the auto-detect won't clobber it later (R6).
  */
 export type AudiencePayload = Partial<
-  Pick<WizardState, "name" | "timezone" | "numbersText" | "audienceSource" | "segmentId" | "segmentName" | "voizoSegmentId" | "voizoSegmentName" | "cioPhones" | "voizoPhones" | "manualPhones" | "isTest" | "tzMismatchAckFor">
+  Pick<WizardState, "name" | "timezone" | "numbersText" | "audienceSource" | "segmentId" | "segmentName" | "voizoSegmentId" | "voizoSegmentName" | "cioPhones" | "cioNames" | "voizoPhones" | "manualPhones" | "isTest" | "tzMismatchAckFor">
 >;
 
-/** Atomic segment-import update — phones + segmentId + segmentName arrive together. */
+/** Atomic segment-import update — phones + segmentId + segmentName (+ names) arrive together. */
 export interface ImportSegmentPayload {
   phones: string[];
+  /** E.164 → raw player name for the imported members (greet-by-name Ramp 1). */
+  names: Record<string, string>;
   segmentId: number | null;
   segmentName: string | null;
 }
@@ -386,6 +392,7 @@ export function createInitialState(): WizardState {
     timezoneTouched: false,
     tzMismatchAckFor: null,
     numbersText: "",
+    cioNames: {},
     audienceSource: "cio",
     cioPhones: "",
     voizoSegmentId: null,
@@ -537,6 +544,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         ...state,
         numbersText: phonesText,
         cioPhones: phonesText,
+        cioNames: action.payload.names,
         segmentId: action.payload.segmentId,
         segmentName: action.payload.segmentName,
         audienceSource: "cio",
@@ -755,6 +763,9 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     smsOnGoalReachedOnly: true,
     smsConsentMode: state.smsConsentMode,
     numbers: parsePhoneList(state.numbersText),
+    // Greet-by-name Ramp 1: conditional key — only CIO imports carry names, so
+    // manual/Voizo creates stay byte-identical to before.
+    ...(Object.keys(state.cioNames).length > 0 ? { namesByPhone: state.cioNames } : {}),
     isTest: state.isTest,
     goalTarget: parseGoalTarget(state.goalTargetText),
     retryIntervalMinutes: state.retryGapMinutes,

@@ -41,6 +41,10 @@ export interface CampaignV2CreateInput {
   smsOnGoalReachedOnly?: boolean;
   smsConsentMode?: "verbal_yes" | "registered_optin"; // Dispatch policy (2026-06-11): verbal_yes = on-call yes required (default); registered_optin = client-attested signup opt-in, send on agent announce.
   numbers: string[];
+  /** E.164 → raw player name for the imported numbers (greet-by-name Ramp 1,
+   *  2026-07-17). Optional + CIO-import-only; the insert applies it per final
+   *  phone and clamps values server-side (client-supplied = trust boundary). */
+  namesByPhone?: Record<string, string>;
   createdBy?: string | null;
   campaignType?: "fixed" | "recurring"; // Defaults to "fixed". Recurring parents save as status='running' with no clone; children are spawned by the scheduler.
   recurrencePattern?: RecurrencePattern | null; // Populated for campaignType='recurring'; null otherwise.
@@ -139,4 +143,22 @@ export function parsePhoneList(input: string): string[] {
     .filter((value) => /^\+\d{8,15}$/.test(value));
 
   return Array.from(new Set(normalized));
+}
+
+/**
+ * Join raw Customer.io {phone, name} entries to the E.164 keys the insert
+ * pipeline stores (greet-by-name Ramp 1, 2026-07-17). Normalizes each phone
+ * through parsePhoneList — the SAME canonicalization as the number inserts —
+ * so map keys line up with campaign_numbers_v2.phone_e164. Nameless and
+ * unparseable entries are skipped; the first name seen for a phone wins
+ * (mirrors parsePhoneList's first-occurrence dedup).
+ */
+export function nameByE164(entries: Array<{ phone: string; name: string | null }>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entries) {
+    if (!e.name) continue;
+    const e164 = parsePhoneList(e.phone)[0];
+    if (e164 && !map.has(e164)) map.set(e164, e.name);
+  }
+  return map;
 }

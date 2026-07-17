@@ -27,6 +27,7 @@ import { composeArmedBriefing } from "@/lib/scriptEngine/lab-briefing";
 import { findEntryNode, nodeById, pickNextEdge, contentTypeOf } from "@/lib/scriptEngine/lab-flow";
 import { classifyUtterance, type Classification } from "@/lib/scriptEngine/lab-router";
 import { resolveCallScriptId } from "@/lib/scriptEngine/resolveScript";
+import { substituteVars } from "@/lib/scriptEngine/substituteVars";
 import {
   getControlUrl,
   injectStaffNote,
@@ -1020,6 +1021,15 @@ async function handleTranscript(
       `The customer raised ${texts.length} points at once — cover ALL of them in ONE short, natural reply (a single paragraph, keep exact facts, prices and terms word-accurate): ` +
       texts.map((t, i) => `(${i + 1}) ${t}`).join(" ");
 
+    // Greet-by-name Ramp 2 (2026-07-17): render {{playerName}} etc. from this
+    // call's seeded variables BEFORE the self-covered comparison — the agent's
+    // spoken text contains the real name, so the check must too (review finding:
+    // comparing the raw token weakened double-delivery suppression). flowStateP
+    // settled long ago (awaited at the script gate), so this await is free;
+    // substituteVars fast-paths lines without "{{".
+    const flowVars = ((await flowStateP)?.variables as Record<string, unknown> | undefined) ?? null;
+    injectedText = substituteVars(injectedText, flowVars);
+
     // The agent's own reply already delivered this line's content — a second
     // delivery is the double-intro. Stand down; the turn is answered.
     if (
@@ -1047,7 +1057,7 @@ async function handleTranscript(
         injectedText = "(machine detected — hung up without speaking)";
       } else {
         // Goodbyes are spoken verbatim, then the call ends.
-        injectedText = handler.response_template;
+        injectedText = substituteVars(handler.response_template, flowVars);
         injectResult = await injectSay(controlUrl, injectedText, true);
         if (!injectResult.ok) {
           // Fallback: plain say then explicit end-call
@@ -1058,15 +1068,20 @@ async function handleTranscript(
         }
       }
     } else if (handler.action_type === "send_sms") {
-      injectedText =
+      injectedText = substituteVars(
         handler.response_template ||
-        "The SMS with the details is on its way. Confirm that to the customer.";
+          "The SMS with the details is on its way. Confirm that to the customer.",
+        flowVars,
+      );
       injectResult = verbatim
         ? await injectSay(controlUrl, injectedText, false)
         : await injectStaffNote(controlUrl, brief(injectedText), settings.trigger_response);
     } else if (extraHandlers.length > 0) {
       // answer / give_offer with additional matched answers → one merged reply
-      injectedText = mergeTexts([handler.response_template, ...extraHandlers.map((h) => h.response_template)]);
+      injectedText = substituteVars(
+        mergeTexts([handler.response_template, ...extraHandlers.map((h) => h.response_template)]),
+        flowVars,
+      );
       injectResult = await injectStaffNote(controlUrl, brief(injectedText), settings.trigger_response);
     } else {
       // answer / give_offer — a verbatim say after the agent's own reply
@@ -1364,7 +1379,11 @@ async function runScriptFlow(
       await waitForAgentSilence(callId); // speaking lock
       if (await staleNow()) return true;
       const goodbyeStatements = (((cfg.statements as string[]) ?? []).map((s) => (s ?? "").trim()).filter(Boolean));
-      const text = [scn?.response_template || "Thanks for your time today. Goodbye!", ...goodbyeStatements].join(" ");
+      // Greet-by-name Ramp 2: render {{playerName}} etc. from the call's variables.
+      const text = substituteVars(
+        [scn?.response_template || "Thanks for your time today. Goodbye!", ...goodbyeStatements].join(" "),
+        variables,
+      );
       // Goodbye delivery honours the scenario: exact line → the system speaks
       // it verbatim with the hangup attached; reword → the model already has
       // it from the stage menu and says it natively — the delivery watchdog
@@ -1475,6 +1494,8 @@ async function runScriptFlow(
       })`;
     }
 
+    // Greet-by-name Ramp 2: one render before the log + every downstream push.
+    expectedText = substituteVars(expectedText, variables);
     note(expectedText, target, ct, edgeCond, scenario?.id ?? null, "model_side", mergedIds.length ? { merged: mergedIds.length } : undefined);
     if (!(await flush())) return true; // lost the race — the newer turn navigates
     if (ct === "send_sms") {
@@ -1512,7 +1533,8 @@ async function runScriptFlow(
       if (!armed) return;
       const controlUrl = await ctl();
       if (!controlUrl) return;
-      await injectStaffNote(controlUrl, armed.text, false);
+      // Greet-by-name Ramp 2: briefing text embeds script statements — render vars.
+      await injectStaffNote(controlUrl, substituteVars(armed.text, variables), false);
       const obsNote = armed.covered || armed.owed ? ` (observer: ${armed.covered} covered, ${armed.owed} owed)` : "";
       await log({
         call_id: callId,

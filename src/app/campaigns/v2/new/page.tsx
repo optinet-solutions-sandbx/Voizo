@@ -221,6 +221,8 @@ function WizardPage({
             overlap: string[];
             suppressed: string[];
             recentlyCalled: string[];
+            /** E.164 → raw player name (greet-by-name Ramp 1); keyed, so client re-filtering can't desync it. */
+            names?: Record<string, string>;
           };
         };
 
@@ -289,6 +291,8 @@ function WizardPage({
             name,
             timezone: src.timezone,
             numbersText: (pf.phones ?? []).join("\n"),
+            // Greet-by-name Ramp 1: duplicated campaigns keep player names.
+            cioNames: pf.names ?? {},
             // 2026-05-22: duplicate ships a frozen phone list, not a live
             // segment link — operator lands on the Paste manually tab with
             // the phones populated. manualPhones cache mirrors numbersText

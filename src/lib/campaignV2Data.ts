@@ -118,10 +118,21 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
     }
   }
 
+  // Greet-by-name Ramp 1: attach the imported player name per final phone.
+  // namesByPhone is CLIENT-supplied (rides the create POST) — trust boundary:
+  // strings only, trimmed, clamped to 120 chars; anything else → null.
+  const names = input.namesByPhone ?? {};
+  const displayNameFor = (phone: string): string | null => {
+    const raw = names[phone];
+    if (typeof raw !== "string") return null;
+    const trimmed = raw.trim();
+    return trimmed ? trimmed.slice(0, 120) : null;
+  };
   const campaignRows = input.numbers.map((phone) => ({
     campaign_id: campaign.id,
     phone_e164: phone,
     outcome: "pending",
+    display_name: displayNameFor(phone),
   }));
 
   if (campaignRows.length > 0) {

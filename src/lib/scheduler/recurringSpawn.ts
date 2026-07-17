@@ -27,7 +27,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClone } from "../vapi/cloneAssistant";
 import { fetchSegmentPhones } from "../customerio";
 import { leaseSlot, patchPhoneAssistant, linkSlot, releaseSlot } from "../vapi/sipPool";
-import { parsePhoneList } from "../campaignV2Shared";
+import { parsePhoneList, nameByE164 } from "../campaignV2Shared";
 import type { DayOfWeek, RecurrencePattern } from "../types/recurrence";
 
 export interface RecurringParent {
@@ -295,12 +295,16 @@ export async function spawnChildIfDue(
   // ── 4. Pull segment phones (SKIPPED for realtime parents — VOZ-132: the
   //       per-minute poll is the sole number source, children spawn empty) ──
   let phones: string[] = [];
+  let namesByPhone = new Map<string, string>();
   if (!parent.realtime) {
     const segmentResult = await fetchSegmentPhones(parent.segment_id);
     if (!segmentResult.ok) {
       return { result: "spawn_failed", details: `segment fetch: ${segmentResult.error}` };
     }
     phones = parsePhoneList(segmentResult.phones.join("\n"));
+    // Greet-by-name Ramp 1: names ride the same profile fetch, keyed by the
+    // normalized phone so they line up with the rows inserted below.
+    namesByPhone = nameByE164(segmentResult.entries);
 
     // ── 5. Empty-segment branch (non-realtime only: an empty realtime child
     //       is the NORMAL morning state, not a skip condition) ──
@@ -413,6 +417,7 @@ export async function spawnChildIfDue(
     campaign_id: childRow.id,
     phone_e164: phone,
     outcome: "pending" as const,
+    display_name: namesByPhone.get(phone) ?? null,
   }));
   if (numberRows.length > 0) {
     const { error: numbersErr } = await supabase.from("campaign_numbers_v2").insert(numberRows);

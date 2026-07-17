@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
-import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { parsePhoneList, nameByE164 } from "@/lib/campaignV2Shared";
 import { parseJsonBody } from "@/lib/jsonBody";
 
 // Up to: paginated customer.io fetch (~10-30s for segments <500 at the
@@ -150,6 +150,9 @@ export async function POST(
   // rows that were inserted from the same parsePhoneList pipeline).
   const segmentPhones = parsePhoneList(segmentResult.phones.join("\n"));
   const segmentPhonesSet = new Set(segmentPhones);
+  // Greet-by-name Ramp 1: names ride the same profile fetch, keyed by the
+  // normalized phone so they line up with the rows inserted below.
+  const namesByPhone = nameByE164(segmentResult.entries);
 
   // ── 3. Read the source's existing campaign_numbers_v2 rows ──
   const { data: existingRows, error: existingErr } = await supabaseAdmin
@@ -236,6 +239,7 @@ export async function POST(
       campaign_id: id,
       phone_e164: phone,
       outcome: "pending" as const,
+      display_name: namesByPhone.get(phone) ?? null,
     }));
     const { error: insertErr } = await supabaseAdmin
       .from("campaign_numbers_v2")

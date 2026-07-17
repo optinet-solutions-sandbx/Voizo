@@ -24,6 +24,7 @@ import { getControlUrl, injectStaffNote, injectSay, endCall } from "./lab-contro
 import { contentTypeOf } from "./lab-flow";
 import { composeArmedBriefing } from "./lab-briefing";
 import { resolveCallScriptId } from "./resolveScript";
+import { substituteVars } from "./substituteVars";
 
 // The idle nudges configure-assistant installs — spoken by VAPI itself, so
 // they must never count as the briefed line having been delivered.
@@ -80,9 +81,14 @@ export async function checkWaitTimeout(callId: string, controlUrlHint: string | 
     const tCfg = (target.config ?? {}) as Record<string, unknown>;
     const statements = (((tCfg.statements as string[]) ?? []).map((s) => (s ?? "").trim()).filter(Boolean));
     const scn = target.scenario_id ? byId.get(target.scenario_id) : undefined;
-    const text = [scn?.response_template?.trim() || (ct === "end" ? "Thanks for your time today. Goodbye!" : ""), ...statements]
-      .filter(Boolean)
-      .join(" ");
+    // Greet-by-name Ramp 2: render {{playerName}} etc. from the call's variables.
+    const callVars = (state.variables as Record<string, unknown>) ?? null;
+    const text = substituteVars(
+      [scn?.response_template?.trim() || (ct === "end" ? "Thanks for your time today. Goodbye!" : ""), ...statements]
+        .filter(Boolean)
+        .join(" "),
+      callVars,
+    );
     // The poll route runs as a separate lambda with no in-memory control-url
     // cache — fall back to the url stamped on the call's last injection row.
     const lastInj = await lastFlowInjection(callId).catch(() => null);
@@ -109,7 +115,7 @@ export async function checkWaitTimeout(callId: string, controlUrlHint: string | 
     if (controlUrl) {
       const armed = await composeArmedBriefing(callId, graph, target.id, handlers).catch(() => null);
       if (armed) {
-        await injectStaffNote(controlUrl, armed.text, false).catch(() => {});
+        await injectStaffNote(controlUrl, substituteVars(armed.text, callVars), false).catch(() => {});
         await insertLabEvent({
           call_id: callId,
           event_type: "injected",

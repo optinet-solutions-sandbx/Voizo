@@ -19,6 +19,7 @@ import { parsePhoneList } from "../campaignV2Shared";
 import {
   chunkedPromiseAll,
   extractPhoneFromAttrs,
+  extractNameFromAttrs,
   getSegmentMembers,
   lookupMemberProfileWithFallback,
   type CustomerIOSegmentMember,
@@ -125,11 +126,13 @@ export function duePromotions(
  * today's child).
  */
 export function partitionRollover(
-  rows: Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string }>,
-): { carry: Array<{ phone_e164: string; attempt_count: number }>; closeIds: string[] } {
+  rows: Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name?: string | null }>,
+): { carry: Array<{ phone_e164: string; attempt_count: number; display_name: string | null }>; closeIds: string[] } {
   const open = rows.filter((r) => r.outcome === "pending" || r.outcome === "pending_retry");
   return {
-    carry: open.map((r) => ({ phone_e164: r.phone_e164, attempt_count: r.attempt_count ?? 0 })),
+    // display_name carries across days (greet-by-name Ramp 1): a player must not
+    // lose their name when their open number rolls into the next child.
+    carry: open.map((r) => ({ phone_e164: r.phone_e164, attempt_count: r.attempt_count ?? 0, display_name: r.display_name ?? null })),
     closeIds: open.map((r) => r.id),
   };
 }
@@ -166,7 +169,7 @@ export async function rolloverLeftovers(
 
   const { data: rows, error: rowsErr } = await supabase
     .from("campaign_numbers_v2")
-    .select("id, phone_e164, attempt_count, outcome")
+    .select("id, phone_e164, attempt_count, outcome, display_name")
     .eq("campaign_id", prev.id as string)
     .in("outcome", ["pending", "pending_retry"]);
   if (rowsErr) {
@@ -175,7 +178,7 @@ export async function rolloverLeftovers(
   }
 
   const { carry, closeIds } = partitionRollover(
-    (rows ?? []) as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string }>,
+    (rows ?? []) as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name: string | null }>,
   );
   if (carry.length > 0) {
     const { error: insErr } = await supabase.from("campaign_numbers_v2").insert(
@@ -184,6 +187,7 @@ export async function rolloverLeftovers(
         phone_e164: c.phone_e164,
         attempt_count: c.attempt_count,
         outcome: "pending",
+        display_name: c.display_name,
       })),
     );
     if (insErr) {
@@ -384,6 +388,9 @@ export async function pollRealtimeParent(
         campaign_id: childId,
         phone_e164: w.phone_e164,
         outcome: "pending",
+        // ponytail: promoted (call-delay) members stay nameless — their profile was
+        // looked up at claim time but realtime_seen_members has no name column.
+        // Add one + carry it here if the realtime trial makes delayed sign-ups common.
       });
       if (promoteInsErr) {
         // Compensation: flip back so the next tick retries. first_seen_at is
@@ -534,6 +541,8 @@ export async function pollRealtimeParent(
       campaign_id: childId,
       phone_e164: phone,
       outcome: "pending",
+      // Greet-by-name Ramp 1: the profile is in hand right here — keep the name.
+      display_name: lookup.success ? extractNameFromAttrs(lookup.data.attributes) : null,
     });
     if (insErr) {
       // Compensation: a claimed-but-never-queued member would be a silently

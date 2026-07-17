@@ -106,17 +106,19 @@ describe("diffNewMembers", () => {
 describe("partitionRollover", () => {
   it("carries pending + pending_retry with attempt_count preserved; closes exactly those rows", () => {
     const rows = [
-      { id: "1", phone_e164: "+61400000001", attempt_count: 0, outcome: "pending" },
-      { id: "2", phone_e164: "+61400000002", attempt_count: 2, outcome: "pending_retry" },
-      { id: "3", phone_e164: "+61400000003", attempt_count: 1, outcome: "sent_sms" },
+      // display_name carries across days (greet-by-name Ramp 1) — a player must
+      // not lose their name when their number rolls into the next child.
+      { id: "1", phone_e164: "+61400000001", attempt_count: 0, outcome: "pending", display_name: "Vicky Seavers" },
+      { id: "2", phone_e164: "+61400000002", attempt_count: 2, outcome: "pending_retry", display_name: null },
+      { id: "3", phone_e164: "+61400000003", attempt_count: 1, outcome: "sent_sms", display_name: "Dropped Terminal" },
       { id: "4", phone_e164: "+61400000004", attempt_count: null, outcome: "pending" },
-      { id: "5", phone_e164: "+61400000005", attempt_count: 3, outcome: "unreached" },
+      { id: "5", phone_e164: "+61400000005", attempt_count: 3, outcome: "unreached", display_name: null },
     ];
     const { carry, closeIds } = partitionRollover(rows);
     expect(carry).toEqual([
-      { phone_e164: "+61400000001", attempt_count: 0 },
-      { phone_e164: "+61400000002", attempt_count: 2 },
-      { phone_e164: "+61400000004", attempt_count: 0 },
+      { phone_e164: "+61400000001", attempt_count: 0, display_name: "Vicky Seavers" },
+      { phone_e164: "+61400000002", attempt_count: 2, display_name: null },
+      { phone_e164: "+61400000004", attempt_count: 0, display_name: null },
     ]);
     expect(closeIds).toEqual(["1", "2", "4"]);
   });

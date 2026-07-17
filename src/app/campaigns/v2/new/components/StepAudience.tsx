@@ -138,10 +138,10 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
             <>
               <SegmentImporter
                 singleSelectOnly={state.campaignType === "recurring"}
-                onImport={(phones, segmentId, segmentName) =>
+                onImport={(phones, segmentId, segmentName, names) =>
                   dispatch({
                     type: "IMPORT_SEGMENT",
-                    payload: { phones, segmentId, segmentName },
+                    payload: { phones, segmentId, segmentName, names },
                   })
                 }
               />
