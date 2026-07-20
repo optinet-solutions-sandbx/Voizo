@@ -15,6 +15,7 @@ import { getScriptGraph, listHandlers } from "./lab-db";
 import { findEntryNode } from "./lab-flow";
 import { compileStageBriefing, compileStandingAnswers } from "./lab-briefing";
 import { LAB_OPERATING_RULES, DEFAULT_SHORT_PROMPT } from "./lab-tools";
+import { substituteVars } from "./substituteVars";
 
 export interface ScriptCloneConfig {
   /** Fully composed system message. Applied WITHOUT the VOIZO_SYSTEM_PREFIX
@@ -90,7 +91,18 @@ const MONITOR_PLAN = { listenEnabled: true, controlEnabled: true };
 // on webhook volume). speech-update powers the speaking lock + started-speaking.
 const SERVER_MESSAGES = ["tool-calls", "transcript", "status-update", "speech-update", "end-of-call-report"];
 
-const renderName = (s: string) => s.replace(/\{\{\s*name\s*\}\}/gi, "there").replace(/\s{2,}/g, " ");
+// Clone-time token hygiene (greet-by-name Ramp 3). firstMessage + the composed
+// prompt are baked into the ONE assistant every player in the campaign shares,
+// so no per-call variable exists yet — any {{token}} left here would be spoken
+// literally on a live call. Strip unresolved tokens exactly as the run-time
+// push path does for a missing variable (graceful nameless seam; substituteVars'
+// tidy is newline-safe, so bullet-menu briefings keep their line breaks), while
+// keeping the legacy {{name}} -> "there" generic greeting. Author names
+// ({{playerName}}) render live wherever the engine PUSHES a stage (armed
+// briefings / expected text / goodbye); the opening / entry-stage / standing
+// banks are prompt-only and never pushed, so nameless is the honest result.
+// substituteVars fast-paths token-free text, so existing scripts are byte-identical.
+const stripCloneTokens = (s: string) => substituteVars(s, { name: "there" });
 
 /**
  * Compose the clone-time config for a script campaign.
@@ -112,7 +124,7 @@ export async function composeScriptClone(opts: { scriptId: string; persona?: str
   // must live in the prompt as an [Opening] rule.
   let openingRule = "";
   if (opening && openingReword) {
-    openingRule = `\n\n[Opening] Open the call in your own words with exactly this meaning — one short greeting and the question, nothing more: "${renderName(opening)}"`;
+    openingRule = `\n\n[Opening] Open the call in your own words with exactly this meaning — one short greeting and the question, nothing more: "${stripCloneTokens(opening)}"`;
   }
 
   // The entry stage + standing-answers bank ship in the prompt so the model can
@@ -121,17 +133,20 @@ export async function composeScriptClone(opts: { scriptId: string; persona?: str
   const standing = await compileStandingAnswers(graph, handlers).catch(() => null);
   const entryStage = entry ? await compileStageBriefing(graph, entry.id, handlers).catch(() => null) : null;
 
+  // Author/operator-authored inputs are token-stripped; the dev-authored rule
+  // constants (WAIT_PHRASE_BAN / LAB_OPERATING_RULES / SCRIPT_RULES) are
+  // token-free by construction and left untouched.
   const personaText = (opts.persona ?? "").trim() || DEFAULT_SHORT_PROMPT;
   const composedPrompt =
-    `${WAIT_PHRASE_BAN}\n\n${personaText}\n\n${LAB_OPERATING_RULES}${SCRIPT_RULES}${openingRule}` +
-    `${standing ? `\n\n${standing}` : ""}${entryStage ? `\n\n${entryStage}` : ""}`;
+    `${WAIT_PHRASE_BAN}\n\n${stripCloneTokens(personaText)}\n\n${LAB_OPERATING_RULES}${SCRIPT_RULES}${openingRule}` +
+    `${standing ? `\n\n${stripCloneTokens(standing)}` : ""}${entryStage ? `\n\n${stripCloneTokens(entryStage)}` : ""}`;
 
   // firstMessage from the Start box: exact opening → literal firstMessage;
   // reworded → model generates (the [Opening] rule steers it); empty → default.
   let firstMessage: string | null = null;
   let firstMessageMode: string | null = null;
   if (opening && !openingReword) {
-    firstMessage = renderName(opening);
+    firstMessage = stripCloneTokens(opening);
     firstMessageMode = "assistant-speaks-first";
   } else if (opening && openingReword) {
     firstMessageMode = "assistant-speaks-first-with-model-generated-message";
