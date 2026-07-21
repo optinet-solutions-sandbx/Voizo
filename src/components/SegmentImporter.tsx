@@ -234,7 +234,11 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     const phones = displayMembers
       .map((m) => m.phone)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
-    if (phones.length === 0) return;
+    // Empty segments are selectable in single mode: a real-time campaign's
+    // audience is future signups, so "0 numbers now" is its correct starting
+    // state (Fixed campaigns still fail launch validation without numbers).
+    // Multi-mode exists to combine numbers, so empty stays a no-op there.
+    if (phones.length === 0 && isMultiMode) return;
     // Single-segment imports carry the segment identity through to the
     // campaign row; multi-segment imports do not (no single source segment).
     const segmentId = isMultiMode ? null : singleSelectedId;
@@ -285,10 +289,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
       const phones = members
         .map((m) => m.phone)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
-      if (phones.length === 0) {
-        setMembersError("Segment has no phone numbers");
-        return;
-      }
+      // 0 phones allowed — chips are single-segment; see handleImport.
       // Greet-by-name Ramp 1: same E.164-keyed name map as handleImport.
       const names = Object.fromEntries(
         nameByE164(
@@ -504,7 +505,26 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
               {displayMembers && !isLoading && (
                 <>
                   {displayMembers.length === 0 ? (
-                    <p className="text-sm text-[var(--text-3)] text-center py-2">No people in this segment.</p>
+                    <div className="flex items-center justify-between gap-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-4 py-3">
+                      <div>
+                        <p className="text-sm text-[var(--text-1)] font-medium">No people in this segment yet.</p>
+                        {!isMultiMode && singleSelectedId != null && (
+                          <p className="text-xs text-[var(--text-3)] mt-0.5">
+                            Fine for real-time campaigns — people who join later are the audience.
+                          </p>
+                        )}
+                      </div>
+                      {!isMultiMode && singleSelectedId != null && (
+                        <button
+                          type="button"
+                          onClick={handleImport}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors shadow-md shadow-blue-600/20 flex-shrink-0"
+                        >
+                          <Download size={13} />
+                          Use empty segment
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <>
                       {/* Summary bar */}
@@ -515,14 +535,14 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
                             <span className="text-[var(--text-2)] font-semibold">{membersWithPhone.length}</span> of {displayMembers.length} contacts have phone numbers
                           </p>
                         </div>
-                        {membersWithPhone.length > 0 && (
+                        {(membersWithPhone.length > 0 || !isMultiMode) && (
                           <button
                             type="button"
                             onClick={handleImport}
                             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors shadow-md shadow-blue-600/20"
                           >
                             <Download size={13} />
-                            Import {membersWithPhone.length}
+                            {membersWithPhone.length > 0 ? `Import ${membersWithPhone.length}` : "Use segment (0 numbers)"}
                           </button>
                         )}
                       </div>
