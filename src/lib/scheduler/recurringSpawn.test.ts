@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildChildPayload, type RecurringParent } from "./recurringSpawn";
+import {
+  buildChildPayload,
+  clampCallEndToLegalCap,
+  legalCallEndCap,
+  type RecurringParent,
+} from "./recurringSpawn";
 
 const parent: RecurringParent = {
   id: "p1",
@@ -66,6 +71,43 @@ describe("buildChildPayload last-resort SMS inheritance (§8)", () => {
 
     const without = buildChildPayload({ parent, ...common });
     expect("sms_last_resort_template" in without).toBe(false);
+  });
+});
+
+describe("legalCallEndCap (VOZ-129 jurisdiction cap)", () => {
+  it("caps AU/NZ/JP at 20:00 (8pm)", () => {
+    expect(legalCallEndCap("Australia/Sydney")).toBe("20:00");
+    expect(legalCallEndCap("Australia/Perth")).toBe("20:00"); // any AU zone
+    expect(legalCallEndCap("Pacific/Auckland")).toBe("20:00");
+    expect(legalCallEndCap("Asia/Tokyo")).toBe("20:00");
+  });
+
+  it("allows US/CA/UK to 21:00 (9pm)", () => {
+    expect(legalCallEndCap("America/Toronto")).toBe("21:00");
+    expect(legalCallEndCap("America/New_York")).toBe("21:00");
+    expect(legalCallEndCap("Europe/London")).toBe("21:00");
+  });
+
+  it("defaults unmapped/empty zones to 21:00 (never tightens a previously-legal window)", () => {
+    expect(legalCallEndCap("Asia/Dubai")).toBe("21:00");
+    expect(legalCallEndCap("")).toBe("21:00");
+    expect(legalCallEndCap(undefined as unknown as string)).toBe("21:00");
+  });
+});
+
+describe("clampCallEndToLegalCap (compliance: clamp DOWN only)", () => {
+  it("clamps an over-cap AU window end down to 20:00", () => {
+    expect(clampCallEndToLegalCap("21:00", "Australia/Sydney")).toBe("20:00");
+    expect(clampCallEndToLegalCap("20:30", "Australia/Sydney")).toBe("20:00");
+  });
+
+  it("leaves an at-cap or under-cap end untouched", () => {
+    expect(clampCallEndToLegalCap("20:00", "Australia/Sydney")).toBe("20:00");
+    expect(clampCallEndToLegalCap("18:00", "Australia/Sydney")).toBe("18:00");
+  });
+
+  it("does not clamp a legal 21:00 window in a 9pm jurisdiction (CA)", () => {
+    expect(clampCallEndToLegalCap("21:00", "America/Toronto")).toBe("21:00");
   });
 });
 

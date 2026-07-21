@@ -173,6 +173,38 @@ export function endOfDayIsoInTz(now: Date, tz: string): string {
   return isoForLocalTime(`${yy}-${mm}-${dd}`, "00:00", tz);
 }
 
+// ── Legal call-window cap (compliance) ───────────────────────────────────
+//
+// Latest legal call END time (exclusive) by jurisdiction, sourced from VOZ-129:
+// AU / NZ / JP cap at 20:00 (8pm); US / CA / UK allow 21:00 (9pm). Any zone not
+// listed falls back to 21:00 — the pre-clamp ceiling — so this can only ever
+// LOWER an over-cap window, never tighten one that was already legal.
+//
+// This is a LEGAL input, not a heuristic: extend the 20:00 set only with an
+// ops/Maria-confirmed jurisdiction (e.g. EU-strict zones, currently unconfirmed
+// → left at the permissive 21:00 default rather than guessed).
+//
+// ponytail: static wall-clock caps — no DST/offset nuance needed (8pm local is
+// 8pm local); add a jurisdiction here when its cap is confirmed.
+const CAP_2000_ZONES = ["Pacific/Auckland", "Asia/Tokyo"];
+
+export function legalCallEndCap(timezone: string): string {
+  const tz = timezone ?? "";
+  if (tz.startsWith("Australia/") || CAP_2000_ZONES.includes(tz)) return "20:00";
+  return "21:00";
+}
+
+/**
+ * Clamp a "HH:MM" window end DOWN to the timezone's legal cap. Zero-padded 24h
+ * strings compare lexicographically = chronologically, so a plain `>` is safe.
+ * Only ever lowers the end; start is the caller's concern (a start at/after the
+ * cap would collapse the window to no-dial — fail-closed, the safe direction).
+ */
+export function clampCallEndToLegalCap(end: string, timezone: string): string {
+  const cap = legalCallEndCap(timezone);
+  return end > cap ? cap : end;
+}
+
 // ── Due-check (pure logic) ───────────────────────────────────────────────
 
 /**
@@ -288,9 +320,16 @@ export async function spawnChildIfDue(
   if (!hours || !hours.start || !hours.end) {
     return { result: "spawn_failed", details: `no call hours configured for ${dow}` };
   }
+  // Compliance clamp: a spawned child's dial window END can never exceed the
+  // destination's legal calling cap, regardless of what the parent stored or an
+  // operator widened it to. VOZ-129 fixed only the UI default (21:00→20:00) for
+  // NEW patterns; existing/edited parents can still hold 21:00 in a 20:00
+  // jurisdiction (e.g. the live AU always-on parent). Clamp DOWN only — start is
+  // untouched — so a legal 9pm window (US/CA/UK) is never shortened.
+  const windowEnd = clampCallEndToLegalCap(hours.end, parent.timezone);
   const startAtIso = isoForLocalTime(todayStr, hours.start, parent.timezone);
-  const endAtIso = isoForLocalTime(todayStr, hours.end, parent.timezone);
-  const todaysCallWindow = [{ day: dow, start: hours.start, end: hours.end }];
+  const endAtIso = isoForLocalTime(todayStr, windowEnd, parent.timezone);
+  const todaysCallWindow = [{ day: dow, start: hours.start, end: windowEnd }];
 
   // ── 4. Pull segment phones (SKIPPED for realtime parents — VOZ-132: the
   //       per-minute poll is the sole number source, children spawn empty) ──
@@ -477,7 +516,7 @@ export async function spawnChildIfDue(
     childId: childRow.id,
     dialCount: phones.length,
     windowStart: hours.start,
-    windowEnd: hours.end,
+    windowEnd,
   };
 }
 
