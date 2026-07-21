@@ -16,7 +16,7 @@
 // It runs against the REAL shared DB — cleanup matters; don't kill it
 // mid-run without re-running so cleanup can finish.
 //
-// Coverage (42 assertions):
+// Coverage (45 assertions):
 //  B1-B7  brief-ahead core: routed turns inject NO spoken line — only one
 //         non-triggering [CURRENT STAGE] menu; menu rendering (members,
 //         word-for-word marks, else ladder, statement riders); stage
@@ -29,6 +29,10 @@
 //         clock, never prematurely, never twice; menus exclude silence paths
 //  O1-O3  observer pass: covered lines marked (never removed), skipped
 //         statements return as Still-OWED debts, paid debts disappear
+//  O4-O6  fact-level coverage (VOZ-177): a fact conveyed under one wording
+//         marks a sibling line that restates it in DIFFERENT words; and the
+//         delivered-ledger arm (VOZ-178) marks a fact covered from a line the
+//         engine pushed even when an interruption kept it out of the transcript
 //  R1-R2  interruption arbiter: noise that cut the agent off triggers a
 //         resume nudge; late noise does not
 import { createClient } from "@supabase/supabase-js";
@@ -362,6 +366,64 @@ try {
     await sleep(1800);
     armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
     check("O3 paid debt disappears", armed.length > 0 && !/Still OWED/.test(armed), armed.slice(-300));
+  }
+
+  // ── O4-O6: fact-level coverage (VOZ-177) + delivered-ledger resilience (VOZ-178) ──
+  // Two members convey the SAME fact in DIFFERENT words. The per-line stem
+  // observer is blind to that; the fact tag makes conveying one mark the other.
+  {
+    const hFactA = await handler({ name: "tmp fact A", intent_key: "tmp_fact_a", description: "customer asks about the golden ticket", response_template: "The golden ticket doubles your very first deposit.", action_type: "answer", delivery: "reword", tags: ["tmp-verify", "fact:tmp_promo"] });
+    const hFactB = await handler({ name: "tmp fact B", intent_key: "tmp_fact_b", description: "customer asks about the reward", response_template: "Your reward is a straight match on whatever you put in.", action_type: "answer", delivery: "reword", tags: ["tmp-verify", "fact:tmp_promo"] });
+    const { data: colF } = await sb.from("listener_collections").insert({ name: "tmp-brief-F-facts", description: "tmp verify" }).select().single();
+    created.collections.push(colF.id);
+    await sb.from("listener_collection_handlers").insert([
+      { collection_id: colF.id, handler_id: hFactA.id },
+      { collection_id: colF.id, handler_id: hFactB.id },
+    ]);
+    // Three collection stages (all colF) so the members render as CONTENT both
+    // before AND after member A is spoken — a stage briefing shows the NEXT
+    // node's content, so we need a following stage that re-surfaces the bank.
+    const scriptFacts = await script("tmp-brief-facts", ({ conn, node, edge }) => {
+      const a1 = conn(null, true), a2 = conn(null, true), a3 = conn(null, true), a4 = conn(null, true);
+      const start = node("start", "Start call", { mode: "agent_first", opening: "", openingDelivery: "verbatim", connectors: [a1] }, null, 0, 0);
+      const A = node("step", "Stage A", { contentType: "collection", collectionId: colF.id, connectors: [a2] }, null, 0, 200);
+      const B = node("step", "Stage B", { contentType: "collection", collectionId: colF.id, connectors: [a3] }, null, 0, 400);
+      const C = node("step", "Stage C", { contentType: "collection", collectionId: colF.id, connectors: [a4] }, null, 0, 600);
+      const end = node("step", "End call", { contentType: "end" }, null, 0, 800);
+      return { nodes: [start, A, B, C, end], edges: [edge(start, a1, A), edge(A, a2, B), edge(B, a3, C), edge(C, a4, end)] };
+    });
+
+    // O4: fresh call — the fact is unspoken, so neither wording is marked.
+    await activate(scriptFacts);
+    const c = newCall();
+    controlMsgs = [];
+    await say(c, "well alright then let us hear what this is all about");
+    await sleep(1800);
+    let armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O4 fresh call: neither wording marked", /golden ticket/.test(armed) && /straight match/.test(armed) && !/ALREADY COVERED/.test(armed), armed.slice(0, 240));
+
+    // The agent voices ONLY member A's wording. Member B shares the fact but
+    // shares NO distinctive words with it ("reward"/"match" never spoken).
+    await say(c, "Right — the golden ticket doubles your very first deposit, by the way.", "assistant");
+    controlMsgs = [];
+    await say(c, "well honestly that is good to know tell me a bit more then");
+    await sleep(1800);
+    armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    // O5: member B is marked covered even though its OWN words were never said —
+    // proof the FACT (not the phrasing) drove the mark.
+    const bChunk = armed.split("straight match")[1]?.slice(0, 80) ?? "";
+    check("O5 sibling fact marked despite new wording", /straight match/.test(armed) && /ALREADY COVERED/.test(bChunk), armed);
+
+    // O6: delivered-ledger arm — a line the engine PUSHED (handler_id logged)
+    // but that never made it into the spoken transcript (interruption) still
+    // marks its fact covered. Synthesize that: an injected row, empty corpus.
+    const c2 = newCall();
+    await sb.from("lab_call_events").insert({ call_id: c2, event_type: "injected", handler_id: hFactB.id, content: "(synthetic push — never transcribed)", meta: {} });
+    controlMsgs = [];
+    await say(c2, "alright so go on then what is this regarding exactly");
+    await sleep(1800);
+    armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O6 delivered-but-unspoken fact still marks covered", /golden ticket/.test(armed) && /ALREADY COVERED/.test(armed), armed.slice(0, 300));
   }
 
   // ── R1-R2: interruption arbiter — noise that cut the agent off sends it back to finish ──
