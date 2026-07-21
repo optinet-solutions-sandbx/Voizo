@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "voizo-api",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

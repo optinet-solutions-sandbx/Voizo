@@ -1,0 +1,4 @@
+# Bruno local secrets — never commit real keys. Secret vars (vars:secret in
+# environments/*.bru) are stored by Bruno outside the repo; this covers any
+# DotEnv usage too.
+.env

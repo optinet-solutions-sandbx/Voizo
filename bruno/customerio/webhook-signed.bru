@@ -1,0 +1,44 @@
+meta {
+  name: Webhook receiver — signed (happy path)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/webhooks/customerio
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  x-cio-timestamp: {{cioTs}}
+  x-cio-signature: {{cioSig}}
+}
+
+body:json {
+  {}
+}
+
+script:pre-request {
+  // Sign exactly the way Customer.io does: HMAC-SHA256 over `v0:<ts>:<raw body>`.
+  // The body is built HERE and set with req.setBody so the signed bytes are
+  // byte-identical to what goes on the wire (pretty-printed .bru bodies are not).
+  const crypto = require('crypto');
+  const body = JSON.stringify({
+    cio_id: 'bruno-test-' + Date.now(),
+    phone: '+61412345678',
+    first_name: 'Bruno',
+    segment_id: Number(bru.getEnvVar('segmentId')),
+  });
+  const ts = Math.floor(Date.now() / 1000);
+  const key = bru.getEnvVar('cioSigningKey');
+  const sig = crypto.createHmac('sha256', key).update(`v0:${ts}:${body}`).digest('hex');
+  req.setBody(body);
+  bru.setVar('cioTs', String(ts));
+  bru.setVar('cioSig', sig);
+}
+
+assert {
+  res.status: eq 200
+}

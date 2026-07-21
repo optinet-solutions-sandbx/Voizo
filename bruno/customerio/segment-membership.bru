@@ -1,0 +1,21 @@
+meta {
+  name: App API — segment membership (what the poll reads)
+  type: http
+  seq: 3
+}
+
+get {
+  url: https://api.customer.io/v1/segments/{{segmentId}}/membership?limit=50
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{cioAppApiKey}}
+}
+
+docs {
+  Phase-0 exploration: lists identifiers of everyone currently in the segment.
+  Same endpoint getSegmentMembers() uses (src/lib/customerio.ts). EU-region
+  workspaces use https://api-eu.customer.io instead.
+}

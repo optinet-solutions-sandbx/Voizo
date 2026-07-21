@@ -1,0 +1,38 @@
+meta {
+  name: Webhook receiver — tampered body (must 401)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/webhooks/customerio
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  x-cio-timestamp: {{cioTs}}
+  x-cio-signature: {{cioSig}}
+}
+
+body:json {
+  {}
+}
+
+script:pre-request {
+  // Sign one body, send another — the receiver must reject it.
+  const crypto = require('crypto');
+  const signedBody = JSON.stringify({ cio_id: 'x', phone: '+61412345678', segment_id: 42 });
+  const sentBody = JSON.stringify({ cio_id: 'x', phone: '+15550001111', segment_id: 42 });
+  const ts = Math.floor(Date.now() / 1000);
+  const key = bru.getEnvVar('cioSigningKey');
+  const sig = crypto.createHmac('sha256', key).update(`v0:${ts}:${signedBody}`).digest('hex');
+  req.setBody(sentBody);
+  bru.setVar('cioTs', String(ts));
+  bru.setVar('cioSig', sig);
+}
+
+assert {
+  res.status: eq 401
+}

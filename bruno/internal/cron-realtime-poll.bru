@@ -1,0 +1,20 @@
+meta {
+  name: Cron — realtime poll tick (manual trigger)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/cron/realtime-poll
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{cronSecret}}
+}
+
+docs {
+  Fires one poll tick by hand (same auth as Vercel cron). Dormant-safe: with
+  no running realtime parents it returns {"parents":0,...} and does nothing.
+}

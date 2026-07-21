@@ -26,7 +26,7 @@ import {
 } from "../customerio";
 import { fetchAllRows } from "../supabaseFetchAll";
 import { postSlackAlert, shouldAlertSpawnFail } from "../alerts/slack";
-import { endOfDayIsoInTz, startOfDayIsoInTz } from "./recurringSpawn";
+import { claimAndQueueMember, findTodaysChild, promoteWaitingMember } from "./realtimeAdmission";
 
 // ── Pure decisions ────────────────────────────────────────────────────────
 
@@ -94,6 +94,8 @@ export interface WaitingSeenRow {
   cio_id: string;
   phone_e164: string | null;
   first_seen_at: string;
+  /** Raw player name captured at claim time (greet-by-name; VOZ-180 adds the column). */
+  display_name?: string | null;
 }
 
 /**
@@ -314,28 +316,13 @@ export async function pollRealtimeParent(
 ): Promise<PollSummary> {
   if (parent.segment_id == null) return { result: "no_segment" };
 
-  // 1) Today's child — same day-math as the spawn idempotency check. draft
-  //    (pre-window) and paused (post-window) children still accept numbers:
-  //    queued players wait for the window, exactly like the daily flow.
-  const dayStart = startOfDayIsoInTz(now, parent.timezone);
-  const dayEnd = endOfDayIsoInTz(now, parent.timezone);
-  const { data: child, error: childErr } = await supabase
-    .from("campaigns_v2")
-    .select("id, name, daily_cap")
-    .eq("parent_campaign_id", parent.id)
-    .in("status", ["draft", "running", "paused"])
-    .gte("start_at", dayStart)
-    .lt("start_at", dayEnd)
-    .limit(1)
-    .maybeSingle();
-  if (childErr) {
-    console.error(`[realtimePoll] ${parent.name}: child query failed:`, childErr);
-    return { result: "no_child_today" };
-  }
-  if (!child) return { result: "no_child_today" }; // spawn cron owns child creation
+  // 1) Today's child — shared lookup (realtimeAdmission.ts) so the webhook
+  //    lane and this poll can never drift on which child accepts numbers.
+  const { ok: childOk, child } = await findTodaysChild(supabase, parent.id, parent.timezone, now);
+  if (!childOk || !child) return { result: "no_child_today" }; // spawn cron owns child creation
 
-  const childId = child.id as string;
-  const dailyCap = (child.daily_cap as number | null) ?? null;
+  const childId = child.id;
+  const dailyCap = child.daily_cap ?? null;
 
   // 2) Cap pre-check BEFORE any Cio spend (moved ahead of the membership
   //    fetch with the call-delay feature: a capped day now skips that call
@@ -362,7 +349,7 @@ export async function pollRealtimeParent(
   let promoted = 0;
   const { data: waitingRows, error: waitErr } = await supabase
     .from("realtime_seen_members")
-    .select("cio_id, phone_e164, first_seen_at")
+    .select("cio_id, phone_e164, first_seen_at, display_name")
     .eq("parent_campaign_id", parent.id)
     .eq("status", "waiting")
     .order("first_seen_at", { ascending: true })
@@ -374,39 +361,18 @@ export async function pollRealtimeParent(
     const due = duePromotions(waitingRows as WaitingSeenRow[], parent.call_delay_minutes, now, room);
     for (const w of due) {
       if (!w.phone_e164) continue; // impossible by construction; guards manual edits
-      // Race-proof flip: only the tick that wins the waiting->queued update
-      // inserts the dial row (mirror of the claim upsert's RETURNING rule).
-      const { data: flipped, error: flipErr } = await supabase
-        .from("realtime_seen_members")
-        .update({ status: "queued", child_campaign_id: childId })
-        .eq("parent_campaign_id", parent.id)
-        .eq("cio_id", w.cio_id)
-        .eq("status", "waiting")
-        .select("cio_id");
-      if (flipErr || !flipped || flipped.length === 0) continue;
-      const { error: promoteInsErr } = await supabase.from("campaign_numbers_v2").insert({
-        campaign_id: childId,
-        phone_e164: w.phone_e164,
-        outcome: "pending",
-        // ponytail: promoted (call-delay) members stay nameless — their profile was
-        // looked up at claim time but realtime_seen_members has no name column.
-        // Add one + carry it here if the realtime trial makes delayed sign-ups common.
+      // Shared race-proof flip + dial-row insert + compensation (VOZ-180:
+      // extracted to realtimeAdmission.ts so the webhook lane reuses it; the
+      // name captured at claim time now rides into the dial row).
+      const outcome = await promoteWaitingMember(supabase, {
+        parentId: parent.id,
+        parentName: parent.name,
+        cioId: w.cio_id,
+        phone: w.phone_e164,
+        displayName: w.display_name ?? null,
+        childId,
       });
-      if (promoteInsErr) {
-        // Compensation: flip back so the next tick retries. first_seen_at is
-        // untouched — the delay clock never resets, no lookup is re-paid.
-        console.error(
-          `[realtimePoll] ${parent.name}: promotion insert failed for ${w.cio_id} — flipping back:`,
-          promoteInsErr,
-        );
-        await supabase
-          .from("realtime_seen_members")
-          .update({ status: "waiting", child_campaign_id: null })
-          .eq("parent_campaign_id", parent.id)
-          .eq("cio_id", w.cio_id);
-        continue;
-      }
-      promoted++;
+      if (outcome === "promoted") promoted++;
     }
     if (promoted > 0) {
       console.log(
@@ -514,48 +480,22 @@ export async function pollRealtimeParent(
       }
     }
 
-    // Race-safe claim: PK (parent, cio_id) + ignoreDuplicates. RETURNING is
-    // empty when another tick already claimed — then we must NOT insert.
-    const { data: claimed, error: claimErr } = await supabase
-      .from("realtime_seen_members")
-      .upsert(
-        {
-          parent_campaign_id: parent.id,
-          cio_id: cioId,
-          phone_e164: phone,
-          status: claimStatus,
-          child_campaign_id: admitThis ? childId : null,
-        },
-        { onConflict: "parent_campaign_id,cio_id", ignoreDuplicates: true },
-      )
-      .select("cio_id");
-    if (claimErr) {
-      console.error(`[realtimePoll] ${parent.name}: claim upsert failed for ${cioId}:`, claimErr);
-      continue; // not claimed → retried next tick
-    }
-    const won = Array.isArray(claimed) && claimed.length > 0;
-    if (won && claimStatus === "waiting") claimedWaiting++;
-    if (!won || !admitThis) continue;
-
-    const { error: insErr } = await supabase.from("campaign_numbers_v2").insert({
-      campaign_id: childId,
-      phone_e164: phone,
-      outcome: "pending",
+    // Shared race-safe claim + dial-row insert + compensation (VOZ-180:
+    // extracted to realtimeAdmission.ts so the webhook lane reuses it). The
+    // claim now also stores the name, so waiting members keep greet-by-name.
+    const result = await claimAndQueueMember(supabase, {
+      parentId: parent.id,
+      parentName: parent.name,
+      cioId,
+      phone,
+      claimStatus,
+      childId: admitThis ? childId : null,
       // Greet-by-name Ramp 1: the profile is in hand right here — keep the name.
-      display_name: lookup.success ? extractNameFromAttrs(lookup.data.attributes) : null,
+      displayName: lookup.success ? extractNameFromAttrs(lookup.data.attributes) : null,
     });
-    if (insErr) {
-      // Compensation: a claimed-but-never-queued member would be a silently
-      // lost player. Release the claim so the next tick retries.
-      console.error(`[realtimePoll] ${parent.name}: dial-row insert failed for ${cioId} — releasing claim:`, insErr);
-      await supabase
-        .from("realtime_seen_members")
-        .delete()
-        .eq("parent_campaign_id", parent.id)
-        .eq("cio_id", cioId);
-      continue;
-    }
-    admitted++;
+    if (!result.won) continue; // duplicate / claim_error / insert_failed → retried or already handled
+    if (claimStatus === "waiting") claimedWaiting++;
+    if (result.queued) admitted++;
   }
 
   // 7) Operator flags (spec item 4). Wrong-country posts at most once per
