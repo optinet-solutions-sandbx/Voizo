@@ -7,14 +7,30 @@
 // lines; the engine's runtime job shrinks to navigation (flow state, the
 // next briefing), actions (SMS / hangup / transfer) and auditing.
 import type { ListenerHandler, ListenerScriptNode, ListenerScriptEdge } from "./database.types";
-import { getCollectionHandlerIds, agentSaidCorpus, visitedFlowNodeIds } from "./lab-db";
+import { getCollectionHandlerIds, agentSaidCorpus, visitedFlowNodeIds, getDeliveredHandlers } from "./lab-db";
 import { contentTypeOf } from "./lab-flow";
 
 type Graph = { nodes: ListenerScriptNode[]; edges: ListenerScriptEdge[] };
 type Cfg = Record<string, unknown>;
 /** Observer context threaded through the compiler: what the agent has
- *  already said (as word stems) and a tally of the marks made. */
-type ObserverCtx = { corpusStems?: Set<string>; counter?: { covered: number } };
+ *  already said (as word stems), the facts already conveyed anywhere in the
+ *  call (fact-level coverage, VOZ-177), and a tally of the marks made. */
+type ObserverCtx = { corpusStems?: Set<string>; counter?: { covered: number }; coveredFacts?: Set<string> };
+
+// Fact-level coverage (VOZ-177). A handler tagged `fact:<key>` declares that
+// its line conveys a shared fact (identity, the free-spins offer, "SMS anyway"…).
+// The per-line stem observer is blind to the SAME fact reworded in a different
+// scenario — the exact repetition seen on the Val test call, where five distinct
+// members each re-introduced "Victor from Lucky Seven". Tagging lets the observer
+// dedupe at the fact level: once a fact has been conveyed under ANY wording, every
+// sibling line that conveys it is marked covered. A handler may carry several tags.
+const FACT_TAG_PREFIX = "fact:";
+export function factsOf(h: ListenerHandler): string[] {
+  return (h.tags ?? [])
+    .filter((t) => t.startsWith(FACT_TAG_PREFIX))
+    .map((t) => t.slice(FACT_TAG_PREFIX.length).trim())
+    .filter(Boolean);
+}
 
 const MEMBER_CAP = 12;
 
@@ -37,6 +53,21 @@ const COVERED_MARK = " — ALREADY COVERED earlier in this call: don't recite it
 
 function markIfCovered(rendered: string, sourceText: string | null | undefined, obs: ObserverCtx | undefined): string {
   if (!obs || !sourceText || !contentCovered(sourceText, obs.corpusStems)) return rendered;
+  if (obs.counter) obs.counter.covered++;
+  return rendered + COVERED_MARK;
+}
+
+/** Handler-aware covered check. A menu line is covered when its OWN wording is
+ *  already in the corpus (per-line stem overlap) OR — the fact-level pass
+ *  (VOZ-177) — when any fact it conveys has already been delivered under
+ *  DIFFERENT wording somewhere in this call. The second arm is what the
+ *  per-line check is blind to: it stops distinct scenarios that restate the
+ *  same fact (identity, the offer, "SMS anyway") from re-pitching it. */
+function markIfCoveredHandler(rendered: string, h: ListenerHandler, obs: ObserverCtx | undefined): string {
+  if (!obs) return rendered;
+  const byStem = contentCovered(h.response_template, obs.corpusStems);
+  const byFact = !byStem && !!obs.coveredFacts?.size && factsOf(h).some((f) => obs.coveredFacts!.has(f));
+  if (!byStem && !byFact) return rendered;
   if (obs.counter) obs.counter.covered++;
   return rendered + COVERED_MARK;
 }
@@ -79,7 +110,7 @@ async function targetSays(node: ListenerScriptNode, byId: Map<string, ListenerHa
   if (ct === "scenario") {
     const cand = (node.scenario_id ? byId.get(node.scenario_id) : undefined) ?? byId.get(((cfg.candidateScenarioIds as string[]) ?? [])[0] ?? "");
     const line = cand?.response_template?.trim()
-      ? `  ${markIfCovered(renderLine(cand), cand.response_template, obs)}`
+      ? `  ${markIfCoveredHandler(renderLine(cand), cand, obs)}`
       : `  (no line authored here — bridge with ONE short, neutral sentence; invent nothing, ask nothing)`;
     return line + rider;
   }
@@ -88,17 +119,17 @@ async function targetSays(node: ListenerScriptNode, byId: Map<string, ListenerHa
     const ids = cfg.collectionId ? await getCollectionHandlerIds(cfg.collectionId as string).catch(() => [] as string[]) : [];
     const members = handlers.filter((h) => ids.includes(h.id) && h.enabled && (h.response_template ?? "").trim() && h.action_type !== "ignore");
     const shown = members.slice(0, MEMBER_CAP);
-    const lines = shown.map((h) => `  - If ${h.description?.trim() || h.name}: ${markIfCovered(renderLine(h), h.response_template, obs)}`);
+    const lines = shown.map((h) => `  - If ${h.description?.trim() || h.name}: ${markIfCoveredHandler(renderLine(h), h, obs)}`);
     if (members.length > shown.length) lines.push(`  - (${members.length - shown.length} more exist — if one clearly fits, answer in the same spirit and length.)`);
     // The else ladder, in the same order the engine used to walk it:
     // written else line → else collection → neutral bridge.
     const elseHandler = node.scenario_id ? byId.get(node.scenario_id) : undefined;
     if (elseHandler?.response_template?.trim()) {
-      lines.push(`  - If NOTHING above fits: ${markIfCovered(renderLine(elseHandler), elseHandler.response_template, obs)}`);
+      lines.push(`  - If NOTHING above fits: ${markIfCoveredHandler(renderLine(elseHandler), elseHandler, obs)}`);
     } else if (cfg.elseCollectionId) {
       const eids = await getCollectionHandlerIds(cfg.elseCollectionId as string).catch(() => [] as string[]);
       const fallbacks = handlers.filter((h) => eids.includes(h.id) && h.enabled && (h.response_template ?? "").trim() && h.action_type !== "ignore").slice(0, 6);
-      for (const h of fallbacks) lines.push(`  - Fallback — if ${h.description?.trim() || h.name}: ${markIfCovered(renderLine(h), h.response_template, obs)}`);
+      for (const h of fallbacks) lines.push(`  - Fallback — if ${h.description?.trim() || h.name}: ${markIfCoveredHandler(renderLine(h), h, obs)}`);
       lines.push(`  - If truly NOTHING fits: bridge with ONE short, neutral sentence (invent nothing, ask nothing).`);
     } else {
       lines.push(`  - If NOTHING above fits: bridge with ONE short, neutral sentence (invent nothing, ask nothing).`);
@@ -181,12 +212,34 @@ export async function composeArmedBriefing(
 ): Promise<{ text: string; covered: number; owed: number } | null> {
   let corpus = "";
   let visited: string[] = [];
+  let delivered: { handler_id: string; count: number }[] = [];
   try {
-    [corpus, visited] = await Promise.all([agentSaidCorpus(callId), visitedFlowNodeIds(callId)]);
+    [corpus, visited, delivered] = await Promise.all([
+      agentSaidCorpus(callId),
+      visitedFlowNodeIds(callId),
+      getDeliveredHandlers(callId),
+    ]);
   } catch {
     /* no history → plain briefing */
   }
-  const obs: ObserverCtx = { corpusStems: new Set(stemsOf(corpus)), counter: { covered: 0 } };
+  const corpusStems = new Set(stemsOf(corpus));
+  // Fact-level coverage (VOZ-177) + interruption resilience (VOZ-178). A fact is
+  // "conveyed" once ANY handler carrying its tag is either detected in the spoken
+  // corpus (stem overlap) OR present in the delivered ledger. The ledger arm is
+  // the interruption-resilient one: a barge-in truncates the transcript so the
+  // spoken corpus misses the line, but the engine still recorded that it pushed
+  // it — without this the observer re-serves the line and the agent repeats it,
+  // exactly what happened when the Val call was talked over.
+  const deliveredIds = new Set(delivered.map((d) => d.handler_id));
+  const coveredFacts = new Set<string>();
+  for (const h of handlers) {
+    const facts = factsOf(h);
+    if (!facts.length) continue;
+    if (deliveredIds.has(h.id) || contentCovered(h.response_template, corpusStems)) {
+      for (const f of facts) coveredFacts.add(f);
+    }
+  }
+  const obs: ObserverCtx = { corpusStems, counter: { covered: 0 }, coveredFacts };
   const briefing = await compileStageBriefing(graph, targetId, handlers, obs);
   if (!briefing) return null;
   // Debts: statements of boxes the flow already passed through whose content
