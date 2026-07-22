@@ -48,8 +48,13 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
   useEffect(() => {
     fetch("/api/vapi-assistants")
       .then((r) => r.json())
-      .then((a) => Array.isArray(a) && setAssistants(a))
-      .catch(() => {});
+      .then((a) => {
+        // Surface failures instead of an unexplained empty dropdown (VOZ-186 —
+        // the silent version cost a day of "why can't Val run tests").
+        if (Array.isArray(a)) setAssistants(a);
+        else setError(typeof a?.error === "string" ? a.error : "Couldn't load the test agent.");
+      })
+      .catch(() => setError("Couldn't load the test agent — network error."));
     fetch("/api/lab/configure-assistant")
       .then((r) => r.json())
       .then((j) => setEnvBaseUrl(j.envBaseUrl ?? null))

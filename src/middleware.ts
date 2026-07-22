@@ -20,6 +20,8 @@ import { NextRequest, NextResponse } from "next/server";
  *                                   (HMAC, x-vapi-secret, reference UUID)
  *   /api/cron/*                   — Bearer CRON_SECRET (Vercel-injected)
  *   /api/freeswitch/originate     — own x-auth-secret header (Phase 0 PoC)
+ *   /api/lab/webhook              — x-vapi-secret (VOZ-186; Vapi can't do
+ *                                   Basic Auth — route carries its own check)
  *   /_next/*, /favicon, /icon     — static assets
  *
  * Env behavior:
@@ -42,6 +44,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/webhooks/",
   "/api/cron/",
   "/api/freeswitch/originate",
+  "/api/lab/webhook",
 ];
 
 function isPublicPath(pathname: string): boolean {

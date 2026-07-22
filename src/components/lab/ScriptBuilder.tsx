@@ -1284,11 +1284,20 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
       setRunPanelOpen(true);
       setRun({ callId: null, status: "connecting", currentNodeId: null, visited: [], lastLine: null, lastHop: null });
       // Push webhook/persona config before dialing, same as the Lab's panel.
-      await fetch("/api/lab/configure-assistant", {
+      // A failed configure means the call would run the assistant's STALE
+      // config (old prompt, wrong webhook, missing secret) — abort with a
+      // visible error instead of a silently-misleading test (VOZ-186).
+      const cfgRes = await fetch("/api/lab/configure-assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assistantId: aid }),
-      }).catch(() => {});
+      }).catch(() => null);
+      if (!cfgRes || !cfgRes.ok) {
+        const detail = cfgRes ? ((await cfgRes.json().catch(() => null))?.error ?? `HTTP ${cfgRes.status}`) : "network error";
+        setError(`Couldn't configure the test agent before dialing: ${detail}`);
+        setRun({ callId: null, status: "idle", currentNodeId: null, visited: [], lastLine: null, lastHop: null });
+        return;
+      }
       const startNode = nodes.find((n) => (n.data as NodeData).kind === "start");
       // Empty opening is a deliberate author choice: no override, the VAPI
       // assistant's own greeting plays.
