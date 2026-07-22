@@ -10,6 +10,7 @@ import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { DownloadIcon } from "@/components/icons/animated/download";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import { fetchCampaignV2, updateCampaignV2Status, fetchCampaignDetailBundle } from "@/lib/campaignV2Client";
+import type { QueueRow } from "@/lib/realtimeQueue";
 import { parseJsonBody } from "@/lib/jsonBody";
 import DynamicSchedule from "@/components/DynamicSchedule";
 import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
@@ -187,6 +188,8 @@ export default function CampaignV2DetailPage() {
   const [campaign, setCampaign] = useState<Row | null>(null);
   const [numbers, setNumbers] = useState<Row[]>([]);
   const [calls, setCalls] = useState<Row[]>([]);
+  // VOZ-186: realtime children only — waiting claims between signup and dial row.
+  const [queue, setQueue] = useState<QueueRow[]>([]);
   const [smsByPhone, setSmsByPhone] = useState<Map<string, Row>>(new Map());
   // Wall-clock of the last successful data sync — passed to RunFlowStrip for retry-window math
   // so that component never has to call Date.now() during render.
@@ -428,6 +431,7 @@ export default function CampaignV2DetailPage() {
       setCampaign(c);
       setNumbers(bundle.numbers);
       setCalls(bundle.calls);
+      setQueue(bundle.queue ?? []);
       const map = new Map<string, Row>();
       for (const row of bundle.sms) {
         const phone = row.to_phone_e164 as string | undefined;
@@ -2045,7 +2049,7 @@ export default function CampaignV2DetailPage() {
       </div>
 
       {(status === "running" || status === "paused") && (
-        <RunFlowStrip numbers={numbers} maxAttempts={Number(campaign.max_attempts ?? 3) || 3} status={status} nowMs={syncedAtMs} />
+        <RunFlowStrip numbers={numbers} maxAttempts={Number(campaign.max_attempts ?? 3) || 3} status={status} nowMs={syncedAtMs} queue={queue} />
       )}
 
       {/* Tabs */}

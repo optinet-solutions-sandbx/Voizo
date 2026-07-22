@@ -10,6 +10,7 @@
 
 import type { CampaignV2CreateInput } from "./campaignV2Shared";
 import type { RecurrencePattern } from "./types/recurrence";
+import type { QueueRow } from "./realtimeQueue";
 
 type Row = Record<string, unknown>;
 
@@ -17,6 +18,9 @@ export interface CampaignDetailBundle {
   numbers: Row[];
   calls: Row[];
   sms: Row[];
+  /** VOZ-186: realtime children only — waiting claims between signup and
+   *  dial row. Empty for every other campaign (and for older API deploys). */
+  queue: QueueRow[];
 }
 
 /**
@@ -35,6 +39,7 @@ export async function fetchCampaignDetailBundle(campaignId: string): Promise<Cam
     numbers: data.numbers ?? [],
     calls: data.calls ?? [],
     sms: data.sms ?? [],
+    queue: data.queue ?? [],
   };
 }
 

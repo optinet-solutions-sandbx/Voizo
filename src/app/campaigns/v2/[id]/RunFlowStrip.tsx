@@ -6,8 +6,9 @@
 // DISPLAYS state the dialer owns; it never selects or fires anything. Logic: campaignRunFlow.ts.
 
 import { useMemo } from "react";
-import { PhoneCall, ChevronRight, Clock } from "lucide-react";
+import { PhoneCall, ChevronRight, Clock, Hourglass } from "lucide-react";
 import { deriveRunFlow, type RunFlowNumber } from "@/lib/campaignRunFlow";
+import { ringsInLabel, type QueueRow } from "@/lib/realtimeQueue";
 
 function fmtTime(iso: string | null): string | null {
   if (!iso) return null;
@@ -21,13 +22,17 @@ export default function RunFlowStrip({
   maxAttempts,
   status,
   nowMs,
+  queue = [],
 }: {
   numbers: Record<string, unknown>[];
   maxAttempts: number;
   status: string;
   // Stamped by the parent when it last synced the data (so this component stays pure — no
-  // Date.now() during render). Used only for retry-window math.
+  // Date.now() during render). Used for retry-window math + queue countdowns.
   nowMs: number;
+  // VOZ-186: realtime children only — signups claimed from Customer.io that are
+  // waiting out the call delay (or a cap slot) before getting a dial row.
+  queue?: QueueRow[];
 }) {
   const running = status === "running";
   const flow = useMemo(
@@ -104,6 +109,34 @@ export default function RunFlowStrip({
           </span>
         )}
       </div>
+
+      {/* Queue (VOZ-186): signups already claimed from Customer.io, waiting for
+          their dial row. Rendered only when someone is actually in line. */}
+      {queue.length > 0 && (
+        <div className="mt-3 pt-2.5 border-t border-[var(--border)]">
+          <div
+            className="text-[11px] mb-1.5"
+            title="New signups land here first. Each one gets a dial row (and appears in Numbers below) once the campaign's call delay is served — then the dialer calls them."
+          >
+            <span className="inline-flex items-center gap-1 font-semibold text-sky-400">
+              <Hourglass size={11} /> Queue
+            </span>
+            <span className="text-[var(--text-3)]">
+              {" "}· {queue.length} waiting — new signup{queue.length === 1 ? "" : "s"} from Customer.io, dialed after the call delay
+            </span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {queue.map((q) => (
+              <div key={q.cioId || `${q.phone}-${q.joinedAt}`} className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs">
+                <span className="text-[var(--text-2)]">{q.displayName ?? "—"}</span>
+                <span className="font-mono text-[var(--text-1)]">{q.phone ?? "no phone"}</span>
+                <span className="text-[var(--text-3)]">joined {fmtTime(q.joinedAt) ?? "—"}</span>
+                <span className="font-semibold text-sky-400">{ringsInLabel(q.etaMs, nowMs)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { shapeQueueRows, type QueueRow } from "@/lib/realtimeQueue";
 
 /**
  * GET /api/campaigns-v2/[id]/detail
@@ -58,9 +59,45 @@ export async function GET(
   if (callsRes.error) console.error(`[campaigns-v2/detail] calls query failed for ${id}:`, callsRes.error);
   if (smsRes.error) console.error(`[campaigns-v2/detail] sms query failed for ${id}:`, smsRes.error);
 
+  // Queue (VOZ-186): a realtime child also surfaces its parent's 'waiting'
+  // claims — players between signup and dial row (call delay / cap gate),
+  // previously invisible until promotion. Read-only over
+  // realtime_seen_members; empty array for every non-realtime campaign.
+  // Same best-effort rule as the tables above: a queue error logs and
+  // returns [], never fails the bundle.
+  let queue: QueueRow[] = [];
+  const { data: camp } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("realtime, parent_campaign_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (camp?.realtime === true && camp.parent_campaign_id) {
+    const parentId = camp.parent_campaign_id as string;
+    const [parentRes, waitingRes] = await Promise.all([
+      supabaseAdmin
+        .from("campaigns_v2")
+        .select("call_delay_minutes")
+        .eq("id", parentId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("realtime_seen_members")
+        .select("cio_id, display_name, phone_e164, first_seen_at")
+        .eq("parent_campaign_id", parentId)
+        .eq("status", "waiting"),
+    ]);
+    if (waitingRes.error) {
+      console.error(`[campaigns-v2/detail] queue query failed for ${id}:`, waitingRes.error);
+    }
+    queue = shapeQueueRows(
+      waitingRes.data ?? [],
+      (parentRes.data?.call_delay_minutes as number | null) ?? null,
+    );
+  }
+
   return NextResponse.json({
     numbers: numbersRes.data ?? [],
     calls: callsRes.data ?? [],
     sms: smsRes.data ?? [],
+    queue,
   });
 }
