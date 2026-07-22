@@ -60,6 +60,15 @@ export interface RecurringParent {
   // Last-resort SMS (§8): same child-row rule — the end-of-call webhook and
   // the last-resort sweep both read the CHILD campaign.
   sms_last_resort_template?: string | null;
+  // Script-mode inheritance (VOZ-184): the script-call webhook resolves each
+  // call's script from the CHILD row (call.assistantId → campaigns_v2 →
+  // script_id), and rebindCore's resume re-compose branches on the CHILD's
+  // agent_mode — without passthrough every spawned child of a script parent
+  // silently dials as a plain base assistant (the 07-22 trial's "Victor" call).
+  // Optional so selects predating the script engine keep compiling.
+  agent_mode?: "assistant" | "script" | null;
+  script_id?: string | null;
+  script_name?: string | null;
 }
 
 export interface DueCheckResult {
@@ -378,11 +387,44 @@ export async function spawnChildIfDue(
   if (leasedBudget <= 0) return { result: "budget_full" };
 
   // ── 7. Clone the base assistant ──
-  const cloneResult = await createClone(vapiKey, parent.base_assistant_id, {
-    voiceId: parent.voice_id ?? undefined,
-    systemPrompt: parent.system_prompt,
-    campaignName: `${parent.name} (${todayStr})`,
-  });
+  // VOZ-184: script parents RE-COMPOSE from the graph each spawn (picking up
+  // script edits since yesterday) — same two-branch shape as
+  // rebindCore.executeRebindCore. Lazy import: composeAssistant's module
+  // chain is test-poisoned (same reason snapshotCampaignPrompt is lazy below).
+  // A compose failure = spawn_failed (loud Slack alert, retried next tick) —
+  // NEVER a silent fallback to the base assistant's baked prompt.
+  // ponytail: third copy of this branch (create flow, rebindCore, here) —
+  // extract a shared cloneForCampaign helper if a fourth site appears.
+  let cloneResult: Awaited<ReturnType<typeof createClone>>;
+  if (parent.agent_mode === "script" && parent.script_id) {
+    const eocUrl =
+      process.env.VAPI_WEBHOOK_URL ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
+    const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
+    try {
+      const { composeScriptClone } = await import("../scriptEngine/composeAssistant");
+      const scriptClone = await composeScriptClone({
+        scriptId: parent.script_id,
+        persona: parent.system_prompt,
+      });
+      cloneResult = await createClone(vapiKey, parent.base_assistant_id, {
+        voiceId: parent.voice_id ?? undefined,
+        campaignName: `${parent.name} (${todayStr})`,
+        scriptClone,
+        serverUrl,
+      });
+    } catch (err) {
+      return {
+        result: "spawn_failed",
+        details: `composeScriptClone: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  } else {
+    cloneResult = await createClone(vapiKey, parent.base_assistant_id, {
+      voiceId: parent.voice_id ?? undefined,
+      systemPrompt: parent.system_prompt,
+      campaignName: `${parent.name} (${todayStr})`,
+    });
+  }
   if (!cloneResult.ok) {
     return { result: "spawn_failed", details: `createClone: ${cloneResult.error}` };
   }
@@ -569,6 +611,17 @@ export function buildChildPayload(args: {
     // Last-resort SMS (§8) inherits the same way — webhook + sweep read the child.
     ...(typeof parent.sms_last_resort_template === "string" && parent.sms_last_resort_template.trim().length > 0
       ? { sms_last_resort_template: parent.sms_last_resort_template }
+      : {}),
+    // Script-mode inheritance (VOZ-184): the script-call webhook resolves a
+    // call's script from the CHILD row — without these keys a script parent's
+    // child dials as a plain assistant. Conditional keys: legacy parents
+    // (null agent_mode) keep DB defaults, byte-identical rows to before.
+    ...(parent.agent_mode
+      ? {
+          agent_mode: parent.agent_mode,
+          script_id: parent.script_id ?? null,
+          script_name: parent.script_name ?? null,
+        }
       : {}),
   };
 }

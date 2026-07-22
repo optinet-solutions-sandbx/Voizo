@@ -33,6 +33,35 @@ const common = {
   sipUri: "sip:x",
 };
 
+describe("buildChildPayload script-mode inheritance (VOZ-184)", () => {
+  it("script parent → child carries agent_mode + script_id + script_name", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, agent_mode: "script", script_id: "scr-1", script_name: "Val - 20FS + 300% DB" },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.agent_mode).toBe("script");
+    expect(p.script_id).toBe("scr-1");
+    expect(p.script_name).toBe("Val - 20FS + 300% DB");
+  });
+
+  it("assistant parent → explicit assistant mode inherited (script pointers null)", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, agent_mode: "assistant" },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.agent_mode).toBe("assistant");
+    expect(p.script_id).toBeNull();
+    expect(p.script_name).toBeNull();
+  });
+
+  it("legacy parent (agent_mode absent) → keys ABSENT so DB defaults apply unchanged", () => {
+    const p = buildChildPayload({ parent, ...common }) as Record<string, unknown>;
+    expect("agent_mode" in p).toBe(false);
+    expect("script_id" in p).toBe(false);
+    expect("script_name" in p).toBe(false);
+  });
+});
+
 describe("buildChildPayload realtime passthrough", () => {
   it("non-realtime parent: payload has NO realtime/daily_cap keys (deploy-order safe)", () => {
     const p = buildChildPayload({ parent, ...common });
