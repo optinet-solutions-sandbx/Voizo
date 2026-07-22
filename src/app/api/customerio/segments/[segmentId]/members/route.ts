@@ -30,6 +30,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getSegmentMembers,
   getCustomerAttributes,
+  lookupLadder,
   type CustomerIOSegmentMember,
   type CustomerIOCustomer,
   type CustomerIOResult,
@@ -87,23 +88,24 @@ async function chunkedPromiseAll<T, R>(
 async function lookupMemberProfileWithFallback(
   member: CustomerIOSegmentMember,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
-  const identifiers = [
-    member.id,
-    member.cio_id ? `cio_${member.cio_id}` : null,
-    member.email,
-  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+  // VOZ-185: identifier forms come from the shared lookupLadder — the inline
+  // id → cio_<prefix> → email list this replaced had two dead rungs (prefix
+  // and raw-email forms 404 on the App API), so imports silently dropped any
+  // member whose workspace `id` didn't resolve.
+  const ladder = lookupLadder(member);
 
-  if (identifiers.length === 0) {
+  if (ladder.length === 0) {
     return { success: false, data: null, error: "No identifiers available on segment member" };
   }
 
   let lastError = "All identifiers exhausted";
-  for (const id of identifiers) {
-    const result = await getCustomerAttributes(id);
+  for (const rung of ladder) {
+    const result = await getCustomerAttributes(rung.identifier, rung.idType);
     if (result.success) return result;
     lastError = result.error;
     console.warn(
-      `[customerio-importer] lookup failed for "${id.slice(0, 60)}" ` +
+      `[customerio-importer] lookup failed for "${rung.identifier.slice(0, 60)}"` +
+      `${rung.idType ? ` (id_type=${rung.idType})` : ""} ` +
       `(cio_id=${member.cio_id ?? "?"}): ${result.error.slice(0, 100)}`,
     );
   }

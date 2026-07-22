@@ -155,12 +155,15 @@ export async function getSegmentMembers(
 /**
  * Get a customer's full attribute set (name, email, phone, custom fields).
  *
- * Pass the customer's identifier — either the workspace-scoped `id`
- * (e.g. "lucky7even:158491") if the workspace uses ID-based identity,
- * OR `cio_<cio_id>` if the workspace uses cio_id-based identity.
+ * Pass the customer's identifier. Without `idType`, the API treats it as the
+ * workspace-scoped `id` (e.g. "lucky7even:158491") — the prod-proven default.
+ * For cio_id or email addressing you MUST pass `idType` (VOZ-185): verified
+ * live 2026-07-22 against the EU App API — the legacy `cio_<cio_id>` prefix
+ * form 404s/400s on this endpoint, raw email 404s, while bare cio_id +
+ * `?id_type=cio_id` and email + `?id_type=email` both resolve.
  *
- * The caller is responsible for picking the right identifier. URL-encoding
- * is handled internally (needed for characters like `:` in workspace IDs).
+ * URL-encoding is handled internally (needed for `:` in workspace IDs and
+ * `+` in emails).
  *
  * Performance: one call per customer. At Customer.io's 10 req/sec rate limit,
  * fetching 1000 customers takes ~100 seconds. Callers should paginate the UI
@@ -168,10 +171,12 @@ export async function getSegmentMembers(
  */
 export async function getCustomerAttributes(
   identifier: string,
+  idType?: "cio_id" | "email",
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
   type Response = { customer: { id: string; attributes: Record<string, unknown> } };
   const encoded = encodeURIComponent(identifier);
-  const result = await customerioFetch<Response>(`/v1/customers/${encoded}/attributes`);
+  const query = idType ? `?id_type=${idType}` : "";
+  const result = await customerioFetch<Response>(`/v1/customers/${encoded}/attributes${query}`);
   if (!result.success) return result;
 
   const attrs = result.data.customer?.attributes ?? {};
@@ -261,29 +266,58 @@ export async function chunkedPromiseAll<T, R>(
   return results;
 }
 
+/** One rung of the profile-lookup ladder: identifier + how to address it. */
+export interface LookupIdentifier {
+  identifier: string;
+  idType?: "cio_id" | "email";
+}
+
+/**
+ * Identifier ladder for profile lookups — the SINGLE source of truth for
+ * which forms work (VOZ-185; consumed by lookupMemberProfileWithFallback
+ * here AND the segment-members import route — keep them on this function,
+ * a second inline copy is how the forms drifted broken in the first place).
+ *
+ * Order: workspace `id` (no id_type — prod-proven, untouched) → bare cio_id
+ * with `id_type=cio_id` → email with `id_type=email`. The legacy
+ * `cio_<cio_id>` prefix and raw-email forms are gone: verified live
+ * 2026-07-22 that they 404 on this endpoint, which left the fallback able
+ * to rescue nobody past leg 1 (the "Glenda" fix was illusory).
+ */
+export function lookupLadder(member: CustomerIOSegmentMember): LookupIdentifier[] {
+  const ladder: LookupIdentifier[] = [];
+  if (typeof member.id === "string" && member.id.trim().length > 0) {
+    ladder.push({ identifier: member.id });
+  }
+  if (typeof member.cio_id === "string" && member.cio_id.trim().length > 0) {
+    ladder.push({ identifier: member.cio_id, idType: "cio_id" });
+  }
+  if (typeof member.email === "string" && member.email.trim().length > 0) {
+    ladder.push({ identifier: member.email, idType: "email" });
+  }
+  return ladder;
+}
+
 /**
  * Identifier-fallback profile lookup. Customer.io's segment-membership and
  * customer-profile tables can be inconsistent — a member's workspace `id`
- * exists in the segment but not in /customers. Try id → cio_<cio_id> → email
- * in order; only return failure when ALL identifiers fail. Closes the
- * 2026-05-13 "Glenda" silent-drop bug.
+ * exists in the segment but not in /customers. Walk lookupLadder in order;
+ * only return failure when ALL identifiers fail. Closes the 2026-05-13
+ * "Glenda" silent-drop bug — genuinely, since VOZ-185 fixed the dead
+ * cio_id/email rungs.
  */
 export async function lookupMemberProfileWithFallback(
   member: CustomerIOSegmentMember,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
-  const identifiers = [
-    member.id,
-    member.cio_id ? `cio_${member.cio_id}` : null,
-    member.email,
-  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+  const ladder = lookupLadder(member);
 
-  if (identifiers.length === 0) {
+  if (ladder.length === 0) {
     return { success: false, data: null, error: "No identifiers available on segment member" };
   }
 
   let lastError = "All identifiers exhausted";
-  for (const id of identifiers) {
-    const result = await getCustomerAttributes(id);
+  for (const rung of ladder) {
+    const result = await getCustomerAttributes(rung.identifier, rung.idType);
     if (result.success) return result;
     lastError = result.error;
   }
