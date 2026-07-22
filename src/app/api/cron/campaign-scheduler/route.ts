@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
 import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
@@ -449,13 +450,11 @@ export async function GET(request: NextRequest) {
 
     const next = await findNextNumber(campaignId);
     if (!next) {
-      // Keep-awake (VOZ-132 spec item 2): a realtime child goes quiet between
-      // signups — the self-heal below would mark it completed and later
-      // registrants would land in a dead campaign with no error anywhere.
-      // Stay awake until its end_at passes. Guarded no-op for every other
-      // campaign (column absent/false → falsy).
-      if ((campaign.realtime as boolean) && campaign.end_at &&
-          new Date(campaign.end_at as string) > new Date()) {
+      // Keep-awake (VOZ-132 spec item 2, shared predicate since VOZ-183): a
+      // realtime child goes quiet between signups — the self-heal below would
+      // mark it completed and later registrants would land in a dead campaign
+      // with no error anywhere. Stay awake until its end_at passes.
+      if (shouldStayAwakeRealtime(campaign, Date.now())) {
         resumeResults.push({ id: campaignId, name: campaignName, result: "realtime_idle_awake" });
         continue;
       }
@@ -712,11 +711,10 @@ export async function GET(request: NextRequest) {
     // ── Find next number and fire first call ──
     const nextNumber = await findNextNumber(campaignId);
     if (!nextNumber) {
-      // Keep-awake (VOZ-132): a realtime child starts EMPTY by design — the
-      // per-minute poll fills it. Leave it running; mirror of the resume-sweep
-      // guard above. Guarded no-op for every other campaign.
-      if ((campaign.realtime as boolean) && campaign.end_at &&
-          new Date(campaign.end_at as string) > new Date()) {
+      // Keep-awake (VOZ-132, shared predicate since VOZ-183): a realtime child
+      // starts EMPTY by design — the per-minute poll fills it. Leave it
+      // running; same guard as the resume sweep + chain-next + start route.
+      if (shouldStayAwakeRealtime(campaign, Date.now())) {
         results.push({ id: campaignId, name: campaignName, result: "started_idle_realtime" });
         continue;
       }

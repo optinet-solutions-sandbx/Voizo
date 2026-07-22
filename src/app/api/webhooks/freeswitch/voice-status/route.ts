@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -146,7 +147,7 @@ export async function POST(request: NextRequest) {
 
   const { data: campaign } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("name, max_attempts, retry_interval_minutes, status, vapi_assistant_id, vapi_pool_slot_id, vapi_sip_uri, call_windows, timezone")
+    .select("name, max_attempts, retry_interval_minutes, status, vapi_assistant_id, vapi_pool_slot_id, vapi_sip_uri, call_windows, timezone, realtime, end_at")
     .eq("id", campaignId)
     .single();
 
@@ -240,6 +241,14 @@ export async function POST(request: NextRequest) {
 
   const nextNumber = await findNextNumber(campaignId);
   if (!nextNumber) {
+    // Keep-awake (VOZ-183): a realtime child with nothing to dial is its
+    // NORMAL resting state — the poll/webhook lanes top it up all day. This
+    // exact path completed the 07-22 trial child 31s after its only call
+    // ended, deafening the campaign for the rest of its window. Same guard
+    // as the scheduler's two sweeps (shared predicate, no more drift).
+    if (shouldStayAwakeRealtime(campaign, Date.now())) {
+      return NextResponse.json({ received: true, next: "idle — realtime child awake until end_at" });
+    }
     // No number eligible right now. If retries are queued for the future,
     // stay `running` — the scheduler cron's resume sweep will fire them when
     // their windows arrive. Only mark `completed` when truly nothing remains.

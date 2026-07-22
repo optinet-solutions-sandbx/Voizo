@@ -99,3 +99,26 @@ export function retryFitsShortestWindow(windows: CallWindowLite[], retryMinutes:
   if (min == null) return true;
   return min > retryMinutes;
 }
+
+/** Keep-awake predicate for realtime (always-on top-up) children — VOZ-183.
+ *
+ *  A realtime child with nothing to dial RIGHT NOW is its normal resting state
+ *  (children spawn empty; the poll/webhook lanes top them up all day), so every
+ *  "nothing left → completed" path must hold it open until its end_at passes.
+ *  This guard existed inline in the scheduler's two sweeps but was missing from
+ *  the chain-next webhook + operator-start route — the 2026-07-22 trial child
+ *  was completed 31s after its only call ended, deafening the campaign for the
+ *  rest of its day. Single source of truth so the four sites can't drift again.
+ *
+ *  Fail-closed: non-realtime, missing/invalid end_at, or end_at reached → false
+ *  → the caller's existing completion behavior. `unknown` param types so raw
+ *  supabase rows pass without casts; only `realtime === true` (real boolean
+ *  from the column) holds the guard. */
+export function shouldStayAwakeRealtime(
+  campaign: { realtime?: unknown; end_at?: unknown },
+  nowMs: number,
+): boolean {
+  if (campaign.realtime !== true) return false;
+  if (typeof campaign.end_at !== "string" || campaign.end_at.length === 0) return false;
+  return new Date(campaign.end_at).getTime() > nowMs; // NaN > n === false → malformed fails closed
+}

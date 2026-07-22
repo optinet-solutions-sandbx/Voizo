@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -124,6 +125,15 @@ export async function POST(
   // Find next eligible number
   const nextNumber = await findNextNumber(id);
   if (!nextNumber) {
+    // Keep-awake (VOZ-183): an operator Start/Resume on an idle realtime
+    // child must not complete it — it stays open for signups until end_at.
+    // Same shared guard as the chain-next webhook + scheduler sweeps.
+    if (shouldStayAwakeRealtime(campaign, Date.now())) {
+      return NextResponse.json({
+        message: "Campaign resumed. Realtime child idle — awaiting signups.",
+        waiting: true,
+      });
+    }
     // No number eligible RIGHT NOW. If pending_retry numbers exist with future
     // next_attempt_at, the campaign is idle-waiting for the retry window —
     // keep it `running` so the scheduler cron can advance it when a retry

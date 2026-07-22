@@ -5,6 +5,7 @@ import {
   resolveStartAt,
   minWindowMinutes,
   retryFitsShortestWindow,
+  shouldStayAwakeRealtime,
 } from "./scheduleWindow";
 
 describe("isWithinCallWindowAt", () => {
@@ -70,4 +71,22 @@ describe("retryFitsShortestWindow", () => {
     expect(retryFitsShortestWindow([{ day: "tue", start: "19:30", end: "21:00" }], 90)).toBe(false)); // 90 !> 90
   it("fits when the shortest window is longer than the retry gap", () =>
     expect(retryFitsShortestWindow([{ day: "mon", start: "09:00", end: "17:00" }], 90)).toBe(true)); // 480 > 90
+});
+
+describe("shouldStayAwakeRealtime", () => {
+  const now = Date.parse("2026-07-22T08:50:33Z"); // the instant the trial child was wrongly completed
+  it("true: realtime child, end_at in the future — stays awake for later signups", () =>
+    expect(shouldStayAwakeRealtime({ realtime: true, end_at: "2026-07-22T13:00:00Z" }, now)).toBe(true));
+  it("false: realtime child, end_at passed — day is over, completion is correct", () =>
+    expect(shouldStayAwakeRealtime({ realtime: true, end_at: "2026-07-22T08:00:00Z" }, now)).toBe(false));
+  it("false: exactly AT end_at — strict >, matches the scheduler's inline guard", () =>
+    expect(shouldStayAwakeRealtime({ realtime: true, end_at: "2026-07-22T08:50:33Z" }, now)).toBe(false));
+  it("false: non-realtime campaign (guarded no-op for every other campaign)", () =>
+    expect(shouldStayAwakeRealtime({ realtime: false, end_at: "2026-07-22T13:00:00Z" }, now)).toBe(false));
+  it("false: realtime column absent (pre-migration row → falsy)", () =>
+    expect(shouldStayAwakeRealtime({ end_at: "2026-07-22T13:00:00Z" }, now)).toBe(false));
+  it("false: end_at null — fail-closed to today's completion behavior", () =>
+    expect(shouldStayAwakeRealtime({ realtime: true, end_at: null }, now)).toBe(false));
+  it("false: end_at malformed — Invalid Date compares false, fail-closed", () =>
+    expect(shouldStayAwakeRealtime({ realtime: true, end_at: "not-a-date" }, now)).toBe(false));
 });
