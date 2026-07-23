@@ -35,13 +35,20 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
   const [assistantId, setAssistantId] = useState("");
   const [shortPrompt, setShortPrompt] = useState(DEFAULT_SHORT_PROMPT);
   // Script persona (VOZ-188). Legacy scripts (no persona yet) get the old
-  // global persona SUGGESTED into a pristine box so one edited Save migrates
+  // global persona SUGGESTED into an untouched box so one edited Save migrates
   // them — but a suggestion is never written by an unrelated Save, async
   // resolves never clobber typing, and a save-echoed prop never refires resets.
   const [persona, setPersona] = useState(scriptPersona);
+  // Latest-prop mirror, updated in an effect — never during render (React may
+  // replay or discard render work). Every reader runs post-commit.
   const personaProp = useRef(scriptPersona);
-  personaProp.current = scriptPersona;
+  useEffect(() => {
+    personaProp.current = scriptPersona;
+  });
   const suggestedPersona = useRef<string | null>(null);
+  // Set once the operator types in the persona box for the open script —
+  // async prefills must never overwrite typing.
+  const personaDirty = useRef(false);
   const [voiceId, setVoiceId] = useState<string>(VOICE_OPTIONS[0].voiceId);
   const [serverOverride, setServerOverride] = useState("");
   const [envBaseUrl, setEnvBaseUrl] = useState<string | null>(null);
@@ -60,8 +67,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
 
   useEffect(() => {
     // Entering (or switching to) a script: the box shows THAT script's saved
-    // persona; the async resolves below may only fill a still-pristine box.
+    // persona; the async resolves below may only fill an untouched box.
     suggestedPersona.current = null;
+    personaDirty.current = false;
     setPersona(personaProp.current);
     fetch("/api/vapi-assistants")
       .then((r) => r.json())
@@ -78,15 +86,12 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       .catch(() => {});
     getLabSettings()
       .then((s) => {
-        if (scriptId && !personaProp.current) {
+        if (scriptId && !personaProp.current && !personaDirty.current) {
           // Legacy script (nothing saved yet): suggest the old global persona —
-          // pristine box only, so mid-fetch typing is never clobbered.
-          setPersona((prev) => {
-            if (prev !== "") return prev;
-            const suggested = s?.short_prompt || DEFAULT_SHORT_PROMPT;
-            suggestedPersona.current = suggested;
-            return suggested;
-          });
+          // untouched box only, so mid-fetch typing is never clobbered.
+          const suggested = s?.short_prompt || DEFAULT_SHORT_PROMPT;
+          suggestedPersona.current = suggested;
+          setPersona(suggested);
         }
         if (!s) return;
         if (s.lab_assistant_id) setAssistantId(s.lab_assistant_id);
@@ -98,12 +103,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
         setTriggerResponse(s.trigger_response);
       })
       .catch((e) => {
-        if (scriptId && !personaProp.current) {
-          setPersona((prev) => {
-            if (prev !== "") return prev;
-            suggestedPersona.current = DEFAULT_SHORT_PROMPT;
-            return DEFAULT_SHORT_PROMPT;
-          });
+        if (scriptId && !personaProp.current && !personaDirty.current) {
+          suggestedPersona.current = DEFAULT_SHORT_PROMPT;
+          setPersona(DEFAULT_SHORT_PROMPT);
         }
         setError(e instanceof Error ? e.message : "Failed to load settings — did you run the migration?");
       });
@@ -232,7 +234,14 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
           className={inputCls + " resize-none font-mono text-xs"}
           rows={9}
           value={scriptId ? persona : shortPrompt}
-          onChange={(e) => (scriptId ? setPersona(e.target.value) : setShortPrompt(e.target.value))}
+          onChange={(e) => {
+            if (scriptId) {
+              personaDirty.current = true;
+              setPersona(e.target.value);
+            } else {
+              setShortPrompt(e.target.value);
+            }
+          }}
         />
       </Section>
 

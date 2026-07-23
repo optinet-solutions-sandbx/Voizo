@@ -188,10 +188,12 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
               campaign at launch, so what the ▶ test call spoke is what runs. */}
           {state.scriptId && (
             <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
+              {/* A <p>, not a <label> — this heads a read-only preview, and a
+                  label bound to no control confuses screen readers. */}
+              <p className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
                 Persona
                 <span className="text-[11px] text-[var(--text-3)] font-normal">from the script</span>
-              </label>
+              </p>
               <div className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm leading-relaxed whitespace-pre-wrap max-h-44 overflow-y-auto">
                 {state.persona ? (
                   <span className="text-[var(--text-2)]">{state.persona}</span>
