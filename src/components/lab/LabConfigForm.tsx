@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { VOICE_OPTIONS } from "@/lib/scriptEngine/voices";
 import { DEFAULT_SHORT_PROMPT } from "@/lib/scriptEngine/lab-tools";
-import { getLabSettings, saveLabSettings } from "@/lib/scriptEngine/lab-db-client";
+import { getLabSettings, saveLabSettings, updateScript } from "@/lib/scriptEngine/lab-db-client";
 
 const inputCls =
   "w-full rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none disabled:opacity-50";
@@ -22,13 +22,26 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 
 type Props = {
   onAssistantChange: (id: string, name: string) => void;
+  /** VOZ-188: when set, the persona box edits THIS script's persona (saved on
+   *  the script row) instead of the legacy global lab_settings.short_prompt. */
+  scriptId?: string | null;
+  scriptPersona?: string;
+  onPersonaSaved?: (persona: string) => void;
 };
 
-export default function LabConfigForm({ onAssistantChange }: Props) {
+export default function LabConfigForm({ onAssistantChange, scriptId = null, scriptPersona = "", onPersonaSaved }: Props) {
   // ── Agent ──
   const [assistants, setAssistants] = useState<{ id: string; name: string }[]>([]);
   const [assistantId, setAssistantId] = useState("");
   const [shortPrompt, setShortPrompt] = useState(DEFAULT_SHORT_PROMPT);
+  // Script persona (VOZ-188). Legacy scripts (no persona yet) get the old
+  // global persona SUGGESTED into a pristine box so one edited Save migrates
+  // them — but a suggestion is never written by an unrelated Save, async
+  // resolves never clobber typing, and a save-echoed prop never refires resets.
+  const [persona, setPersona] = useState(scriptPersona);
+  const personaProp = useRef(scriptPersona);
+  personaProp.current = scriptPersona;
+  const suggestedPersona = useRef<string | null>(null);
   const [voiceId, setVoiceId] = useState<string>(VOICE_OPTIONS[0].voiceId);
   const [serverOverride, setServerOverride] = useState("");
   const [envBaseUrl, setEnvBaseUrl] = useState<string | null>(null);
@@ -46,6 +59,10 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
   const [configured, setConfigured] = useState<{ webhookUrl: string; toolCount: number } | null>(null);
 
   useEffect(() => {
+    // Entering (or switching to) a script: the box shows THAT script's saved
+    // persona; the async resolves below may only fill a still-pristine box.
+    suggestedPersona.current = null;
+    setPersona(personaProp.current);
     fetch("/api/vapi-assistants")
       .then((r) => r.json())
       .then((a) => {
@@ -61,6 +78,16 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
       .catch(() => {});
     getLabSettings()
       .then((s) => {
+        if (scriptId && !personaProp.current) {
+          // Legacy script (nothing saved yet): suggest the old global persona —
+          // pristine box only, so mid-fetch typing is never clobbered.
+          setPersona((prev) => {
+            if (prev !== "") return prev;
+            const suggested = s?.short_prompt || DEFAULT_SHORT_PROMPT;
+            suggestedPersona.current = suggested;
+            return suggested;
+          });
+        }
         if (!s) return;
         if (s.lab_assistant_id) setAssistantId(s.lab_assistant_id);
         if (s.short_prompt) setShortPrompt(s.short_prompt);
@@ -70,8 +97,17 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
         setCooldown(s.injection_cooldown_ms);
         setTriggerResponse(s.trigger_response);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load settings — did you run the migration?"));
-  }, []);
+      .catch((e) => {
+        if (scriptId && !personaProp.current) {
+          setPersona((prev) => {
+            if (prev !== "") return prev;
+            suggestedPersona.current = DEFAULT_SHORT_PROMPT;
+            return DEFAULT_SHORT_PROMPT;
+          });
+        }
+        setError(e instanceof Error ? e.message : "Failed to load settings — did you run the migration?");
+      });
+  }, [scriptId]);
 
   useEffect(() => {
     const a = assistants.find((x) => x.id === assistantId);
@@ -84,16 +120,30 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
     setNotice(null);
     setConfigured(null);
     try {
-      // 1. Persist all lab settings first (configure reads server_url_override from here)
+      // 1. Persist all lab settings first (configure reads server_url_override
+      // from here). Script mode leaves the global short_prompt untouched —
+      // the persona lives on the script row instead (VOZ-188).
       await saveLabSettings({
         lab_assistant_id: assistantId || null,
-        short_prompt: shortPrompt,
+        ...(scriptId ? {} : { short_prompt: shortPrompt }),
         server_url_override: serverOverride.trim() || null,
         router_model: routerModel.trim() || "gpt-5.4-mini",
         confidence_threshold: threshold,
         injection_cooldown_ms: cooldown,
         trigger_response: triggerResponse,
       });
+      if (scriptId) {
+        // An untouched SUGGESTION must not be persisted by an unrelated save
+        // (e.g. tweaking the threshold) — only operator-confirmed text lands
+        // on the script. Editing it, even by one character, confirms it.
+        const untouchedSuggestion =
+          suggestedPersona.current !== null && persona === suggestedPersona.current;
+        if (!untouchedSuggestion) {
+          await updateScript(scriptId, { persona: persona.trim() });
+          suggestedPersona.current = null;
+          onPersonaSaved?.(persona.trim());
+        }
+      }
 
       if (!assistantId) {
         setNotice("Settings saved. Select an assistant to push the prompt and configure tools.");
@@ -107,7 +157,9 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assistantId,
-          systemPrompt: shortPrompt,
+          // '' would blank the base assistant's standing prompt — omit instead
+          // (the configure step recomposes the full prompt anyway).
+          systemPrompt: (scriptId ? persona : shortPrompt) || undefined,
           ...(voice && { voice: { provider: voice.provider, voiceId: voice.voiceId } }),
         }),
       });
@@ -169,14 +221,18 @@ export default function LabConfigForm({ onAssistantChange }: Props) {
       </Section>
 
       <Section
-        title="Campaign Persona (fallback)"
-        hint='Identity + delivery only. If the Playbook has an "identity" scenario, THAT is used instead — keep the persona there, next to the opening line. The listener operating rules are appended automatically when pushed.'
+        title={scriptId ? "Script Persona" : "Campaign Persona (fallback)"}
+        hint={
+          scriptId
+            ? "Who the agent is for THIS script — saved on the script itself. The campaign wizard shows it when this script is picked, and ▶ test calls speak it. The listener operating rules are appended automatically."
+            : 'Identity + delivery only. If the Playbook has an "identity" scenario, THAT is used instead — keep the persona there, next to the opening line. The listener operating rules are appended automatically when pushed.'
+        }
       >
         <textarea
           className={inputCls + " resize-none font-mono text-xs"}
           rows={9}
-          value={shortPrompt}
-          onChange={(e) => setShortPrompt(e.target.value)}
+          value={scriptId ? persona : shortPrompt}
+          onChange={(e) => (scriptId ? setPersona(e.target.value) : setShortPrompt(e.target.value))}
         />
       </Section>
 

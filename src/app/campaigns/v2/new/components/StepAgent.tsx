@@ -18,11 +18,14 @@ export interface Assistant {
   firstMessage: string | null;
 }
 
-/** Shape of an entry in GET /api/scripts (VOZ-159). */
+/** Shape of an entry in GET /api/scripts (VOZ-159; persona added VOZ-188). */
 export interface ScriptOption {
   id: string;
   name: string;
   description: string;
+  /** The script's own persona — previewed read-only below the picker.
+   *  May be absent from older deploys; treat missing as "". */
+  persona?: string;
 }
 
 interface Props {
@@ -116,7 +119,12 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
                 value={state.scriptId}
                 onChange={(value) => {
                   const s = scripts.find((x) => x.id === value);
-                  dispatch({ type: "SET_AGENT_FIELDS", payload: { scriptId: s?.id ?? "", scriptName: s?.name ?? "" } });
+                  // VOZ-188: the script's persona rides along (snapshot at
+                  // launch) — the preview below shows exactly what launches.
+                  dispatch({
+                    type: "SET_AGENT_FIELDS",
+                    payload: { scriptId: s?.id ?? "", scriptName: s?.name ?? "", persona: s?.persona ?? "" },
+                  });
                 }}
                 options={scripts.map((s) => ({ value: s.id, label: s.name }))}
                 placeholder="Select a script…"
@@ -127,14 +135,15 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
             </a>
           </div>
 
-          {/* Base agent (VOZ-168-lite, optional): which agent the script clone is
-              composed FROM. Supplies the VOICE + call setup only — the script
-              still decides everything that's said. Empty = the standard script
-              base (VAPI_SCRIPT_BASE_ASSISTANT_ID), byte-identical to before. */}
+          {/* Voice (VOZ-168-lite, optional; relabeled from "Base agent" VOZ-188):
+              which agent the script clone is composed FROM. Supplies the VOICE +
+              call setup only — the script still decides everything that's said.
+              Empty = the standard script base (VAPI_SCRIPT_BASE_ASSISTANT_ID),
+              byte-identical to before. */}
           {assistants !== null && !assistantsError && assistants.length > 0 && (
             <div className="flex flex-col gap-2">
               <label className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
-                Base agent
+                Voice
                 <span className="text-[11px] text-[var(--text-3)] font-normal">optional</span>
               </label>
               <StyledSelect
@@ -174,25 +183,37 @@ export default function StepAgent({ state, dispatch, assistants, assistantsError
             </div>
           )}
 
-          {/* Persona (who the agent is) — saved to system_prompt */}
-          <div className="flex flex-col gap-2">
-            <label htmlFor="wizard-persona" className="text-xs font-medium text-[var(--text-2)]">
-              Persona
-            </label>
-            <textarea
-              id="wizard-persona"
-              value={state.persona}
-              onChange={(e) => dispatch({ type: "SET_AGENT_FIELDS", payload: { persona: e.target.value } })}
-              rows={6}
-              className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-y text-sm leading-relaxed"
-              placeholder={DEFAULT_SHORT_PROMPT}
-            />
-            <p className="text-[11px] text-[var(--text-3)]">
-              The Script sets what to say and when. The persona sets who says it, like the name, brand,
-              and tone. Leave it blank to use the default shown above. The base agent only sets the
-              voice, so its own instructions are not used here.
-            </p>
-          </div>
+          {/* Persona — read-only preview of the script's persona (VOZ-188).
+              It's edited in the Script Builder and snapshotted into the
+              campaign at launch, so what the ▶ test call spoke is what runs. */}
+          {state.scriptId && (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-medium text-[var(--text-2)] flex items-baseline gap-1.5">
+                Persona
+                <span className="text-[11px] text-[var(--text-3)] font-normal">from the script</span>
+              </label>
+              <div className="w-full px-4 py-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm leading-relaxed whitespace-pre-wrap max-h-44 overflow-y-auto">
+                {state.persona ? (
+                  <span className="text-[var(--text-2)]">{state.persona}</span>
+                ) : (
+                  <span className="text-[var(--text-3)]">{DEFAULT_SHORT_PROMPT}</span>
+                )}
+              </div>
+              <p className="text-[11px] text-[var(--text-3)]">
+                {state.persona
+                  ? "Who the agent says it is — set on the script, so what you tested is what launches here."
+                  : "This script has no persona saved yet, so it will launch with the default shown above."}
+              </p>
+              <a
+                href={`/script-builder?id=${state.scriptId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[12px] text-blue-400 hover:text-blue-300 w-fit"
+              >
+                Edit persona in Script Builder →
+              </a>
+            </div>
+          )}
         </div>
       ) : (
       <div className="mt-7 flex flex-col gap-[18px]">

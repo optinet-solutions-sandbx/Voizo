@@ -10,6 +10,7 @@ vi.mock("../../../../lib/scriptEngine/lab-db", () => ({
   saveLabSettings: vi.fn(async () => {}),
   listHandlers: vi.fn(async () => []),
   getScriptGraph: vi.fn(async () => ({ nodes: [], edges: [] })),
+  getScript: vi.fn(async () => null),
 }));
 vi.mock("../../../../lib/scriptEngine/lab-briefing", () => ({
   compileStageBriefing: vi.fn(async () => null),
@@ -20,6 +21,7 @@ vi.mock("../../../../lib/scriptEngine/lab-flow", () => ({
 }));
 
 import { POST } from "./route";
+import * as labDb from "../../../../lib/scriptEngine/lab-db";
 
 const realFetch = global.fetch;
 
@@ -81,6 +83,51 @@ describe("POST /api/lab/configure-assistant", () => {
       url: "https://example.test/api/lab/webhook", // origin of VAPI_WEBHOOK_URL — the ladder's rung 3
       timeoutSeconds: 20,
       secret: "key-1",
+    });
+  });
+
+  // ── VOZ-188: persona ladder — the active script's own persona first ──
+  describe("persona ladder (VOZ-188)", () => {
+    afterEach(() => {
+      // listHandlers gets a persistent impl below; restore the factory default
+      // so tests outside this block keep seeing no handlers.
+      vi.mocked(labDb.listHandlers).mockImplementation(async () => []);
+    });
+
+    function systemPromptOf(calls: { url: string; init?: RequestInit }[]): string {
+      const patch = calls.find((c) => c.init?.method === "PATCH");
+      const body = JSON.parse(String(patch!.init!.body));
+      return (body.model.messages as { role: string; content: string }[]).find((m) => m.role === "system")!.content;
+    }
+
+    it("the active script's persona outranks the Playbook identity scenario", async () => {
+      vi.mocked(labDb.getLabSettings).mockResolvedValueOnce({ active_script_id: "s1" } as never);
+      vi.mocked(labDb.getScript).mockResolvedValueOnce({ id: "s1", persona: "SCRIPT-PERSONA" } as never);
+      vi.mocked(labDb.listHandlers).mockImplementation(
+        async () => [{ intent_key: "identity", enabled: true, response_template: "IDENTITY-PERSONA" }] as never,
+      );
+      const calls = mockVapi();
+      const res = await POST(req({ assistantId: "asst-1" }));
+      expect(res.status).toBe(200);
+      const sys = systemPromptOf(calls);
+      expect(sys).toContain("SCRIPT-PERSONA");
+      expect(sys).not.toContain("IDENTITY-PERSONA");
+    });
+
+    it("a script with a blank persona falls through to the identity scenario (legacy behavior)", async () => {
+      vi.mocked(labDb.getLabSettings).mockResolvedValueOnce(
+        { active_script_id: "s1", short_prompt: "GLOBAL-FALLBACK" } as never,
+      );
+      vi.mocked(labDb.getScript).mockResolvedValueOnce({ id: "s1", persona: "   " } as never);
+      vi.mocked(labDb.listHandlers).mockImplementation(
+        async () => [{ intent_key: "identity", enabled: true, response_template: "IDENTITY-PERSONA" }] as never,
+      );
+      const calls = mockVapi();
+      const res = await POST(req({ assistantId: "asst-1" }));
+      expect(res.status).toBe(200);
+      const sys = systemPromptOf(calls);
+      expect(sys).toContain("IDENTITY-PERSONA");
+      expect(sys).not.toContain("GLOBAL-FALLBACK");
     });
   });
 });

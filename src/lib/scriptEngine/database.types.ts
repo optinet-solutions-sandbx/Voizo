@@ -203,6 +203,9 @@ export type Database = {
           name: string;
           description: string;
           collection_id: string | null;
+          /** VOZ-188: who the agent is for THIS script — test calls speak it,
+           *  the wizard previews it. '' = fall back to identity/global/default. */
+          persona: string;
           created_at: string;
           updated_at: string;
         };
@@ -211,6 +214,7 @@ export type Database = {
           name: string;
           description?: string;
           collection_id?: string | null;
+          persona?: string;
           created_at?: string;
           updated_at?: string;
         };
@@ -219,6 +223,7 @@ export type Database = {
           name?: string;
           description?: string;
           collection_id?: string | null;
+          persona?: string;
           created_at?: string;
           updated_at?: string;
         };

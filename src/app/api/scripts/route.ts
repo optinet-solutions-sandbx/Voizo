@@ -20,6 +20,9 @@ export async function GET() {
           id: s.id,
           name: s.name,
           description: s.description,
+          // VOZ-188: the wizard previews the script's persona read-only.
+          // `?? ""` guards rows read before the persona migration ran.
+          persona: s.persona ?? "",
           updatedAt: s.updated_at,
         })),
     });

@@ -152,9 +152,20 @@ export async function createScript(name: string, collectionId: string | null = n
   return data;
 }
 
+/** One script row — the lab configure route reads the active script's persona (VOZ-188). */
+export async function getScript(id: string): Promise<ListenerScript | null> {
+  const { data, error } = await supabase
+    .from("listener_scripts")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 export async function updateScript(
   id: string,
-  updates: { name?: string; description?: string; collection_id?: string | null }
+  updates: { name?: string; description?: string; collection_id?: string | null; persona?: string }
 ): Promise<void> {
   const { error } = await supabase
     .from("listener_scripts")
@@ -181,7 +192,14 @@ export async function duplicateScript(id: string, newName: string): Promise<List
   if (srcErr) throw new Error(srcErr.message);
   const { data: copy, error: insErr } = await supabase
     .from("listener_scripts")
-    .insert({ name: newName, description: src?.description ?? null, collection_id: src?.collection_id ?? null })
+    // persona rides along (VOZ-188) — "duplicate for another brand" must not
+    // silently fall back to the default identity.
+    .insert({
+      name: newName,
+      description: src?.description ?? null,
+      collection_id: src?.collection_id ?? null,
+      persona: src?.persona ?? "",
+    })
     .select()
     .single();
   if (insErr) throw new Error(insErr.message);

@@ -386,23 +386,55 @@ function WizardPage({
   const [scriptsError, setScriptsError] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    // VOZ-188: also refetch on window focus, so a persona edited via the
+    // "Edit persona in Script Builder →" round-trip is fresh at launch.
+    // Focus-refetch failures keep the existing list — never wipe a working
+    // wizard over a transient refresh error.
+    async function loadScripts(initial: boolean) {
       try {
         const res = await fetch("/api/scripts");
+        if (cancelled) return;
         if (!res.ok) {
-          const body = await parseJsonBody(res);
-          setScriptsError(body.error || `Failed to load scripts (${res.status})`);
-          setScripts([]);
+          if (initial) {
+            const body = await parseJsonBody(res);
+            if (cancelled) return;
+            setScriptsError(body.error || `Failed to load scripts (${res.status})`);
+            setScripts([]);
+          }
           return;
         }
         const body = await res.json();
+        if (cancelled) return;
+        setScriptsError(null);
         setScripts(body.scripts ?? []);
       } catch (err) {
-        setScriptsError(err instanceof Error ? err.message : "Network error");
-        setScripts([]);
+        if (initial && !cancelled) {
+          setScriptsError(err instanceof Error ? err.message : "Network error");
+          setScripts([]);
+        }
       }
-    })();
+    }
+    loadScripts(true);
+    const onFocus = () => loadScripts(false);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
+
+  // VOZ-188: when the scripts list refreshes (focus refetch above), re-sync
+  // the picked script's persona so the launch snapshot can't go stale after an
+  // "Edit persona in Script Builder →" round-trip. Lives HERE, not in
+  // StepAgent — steps unmount, and the edit can happen from any step.
+  useEffect(() => {
+    if (state.agentMode !== "script" || !state.scriptId || !scripts) return;
+    const s = scripts.find((x) => x.id === state.scriptId);
+    if (s && (s.persona ?? "") !== state.persona) {
+      dispatch({ type: "SET_AGENT_FIELDS", payload: { persona: s.persona ?? "" } });
+    }
+  }, [scripts, state.agentMode, state.scriptId, state.persona]);
 
   /**
    * Submit — porting classic page-classic.tsx::handleSubmit (310-440)

@@ -14,7 +14,7 @@
 import { NextResponse } from "next/server";
 // Relative imports — vitest does not resolve "@/" (testable-route convention).
 import { LAB_TOOLS, LAB_OPERATING_RULES, DEFAULT_SHORT_PROMPT } from "../../../../lib/scriptEngine/lab-tools";
-import { getLabSettings, saveLabSettings, listHandlers, getScriptGraph } from "../../../../lib/scriptEngine/lab-db";
+import { getLabSettings, saveLabSettings, listHandlers, getScriptGraph, getScript } from "../../../../lib/scriptEngine/lab-db";
 import { compileStageBriefing, compileStandingAnswers } from "../../../../lib/scriptEngine/lab-briefing";
 import { findEntryNode } from "../../../../lib/scriptEngine/lab-flow";
 
@@ -88,8 +88,17 @@ export async function POST(req: Request) {
   const identityScenario = await listHandlers()
     .then((hs) => hs.find((h) => h.intent_key === "identity" && h.enabled))
     .catch(() => undefined);
+  // VOZ-188: the ACTIVE script's own persona (edited in the builder drawer)
+  // outranks the global identity — so a ▶ test call speaks exactly what the
+  // wizard will launch for this script. Blank persona = legacy ladder.
+  const activeScript = settings?.active_script_id
+    ? await getScript(settings.active_script_id).catch(() => null)
+    : null;
   const persona =
-    identityScenario?.response_template?.trim() || settings?.short_prompt?.trim() || DEFAULT_SHORT_PROMPT;
+    (activeScript?.persona ?? "").trim() ||
+    identityScenario?.response_template?.trim() ||
+    settings?.short_prompt?.trim() ||
+    DEFAULT_SHORT_PROMPT;
   // The wait-phrase ban is bookended: first line of the prompt AND inside the
   // hard rules — it kept leaking from an end-only position.
   // Script mode (brief-ahead): the graph is compiled into [CURRENT STAGE]
