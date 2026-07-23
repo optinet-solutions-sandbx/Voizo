@@ -6,9 +6,12 @@ import {
   createCollection,
   updateCollection,
   deleteCollection,
+  duplicateCollection,
   getCollectionHandlerIds,
   setCollectionHandlers,
   listHandlers,
+  updateHandler,
+  duplicateHandler,
   getLabSettings,
   saveLabSettings,
 } from "@/lib/scriptEngine/lab-db-client";
@@ -22,17 +25,33 @@ type Props = {
   onActiveChange?: (id: string | null, name: string | null) => void;
 };
 
+/** Inline scenario edit (item C) — the core content editable without leaving
+ *  the collection. Full editing (tags/action/priority) stays on the Playbook. */
+type EditDraft = {
+  name: string;
+  description: string;
+  response_template: string;
+  delivery: ListenerHandler["delivery"];
+};
+
 export default function CollectionsManager({ onActiveChange }: Props) {
   const [collections, setCollections] = useState<ListenerCollection[]>([]);
   const [handlers, setHandlers] = useState<ListenerHandler[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [members, setMembers] = useState<Set<string>>(new Set());
+  // Membership captured when the collection was OPENED — drives the
+  // selected-first ordering (item D) so rows don't reshuffle as you toggle.
+  const [openMemberIds, setOpenMemberIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Inline scenario editing (item C)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   async function loadAll() {
     try {
@@ -60,9 +79,13 @@ export default function CollectionsManager({ onActiveChange }: Props) {
   async function selectCollection(id: string) {
     setSelectedId(id);
     setNotice(null);
+    setEditingId(null);
+    setSearch("");
     try {
       const ids = await getCollectionHandlerIds(id);
-      setMembers(new Set(ids));
+      const set = new Set(ids);
+      setMembers(set);
+      setOpenMemberIds(new Set(set)); // snapshot for the selected-first ordering
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load scenarios");
     }
@@ -78,6 +101,23 @@ export default function CollectionsManager({ onActiveChange }: Props) {
       selectCollection(c.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create collection");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Deep copy (item B): a new collection whose scenarios are independent
+  // copies, so it can be re-branded without touching the original.
+  async function handleDuplicateCollection(id: string) {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const copy = await duplicateCollection(id);
+      await loadAll();
+      await selectCollection(copy.id);
+      setNotice("Collection duplicated with independent scenario copies — edit them below for the new brand.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to duplicate collection");
     } finally {
       setBusy(false);
     }
@@ -118,6 +158,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     try {
       await setCollectionHandlers(selectedId, Array.from(members));
       await loadAll();
+      setOpenMemberIds(new Set(members)); // re-snapshot so the ordering reflects the save
       setNotice("Scenarios saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save scenarios");
@@ -146,14 +187,152 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     });
   }
 
+  function startEdit(h: ListenerHandler) {
+    setEditingId(h.id);
+    setEditDraft({
+      name: h.name,
+      description: h.description,
+      response_template: h.response_template,
+      delivery: h.delivery,
+    });
+  }
+
+  async function saveEdit() {
+    if (!editingId || !editDraft || !editDraft.name.trim()) return;
+    setSavingEdit(true);
+    try {
+      await updateHandler(editingId, {
+        name: editDraft.name.trim(),
+        description: editDraft.description,
+        response_template: editDraft.response_template,
+        delivery: editDraft.delivery,
+      });
+      await loadAll();
+      setEditingId(null);
+      setEditDraft(null);
+      setNotice("Scenario updated.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update scenario");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  // Duplicate a scenario from within the editor: the copy is auto-selected into
+  // this collection (pending Save) and shown in the selected group.
+  async function handleDuplicateScenario(id: string) {
+    try {
+      const dup = await duplicateHandler(id);
+      await loadAll();
+      setMembers((prev) => new Set(prev).add(dup.id));
+      setOpenMemberIds((prev) => new Set(prev).add(dup.id));
+      startEdit(dup);
+      setNotice("Scenario duplicated — edit it below, then Save scenarios to keep it in this collection.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to duplicate scenario");
+    }
+  }
+
   const q = search.trim().toLowerCase();
   const filteredHandlers = q
     ? handlers.filter((h) =>
-        `${h.name} ${h.intent_key} ${(h.tags ?? []).join(" ")}`.toLowerCase().includes(q)
+        `${h.name} ${h.intent_key} ${h.description} ${h.response_template} ${(h.tags ?? []).join(" ")}`.toLowerCase().includes(q)
       )
     : handlers;
 
+  // Item D: selected (in this collection at open time) first, each group A→Z.
+  const inCollection = filteredHandlers
+    .filter((h) => openMemberIds.has(h.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const available = filteredHandlers
+    .filter((h) => !openMemberIds.has(h.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   const selected = collections.find((c) => c.id === selectedId) ?? null;
+
+  function renderRow(h: ListenerHandler) {
+    const checked = members.has(h.id);
+    const isEditing = editingId === h.id;
+    return (
+      <div key={h.id} className="rounded border border-transparent hover:border-gray-700/60">
+        <div className="flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800">
+          <input type="checkbox" checked={checked} onChange={() => toggleMember(h.id)} className="cursor-pointer" />
+          <span className="text-xs">{checked ? "✅" : "⬜"}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-gray-200">{h.name}</span>
+          {(h.tags ?? []).slice(0, 1).map((t) => (
+            <span key={t} className="shrink-0 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[9px] text-purple-300">
+              {t}
+            </span>
+          ))}
+          <button
+            onClick={() => (isEditing ? setEditingId(null) : startEdit(h))}
+            className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-gray-200"
+            title="Edit scenario inline"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => handleDuplicateScenario(h.id)}
+            className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-indigo-300"
+            title="Duplicate scenario"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+            </svg>
+          </button>
+        </div>
+        {isEditing && editDraft && (
+          <div className="space-y-1.5 border-t border-gray-700/60 bg-gray-900/60 px-2 py-2">
+            <input
+              className={inputCls}
+              value={editDraft.name}
+              onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
+              placeholder="Scenario name"
+            />
+            <textarea
+              className={inputCls + " resize-y"}
+              rows={2}
+              value={editDraft.description}
+              onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
+              placeholder="When to use this (the trigger the agent listens for)…"
+            />
+            <textarea
+              className={inputCls + " resize-y"}
+              rows={2}
+              value={editDraft.response_template}
+              onChange={(e) => setEditDraft({ ...editDraft, response_template: e.target.value })}
+              placeholder="What the agent says / does…"
+            />
+            <div className="flex items-center gap-2">
+              <select
+                className={inputCls + " [color-scheme:dark]"}
+                value={editDraft.delivery}
+                onChange={(e) => setEditDraft({ ...editDraft, delivery: e.target.value as ListenerHandler["delivery"] })}
+              >
+                <option value="reword">reword (own words)</option>
+                <option value="verbatim">verbatim (word-for-word)</option>
+              </select>
+              <button
+                onClick={saveEdit}
+                disabled={savingEdit || !editDraft.name.trim()}
+                className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+              >
+                {savingEdit ? "Saving…" : "Save scenario"}
+              </button>
+              <button
+                onClick={() => { setEditingId(null); setEditDraft(null); }}
+                className="shrink-0 rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -213,6 +392,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
               <div className="flex items-center gap-2">
                 <input
                   defaultValue={c.name}
+                  key={c.name}
                   onBlur={(e) => e.target.value.trim() !== c.name && handleRename(c.id, e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                   className="flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm font-medium text-gray-200 hover:border-gray-700 focus:border-indigo-500 focus:bg-gray-800 focus:outline-none"
@@ -236,6 +416,14 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                   {isSelected ? "Close" : "Edit scenarios"}
                 </button>
                 <button
+                  onClick={() => handleDuplicateCollection(c.id)}
+                  disabled={busy}
+                  className="shrink-0 rounded-lg border border-gray-700 px-2 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800 hover:text-indigo-300 disabled:opacity-40"
+                  title="Duplicate this collection and all its scenarios (independent copies)"
+                >
+                  Duplicate
+                </button>
+                <button
                   onClick={() => handleDelete(c.id)}
                   className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-rose-400"
                   title="Delete collection"
@@ -256,27 +444,20 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Filter scenarios…"
                     />
-                    <span className="shrink-0 text-[11px] text-gray-500">{members.size} scenarios selected</span>
+                    <span className="shrink-0 text-[11px] text-gray-500">{members.size} selected</span>
                   </div>
-                  <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-700 p-1.5">
-                    {filteredHandlers.map((h) => (
-                      <label
-                        key={h.id}
-                        className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-gray-800"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={members.has(h.id)}
-                          onChange={() => toggleMember(h.id)}
-                        />
-                        <span className="text-sm text-gray-200">{h.name}</span>
-                        {(h.tags ?? []).slice(0, 1).map((t) => (
-                          <span key={t} className="rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[9px] text-purple-300">
-                            {t}
-                          </span>
-                        ))}
-                      </label>
-                    ))}
+                  <div className="max-h-80 space-y-1 overflow-y-auto rounded-lg border border-gray-700 p-1.5">
+                    <p className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-400/80">
+                      In this collection ({inCollection.length})
+                    </p>
+                    {inCollection.length === 0 && (
+                      <p className="px-2 py-1 text-xs text-gray-600">None yet — tick scenarios below to add them.</p>
+                    )}
+                    {inCollection.map(renderRow)}
+                    <p className="mt-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                      Available scenarios ({available.length})
+                    </p>
+                    {available.map(renderRow)}
                   </div>
                   {notice && <p className="mt-1.5 text-xs text-emerald-400">{notice}</p>}
                   <button

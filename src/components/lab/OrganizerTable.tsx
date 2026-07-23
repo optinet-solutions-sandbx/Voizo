@@ -6,6 +6,7 @@ import {
   createHandler,
   updateHandler,
   deleteHandler,
+  duplicateHandler,
 } from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerHandler } from "@/lib/scriptEngine/database.types";
 
@@ -235,6 +236,30 @@ export default function OrganizerTable() {
     }
   }
 
+  // Clone a scenario into an independent "(copy)" with a fresh intent_key, then
+  // open it in the editor so it can be tweaked immediately.
+  async function handleDuplicate(id: string) {
+    try {
+      const dup = await duplicateHandler(id);
+      await reload();
+      setDraft({
+        id: dup.id,
+        name: dup.name,
+        intent_key: dup.intent_key,
+        description: dup.description,
+        response_template: dup.response_template,
+        action_type: dup.action_type,
+        delivery: dup.delivery,
+        tags: dup.tags ?? [],
+        mode: dup.mode,
+        priority: dup.priority,
+        enabled: dup.enabled,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to duplicate scenario");
+    }
+  }
+
   async function handleToggle(h: ListenerHandler) {
     try {
       await updateHandler(h.id, { enabled: !h.enabled });
@@ -395,6 +420,15 @@ export default function OrganizerTable() {
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleDuplicate(h.id)}
+              className="rounded p-1.5 text-gray-500 transition hover:bg-gray-700 hover:text-indigo-300"
+              title="Duplicate"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
               </svg>
             </button>
             <button

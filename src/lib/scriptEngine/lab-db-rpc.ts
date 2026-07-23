@@ -20,11 +20,13 @@ export const LAB_DB_BROWSER_FNS = [
   "createHandler",
   "updateHandler",
   "deleteHandler",
+  "duplicateHandler",
   // collections
   "listCollections",
   "createCollection",
   "updateCollection",
   "deleteCollection",
+  "duplicateCollection",
   "getCollectionHandlerIds",
   "setCollectionHandlers",
   // settings

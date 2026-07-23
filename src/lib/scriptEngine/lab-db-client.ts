@@ -36,11 +36,13 @@ export const listHandlers = remote("listHandlers");
 export const createHandler = remote("createHandler");
 export const updateHandler = remote("updateHandler");
 export const deleteHandler = remote("deleteHandler");
+export const duplicateHandler = remote("duplicateHandler");
 // collections
 export const listCollections = remote("listCollections");
 export const createCollection = remote("createCollection");
 export const updateCollection = remote("updateCollection");
 export const deleteCollection = remote("deleteCollection");
+export const duplicateCollection = remote("duplicateCollection");
 export const getCollectionHandlerIds = remote("getCollectionHandlerIds");
 export const setCollectionHandlers = remote("setCollectionHandlers");
 // settings

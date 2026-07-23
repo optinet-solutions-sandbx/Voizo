@@ -53,6 +53,42 @@ export async function deleteHandler(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+/** Clone one scenario into a fresh, independent row. The copy carries every
+ *  field verbatim except a "(copy)" name and a NEW unique intent_key
+ *  (<key>_copy, then _copy_2…, deduped against the whole table) — intent_key
+ *  is the routing id, so two live scenarios must never share one. Powers
+ *  one-click duplication in the Organizer and the deep collection copy below. */
+export async function duplicateHandler(id: string, newName?: string): Promise<ListenerHandler> {
+  const { data: src, error: srcErr } = await supabase
+    .from("listener_handlers")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (srcErr) throw new Error(srcErr.message);
+  const { data: all, error: allErr } = await supabase.from("listener_handlers").select("intent_key");
+  if (allErr) throw new Error(allErr.message);
+  const taken = new Set((all ?? []).map((h) => h.intent_key as string));
+  const base = `${src.intent_key || "scenario"}_copy`;
+  let key = base;
+  for (let i = 2; taken.has(key); i++) key = `${base}_${i}`;
+  const insert: HandlerInsert = {
+    name: newName?.trim() || `${src.name} (copy)`,
+    intent_key: key,
+    description: src.description,
+    response_template: src.response_template,
+    action_type: src.action_type,
+    delivery: src.delivery,
+    group_name: src.group_name,
+    tags: src.tags,
+    enabled: src.enabled,
+    priority: src.priority,
+    mode: src.mode,
+  };
+  const { data, error } = await supabase.from("listener_handlers").insert(insert).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 /** Rename a group across every handler that uses it. */
 export async function renameGroup(oldName: string, newName: string): Promise<void> {
   const { error } = await supabase
@@ -129,6 +165,30 @@ export async function setCollectionHandlers(collectionId: string, handlerIds: st
   const rows = handlerIds.map((handler_id) => ({ collection_id: collectionId, handler_id }));
   const ins = await supabase.from("listener_collection_handlers").insert(rows);
   if (ins.error) throw new Error(ins.error.message);
+}
+
+/** Deep-duplicate a collection: a new bundle whose members are fresh COPIES of
+ *  every scenario in the original (via duplicateHandler), not references. So
+ *  editing or deleting a copy never touches the source brand — the basis for
+ *  standing up a new brand from an existing one, then tweaking its lines. */
+export async function duplicateCollection(id: string, newName?: string): Promise<ListenerCollection> {
+  const { data: src, error: srcErr } = await supabase
+    .from("listener_collections")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (srcErr) throw new Error(srcErr.message);
+  const memberIds = await getCollectionHandlerIds(id);
+  const copy = await createCollection(newName?.trim() || `${src.name} (copy)`, src.description ?? "");
+  const newIds: string[] = [];
+  // Sequential (not Promise.all): each duplicateHandler dedups intent_key
+  // against the whole table, so copies must land one-by-one to stay unique.
+  for (const hid of memberIds) {
+    const dup = await duplicateHandler(hid);
+    newIds.push(dup.id);
+  }
+  if (newIds.length) await setCollectionHandlers(copy.id, newIds);
+  return copy;
 }
 
 // ── Scripts (visual call-flow builder) ────────────────────────
