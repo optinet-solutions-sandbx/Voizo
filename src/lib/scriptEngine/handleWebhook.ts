@@ -1535,13 +1535,16 @@ async function runScriptFlow(
       if (!controlUrl) return;
       // Greet-by-name Ramp 2: briefing text embeds script statements — render vars.
       await injectStaffNote(controlUrl, substituteVars(armed.text, variables), false);
-      const obsNote = armed.covered || armed.owed ? ` (observer: ${armed.covered} covered, ${armed.owed} owed)` : "";
+      const obsNote =
+        armed.covered || armed.owed || armed.missing
+          ? ` (observer: ${armed.covered} covered, ${armed.owed} owed, ${armed.missing} to-mention)`
+          : "";
       await log({
         call_id: callId,
         event_type: "injected",
         content: `→ armed stage: ${target.label || contentTypeOf(target)}${obsNote}`,
         intent_key: intent,
-        meta: { flow: true, mode: "briefed", toNode: target.id, nodeType: contentTypeOf(target), covered: armed.covered, owed: armed.owed, ...(controlUrlHint ? { controlUrl: controlUrlHint } : {}) },
+        meta: { flow: true, mode: "briefed", toNode: target.id, nodeType: contentTypeOf(target), covered: armed.covered, owed: armed.owed, missing: armed.missing, ...(controlUrlHint ? { controlUrl: controlUrlHint } : {}) },
       });
     } catch {
       /* best effort — the model still has the previous stage to work from */

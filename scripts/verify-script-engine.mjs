@@ -16,7 +16,7 @@
 // It runs against the REAL shared DB — cleanup matters; don't kill it
 // mid-run without re-running so cleanup can finish.
 //
-// Coverage (45 assertions):
+// Coverage (47 assertions):
 //  B1-B7  brief-ahead core: routed turns inject NO spoken line — only one
 //         non-triggering [CURRENT STAGE] menu; menu rendering (members,
 //         word-for-word marks, else ladder, statement riders); stage
@@ -33,6 +33,8 @@
 //         marks a sibling line that restates it in DIFFERENT words; and the
 //         delivered-ledger arm (VOZ-178) marks a fact covered from a line the
 //         engine pushed even when an interruption kept it out of the transcript
+//  O7     required-offer tracking (VOZ-194): a `must:` fact not yet said is
+//         surfaced as NOT YET MENTIONED and clears once delivered
 //  R1-R2  interruption arbiter: noise that cut the agent off triggers a
 //         resume nudge; late noise does not
 import { createClient } from "@supabase/supabase-js";
@@ -66,6 +68,10 @@ const BASIC_AUTH =
     ? "Basic " + Buffer.from(`${env.DASHBOARD_USERNAME}:${env.DASHBOARD_PASSWORD}`).toString("base64")
     : null;
 const authHeaders = BASIC_AUTH ? { Authorization: BASIC_AUTH } : {};
+// VOZ-186: /api/lab/webhook is exempted from Basic Auth and gated by
+// x-vapi-secret instead (Vapi can't Basic-Auth). Match the route's fallback
+// chain (VAPI_WEBHOOK_SECRET → VAPI_PRIVATE_KEY) so posts authenticate.
+const LAB_WEBHOOK_SECRET = env.VAPI_WEBHOOK_SECRET || env.VAPI_PRIVATE_KEY || "";
 
 const APP = "http://127.0.0.1:3987";
 const CONTROL = "http://127.0.0.1:45872/control";
@@ -114,7 +120,7 @@ http
 async function post(msg, callId) {
   const r = await fetch(`${APP}/api/lab/webhook`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders },
+    headers: { "Content-Type": "application/json", ...authHeaders, "x-vapi-secret": LAB_WEBHOOK_SECRET },
     body: JSON.stringify({ message: { ...msg, call: { id: callId, monitor: { controlUrl: CONTROL } } } }),
   });
   if (!r.ok) throw new Error(`webhook ${r.status}`);
@@ -358,7 +364,7 @@ try {
     check("O2 unsaid member NOT marked", !/Sunday midnight[^]*?ALREADY COVERED/.test(armed.split("It runs until")[1]?.slice(0, 200) ?? ""), armed);
     check("O2 skipped statement comes back as debt", /Still OWED/.test(armed) && /moonlight discount/.test(armed), armed);
     const evs = await events(c);
-    check("O2 observer counts on the armed row", evs.some((e) => /armed stage: Stage B \(observer: \d+ covered, 1 owed\)/.test(e.content ?? "")), JSON.stringify(evs.filter((e) => e.meta?.mode === "briefed").map((e) => e.content)));
+    check("O2 observer counts on the armed row", evs.some((e) => /armed stage: Stage B \(observer: \d+ covered, 1 owed, \d+ to-mention\)/.test(e.content ?? "")), JSON.stringify(evs.filter((e) => e.meta?.mode === "briefed").map((e) => e.content)));
     // The agent pays the debt — next arming must drop it.
     await say(c, "Oh and before anything else — the moonlight discount is happening tonight.", "assistant");
     controlMsgs = [];
@@ -462,6 +468,39 @@ try {
     const evs = await events(c);
     check("B7 no injected events", !evs.some((e) => e.event_type === "injected"), JSON.stringify(evs.map((e) => e.event_type)));
     check("G4 held-at-stage made visible", evs.some((e) => e.event_type === "skipped" && e.meta?.reason === "held_at_stage"), JSON.stringify(evs.map((e) => [e.event_type, e.meta?.reason])));
+  }
+
+  // ── O7: required-offer tracking (VOZ-194) — a `must:` fact not yet said is
+  // surfaced as NOT YET MENTIONED, and clears once delivered. Runs LAST so the
+  // temporary required handler can't leak its requirement into other tests.
+  {
+    const hOffer = await handler({ name: "tmp required offer", intent_key: "tmp_req_offer", description: "the core offer", response_template: "You have the platinum jackpot unlocked on your account.", action_type: "answer", delivery: "reword", tags: ["tmp-verify", "must:tmp_jackpot"] });
+    const { data: colR } = await sb.from("listener_collections").insert({ name: "tmp-brief-R-offer", description: "tmp verify" }).select().single();
+    created.collections.push(colR.id);
+    await sb.from("listener_collection_handlers").insert([{ collection_id: colR.id, handler_id: hOffer.id }]);
+    const scriptOffer = await script("tmp-brief-offer", ({ conn, node, edge }) => {
+      const a1 = conn(null, true), a2 = conn(null, true), a3 = conn(null, true);
+      const start = node("start", "Start call", { mode: "agent_first", opening: "", openingDelivery: "verbatim", connectors: [a1] }, null, 0, 0);
+      const A = node("step", "Stage A", { contentType: "collection", collectionId: colR.id, connectors: [a2] }, null, 0, 200);
+      const B = node("step", "Stage B", { contentType: "collection", collectionId: colR.id, connectors: [a3] }, null, 0, 400);
+      const end = node("step", "End call", { contentType: "end" }, null, 0, 600);
+      return { nodes: [start, A, B, end], edges: [edge(start, a1, A), edge(A, a2, B), edge(B, a3, end)] };
+    });
+    await activate(scriptOffer);
+    const c = newCall();
+    controlMsgs = [];
+    await say(c, "well alright then let us hear what this is all about");
+    await sleep(1800);
+    let armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O7 unsaid required offer surfaced as NOT YET MENTIONED", /NOT YET MENTIONED/.test(armed) && /platinum jackpot/.test(armed), armed.slice(-260));
+
+    // The agent delivers the offer — the next arming must drop the flag.
+    await say(c, "Good news — you have the platinum jackpot unlocked on your account.", "assistant");
+    controlMsgs = [];
+    await say(c, "oh interesting alright tell me a bit more about that");
+    await sleep(1800);
+    armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O7 required offer clears once delivered", armed.length > 0 && !/NOT YET MENTIONED/.test(armed), armed.slice(-260));
   }
 } finally {
   try {

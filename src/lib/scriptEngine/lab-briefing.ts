@@ -17,18 +17,41 @@ type Cfg = Record<string, unknown>;
  *  call (fact-level coverage, VOZ-177), and a tally of the marks made. */
 type ObserverCtx = { corpusStems?: Set<string>; counter?: { covered: number }; coveredFacts?: Set<string> };
 
-// Fact-level coverage (VOZ-177). A handler tagged `fact:<key>` declares that
-// its line conveys a shared fact (identity, the free-spins offer, "SMS anyway"…).
+// Fact-level coverage (VOZ-177) + required-offer tracking (VOZ-194).
+// A handler tag declares that its line conveys a shared fact:
+//   `fact:<key>`  — a fact (identity, "SMS anyway"…). Dedupe only: once
+//                   conveyed under ANY wording, sibling lines are marked covered.
+//   `must:<key>`  — a REQUIRED fact (the core offer). Same dedupe as `fact:`,
+//                   AND the observer surfaces it as "NOT YET MENTIONED" until it
+//                   has been said, so the call can't wrap without delivering it.
 // The per-line stem observer is blind to the SAME fact reworded in a different
-// scenario — the exact repetition seen on the Val test call, where five distinct
-// members each re-introduced "Victor from Lucky Seven". Tagging lets the observer
-// dedupe at the fact level: once a fact has been conveyed under ANY wording, every
-// sibling line that conveys it is marked covered. A handler may carry several tags.
+// scenario — the repetition seen on the Val test call, where five distinct
+// members each re-introduced "Victor from Lucky Seven". Tags fix both blind
+// spots: don't-repeat AND don't-forget. A handler may carry several tags.
 const FACT_TAG_PREFIX = "fact:";
+const REQUIRED_TAG_PREFIX = "must:";
+
+/** Every fact key a handler conveys — both plain (`fact:`) and required
+ *  (`must:`) — so coverage/dedup treats them identically. */
 export function factsOf(h: ListenerHandler): string[] {
   return (h.tags ?? [])
-    .filter((t) => t.startsWith(FACT_TAG_PREFIX))
-    .map((t) => t.slice(FACT_TAG_PREFIX.length).trim())
+    .flatMap((t) =>
+      t.startsWith(FACT_TAG_PREFIX)
+        ? [t.slice(FACT_TAG_PREFIX.length)]
+        : t.startsWith(REQUIRED_TAG_PREFIX)
+        ? [t.slice(REQUIRED_TAG_PREFIX.length)]
+        : []
+    )
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+
+/** The REQUIRED fact keys a handler declares (`must:` only) — the offer that
+ *  must be delivered at least once before the call ends. */
+export function requiredFactsOf(h: ListenerHandler): string[] {
+  return (h.tags ?? [])
+    .filter((t) => t.startsWith(REQUIRED_TAG_PREFIX))
+    .map((t) => t.slice(REQUIRED_TAG_PREFIX.length).trim())
     .filter(Boolean);
 }
 
@@ -196,6 +219,26 @@ export async function compileStageBriefing(graph: Graph, nodeId: string, handler
   ].join("\n");
 }
 
+/** Every handler id THIS script's graph can surface — collection members plus
+ *  box scenarios. Fact tracking (covered + required) is scoped to this set, so a
+ *  `fact:`/`must:` tag on some OTHER script's scenario never bleeds into this
+ *  call's briefing (a Val `must:` offer must not become required for an
+ *  unrelated campaign's calls). */
+async function scriptHandlerIds(graph: Graph): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const colIds = new Set<string>();
+  for (const n of graph.nodes) {
+    const cfg = cfgOf(n);
+    if (cfg.collectionId) colIds.add(cfg.collectionId as string);
+    if (cfg.elseCollectionId) colIds.add(cfg.elseCollectionId as string);
+    if (n.scenario_id) ids.add(n.scenario_id);
+    for (const cid of (cfg.candidateScenarioIds as string[]) ?? []) ids.add(cid);
+  }
+  for (const cid of colIds)
+    for (const hid of await getCollectionHandlerIds(cid).catch(() => [] as string[])) ids.add(hid);
+  return ids;
+}
+
 /** The observer pass. Mid-call arming goes through here instead of the raw
  *  compiler: the observer knows the whole script AND the whole conversation,
  *  so every outgoing briefing gets reconciled against what was actually
@@ -209,7 +252,7 @@ export async function composeArmedBriefing(
   graph: Graph,
   targetId: string,
   handlers: ListenerHandler[]
-): Promise<{ text: string; covered: number; owed: number } | null> {
+): Promise<{ text: string; covered: number; owed: number; missing: number } | null> {
   let corpus = "";
   let visited: string[] = [];
   let delivered: { handler_id: string; count: number }[] = [];
@@ -230,9 +273,12 @@ export async function composeArmedBriefing(
   // spoken corpus misses the line, but the engine still recorded that it pushed
   // it — without this the observer re-serves the line and the agent repeats it,
   // exactly what happened when the Val call was talked over.
+  // Fact tracking is scoped to THIS script's handlers (see scriptHandlerIds).
+  const scriptIds = await scriptHandlerIds(graph);
+  const scoped = handlers.filter((h) => scriptIds.has(h.id));
   const deliveredIds = new Set(delivered.map((d) => d.handler_id));
   const coveredFacts = new Set<string>();
-  for (const h of handlers) {
+  for (const h of scoped) {
     const facts = factsOf(h);
     if (!facts.length) continue;
     if (deliveredIds.has(h.id) || contentCovered(h.response_template, corpusStems)) {
@@ -254,13 +300,31 @@ export async function composeArmedBriefing(
     }
   }
   const owed = debts.slice(0, 2);
-  const text = owed.length
+  let text = owed.length
     ? briefing +
       `\nStill OWED from earlier stages — the customer never actually heard these; work each into your NEXT reply naturally, once (own words where it reads as an instruction): ${owed
         .map((s, i) => `(${i + 1}) "${s}"`)
         .join(" ")}`
     : briefing;
-  return { text, covered: obs.counter!.covered, owed: owed.length };
+
+  // Required-offer tracking (VOZ-194): the mirror of covered-ground. Any `must:`
+  // fact the call has NOT yet conveyed is surfaced so the agent delivers the
+  // offer before wrapping — the observer now knows both what was already said
+  // (don't repeat) and what has not been said yet (don't forget). The
+  // representative line per fact is the first must:-tagged handler carrying it.
+  const requiredLine = new Map<string, string>();
+  for (const h of scoped) {
+    const line = (h.response_template ?? "").trim();
+    if (!line) continue;
+    for (const f of requiredFactsOf(h)) if (!requiredLine.has(f)) requiredLine.set(f, line);
+  }
+  const missing = [...requiredLine.keys()].filter((f) => !coveredFacts.has(f)).slice(0, 4);
+  if (missing.length) {
+    text +=
+      `\nNOT YET MENTIONED — the customer still has NOT heard the core offer. You MUST work each of these into the call, once and naturally, BEFORE it ends; do not let the call close while any remain: ` +
+      missing.map((f, i) => `(${i + 1}) "${requiredLine.get(f)}"`).join(" ");
+  }
+  return { text, covered: obs.counter!.covered, owed: owed.length, missing: missing.length };
 }
 
 /** Off-path answer bank for the whole call: every collection the script's

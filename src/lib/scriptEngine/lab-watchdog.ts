@@ -119,8 +119,8 @@ export async function checkWaitTimeout(callId: string, controlUrlHint: string | 
         await insertLabEvent({
           call_id: callId,
           event_type: "injected",
-          content: `→ armed stage: ${target.label || ct}${armed.covered || armed.owed ? ` (observer: ${armed.covered} covered, ${armed.owed} owed)` : ""}`,
-          meta: { flow: true, mode: "briefed", toNode: target.id, nodeType: ct, covered: armed.covered, owed: armed.owed },
+          content: `→ armed stage: ${target.label || ct}${armed.covered || armed.owed || armed.missing ? ` (observer: ${armed.covered} covered, ${armed.owed} owed, ${armed.missing} to-mention)` : ""}`,
+          meta: { flow: true, mode: "briefed", toNode: target.id, nodeType: ct, covered: armed.covered, owed: armed.owed, missing: armed.missing },
         }).catch(() => {});
       }
     }

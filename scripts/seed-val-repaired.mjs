@@ -83,14 +83,17 @@ async function handler(row) {
 async function main() {
   await cleanup();
 
-  // Proactive fact beats — each fact delivered ONCE, tagged so it is never re-pitched.
+  // Proactive fact beats — each fact delivered ONCE, tagged so it is never
+  // re-pitched. The two VALUE beats carry `must:` (VOZ-194): the observer
+  // surfaces them as NOT YET MENTIONED until said, so the call can't wrap
+  // without delivering the offer, however the customer derails the flow.
   const hFreeSpins = await handler({
-    name: "Val R - Free spins", intent_key: "valr_free_spins", tags: [SEED_TAG, "fact:free_spins"],
+    name: "Val R - Free spins", intent_key: "valr_free_spins", tags: [SEED_TAG, "must:free_spins"],
     description: "proactively reveal the twenty free spins",
     response_template: "So the reason I'm calling — I was going through your account and popped twenty free spins on there for you. Wanted to flag them since they do expire.",
   });
   const hBonus = await handler({
-    name: "Val R - Bonus", intent_key: "valr_bonus", tags: [SEED_TAG, "fact:bonus"],
+    name: "Val R - Bonus", intent_key: "valr_bonus", tags: [SEED_TAG, "must:bonus"],
     description: "proactively reveal the 300% deposit bonus",
     response_template: "And on top of the spins, there's a three hundred percent bonus waiting on your next deposit.",
   });
@@ -218,7 +221,7 @@ async function main() {
   console.log("   name      :", SCRIPT_NAME);
   console.log("   collection:", col.id, `(${COLLECTION_NAME})`);
   console.log("   nodes     :", nodes.length, "| edges:", edges.length, "| handlers:", 15);
-  console.log("\nFact tags in play: free_spins, bonus, sms, offer_window, identity, legitimacy, login_help, wagering, sms_anyway");
+  console.log("\nFact tags in play: must:free_spins, must:bonus (required offer), fact:sms, fact:offer_window, fact:identity, fact:legitimacy, fact:login_help, fact:wagering, fact:sms_anyway");
   console.log("Select it in the campaign wizard (Step 2 → Script) to launch a test.");
 }
 
