@@ -94,7 +94,9 @@ const EMPTY_DRAFT: Draft = {
   description: "",
   response_template: "",
   action_type: "answer",
-  delivery: "verbatim",
+  // New scenarios default to reword (agent says it in its own voice); authors
+  // switch to verbatim only for lines that must be spoken word-for-word.
+  delivery: "reword",
   tags: [],
   mode: "both",
   priority: 100,
