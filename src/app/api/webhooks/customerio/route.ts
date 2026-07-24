@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 // Relative imports (vitest does not resolve "@/"; same convention as the
 // ghost routes — keeps this route unit-testable).
 import { supabaseAdmin } from "../../../../lib/supabaseServer";
+import { CIO_DEFAULT_WORKSPACE } from "../../../../lib/customerio";
 import { parseSigningKeys, verifyCioSignature } from "../../../../lib/customerioWebhookAuth";
 import { claimAndQueueMember, findTodaysChild } from "../../../../lib/scheduler/realtimeAdmission";
 import { decideAdmission, expectedCountryForTimezone } from "../../../../lib/scheduler/realtimePoll";
@@ -18,8 +19,10 @@ import { decideAdmission, expectedCountryForTimezone } from "../../../../lib/sch
  * Voizo side, per delivery:
  *   1. Verify the CIO HMAC signature (v0:<ts>:<body>, workspace key map in
  *      CUSTOMERIO_WEBHOOK_SIGNING_KEYS). Fail CLOSED on missing config.
- *   2. Route by segment_id → running realtime parents. None → 200 no-op
- *      (dormant-safe: with no realtime campaigns this endpoint does nothing).
+ *   2. Route by (workspace, segment_id) → running realtime parents (VOZ-198:
+ *      segment ids are only unique per workspace; the verified signing key
+ *      names the workspace). None → 200 no-op (dormant-safe: with no realtime
+ *      campaigns this endpoint does nothing).
  *   3. Admit through the SAME door as the poll (decideAdmission +
  *      claimAndQueueMember): country vs campaign timezone, race-safe claim.
  *      The claim PK is what makes push + poll + CIO retries collision-proof
@@ -60,6 +63,8 @@ interface ParentRow {
   name: string;
   timezone: string;
   call_delay_minutes: number | null;
+  /** CIO workspace label (VOZ-198). NULL = legacy row = the default workspace. */
+  cio_workspace: string | null;
 }
 
 export async function POST(request: NextRequest) {
@@ -76,8 +81,6 @@ export async function POST(request: NextRequest) {
   if (!verdict.ok) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
-  // TODO(multi-workspace): segment ids are only unique per workspace — route
-  // by (verdict.workspace, segment_id) before adding a second signing key.
   console.log(`[cio-webhook] verified delivery from workspace ${verdict.workspace}`);
 
   // ── 2. Payload shape ──
@@ -111,10 +114,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // ── 3. Route to running realtime parents by segment ──
+  // ── 3. Route to running realtime parents by (workspace, segment) ──
+  // Segment ids are only unique per workspace (VOZ-198): the signing key that
+  // verified THIS delivery names its workspace, and only campaigns of that
+  // workspace may match. Filtered in JS (parents-per-segment is ~1): NULL
+  // cio_workspace = legacy row = the default workspace, one visible rule.
   const { data: parents, error: parentsErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, timezone, call_delay_minutes")
+    .select("id, name, timezone, call_delay_minutes, cio_workspace")
     .eq("campaign_type", "recurring")
     .eq("status", "running")
     .eq("realtime", true)
@@ -123,7 +130,18 @@ export async function POST(request: NextRequest) {
     console.error("[cio-webhook] parents query failed:", parentsErr);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
-  if (!parents || parents.length === 0) {
+  const wsParents = ((parents ?? []) as ParentRow[]).filter(
+    (p) => (((p.cio_workspace ?? "").trim() || CIO_DEFAULT_WORKSPACE) === verdict.workspace),
+  );
+  if (wsParents.length === 0) {
+    if ((parents ?? []).length > 0) {
+      // A segment-id collision across workspaces is exactly the misroute this
+      // filter exists to stop — loud log, quiet 200 (stops CIO retries).
+      console.warn(
+        `[cio-webhook] segment ${payload.segment_id}: ${parents!.length} campaign(s) matched the ` +
+          `segment id but none belong to workspace '${verdict.workspace}' — no-op (VOZ-198 guard)`,
+      );
+    }
     return NextResponse.json({ handled: false, results: [] });
   }
 
@@ -132,7 +150,7 @@ export async function POST(request: NextRequest) {
   const results: Array<{ parentId: string; outcome: string }> = [];
   let internalError = false;
 
-  for (const p of parents as ParentRow[]) {
+  for (const p of wsParents) {
     // ── 4. Validate the payload phone + country. ANY non-admit verdict is
     //       deferred to the poll (spec §5.3): it re-resolves the member ≤1 min
     //       later with full profile attrs + the lookup fallback, and owns the

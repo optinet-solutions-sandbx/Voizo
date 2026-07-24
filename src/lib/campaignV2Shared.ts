@@ -32,6 +32,7 @@ export interface CampaignV2CreateInput {
   baseAssistantId?: string; // Source agent the clone was made from; persisted for re-bind after eject
   voiceId?: string; // ElevenLabs voice ID chosen at create time; persisted for re-bind so operator intent survives eject. NULL = use base agent's default voice.
   segmentId?: number; // customer.io segment ID (single-segment imports only); persisted for Step 5 Duplicate, Step 6 Manual refresh, Step 7 Resume-diff. NULL for multi-segment imports.
+  cioWorkspace?: string | null; // CIO workspace label (VOZ-198, e.g. "fortuneplay"). Must match a CUSTOMERIO_WEBHOOK_SIGNING_KEYS / CUSTOMERIO_APP_API_KEYS label. Absent/null = the default workspace (lucky7even). No wizard UI yet — workspace-2 campaigns are created via API.
   timezone: string;
   startAt?: string | null;
   endAt?: string | null;

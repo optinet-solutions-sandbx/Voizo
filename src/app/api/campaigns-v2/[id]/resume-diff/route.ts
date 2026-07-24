@@ -69,7 +69,7 @@ export async function GET(
   // ── 1. Read source campaign ──
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, status, segment_id")
+    .select("id, name, status, segment_id, cio_workspace")
     .eq("id", id)
     .single();
 
@@ -170,7 +170,10 @@ export async function GET(
   let segmentSnapshotSize: number | undefined;
 
   if (source.segment_id != null) {
-    const segmentResult = await fetchSegmentPhones(source.segment_id as number);
+    const segmentResult = await fetchSegmentPhones(
+      source.segment_id as number,
+      source.cio_workspace as string | null, // VOZ-198: fetch with THIS campaign's workspace key
+    );
     if (!segmentResult.ok) {
       return NextResponse.json(
         { error: `Customer.io fetch failed: ${segmentResult.error}` },

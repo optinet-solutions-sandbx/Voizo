@@ -103,6 +103,23 @@ describe("buildChildPayload last-resort SMS inheritance (§8)", () => {
   });
 });
 
+describe("buildChildPayload cio_workspace inheritance (VOZ-198)", () => {
+  it("workspace-2 parent → child carries cio_workspace (webhook/poll route children by it)", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, cio_workspace: "fortuneplay" },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.cio_workspace).toBe("fortuneplay");
+  });
+
+  it("legacy parent (cio_workspace absent/null) → key ABSENT so DB default/NULL applies (deploy-order safe)", () => {
+    const absent = buildChildPayload({ parent, ...common });
+    expect("cio_workspace" in absent).toBe(false);
+    const nulled = buildChildPayload({ parent: { ...parent, cio_workspace: null }, ...common });
+    expect("cio_workspace" in nulled).toBe(false);
+  });
+});
+
 describe("legalCallEndCap (VOZ-129 jurisdiction cap)", () => {
   it("caps AU/NZ/JP at 20:00 (8pm)", () => {
     expect(legalCallEndCap("Australia/Sydney")).toBe("20:00");

@@ -288,6 +288,10 @@ export interface RealtimeParentRow {
   segment_id: number | null;
   /** Operator call delay: minutes between first sight and the dial row (null = right away). */
   call_delay_minutes: number | null;
+  /** CIO workspace label (VOZ-198). NULL/absent = legacy = the default
+   *  workspace; segment_id + profile lookups resolve against THIS workspace's
+   *  App API key. */
+  cio_workspace?: string | null;
 }
 
 export interface PollSummary {
@@ -387,7 +391,11 @@ export async function pollRealtimeParent(
   const members = new Map<string, CustomerIOSegmentMember>();
   let cursor: string | undefined;
   for (let pages = 0; pages < MEMBERSHIP_PAGE_CAP; pages++) {
-    const batch = await getSegmentMembers(parent.segment_id, { start: cursor, limit: 1000 });
+    const batch = await getSegmentMembers(
+      parent.segment_id,
+      { start: cursor, limit: 1000 },
+      parent.cio_workspace, // VOZ-198: the parent's workspace, not the global default
+    );
     if (!batch.success) {
       console.warn(`[realtimePoll] ${parent.name}: membership fetch failed: ${batch.error}`);
       return { result: "membership_fetch_failed" };
@@ -423,7 +431,7 @@ export async function pollRealtimeParent(
   }
   const profiles = await chunkedPromiseAll(batchIds, 8, async (cioId) => ({
     cioId,
-    lookup: await lookupMemberProfileWithFallback(members.get(cioId)!),
+    lookup: await lookupMemberProfileWithFallback(members.get(cioId)!, parent.cio_workspace),
   }));
 
   // 6) Admit → claim → insert, sequentially (the cap counter is shared state).

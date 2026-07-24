@@ -69,6 +69,10 @@ export interface RecurringParent {
   agent_mode?: "assistant" | "script" | null;
   script_id?: string | null;
   script_name?: string | null;
+  // CIO workspace (VOZ-198): the webhook + poll route children by it, and the
+  // non-realtime segment prefill fetches with THIS workspace's App API key.
+  // Optional so selects predating the cio-workspace migration keep compiling.
+  cio_workspace?: string | null;
 }
 
 export interface DueCheckResult {
@@ -345,7 +349,9 @@ export async function spawnChildIfDue(
   let phones: string[] = [];
   let namesByPhone = new Map<string, string>();
   if (!parent.realtime) {
-    const segmentResult = await fetchSegmentPhones(parent.segment_id);
+    // VOZ-198: prefill with THIS parent's workspace key (parent rows arrive via
+    // select("*"), so cio_workspace is present once the migration is applied).
+    const segmentResult = await fetchSegmentPhones(parent.segment_id, parent.cio_workspace);
     if (!segmentResult.ok) {
       return { result: "spawn_failed", details: `segment fetch: ${segmentResult.error}` };
     }
@@ -608,6 +614,12 @@ export function buildChildPayload(args: {
     // Children carry the flag so the scheduler's keep-awake guard can read
     // it off the child row, and the cap so the poll enforces it per day.
     ...(parent.realtime ? { realtime: true, daily_cap: parent.daily_cap ?? null } : {}),
+    // CIO workspace (VOZ-198) inherits the same way: the webhook/poll match
+    // children through their parent, but refresh/resume on a child must fetch
+    // with the right workspace key. Absent for legacy parents (NULL = default).
+    ...(typeof parent.cio_workspace === "string" && parent.cio_workspace.trim().length > 0
+      ? { cio_workspace: parent.cio_workspace }
+      : {}),
     // Last-resort SMS (§8) inherits the same way — webhook + sweep read the child.
     ...(typeof parent.sms_last_resort_template === "string" && parent.sms_last_resort_template.trim().length > 0
       ? { sms_last_resort_template: parent.sms_last_resort_template }

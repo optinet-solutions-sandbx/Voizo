@@ -228,3 +228,55 @@ describe("POST /api/webhooks/customerio — admission", () => {
     expect(res.status).toBe(500);
   });
 });
+
+// VOZ-198: segment ids are only unique PER WORKSPACE. Routing must pair the
+// verified signing-key workspace with the campaign's cio_workspace — otherwise
+// a Fortune Play signup whose segment id collides with a Lucky7 campaign gets
+// dialed by the wrong brand (route.ts:79 TODO, now closed).
+describe("POST /api/webhooks/customerio — workspace routing (VOZ-198)", () => {
+  const FP_KEY = "test-key-fortuneplay";
+
+  beforeEach(() => {
+    process.env.CUSTOMERIO_WEBHOOK_SIGNING_KEYS = JSON.stringify({
+      lucky7even: KEY,
+      fortuneplay: FP_KEY,
+    });
+  });
+
+  it("a fortuneplay-signed delivery NEVER matches a lucky7even campaign with the same segment id (collision guard)", async () => {
+    // PARENT carries no cio_workspace (legacy row) → belongs to lucky7even.
+    h.db = makeFakeDb([{ data: [PARENT] }]); // parents query by segment_id
+    const res = await POST(signedReq(PAYLOAD, { key: FP_KEY }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.handled).toBe(false); // no-op, NOT a claim into the wrong brand
+    expect(claimUpsertPayload(h.db.ops)).toBeNull();
+    expect(dialInsertPayload(h.db.ops)).toBeNull();
+  });
+
+  it("a legacy parent row (cio_workspace null) still accepts lucky7even deliveries (pre-backfill safety)", async () => {
+    h.db = makeFakeDb([
+      { data: [{ ...PARENT, cio_workspace: null }] },
+      { data: CHILD },
+      { data: [{ cio_id: "cio-9" }] },
+      { error: null },
+    ]);
+    const res = await POST(signedReq(PAYLOAD)); // signed with the lucky7even key
+    expect(res.status).toBe(200);
+    expect((await res.json()).results[0].outcome).toBe("queued");
+  });
+
+  it("a fortuneplay delivery routes into the fortuneplay campaign on the same segment id", async () => {
+    h.db = makeFakeDb([
+      { data: [{ ...PARENT, id: "parent-fp", name: "RT FP AU", cio_workspace: "fortuneplay" }] },
+      { data: CHILD },
+      { data: [{ cio_id: "cio-9" }] },
+      { error: null },
+    ]);
+    const res = await POST(signedReq(PAYLOAD, { key: FP_KEY }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.handled).toBe(true);
+    expect(body.results[0].outcome).toBe("queued");
+  });
+});

@@ -85,6 +85,9 @@ export async function GET(request: NextRequest) {
       timezone: p.timezone as string,
       segment_id: (p.segment_id as number | null) ?? null,
       call_delay_minutes: (p.call_delay_minutes as number | null) ?? null,
+      // VOZ-198: select("*") keeps this deploy-order safe — pre-migration the
+      // field is simply absent → null → default workspace, today's behavior.
+      cio_workspace: (p.cio_workspace as string | null) ?? null,
     };
 
     let summary: PollSummary;

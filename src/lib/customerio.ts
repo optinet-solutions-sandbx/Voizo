@@ -23,7 +23,59 @@ const APP_API_KEY = process.env.CUSTOMERIO_APP_API_KEY;
 const REGION = (process.env.CUSTOMERIO_API_REGION || "us").toLowerCase();
 
 // Base URL differs by region. Customer.io hosts US and EU separately.
+// ponytail: region stays global — both live workspaces are EU; add a
+// per-workspace region map only when a non-EU workspace arrives (VOZ-198).
 const BASE_URL = REGION === "eu" ? "https://api-eu.customer.io" : "https://api.customer.io";
+
+/** The original / only workspace before VOZ-198. A NULL/absent cio_workspace
+ *  on a campaigns_v2 row means this one. */
+export const CIO_DEFAULT_WORKSPACE = "lucky7even";
+
+/**
+ * Resolve the App API key for a CIO workspace (VOZ-198 — Fortune Play is
+ * workspace #2). Reads env at CALL time so tests can steer it and the
+ * dashboard still boots unconfigured.
+ *
+ * Map env `CUSTOMERIO_APP_API_KEYS` = `{"lucky7even":"…","fortuneplay":"…"}` —
+ * the same {workspace label → key} shape as CUSTOMERIO_WEBHOOK_SIGNING_KEYS,
+ * and the labels MUST match that map + campaigns_v2.cio_workspace.
+ *
+ * The legacy single `CUSTOMERIO_APP_API_KEY` remains the fallback for the
+ * DEFAULT workspace only. A non-default workspace never borrows another
+ * workspace's key: that would silently read brand A's segment/profiles into
+ * brand B's campaign — the exact cross-brand bug VOZ-198 exists to prevent.
+ * Fail closed instead.
+ */
+export function resolveAppApiKey(
+  workspace?: string | null,
+): { key: string; error: null } | { key: null; error: string } {
+  const ws = (workspace ?? "").trim() || CIO_DEFAULT_WORKSPACE;
+
+  const rawMap = process.env.CUSTOMERIO_APP_API_KEYS;
+  let map: Record<string, unknown> = {};
+  if (rawMap) {
+    try {
+      const parsed: unknown = JSON.parse(rawMap);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        map = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Malformed map: the default workspace can still run on the legacy key;
+      // non-default workspaces fail closed below.
+    }
+  }
+
+  const entry = map[ws];
+  if (typeof entry === "string" && entry.trim().length > 0) {
+    return { key: entry, error: null };
+  }
+  if (ws === CIO_DEFAULT_WORKSPACE) {
+    const legacy = process.env.CUSTOMERIO_APP_API_KEY;
+    if (legacy) return { key: legacy, error: null };
+    return { key: null, error: "CUSTOMERIO_APP_API_KEY is not set" };
+  }
+  return { key: null, error: `CUSTOMERIO_APP_API_KEYS has no key for workspace '${ws}'` };
+}
 
 /** Pre-flight check. Returns error message if not configured, null if ready. */
 export function getCustomerIOConfigError(): string | null {
@@ -66,16 +118,27 @@ export type CustomerIOResult<T> =
 
 // ── Internal helper ──────────────────────────────────────────────────────────
 
-async function customerioFetch<T>(path: string): Promise<CustomerIOResult<T>> {
-  const configError = getCustomerIOConfigError();
-  if (configError) return { success: false, data: null, error: configError };
+async function customerioFetch<T>(
+  path: string,
+  workspace?: string | null,
+): Promise<CustomerIOResult<T>> {
+  if (REGION !== "us" && REGION !== "eu") {
+    return {
+      success: false,
+      data: null,
+      error: `CUSTOMERIO_API_REGION must be 'us' or 'eu' (got '${REGION}')`,
+    };
+  }
+  // Per-workspace key (VOZ-198): default/null → legacy key, unchanged behavior.
+  const resolved = resolveAppApiKey(workspace);
+  if (resolved.error !== null) return { success: false, data: null, error: resolved.error };
 
   try {
     const response = await fetch(`${BASE_URL}${path}`, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${APP_API_KEY}`,
+        Authorization: `Bearer ${resolved.key}`,
       },
       // Don't cache — segments can change between calls
       cache: "no-store",
@@ -105,9 +168,11 @@ async function customerioFetch<T>(path: string): Promise<CustomerIOResult<T>> {
  *
  * Fast — single call, returns all segments at once.
  */
-export async function listSegments(): Promise<CustomerIOResult<CustomerIOSegment[]>> {
+export async function listSegments(
+  workspace?: string | null,
+): Promise<CustomerIOResult<CustomerIOSegment[]>> {
   type Response = { segments: CustomerIOSegment[] };
-  const result = await customerioFetch<Response>("/v1/segments");
+  const result = await customerioFetch<Response>("/v1/segments", workspace);
   if (!result.success) return result;
   return { success: true, data: result.data.segments ?? [], error: null };
 }
@@ -124,6 +189,7 @@ export async function listSegments(): Promise<CustomerIOResult<CustomerIOSegment
 export async function getSegmentMembers(
   segmentId: number,
   options: { start?: string; limit?: number } = {},
+  workspace?: string | null,
 ): Promise<CustomerIOResult<{ identifiers: CustomerIOSegmentMember[]; next: string | null }>> {
   const limit = Math.min(options.limit ?? 1000, 1000);
   const params = new URLSearchParams({ limit: String(limit) });
@@ -135,6 +201,7 @@ export async function getSegmentMembers(
   type Response = { identifiers: CustomerIOSegmentMember[]; next?: string };
   const result = await customerioFetch<Response>(
     `/v1/segments/${segmentId}/membership?${params.toString()}`,
+    workspace,
   );
   if (!result.success) return result;
 
@@ -172,11 +239,15 @@ export async function getSegmentMembers(
 export async function getCustomerAttributes(
   identifier: string,
   idType?: "cio_id" | "email",
+  workspace?: string | null,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
   type Response = { customer: { id: string; attributes: Record<string, unknown> } };
   const encoded = encodeURIComponent(identifier);
   const query = idType ? `?id_type=${idType}` : "";
-  const result = await customerioFetch<Response>(`/v1/customers/${encoded}/attributes${query}`);
+  const result = await customerioFetch<Response>(
+    `/v1/customers/${encoded}/attributes${query}`,
+    workspace,
+  );
   if (!result.success) return result;
 
   const attrs = result.data.customer?.attributes ?? {};
@@ -308,6 +379,7 @@ export function lookupLadder(member: CustomerIOSegmentMember): LookupIdentifier[
  */
 export async function lookupMemberProfileWithFallback(
   member: CustomerIOSegmentMember,
+  workspace?: string | null,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
   const ladder = lookupLadder(member);
 
@@ -317,7 +389,7 @@ export async function lookupMemberProfileWithFallback(
 
   let lastError = "All identifiers exhausted";
   for (const rung of ladder) {
-    const result = await getCustomerAttributes(rung.identifier, rung.idType);
+    const result = await getCustomerAttributes(rung.identifier, rung.idType, workspace);
     if (result.success) return result;
     lastError = result.error;
   }
@@ -337,7 +409,10 @@ export async function lookupMemberProfileWithFallback(
  * Used by Step 5b (Duplicate) and Step 6 (Manual segment refresh). Step 7
  * (Resume-diff segment-membership check) will be the third caller.
  */
-export async function fetchSegmentPhones(segmentId: number): Promise<
+export async function fetchSegmentPhones(
+  segmentId: number,
+  workspace?: string | null,
+): Promise<
   | { ok: true; phones: string[]; entries: Array<{ phone: string; name: string | null }>; sampled: number }
   | { ok: false; status: number; error: string }
 > {
@@ -352,19 +427,19 @@ export async function fetchSegmentPhones(segmentId: number): Promise<
   let pages = 0;
 
   while (pages < PAGE_CAP) {
-    const batchResult = await getSegmentMembers(segmentId, { start: cursor, limit: 1000 });
+    const batchResult = await getSegmentMembers(segmentId, { start: cursor, limit: 1000 }, workspace);
     if (!batchResult.success) {
       return {
         ok: false,
+        // NB: "CUSTOMERIO_APP_API_KEYS has no key for workspace …" matches this
+        // substring too — missing-config stays a 500 for every workspace.
         status: batchResult.error.includes("CUSTOMERIO_APP_API_KEY") ? 500 : 502,
         error: batchResult.error,
       };
     }
 
-    const profiles = await chunkedPromiseAll(
-      batchResult.data.identifiers,
-      8,
-      lookupMemberProfileWithFallback,
+    const profiles = await chunkedPromiseAll(batchResult.data.identifiers, 8, (m) =>
+      lookupMemberProfileWithFallback(m, workspace),
     );
 
     for (const profile of profiles) {

@@ -1,11 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   decideAdmission,
   diffNewMembers,
   duePromotions,
   expectedCountryForTimezone,
   partitionRollover,
+  pollRealtimeParent,
 } from "./realtimePoll";
+
+// ── Mocks for the pollRealtimeParent workspace-threading test (VOZ-198) ────
+// Everything else in this file tests pure functions and touches none of these.
+const pm = vi.hoisted(() => ({
+  getSegmentMembers: vi.fn(),
+  lookup: vi.fn(),
+}));
+vi.mock("../customerio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../customerio")>();
+  return {
+    ...actual,
+    getSegmentMembers: pm.getSegmentMembers,
+    lookupMemberProfileWithFallback: pm.lookup,
+  };
+});
+vi.mock("../supabaseFetchAll", () => ({ fetchAllRows: vi.fn(async () => []) }));
+vi.mock("../alerts/slack", () => ({
+  postSlackAlert: vi.fn(async () => {}),
+  shouldAlertSpawnFail: vi.fn(() => false),
+}));
+vi.mock("./realtimeAdmission", () => ({
+  findTodaysChild: vi.fn(async () => ({ ok: true, child: { id: "child-1", name: "FP child", daily_cap: null } })),
+  claimAndQueueMember: vi.fn(async () => ({ won: true, queued: true })),
+  promoteWaitingMember: vi.fn(async () => "promoted"),
+}));
 
 describe("expectedCountryForTimezone", () => {
   it("maps the three launch regions", () => {
@@ -229,5 +255,57 @@ describe("decideAdmission — daily cap boundary + overlap semantics", () => {
     // cross-call memory, so a future change that assumes a hard cap trips here.
     expect(snapshot + tickA + tickB).toBe(110);
     expect(snapshot + tickA + tickB).toBeGreaterThan(cap);
+  });
+});
+
+// VOZ-198: a Fortune Play (workspace #2) parent must poll ITS workspace's
+// segment and look profiles up with ITS key — the single-key era silently
+// queried Lucky7 for every parent (cross-brand read / dead safety net).
+describe("pollRealtimeParent threads the parent's cio_workspace into every CIO call (VOZ-198)", () => {
+  function fakeDb(responses: Array<{ data?: unknown; error?: unknown; count?: number }>) {
+    const queue = [...responses];
+    const chain: Record<string, unknown> = {
+      then(resolve: (v: unknown) => void) {
+        const next = queue.shift() ?? { data: null, error: null };
+        resolve({ data: next.data ?? null, error: next.error ?? null, count: next.count ?? 0 });
+      },
+    };
+    for (const m of ["select", "eq", "in", "gte", "lt", "limit", "order", "maybeSingle", "upsert", "insert", "update"]) {
+      chain[m] = () => chain;
+    }
+    return { from: () => chain } as never;
+  }
+
+  it("passes cio_workspace to getSegmentMembers and lookupMemberProfileWithFallback", async () => {
+    pm.getSegmentMembers.mockResolvedValue({
+      success: true,
+      data: { identifiers: [{ cio_id: "m1" }], next: null },
+      error: null,
+    });
+    pm.lookup.mockResolvedValue({
+      success: true,
+      data: { id: "m1", email: null, attributes: { phone: "+61412345678", first_name: "Jo" } },
+      error: null,
+    });
+
+    const parent = {
+      id: "parent-fp",
+      name: "RT FP AU",
+      timezone: "Australia/Sydney",
+      segment_id: 406,
+      call_delay_minutes: null,
+      cio_workspace: "fortuneplay",
+    };
+    const summary = await pollRealtimeParent(
+      fakeDb([{ count: 0 }, { data: [] }]), // addedToday count, waiting rows
+      parent,
+      new Date("2026-07-24T03:00:00Z"),
+    );
+
+    expect(summary.result).toBe("polled");
+    expect(pm.getSegmentMembers).toHaveBeenCalled();
+    expect(pm.getSegmentMembers.mock.calls[0][2]).toBe("fortuneplay");
+    expect(pm.lookup).toHaveBeenCalled();
+    expect(pm.lookup.mock.calls[0][1]).toBe("fortuneplay");
   });
 });

@@ -83,6 +83,12 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       // Operator controls + realtime mode (VOZ-132): validated/whitelisted by
       // the pure normalizer; conditional keys throughout (see its docblock).
       ...normalizeOperatorControls(input),
+      // CIO workspace (VOZ-198): conditional key (voicemail_autohangup
+      // precedent) — absent pre-migration and for every default-workspace
+      // campaign, so legacy creates stay byte-identical.
+      ...(typeof input.cioWorkspace === "string" && input.cioWorkspace.trim().length > 0
+        ? { cio_workspace: input.cioWorkspace.trim() }
+        : {}),
       // Last-resort SMS template (§8): conditional key — absent pre-migration
       // and for every campaign that doesn't opt in.
       ...(typeof input.smsLastResortTemplate === "string" && input.smsLastResortTemplate.trim().length > 0

@@ -80,7 +80,7 @@ export async function GET(
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
     .select(
-      "id, name, status, campaign_type, system_prompt, base_assistant_id, voice_id, segment_id, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode",
+      "id, name, status, campaign_type, system_prompt, base_assistant_id, voice_id, segment_id, cio_workspace, timezone, call_windows, max_attempts, retry_interval_minutes, sms_enabled, sms_template, sms_on_goal_reached_only, sms_consent_mode",
     )
     .eq("id", id)
     .single();
@@ -108,7 +108,10 @@ export async function GET(
   let candidateNames = new Map<string, string>();
 
   if (refreshSegment && source.segment_id != null) {
-    const segmentResult = await fetchSegmentPhones(source.segment_id as number);
+    const segmentResult = await fetchSegmentPhones(
+      source.segment_id as number,
+      source.cio_workspace as string | null, // VOZ-198: fetch with THIS campaign's workspace key
+    );
     if (!segmentResult.ok) {
       return NextResponse.json(
         { error: `Customer.io fetch failed: ${segmentResult.error}` },

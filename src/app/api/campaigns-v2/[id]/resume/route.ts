@@ -120,7 +120,7 @@ export async function POST(
   // pre-rebind cleanup hook can detect "old-shape paused" rows.
   const { data: source, error: selectErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, status, segment_id, base_assistant_id, voice_id, system_prompt, vapi_assistant_id, vapi_pool_slot_id, agent_mode, script_id")
+    .select("id, name, status, segment_id, cio_workspace, base_assistant_id, voice_id, system_prompt, vapi_assistant_id, vapi_pool_slot_id, agent_mode, script_id")
     .eq("id", id)
     .single();
 
@@ -203,7 +203,10 @@ export async function POST(
         { status: 400 },
       );
     }
-    const segmentResult = await fetchSegmentPhones(source.segment_id as number);
+    const segmentResult = await fetchSegmentPhones(
+      source.segment_id as number,
+      source.cio_workspace as string | null, // VOZ-198: fetch with THIS campaign's workspace key
+    );
     if (!segmentResult.ok) {
       return NextResponse.json(
         { error: `Customer.io fetch failed: ${segmentResult.error}` },
