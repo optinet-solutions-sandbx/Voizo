@@ -1749,6 +1749,17 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           {notice && <span className="text-xs text-emerald-400">{notice}</span>}
           {error && <span className="text-xs text-red-400">{error}</span>}
 
+          {/* VOZ-189: another script holds the test-call slot — say so, by
+              name. Save Configuration or ▶ moves the slot to this script. */}
+          {scriptId && activeScriptId && activeScriptId !== scriptId && (
+            <span
+              className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+              title="Another script currently holds the test-call slot. Save Configuration or ▶ switches it to this one."
+            >
+              Test calls run “{scripts.find((s) => s.id === activeScriptId)?.name ?? "another script"}”
+            </span>
+          )}
+
           {/* Active toggle (off by default) */}
           <label className="flex items-center gap-2 text-xs text-gray-400" title="Use this script for test calls">
             <span>Active</span>
@@ -2313,6 +2324,8 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                 onPersonaSaved={(p) =>
                   setScripts((ss) => ss.map((s) => (s.id === scriptId ? { ...s, persona: p } : s)))
                 }
+                scriptName={name}
+                onArmed={(id) => setActiveScriptId(id)}
               />
             </div>
           </div>

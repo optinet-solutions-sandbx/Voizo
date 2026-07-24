@@ -27,9 +27,14 @@ type Props = {
   scriptId?: string | null;
   scriptPersona?: string;
   onPersonaSaved?: (persona: string) => void;
+  /** VOZ-189: Save arms the open script for test calls (same rule as ▶) —
+   *  fired right after the arm lands in lab_settings. */
+  onArmed?: (id: string) => void;
+  /** VOZ-189: the open script's name, for the Save success notice. */
+  scriptName?: string;
 };
 
-export default function LabConfigForm({ onAssistantChange, scriptId = null, scriptPersona = "", onPersonaSaved }: Props) {
+export default function LabConfigForm({ onAssistantChange, scriptId = null, scriptPersona = "", onPersonaSaved, onArmed, scriptName = "" }: Props) {
   // ── Agent ──
   const [assistants, setAssistants] = useState<{ id: string; name: string }[]>([]);
   const [assistantId, setAssistantId] = useState("");
@@ -127,13 +132,16 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       // the persona lives on the script row instead (VOZ-188).
       await saveLabSettings({
         lab_assistant_id: assistantId || null,
-        ...(scriptId ? {} : { short_prompt: shortPrompt }),
+        // VOZ-189: Save arms the open script — what you just edited is what
+        // test calls run (same rule as ▶). Legacy mode never touches the slot.
+        ...(scriptId ? { active_script_id: scriptId } : { short_prompt: shortPrompt }),
         server_url_override: serverOverride.trim() || null,
         router_model: routerModel.trim() || "gpt-5.4-mini",
         confidence_threshold: threshold,
         injection_cooldown_ms: cooldown,
         trigger_response: triggerResponse,
       });
+      if (scriptId) onArmed?.(scriptId);
       if (scriptId) {
         // An untouched SUGGESTION must not be persisted by an unrelated save
         // (e.g. tweaking the threshold) — only operator-confirmed text lands
@@ -179,6 +187,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       const j2 = await r2.json();
       if (!r2.ok) throw new Error(j2.error ?? "Configure failed");
       setConfigured({ webhookUrl: j2.webhookUrl, toolCount: j2.toolCount });
+      // VOZ-189: say WHICH script test calls now run — the old silent success
+      // implied the open script even when another one held the slot.
+      if (scriptId) setNotice(`Configured for “${scriptName.trim() || "this script"}” — test calls now run this script.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -191,8 +202,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       <Section title="Lab Agent" hint="The politician — pick a dedicated test assistant; saving overwrites its tools + webhook.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs text-gray-400">Assistant</label>
+            <label htmlFor="lab-assistant" className="mb-1 block text-xs text-gray-400">Assistant</label>
             <select
+              id="lab-assistant"
               className={inputCls + " [color-scheme:dark]"}
               value={assistantId}
               onChange={(e) => setAssistantId(e.target.value)}
@@ -206,8 +218,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs text-gray-400">Voice</label>
+            <label htmlFor="lab-voice" className="mb-1 block text-xs text-gray-400">Voice</label>
             <select
+              id="lab-voice"
               className={inputCls + " [color-scheme:dark]"}
               value={voiceId}
               onChange={(e) => setVoiceId(e.target.value)}
@@ -231,6 +244,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
         }
       >
         <textarea
+          aria-label={scriptId ? "Script Persona" : "Campaign Persona (fallback)"}
           className={inputCls + " resize-none font-mono text-xs"}
           rows={9}
           value={scriptId ? persona : shortPrompt}
@@ -250,6 +264,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
         hint={`Where VAPI sends live events. Env default: ${envBaseUrl ?? "not set"} — override for local dev with your ngrok URL.`}
       >
         <input
+          aria-label="Webhook Server URL"
           className={inputCls}
           value={serverOverride}
           onChange={(e) => setServerOverride(e.target.value)}
@@ -260,12 +275,13 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       <Section title="Listener Tuning" hint="How aggressively the staff whispers.">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-xs text-gray-400">Router Model</label>
-            <input className={inputCls} value={routerModel} onChange={(e) => setRouterModel(e.target.value)} />
+            <label htmlFor="lab-router-model" className="mb-1 block text-xs text-gray-400">Router Model</label>
+            <input id="lab-router-model" className={inputCls} value={routerModel} onChange={(e) => setRouterModel(e.target.value)} />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-gray-400">Injection Cooldown (ms)</label>
+            <label htmlFor="lab-cooldown" className="mb-1 block text-xs text-gray-400">Injection Cooldown (ms)</label>
             <input
+              id="lab-cooldown"
               className={inputCls}
               type="number"
               step={500}
@@ -275,11 +291,12 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
           </div>
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-400">
+          <label htmlFor="lab-threshold" className="mb-1 block text-xs text-gray-400">
             Confidence Threshold: <span className="font-semibold text-gray-200">{threshold.toFixed(2)}</span>
             <span className="ml-1 text-gray-600">(below this, the agent handles it alone)</span>
           </label>
           <input
+            id="lab-threshold"
             type="range"
             min={0}
             max={1}
