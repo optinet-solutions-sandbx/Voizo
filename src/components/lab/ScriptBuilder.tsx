@@ -319,6 +319,32 @@ function legacyToContent(type: string): Content | null {
 
 type Props = { onClose: () => void; initialScriptId?: string | null };
 
+// Play/download a run's call recording (VOZ-197). The lab call_id IS the Vapi
+// call id, so /api/recordings/proxy?callId=… resolves a fresh presigned link at
+// play time (stored URLs are dead — see the proxy route). preload="none" means
+// no fetch until the operator hits play; onError degrades to a quiet note when
+// a run has no recording (rare — lab + campaign calls record by default).
+function RunRecording({ callId }: { callId: string }) {
+  const [unavailable, setUnavailable] = useState(false);
+  const src = `/api/recordings/proxy?callId=${encodeURIComponent(callId)}`;
+  if (unavailable) {
+    return <p className="border-t border-gray-800/80 px-3 py-1.5 text-[10px] text-gray-600">Recording unavailable</p>;
+  }
+  return (
+    <div className="flex items-center gap-2 border-t border-gray-800/80 px-3 py-2" onClick={(e) => e.stopPropagation()}>
+      <audio controls preload="none" src={src} onError={() => setUnavailable(true)} className="h-8 min-w-0 flex-1" />
+      <a
+        href={src}
+        download={`voizo-call-${callId.slice(0, 8)}.wav`}
+        className="shrink-0 rounded-lg border border-gray-700 px-2 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800"
+        title="Download recording"
+      >
+        ↓ Download
+      </a>
+    </div>
+  );
+}
+
 // Inline-authored line for a box — the scenario is created or updated in the
 // Playbook automatically when the script is saved.
 type LineDraft = { text: string; delivery: ListenerHandler["delivery"]; hint: string };
@@ -3052,21 +3078,23 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
               {history.map((r) => {
                 const endedAt = (nodes.find((n) => n.id === r.current_node_id)?.data as NodeData | undefined)?.label;
                 return (
-                  <button
-                    key={r.call_id}
-                    onClick={() => viewRun(r)}
-                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-gray-800 bg-gray-900/50 px-3 py-2 text-left transition hover:border-gray-600 hover:bg-gray-900"
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-xs font-medium text-gray-200">
-                        {new Date(r.updated_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  <div key={r.call_id} className="rounded-lg border border-gray-800 bg-gray-900/50">
+                    <button
+                      onClick={() => viewRun(r)}
+                      className="flex w-full items-center justify-between gap-3 rounded-t-lg px-3 py-2 text-left transition hover:bg-gray-900"
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-xs font-medium text-gray-200">
+                          {new Date(r.updated_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                        <span className="block truncate text-[10px] text-gray-500">
+                          {endedAt ? `reached “${endedAt}”` : "position unknown (boxes changed since)"} · {r.turns ?? 0} turn{(r.turns ?? 0) === 1 ? "" : "s"} · {r.call_id.slice(0, 8)}…
+                        </span>
                       </span>
-                      <span className="block truncate text-[10px] text-gray-500">
-                        {endedAt ? `reached “${endedAt}”` : "position unknown (boxes changed since)"} · {r.turns ?? 0} turn{(r.turns ?? 0) === 1 ? "" : "s"} · {r.call_id.slice(0, 8)}…
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-[11px] font-semibold text-emerald-400">Replay →</span>
-                  </button>
+                      <span className="shrink-0 text-[11px] font-semibold text-emerald-400">Replay →</span>
+                    </button>
+                    <RunRecording callId={r.call_id} />
+                  </div>
                 );
               })}
             </div>

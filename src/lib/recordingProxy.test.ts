@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { vapiCallIdFromRecordingUrl, pickPlayableUrl } from "./recordingProxy";
+import { vapiCallIdFromRecordingUrl, normalizeVapiCallId, pickPlayableUrl } from "./recordingProxy";
 
 // Real stored shapes from calls_v2.recording_url (verified 2519/2519 rows carry the
 // Vapi call id as the filename's leading UUID — probe 2026-07-17):
@@ -33,6 +33,22 @@ describe("vapiCallIdFromRecordingUrl", () => {
     expect(vapiCallIdFromRecordingUrl(42)).toBeNull();
     expect(vapiCallIdFromRecordingUrl("")).toBeNull();
     expect(vapiCallIdFromRecordingUrl("not a url at all")).toBeNull();
+  });
+});
+
+describe("normalizeVapiCallId", () => {
+  it("accepts a bare full UUID and lowercases it", () => {
+    expect(normalizeVapiCallId("019f9457-ca85-7bb4-8245-82724736afed")).toBe("019f9457-ca85-7bb4-8245-82724736afed");
+    expect(normalizeVapiCallId("019F9457-CA85-7BB4-8245-82724736AFED")).toBe("019f9457-ca85-7bb4-8245-82724736afed");
+  });
+
+  it("rejects partial UUIDs, extra chars, URLs, and non-strings", () => {
+    expect(normalizeVapiCallId("019f9457-ca85-7bb4-8245-82724736afed-extra")).toBeNull(); // must be the WHOLE string
+    expect(normalizeVapiCallId("019f9457")).toBeNull();
+    expect(normalizeVapiCallId("https://x/019f9457-ca85-7bb4-8245-82724736afed.wav")).toBeNull();
+    expect(normalizeVapiCallId("")).toBeNull();
+    expect(normalizeVapiCallId(null)).toBeNull();
+    expect(normalizeVapiCallId(42)).toBeNull();
   });
 });
 

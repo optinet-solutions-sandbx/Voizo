@@ -12,6 +12,16 @@
 // the stored URL and re-resolves a playable link per request.
 
 const LEADING_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const FULL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A bare Vapi call id, validated (lowercased) or null. Lets callers that
+ *  already hold the call id — e.g. the builder run history, whose lab call_id
+ *  IS the vapi call id — resolve a recording without a stored recording_url.
+ *  Same trust level as the URL path: the id only ever addresses Vapi's own
+ *  authenticated API, so SSRF stays bounded to "which call ids can you probe". */
+export function normalizeVapiCallId(callId: unknown): string | null {
+  return typeof callId === "string" && FULL_UUID.test(callId) ? callId.toLowerCase() : null;
+}
 
 /** Vapi call id from a stored recording URL's filename (leading UUID), or null. */
 export function vapiCallIdFromRecordingUrl(recordingUrl: unknown): string | null {

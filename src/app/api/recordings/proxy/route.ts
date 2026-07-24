@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { vapiCallIdFromRecordingUrl, pickPlayableUrl } from "@/lib/recordingProxy";
+import { vapiCallIdFromRecordingUrl, normalizeVapiCallId, pickPlayableUrl } from "@/lib/recordingProxy";
 
 /**
  * GET /api/recordings/proxy?url=<stored calls_v2.recording_url>
+ *     — or —
+ * GET /api/recordings/proxy?callId=<vapi call id>
+ *
+ * `url` is the original contract (call-detail modal, /reviews, ghost pages,
+ * exports); `callId` is for callers that already hold the Vapi call id and have
+ * no stored recording_url — the Script Builder run history, whose lab call_id
+ * IS the vapi call id (VOZ-197). Both collapse to the same call-id → Vapi
+ * presigned-URL → stream path below.
  *
  * Streams a Vapi call recording through Vercel so the browser can play it.
  *
@@ -42,15 +50,18 @@ import { vapiCallIdFromRecordingUrl, pickPlayableUrl } from "@/lib/recordingProx
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
-  const urlParam = new URL(request.url).searchParams.get("url");
-  if (!urlParam) {
-    return NextResponse.json({ error: "Missing url parameter" }, { status: 400 });
+  const params = new URL(request.url).searchParams;
+  const urlParam = params.get("url");
+  const callIdParam = params.get("callId");
+  if (!urlParam && !callIdParam) {
+    return NextResponse.json({ error: "Missing url or callId parameter" }, { status: 400 });
   }
 
-  const callId = vapiCallIdFromRecordingUrl(urlParam);
+  // callId (validated) wins; otherwise derive the id from the stored URL.
+  const callId = normalizeVapiCallId(callIdParam) ?? vapiCallIdFromRecordingUrl(urlParam);
   if (!callId) {
     return NextResponse.json(
-      { error: "url is not a recognizable Vapi recording URL" },
+      { error: "Provide a valid callId, or a recognizable Vapi recording URL" },
       { status: 400 },
     );
   }
