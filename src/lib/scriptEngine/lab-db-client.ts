@@ -1,4 +1,4 @@
-// Browser-side lab-db (workstream E, VOZ-116): the same 24 functions the
+// Browser-side lab-db (workstream E, VOZ-116): the same 26 functions the
 // Builder UIs always called, with identical signatures — but each one is a
 // thin POST to the Basic-Auth-gated /api/lab/db RPC instead of a direct
 // anon-key Supabase read. Type-locked to the real lab-db via `typeof import`,

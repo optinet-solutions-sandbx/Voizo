@@ -5,13 +5,14 @@ import { LAB_DB_BROWSER_FNS, isAllowedLabDbFn } from "./lab-db-rpc";
 // lab-db functions the Builder UIs use — nothing else on the module, and
 // nothing off the prototype chain.
 describe("lab-db RPC allow-list", () => {
-  it("covers the exact browser surface (24 functions)", () => {
-    expect(LAB_DB_BROWSER_FNS.length).toBe(24);
+  it("covers the exact browser surface (26 functions)", () => {
+    // 24→26 on VOZ-190: duplicateHandler + duplicateCollection joined the surface.
+    expect(LAB_DB_BROWSER_FNS.length).toBe(26);
     for (const fn of [
       "listScripts", "createScript", "updateScript", "deleteScript", "duplicateScript",
       "getScriptGraph", "saveScriptGraph",
-      "listHandlers", "createHandler", "updateHandler", "deleteHandler",
-      "listCollections", "createCollection", "updateCollection", "deleteCollection",
+      "listHandlers", "createHandler", "updateHandler", "deleteHandler", "duplicateHandler",
+      "listCollections", "createCollection", "updateCollection", "deleteCollection", "duplicateCollection",
       "getCollectionHandlerIds", "setCollectionHandlers",
       "getLabSettings", "saveLabSettings",
       "getFlowState", "listLabCallEvents", "listScriptRuns", "utteranceCounts",
