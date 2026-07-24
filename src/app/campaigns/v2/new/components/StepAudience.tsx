@@ -9,7 +9,7 @@ import {
   countryLabel,
   detectAudienceCountry,
 } from "@/lib/audienceCountry";
-import SegmentImporter from "@/components/SegmentImporter";
+import SegmentImporter, { DEFAULT_WS } from "@/components/SegmentImporter";
 import VoizoSegmentImporter from "@/components/VoizoSegmentImporter";
 
 import {
@@ -138,10 +138,10 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
             <>
               <SegmentImporter
                 singleSelectOnly={state.campaignType === "recurring"}
-                onImport={(phones, segmentId, segmentName, names) =>
+                onImport={(phones, segmentId, segmentName, names, cioWorkspace) =>
                   dispatch({
                     type: "IMPORT_SEGMENT",
-                    payload: { phones, segmentId, segmentName, names },
+                    payload: { phones, segmentId, segmentName, names, cioWorkspace },
                   })
                 }
               />
@@ -150,7 +150,12 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
                   <Users size={12} className="mt-0.5 text-blue-400 shrink-0" />
                   <span>
                     Selected: <span className="text-[var(--text-1)] font-medium">{state.segmentName}</span>
-                    <span className="text-[var(--text-3)]"> · id {state.segmentId} · {parsedNumbers.length} number{parsedNumbers.length === 1 ? "" : "s"}</span>
+                    <span className="text-[var(--text-3)]">
+                      {" "}· id {state.segmentId}
+                      {/* brand shown only when it's not the default workspace (operator-legible) */}
+                      {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${state.cioWorkspace}` : ""}
+                      {" "}· {parsedNumbers.length} number{parsedNumbers.length === 1 ? "" : "s"}
+                    </span>
                   </span>
                 </div>
               )}

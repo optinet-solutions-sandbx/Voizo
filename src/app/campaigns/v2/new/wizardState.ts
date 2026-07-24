@@ -129,6 +129,10 @@ export interface WizardState {
   manualPhones: string;            // Manual paste source cache (operator's textarea content)
   segmentId: number | null;
   segmentName: string | null;
+  /** CIO workspace (brand) the segment was imported from (VOZ-201). Rides with
+   *  segmentId/segmentName exactly — null = default workspace (lucky7even).
+   *  Persisted as campaigns_v2.cio_workspace so the webhook/poll route by it. */
+  cioWorkspace: string | null;
   isTest: boolean;                 // Marks the campaign as a test; excludes from /audience suggestions. Defaults false.
 
   // Step 2 — Agent
@@ -233,6 +237,8 @@ export interface ImportSegmentPayload {
   names: Record<string, string>;
   segmentId: number | null;
   segmentName: string | null;
+  /** Which CIO workspace (brand) the segment belongs to (VOZ-201). null = default. */
+  cioWorkspace: string | null;
 }
 
 /**
@@ -401,6 +407,7 @@ export function createInitialState(): WizardState {
     manualPhones: "",
     segmentId: null,
     segmentName: null,
+    cioWorkspace: null,
     isTest: false,
 
     agentMode: "assistant",
@@ -547,6 +554,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         cioNames: action.payload.names,
         segmentId: action.payload.segmentId,
         segmentName: action.payload.segmentName,
+        cioWorkspace: action.payload.cioWorkspace,
         audienceSource: "cio",
       };
       // Country-aware TZ guardrail — see applyDetectedTimezone comment.
@@ -699,6 +707,8 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       baseAssistantId: state.vapiAssistantId.trim(),
       voiceId: state.voiceId || undefined,
       segmentId: state.segmentId ?? undefined,
+      cioWorkspace: state.cioWorkspace ?? undefined, // VOZ-201: brand routing anchor
+
       timezone: state.timezone.trim(),
       startAt: null,
       endAt: null,
@@ -754,6 +764,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     baseAssistantId: clone.baseAssistantId,
     voiceId: clone.voiceId ?? undefined,
     segmentId: state.segmentId ?? undefined,
+    cioWorkspace: state.cioWorkspace ?? undefined, // VOZ-201: brand routing anchor
     timezone: state.timezone.trim(),
     startAt,
     endAt: null,

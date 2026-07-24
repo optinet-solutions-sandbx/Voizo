@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check, Star } from "lucide-react";
+import { Building2, ChevronDown, ChevronRight, Download, Loader2, Search, Users, Check, Star } from "lucide-react";
+import StyledSelect from "@/components/StyledSelect";
 import { usePinnedSegments } from "@/lib/pinnedSegments";
 import { parseJsonBody } from "@/lib/jsonBody";
 import { nameByE164 } from "@/lib/campaignV2Shared";
+
+/** Mirrors CIO_DEFAULT_WORKSPACE in src/lib/customerio.ts (server-only module —
+ *  never import it into a client component; the label string is the contract).
+ *  Exported for the wizard steps that render brand labels. */
+export const DEFAULT_WS = "lucky7even";
 
 interface Segment {
   id: number;
@@ -38,6 +44,9 @@ interface Props {
     segmentName: string | null,
     /** E.164 → raw member name for the imported phones (greet-by-name Ramp 1). */
     names: Record<string, string>,
+    /** Which CIO workspace (brand) the segment belongs to (VOZ-201).
+     *  null = default workspace. Rides to campaigns_v2.cio_workspace. */
+    cioWorkspace: string | null,
   ) => void;
   /**
    * When true, hides the per-row multi-select checkboxes — operator can
@@ -47,17 +56,57 @@ interface Props {
    * segmentId breaks the refresh contract per migration 1d).
    */
   singleSelectOnly?: boolean;
+  /**
+   * VOZ-201: PIN the importer to one workspace (edit page passes the
+   * campaign's own cio_workspace — an existing campaign must never be
+   * silently repointed at another brand). When set, the Brand dropdown is
+   * hidden and every fetch browses this workspace. Absent → self-serve mode:
+   * a Brand dropdown appears when more than one workspace is configured.
+   */
+  workspace?: string | null;
 }
 
-export default function SegmentImporter({ onImport, singleSelectOnly = false }: Props) {
+export default function SegmentImporter({ onImport, singleSelectOnly = false, workspace: workspaceProp }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [segments, setSegments] = useState<Segment[] | null>(null);
   const [segmentsError, setSegmentsError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
+  // ── VOZ-201: workspace (brand) selection ──
+  // "" = default workspace (no query param — server browses lucky7even, the
+  // pre-VOZ-201 behavior). A concrete label = operator picked that brand.
+  const [availableWs, setAvailableWs] = useState<string[] | null>(null);
+  const [activeWs, setActiveWs] = useState("");
+  /** The workspace every fetch uses: pinned prop wins; "" = default. */
+  const effectiveWs = workspaceProp ?? (activeWs || null);
+  /** Concrete label for the import payload + pin scoping. */
+  const wsLabel = workspaceProp ?? (activeWs || availableWs?.[0] || null);
+  /** Query-string suffix for the member fetches ("" for default workspace). */
+  const wsQuery = effectiveWs ? `&workspace=${encodeURIComponent(effectiveWs)}` : "";
+
+  // Self-serve mode only: which brands exist (labels only; server never sends
+  // keys). Failure → null → no dropdown → default-workspace flow, unchanged.
+  useEffect(() => {
+    if (workspaceProp != null) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/customerio/workspaces");
+        if (!res.ok) return;
+        const body = await res.json();
+        if (Array.isArray(body.workspaces)) setAvailableWs(body.workspaces);
+      } catch {
+        // Silent: the picker simply doesn't render and default flow stands.
+      }
+    })();
+  }, [workspaceProp]);
+
   // 2026-05-22: per-operator pinned CIO segments. Star icon in row renderer
   // toggles; pinned float to top when no search query is active.
-  const [pinnedIds, togglePin] = usePinnedSegments("cio");
+  // VOZ-201: pins are scoped per brand (segment ids collide across
+  // workspaces); the default workspace keeps the legacy "cio" store so
+  // operators' existing pins survive.
+  const pinSource = wsLabel && wsLabel !== DEFAULT_WS ? `cio:${wsLabel}` : "cio";
+  const [pinnedIds, togglePin] = usePinnedSegments(pinSource);
 
   // Multi-select state
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
@@ -76,23 +125,40 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
   // pinned IDs, so the list has to be available even before the operator
   // expands the dropdown. One extra network call on Step 1 mount — same call
   // we always made on first expand, just earlier.
+  // VOZ-201: re-runs when the brand changes — the list AND every piece of
+  // selection/preview state belong to ONE workspace, so a switch clears all
+  // of it (a stale cross-brand member cache is exactly the misroute class the
+  // workspace split exists to prevent).
   useEffect(() => {
-    if (segments !== null) return;
+    let cancelled = false;
+    setSegments(null);
+    setSegmentsError(null);
+    setCheckedIds(new Set());
+    setMembersBySegment(new Map());
+    setSingleSelectedId(null);
+    setSingleSelectedName(null);
+    setSingleMembers(null);
+    setMembersError(null);
     (async () => {
       try {
-        const res = await fetch("/api/customerio/segments");
+        const res = await fetch(`/api/customerio/segments${effectiveWs ? `?workspace=${encodeURIComponent(effectiveWs)}` : ""}`);
+        if (cancelled) return;
         if (!res.ok) {
           const body = await parseJsonBody(res);
           setSegmentsError(body.error || `Failed to load segments (${res.status})`);
           return;
         }
         const body = await res.json();
-        setSegments(body.segments ?? []);
+        if (!cancelled) setSegments(body.segments ?? []);
       } catch (err) {
-        setSegmentsError(err instanceof Error ? err.message : "Network error");
+        if (!cancelled) setSegmentsError(err instanceof Error ? err.message : "Network error");
       }
     })();
-  }, [segments]);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- state setters are stable; effectiveWs is the real dependency
+  }, [effectiveWs]);
 
   const filteredSegments = useMemo(() => {
     if (!segments) return [];
@@ -122,7 +188,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
 
     setLoadingIds((prev) => new Set(prev).add(segmentId));
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
       if (!res.ok) {
         const body = await parseJsonBody(res);
         throw new Error(body.error || `Failed (${res.status})`);
@@ -180,7 +246,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     setSingleMembers(null);
     setSingleLoading(true);
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
       if (!res.ok) {
         const body = await parseJsonBody(res);
         setMembersError(body.error || `Failed to load members (${res.status})`);
@@ -252,7 +318,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
           .map((m) => ({ phone: m.phone, name: m.name ?? null })),
       ),
     );
-    onImport(phones, segmentId, segmentName, names);
+    onImport(phones, segmentId, segmentName, names, wsLabel);
     setExpanded(false);
     setCheckedIds(new Set());
     setSingleSelectedId(null);
@@ -278,7 +344,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
     });
     setMembersError(null);
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200`);
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
       if (!res.ok) {
         const body = await parseJsonBody(res);
         setMembersError(body.error || `Failed to load members (${res.status})`);
@@ -298,7 +364,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
             .map((m) => ({ phone: m.phone, name: m.name ?? null })),
         ),
       );
-      onImport(phones, segmentId, segmentName, names);
+      onImport(phones, segmentId, segmentName, names, wsLabel);
     } catch (err) {
       setMembersError(err instanceof Error ? err.message : "Network error");
     } finally {
@@ -386,6 +452,26 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false }: 
 
           {segments && (
             <div className="grid gap-3">
+              {/* VOZ-201: Brand picker — self-serve mode only, and only when
+                  more than one workspace is configured. Pinned mode (edit
+                  page) and single-brand installs never see it. */}
+              {workspaceProp == null && availableWs && availableWs.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-[var(--text-2)] inline-flex items-center gap-1.5 shrink-0">
+                    <Building2 size={13} className="text-[var(--text-3)]" />
+                    Brand
+                  </span>
+                  <div className="flex-1 max-w-[16rem]">
+                    <StyledSelect
+                      size="sm"
+                      value={activeWs || availableWs[0]}
+                      onChange={(v) => setActiveWs(v)}
+                      options={availableWs.map((w) => ({ value: w, label: w }))}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Search */}
               <div className="relative">
                 <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />

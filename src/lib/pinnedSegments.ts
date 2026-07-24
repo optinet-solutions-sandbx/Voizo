@@ -7,29 +7,34 @@
 // importers (e.g., Tab A's CIO importer + a future popover) see the same
 // pinned set without prop-drilling.
 //
-// Storage keys: voizo:pinned-cio-segments, voizo:pinned-voizo-segments.
-// Both stored as JSON-serialized arrays of strings (CIO id -> String(num),
-// Voizo uuid as-is).
+// Storage keys: voizo:pinned-<source>-segments — "cio" and "voizo" keep their
+// original keys byte-identical (operators' existing pins survive). VOZ-201
+// adds workspace-scoped sources ("cio:fortuneplay") because CIO segment ids
+// are only unique per workspace — a pinned FP 406 must not pin an L7 406.
 
 import { useEffect, useState, useCallback } from "react";
 
-export type PinSource = "cio" | "voizo";
+/** "cio" | "voizo" | "cio:<workspace>" (VOZ-201 brand-scoped pins). */
+export type PinSource = string;
 
-const STORAGE_KEY: Record<PinSource, string> = {
-  cio: "voizo:pinned-cio-segments",
-  voizo: "voizo:pinned-voizo-segments",
-};
+const storageKeyFor = (source: PinSource): string => `voizo:pinned-${source}-segments`;
 
 // Module-level emitter so toggles in one component update other subscribers.
-const listeners: Record<PinSource, Set<() => void>> = {
-  cio: new Set(),
-  voizo: new Set(),
-};
+// Lazily keyed (VOZ-201: sources are dynamic now).
+const listeners = new Map<PinSource, Set<() => void>>();
+function listenersFor(source: PinSource): Set<() => void> {
+  let set = listeners.get(source);
+  if (!set) {
+    set = new Set();
+    listeners.set(source, set);
+  }
+  return set;
+}
 
 function readFromStorage(source: PinSource): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY[source]);
+    const raw = window.localStorage.getItem(storageKeyFor(source));
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return new Set();
@@ -43,7 +48,7 @@ function readFromStorage(source: PinSource): Set<string> {
 function writeToStorage(source: PinSource, set: Set<string>): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY[source], JSON.stringify(Array.from(set)));
+    window.localStorage.setItem(storageKeyFor(source), JSON.stringify(Array.from(set)));
   } catch (err) {
     console.warn(`[pinnedSegments] write failed for ${source}:`, err);
   }
@@ -61,7 +66,7 @@ export function togglePinnedSegment(source: PinSource, id: string): Set<string> 
   if (current.has(id)) current.delete(id);
   else current.add(id);
   writeToStorage(source, current);
-  for (const fn of listeners[source]) fn();
+  for (const fn of listenersFor(source)) fn();
   return current;
 }
 
@@ -74,10 +79,14 @@ export function usePinnedSegments(
   const [pinned, setPinned] = useState<Set<string>>(() => readFromStorage(source));
 
   useEffect(() => {
+    // Re-read on source change (VOZ-201: the importer's source flips when the
+    // operator switches brand — the state must follow, not just the listener).
+    setPinned(readFromStorage(source));
     const handler = () => setPinned(readFromStorage(source));
-    listeners[source].add(handler);
+    const set = listenersFor(source);
+    set.add(handler);
     return () => {
-      listeners[source].delete(handler);
+      set.delete(handler);
     };
   }, [source]);
 

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { DEFAULT_WS } from "@/components/SegmentImporter";
 
 import {
   DAYS, getCallingHours, SHORTENED_URL_LENGTH, smsSegmentCount, TIMEZONE_OPTIONS,
@@ -89,7 +90,10 @@ export default function StepReview({ state, dispatch }: Props) {
               state.segmentName ? (
                 <>
                   {state.segmentName}
-                  <span className="text-[var(--text-3)] ml-1.5">· id {state.segmentId}</span>
+                  <span className="text-[var(--text-3)] ml-1.5">
+                    · id {state.segmentId}
+                    {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${state.cioWorkspace}` : ""}
+                  </span>
                 </>
               ) : parsedNumbers.length > 0 ? (
                 <>{parsedNumbers.length.toLocaleString()} manual number{parsedNumbers.length === 1 ? "" : "s"}</>

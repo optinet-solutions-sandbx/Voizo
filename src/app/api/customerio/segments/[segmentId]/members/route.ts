@@ -87,6 +87,7 @@ async function chunkedPromiseAll<T, R>(
  */
 async function lookupMemberProfileWithFallback(
   member: CustomerIOSegmentMember,
+  workspace?: string | null,
 ): Promise<CustomerIOResult<CustomerIOCustomer>> {
   // VOZ-185: identifier forms come from the shared lookupLadder — the inline
   // id → cio_<prefix> → email list this replaced had two dead rungs (prefix
@@ -100,7 +101,7 @@ async function lookupMemberProfileWithFallback(
 
   let lastError = "All identifiers exhausted";
   for (const rung of ladder) {
-    const result = await getCustomerAttributes(rung.identifier, rung.idType);
+    const result = await getCustomerAttributes(rung.identifier, rung.idType, workspace);
     if (result.success) return result;
     lastError = result.error;
     console.warn(
@@ -158,9 +159,12 @@ export async function GET(
   const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 200);
   const start = searchParams.get("start") || undefined;
   const debug = searchParams.get("debug") === "true";
+  // VOZ-201: which brand's workspace to read. Absent → default; unknown label
+  // fails closed in the lib (segments route note applies here too).
+  const workspace = searchParams.get("workspace");
 
   // Step 1: Get member IDs (one fast call)
-  const membersResult = await getSegmentMembers(segmentId, { limit, start });
+  const membersResult = await getSegmentMembers(segmentId, { limit, start }, workspace);
   if (!membersResult.success) {
     const status = membersResult.error.includes("CUSTOMERIO_APP_API_KEY") ? 500 : 502;
     return NextResponse.json({ error: membersResult.error }, { status });
@@ -180,10 +184,8 @@ export async function GET(
   // segment membership and customer profile tables can be inconsistent — a
   // member's `id` is in the segment but missing from /customers. Falling back
   // captures customers we previously silently dropped (the "Glenda" bug).
-  const profiles = await chunkedPromiseAll(
-    membersResult.data.identifiers,
-    8,
-    lookupMemberProfileWithFallback,
+  const profiles = await chunkedPromiseAll(membersResult.data.identifiers, 8, (m) =>
+    lookupMemberProfileWithFallback(m, workspace),
   );
 
   // Debug mode: return raw profile data to inspect attribute names.

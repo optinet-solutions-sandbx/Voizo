@@ -20,7 +20,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Globe2, Loader2, Save, Target, Users, Zap } from "lucide-react";
 
 import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
-import SegmentImporter from "@/components/SegmentImporter";
+import SegmentImporter, { DEFAULT_WS } from "@/components/SegmentImporter";
 import StyledSelect from "@/components/StyledSelect";
 import { patchCampaignSettings } from "@/lib/campaignV2Client";
 import { resolveCallDelay } from "@/lib/campaignV2Shared";
@@ -86,6 +86,9 @@ export default function EditAlwaysOnCampaignPage() {
   const [row, setRow] = useState<Row | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  /** The campaign's CIO workspace (VOZ-201) — pins the segment picker to its
+   *  own brand; an existing campaign is never repointed at another workspace. */
+  const [campaignWs, setCampaignWs] = useState<string | null>(null);
   const [segmentMissing, setSegmentMissing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -94,15 +97,19 @@ export default function EditAlwaysOnCampaignPage() {
     let cancelled = false;
     (async () => {
       try {
-        // Fetch the campaign row and the live Customer.io segment list together
-        // so the Audience header can show the segment's name (not just #id) and
-        // flag it when it was deleted in Customer.io after creation.
-        const [campRes, segRes] = await Promise.all([
-          fetch(`/api/campaigns-v2/${id}`),
-          fetch(`/api/customerio/segments`),
-        ]);
+        // Campaign row FIRST, then the segment list — the list must come from
+        // the campaign's OWN workspace (VOZ-201: a Fortune Play campaign's
+        // segments live in the fortuneplay CIO workspace; browsing the default
+        // one would false-flag its segment as deleted). Sequential on purpose.
+        const campRes = await fetch(`/api/campaigns-v2/${id}`);
         if (!campRes.ok) throw new Error(`Campaign not found (${campRes.status})`);
         const data = (await campRes.json()) as Row;
+        const campaignWs =
+          ((data as Record<string, unknown>).cio_workspace as string | null) ?? null;
+
+        const segRes = await fetch(
+          `/api/customerio/segments${campaignWs ? `?workspace=${encodeURIComponent(campaignWs)}` : ""}`,
+        );
 
         let segList: { id: number; name: string }[] = [];
         if (segRes.ok) {
@@ -117,6 +124,7 @@ export default function EditAlwaysOnCampaignPage() {
 
         if (cancelled) return;
         setRow(data);
+        setCampaignWs(campaignWs);
         setDraft({ ...draftFromRow(data), segmentName: presence.name });
         if (presence.missing) setSegmentMissing(true);
       } catch (err) {
@@ -294,6 +302,9 @@ export default function EditAlwaysOnCampaignPage() {
           </p>
           <SegmentImporter
             singleSelectOnly
+            // Always PINNED on the edit page (null cio_workspace = legacy row =
+            // default brand) — passing null would flip self-serve mode on.
+            workspace={campaignWs ?? DEFAULT_WS}
             onImport={(_phones, segmentId, segmentName) => {
               if (segmentId != null) {
                 setDraft({ ...draft, segmentId, segmentName });

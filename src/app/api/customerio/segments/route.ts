@@ -14,11 +14,16 @@
  * Spec: .agent/tasks/2026-04-16_TASK_SMS_Mobivate_CustomerIO.md (Segment Import section)
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { listSegments } from "@/lib/customerio";
 
-export async function GET() {
-  const result = await listSegments();
+export async function GET(request: NextRequest) {
+  // VOZ-201: ?workspace=<label> browses that brand's CIO workspace. Absent →
+  // default (lucky7even), unchanged behavior. An unknown label fails closed
+  // inside resolveAppApiKey with a config error → 500 below, never data from
+  // another brand.
+  const workspace = new URL(request.url).searchParams.get("workspace");
+  const result = await listSegments(workspace);
 
   if (!result.success) {
     // Distinguish configuration errors (500) from Customer.io API errors (502)

@@ -46,25 +46,46 @@ export const CIO_DEFAULT_WORKSPACE = "lucky7even";
  * brand B's campaign — the exact cross-brand bug VOZ-198 exists to prevent.
  * Fail closed instead.
  */
+/** Parse CUSTOMERIO_APP_API_KEYS at call time. Malformed/absent → {} — the
+ *  default workspace still runs on the legacy key; others fail closed. */
+function parseAppApiKeyMap(): Record<string, unknown> {
+  const rawMap = process.env.CUSTOMERIO_APP_API_KEYS;
+  if (!rawMap) return {};
+  try {
+    const parsed: unknown = JSON.parse(rawMap);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through
+  }
+  return {};
+}
+
+/**
+ * Which workspaces (brands) are configured — the wizard's Brand picker source
+ * (VOZ-201). Returns LABELS only; keys never leave this module. Default
+ * workspace first (present when the legacy key OR its map entry is usable),
+ * then the other usable map labels in map order.
+ */
+export function listConfiguredWorkspaces(): string[] {
+  const map = parseAppApiKeyMap();
+  const usable = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+  const out: string[] = [];
+  if (process.env.CUSTOMERIO_APP_API_KEY || usable(map[CIO_DEFAULT_WORKSPACE])) {
+    out.push(CIO_DEFAULT_WORKSPACE);
+  }
+  for (const [label, key] of Object.entries(map)) {
+    if (label !== CIO_DEFAULT_WORKSPACE && usable(key)) out.push(label);
+  }
+  return out;
+}
+
 export function resolveAppApiKey(
   workspace?: string | null,
 ): { key: string; error: null } | { key: null; error: string } {
   const ws = (workspace ?? "").trim() || CIO_DEFAULT_WORKSPACE;
-
-  const rawMap = process.env.CUSTOMERIO_APP_API_KEYS;
-  let map: Record<string, unknown> = {};
-  if (rawMap) {
-    try {
-      const parsed: unknown = JSON.parse(rawMap);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        map = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Malformed map: the default workspace can still run on the legacy key;
-      // non-default workspaces fail closed below.
-    }
-  }
-
+  const map = parseAppApiKeyMap();
   const entry = map[ws];
   if (typeof entry === "string" && entry.trim().length > 0) {
     return { key: entry, error: null };

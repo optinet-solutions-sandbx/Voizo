@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CIO_DEFAULT_WORKSPACE, lookupLadder, resolveAppApiKey } from "./customerio";
+import {
+  CIO_DEFAULT_WORKSPACE,
+  listConfiguredWorkspaces,
+  lookupLadder,
+  resolveAppApiKey,
+} from "./customerio";
 
 // VOZ-185: identifier forms empirically verified against the live EU App API
 // (2026-07-22): the legacy `cio_<cio_id>` prefix form and raw-email form 404;
@@ -106,5 +111,60 @@ describe("resolveAppApiKey (VOZ-198 multi-workspace)", () => {
     const res = resolveAppApiKey();
     expect(res.key).toBeNull();
     expect(res.error).toContain("CUSTOMERIO_APP_API_KEY");
+  });
+});
+
+// VOZ-201: the wizard's Brand picker asks the server which workspaces exist.
+// Labels come from env config only — the API keys themselves NEVER leave the lib.
+describe("listConfiguredWorkspaces (VOZ-201 brand picker)", () => {
+  const savedSingle = process.env.CUSTOMERIO_APP_API_KEY;
+  const savedMap = process.env.CUSTOMERIO_APP_API_KEYS;
+
+  beforeEach(() => {
+    delete process.env.CUSTOMERIO_APP_API_KEY;
+    delete process.env.CUSTOMERIO_APP_API_KEYS;
+  });
+  afterEach(() => {
+    if (savedSingle === undefined) delete process.env.CUSTOMERIO_APP_API_KEY;
+    else process.env.CUSTOMERIO_APP_API_KEY = savedSingle;
+    if (savedMap === undefined) delete process.env.CUSTOMERIO_APP_API_KEYS;
+    else process.env.CUSTOMERIO_APP_API_KEYS = savedMap;
+  });
+
+  it("legacy key only → just the default workspace (today's prod, pre-map)", () => {
+    process.env.CUSTOMERIO_APP_API_KEY = "legacy-key";
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE]);
+  });
+
+  it("legacy + fortuneplay map entry → default FIRST, then map labels", () => {
+    process.env.CUSTOMERIO_APP_API_KEY = "legacy-key";
+    process.env.CUSTOMERIO_APP_API_KEYS = JSON.stringify({ fortuneplay: "fp" });
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE, "fortuneplay"]);
+  });
+
+  it("map contains the default too → deduped, default still first", () => {
+    process.env.CUSTOMERIO_APP_API_KEY = "legacy-key";
+    process.env.CUSTOMERIO_APP_API_KEYS = JSON.stringify({ fortuneplay: "fp", lucky7even: "l7" });
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE, "fortuneplay"]);
+  });
+
+  it("map-only (no legacy key) → exactly the usable map labels", () => {
+    process.env.CUSTOMERIO_APP_API_KEYS = JSON.stringify({ lucky7even: "l7", fortuneplay: "fp" });
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE, "fortuneplay"]);
+  });
+
+  it("unusable map entries (empty/non-string) are excluded", () => {
+    process.env.CUSTOMERIO_APP_API_KEY = "legacy-key";
+    process.env.CUSTOMERIO_APP_API_KEYS = JSON.stringify({ fortuneplay: "", roosterbet: 7 });
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE]);
+  });
+
+  it("malformed map + legacy → default only; nothing configured → empty list", () => {
+    process.env.CUSTOMERIO_APP_API_KEY = "legacy-key";
+    process.env.CUSTOMERIO_APP_API_KEYS = "{not json";
+    expect(listConfiguredWorkspaces()).toEqual([CIO_DEFAULT_WORKSPACE]);
+    delete process.env.CUSTOMERIO_APP_API_KEY;
+    delete process.env.CUSTOMERIO_APP_API_KEYS;
+    expect(listConfiguredWorkspaces()).toEqual([]);
   });
 });
