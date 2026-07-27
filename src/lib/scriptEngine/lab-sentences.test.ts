@@ -22,16 +22,36 @@ describe("splitSentences", () => {
   });
 });
 
-describe("salientTokens", () => {
-  it("captures digits and number-words as fact carriers", () => {
-    const t = salientTokens("a 300% bonus and twenty spins");
-    expect(t).toContain("300");
-    expect(t).toContain("twenty");
+describe("salientTokens (VOZ-229)", () => {
+  it("keeps content-word stems and drops numbers (digit AND word)", () => {
+    const t = salientTokens("a 300% bonus and twenty free spins");
     expect(t).toContain("bonus");
     expect(t).toContain("spins");
+    expect(t).not.toContain("300"); // digit — never matches spoken "three hundred"
+    expect(t).not.toContain("twenty"); // number-word — dropped so digit-vs-word can't mismatch
   });
-  it("keeps number-words whole (not truncated)", () => {
-    expect(salientTokens("three hundred percent")).toEqual(expect.arrayContaining(["three", "hundred", "percent"]));
+  it("strips authoring/instruction words a live agent never speaks", () => {
+    const t = salientTokens("Mention the 20 Free Spins");
+    expect(t).not.toContain("menti"); // "Mention"
+    expect(t).toEqual(expect.arrayContaining(["free", "spins"]));
+  });
+  it("keeps short acronyms like SMS that the 4-char stemmer would drop", () => {
+    expect(salientTokens("sending an SMS with the details")).toContain("sms");
+  });
+});
+
+describe("VOZ-229 regression — instruction+number goals detected from reworded speech", () => {
+  it("'Mention the 20 Free Spins' counts as said once the agent says 'twenty free spins'", () => {
+    const corpus = corpusTokenSet("right so i've added twenty free spins to your account");
+    expect(sentenceSaid("Mention the 20 Free Spins", corpus)).toBe(true);
+  });
+  it("'Mention the 300% Deposit Bonus' counts as said from 'three hundred percent bonus … deposit'", () => {
+    const corpus = corpusTokenSet("you also get a three hundred percent bonus on your next deposit");
+    expect(sentenceSaid("Mention the 300% Deposit Bonus", corpus)).toBe(true);
+  });
+  it("still NOT said when the topic genuinely wasn't mentioned", () => {
+    const corpus = corpusTokenSet("hi there, is this a good time to chat?");
+    expect(sentenceSaid("Mention the 20 Free Spins", corpus)).toBe(false);
   });
 });
 

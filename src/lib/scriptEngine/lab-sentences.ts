@@ -26,23 +26,47 @@ export function splitSentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-// Number-words that carry the fact ("twenty free spins", "three hundred percent")
-// — digits are dropped by the [a-z] stem regex, so capture them explicitly.
+// Numbers are DROPPED from the salient set (VOZ-229): a goal authored with a
+// digit ("20 free spins", "300% bonus") never matches the spoken number-WORD
+// ("twenty", "three hundred percent"), and vice-versa — so a number would
+// falsely read as "not said" and the observer would keep re-ordering the offer.
+// The surrounding content words ("free spins", "deposit bonus") carry the topic;
+// "was this fact mentioned?" doesn't need digit-exact matching.
 const NUMBER_WORDS = new Set([
   "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
   "eleven", "twelve", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
   "eighty", "ninety", "hundred", "thousand", "percent", "first", "second", "third",
 ]);
 
-/** The salient tokens of a piece of text: digit-runs, number-words, and
- *  significant word-stems (first 5 chars of words ≥4 letters). This is the unit
- *  of comparison — a sentence "counts as said" when enough of ITS salient tokens
- *  turn up in the transcript, whatever the exact wording. */
+// STOPWORDS (5-char stems) that appear in AUTHORED goal/statement text but that
+// a live agent never actually speaks — authoring/instruction verbs ("Mention
+// the…", "Explain that…") and low-content function words. Counting them as
+// required tokens dragged real deliveries below the match threshold (VOZ-229:
+// "Mention the 20 Free Spins" scored 2/4 and re-fired though the agent said it).
+const STOPWORD_STEMS = new Set([
+  // authoring / instruction verbs
+  "menti", "expla", "remin", "confi", "ensur", "tell", "discu", "share", "state", "descr", "instr",
+  // low-content function words (>=4 chars)
+  "that", "this", "these", "those", "with", "your", "have", "will", "woul", "from", "into", "onto",
+  "just", "been", "bein", "when", "what", "whic", "also", "make", "sure", "want", "need", "well",
+  "they", "them", "then", "than", "ther", "thei", "abou", "here", "gonna", "some", "only", "more", "very",
+]);
+
+/** The salient tokens of a piece of text: significant word-stems (first 5 chars
+ *  of words ≥4 letters) MINUS numbers and authoring/function stopwords, PLUS
+ *  short all-caps acronyms (SMS, VIP) the stemmer would otherwise drop. This is
+ *  the unit of comparison — a sentence "counts as said" when enough of ITS
+ *  salient tokens turn up in the transcript, whatever the exact wording. */
 export function salientTokens(text: string): string[] {
-  const lower = (text || "").toLowerCase();
-  const stems = (lower.match(/[a-z]{4,}/g) ?? []).map((w) => (NUMBER_WORDS.has(w) ? w : w.slice(0, 5)));
-  const digits = lower.match(/\d+/g) ?? [];
-  return [...new Set([...stems, ...digits])];
+  const raw = text || "";
+  // Acronyms captured from the ORIGINAL casing (2–5 uppercase letters) before
+  // lowercasing — "SMS"/"VIP" are strong fact tokens shorter than the 4-char cut.
+  const acronyms = (raw.match(/\b[A-Z]{2,5}\b/g) ?? []).map((a) => a.toLowerCase());
+  const stems = (raw.toLowerCase().match(/[a-z]{4,}/g) ?? [])
+    .filter((w) => !NUMBER_WORDS.has(w))
+    .map((w) => w.slice(0, 5))
+    .filter((s) => !STOPWORD_STEMS.has(s));
+  return [...new Set([...stems, ...acronyms])];
 }
 
 /** Build the transcript's salient-token set once, to test many sentences against. */

@@ -25,6 +25,7 @@ import { handleWebhook, type VapiMessage } from "@/lib/scriptEngine/handleWebhoo
 import { decideScriptSeed, type CampaignScriptRow } from "@/lib/scriptEngine/resolveScript";
 import { cleanFirstName } from "@/lib/playerName";
 import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { getKillableVoicemailUtterance, resolveControlUrl, endCallViaControlUrl } from "@/lib/vapi/liveCallControl";
 
 // The engine can hold the line a while (speaking lock + classification + inject).
 export const maxDuration = 60;
@@ -224,6 +225,50 @@ export async function POST(request: NextRequest) {
   // end-of-call-report: reuse the shared agent-mode pipeline verbatim.
   if (type === "end-of-call-report") {
     return processEndOfCall(message as Record<string, unknown>);
+  }
+
+  // ── Live voicemail auto-hangup on the SCRIPT path (VOZ-231) ──
+  // Mirror of the agent-mode end-of-call route: a script agent that reaches an
+  // answering machine otherwise monologues the whole offer, and the IVR menu
+  // prompts ("press one…") get transcribed as customer turns that re-trigger
+  // delivery — the excessive repetition seen on Val calls 019fa439/019fa43c.
+  // Gated by campaigns_v2.voicemail_autohangup (default false) → behavior-neutral
+  // until enabled. Fail-safe: any error → fall through to the engine as normal.
+  if (type === "transcript") {
+    try {
+      const utterance = getKillableVoicemailUtterance(body.message as Record<string, unknown>);
+      const assistantId = message.call?.assistantId ?? undefined;
+      if (utterance && assistantId) {
+        const { data: camps } = await supabaseAdmin
+          .from("campaigns_v2")
+          .select("id, voicemail_autohangup")
+          .eq("vapi_assistant_id", assistantId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        const camp = camps?.[0] as { id: string; voicemail_autohangup: boolean | null } | undefined;
+        if (camp?.voicemail_autohangup === true) {
+          const rawCall = (body.message as Record<string, unknown> | undefined)?.call as Record<string, unknown> | undefined;
+          const monitor = rawCall?.monitor as Record<string, unknown> | undefined;
+          const controlUrl = await resolveControlUrl(
+            process.env.VAPI_PRIVATE_KEY ?? "",
+            message.call?.id,
+            monitor?.controlUrl as string | undefined,
+          );
+          if (controlUrl) {
+            const kill = await endCallViaControlUrl(controlUrl);
+            console.log(
+              `[script-call voicemail-autohangup] end-call sent (status=${kill.status}) campaign=${camp.id} ` +
+                `vapiCallId=${message.call?.id} utterance="${utterance.slice(0, 140)}"`,
+            );
+            // Killed — don't run the engine turn (no point injecting into a call we're ending).
+            return NextResponse.json({ received: true });
+          }
+          console.warn(`[script-call voicemail-autohangup] no controlUrl resolvable vapiCallId=${message.call?.id}`);
+        }
+      }
+    } catch (err) {
+      console.error("[script-call voicemail-autohangup] error (call continues, engine runs):", err);
+    }
   }
 
   // Engine-driven turns. Seed the per-call script first so the engine walks

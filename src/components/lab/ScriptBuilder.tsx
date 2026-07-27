@@ -48,6 +48,7 @@ import { getVapi, vapiErrorText } from "@/lib/scriptEngine/vapi";
 import LabConfigForm from "@/components/lab/LabConfigForm";
 import type { ListenerScript, ListenerHandler, ListenerCollection, LabCallEvent } from "@/lib/scriptEngine/database.types";
 import { CONTENT_META, metaOf, type Content } from "./scriptContent";
+import { SYSTEM_RULES } from "./systemRules";
 
 // Content types + CONTENT_META + metaOf live in ./scriptContent (a pure module,
 // no React/DOM — so the runtime and vitest can read them without the canvas deps).
@@ -1108,6 +1109,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   });
   const [qa, setQa] = useState<QaResult | null>(null);
   const [qaBusy, setQaBusy] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false); // System Rules panel — hidden by default
   const lastRunEvId = useRef(0);
   // Everything the call has produced so far — feeds the live dock's three
   // views (transcript / listener / thinking).
@@ -1851,6 +1853,18 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+
+          {/* System Rules — hidden-by-default reference of the backend rules
+              (agent / listener / observer) that aren't visible as boxes. */}
+          <button
+            onClick={() => setRulesOpen(true)}
+            title="System Rules — the agent / listener / observer rules the engine enforces beyond the visible script"
+            className="rounded-lg border border-gray-700 p-2 text-gray-300 transition hover:bg-gray-800"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
 
@@ -3123,6 +3137,50 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
             </div>
             <div className="flex justify-end border-t border-gray-800 px-5 py-3">
               <button onClick={() => setHistory(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* System Rules — hidden-by-default reference of the backend rules the
+          engine enforces beyond the visible script (VOZ-232). */}
+      {rulesOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" onClick={() => setRulesOpen(false)}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl"
+          >
+            <div className="border-b border-gray-800 px-5 py-3">
+              <p className="text-[10px] uppercase tracking-wider text-gray-500">Voice AI Call System</p>
+              <p className="text-sm font-bold text-white">Rules &amp; Architecture</p>
+              <p className="mt-0.5 text-[11px] text-gray-500">
+                What the engine enforces on top of the script you draw — the agent, listener and observer rules that aren&rsquo;t visible as boxes or arrows.
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+              {SYSTEM_RULES.map((section) => (
+                <div key={section.title}>
+                  <p className="text-xs font-bold uppercase tracking-wider text-indigo-300">{section.title}</p>
+                  <p className="mb-2 text-[11px] italic text-gray-500">{section.subtitle}</p>
+                  <div className="overflow-hidden rounded-lg border border-gray-800">
+                    {section.rules.map((r, i) => (
+                      <div key={r.name} className={`flex gap-3 px-3 py-2 ${i % 2 ? "bg-gray-900/40" : ""}`}>
+                        <div className="w-40 shrink-0">
+                          <span className="text-[11px] font-semibold text-gray-200">{r.name}</span>
+                          {r.recent && <span className="ml-1 rounded-full bg-yellow-500/20 px-1.5 py-px text-[8px] font-semibold uppercase text-yellow-300">new</span>}
+                        </div>
+                        <span className="flex-1 text-[11px] leading-snug text-gray-400">{r.spec}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end border-t border-gray-800 px-5 py-3">
+              <button onClick={() => setRulesOpen(false)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">
                 Close
               </button>
             </div>
