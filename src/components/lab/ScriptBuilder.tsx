@@ -135,6 +135,9 @@ function FlowNode({ id, data, selected }: NodeProps) {
   // and ride along with its reply — drawn as dashed capsules latched onto the
   // box's left side. Clicking one selects the host (that's where they live).
   const stmts = ((d.config.statements as string[]) ?? []).map((s) => (s ?? "").trim()).filter(Boolean);
+  // Call Goal: a floating checklist, not a conversation step — no target handle
+  // (nothing wires into it), goals shown as a numbered 1..N list in the box.
+  const isCallGoal = content === "call_goal";
   return (
     <div
       className={`group max-w-[420px] rounded-lg border-2 px-3 ${labelled ? "pb-7 pt-2" : "py-2"} text-left shadow ${meta.color} ${ring} ${nodeDisabled ? "opacity-50" : ""}`}
@@ -185,7 +188,7 @@ function FlowNode({ id, data, selected }: NodeProps) {
           </svg>
         </button>
       </div>
-      {!isStart && (
+      {!isStart && !isCallGoal && (
         <Handle
           type="target"
           position={Position.Top}
@@ -199,6 +202,18 @@ function FlowNode({ id, data, selected }: NodeProps) {
       <p className="truncate text-sm font-medium text-white">{d.label || meta.label}</p>
       {d.subtitle && <p className="mt-0.5 truncate text-[11px] text-gray-400">{d.subtitle}</p>}
       {d.note && <p className="mt-0.5 line-clamp-2 text-[10px] italic text-gray-500">{d.note}</p>}
+      {/* Call Goal: the must-cover checklist, numbered = priority order. */}
+      {isCallGoal && (
+        <ol className="mt-1 space-y-0.5">
+          {stmts.length === 0 && <li className="text-[10px] italic text-gray-500">No goals yet — add statements the call must cover.</li>}
+          {stmts.map((s, i) => (
+            <li key={i} className="flex gap-1.5 text-[11px] text-gray-200" title={s}>
+              <span className="shrink-0 font-semibold text-yellow-300">{i + 1}.</span>
+              <span className="line-clamp-2">{s}</span>
+            </li>
+          ))}
+        </ol>
+      )}
       {handles.map((h, i) => {
         const left = `${((i + 1) / (handles.length + 1)) * 100}%`;
         return (
@@ -222,8 +237,9 @@ function FlowNode({ id, data, selected }: NodeProps) {
           </span>
         );
       })}
-      {/* Parasite statements — always spoken with this box's reply */}
-      {stmts.length > 0 && (
+      {/* Parasite statements — always spoken with this box's reply (Call Goal
+          shows its statements as an in-box checklist instead) */}
+      {stmts.length > 0 && !isCallGoal && (
         <div className="absolute right-full top-1.5 mr-0 w-44 space-y-1">
           {stmts.map((s, i) => (
             <div key={i} className="flex items-center justify-end" title={s}>
@@ -807,6 +823,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
     { payload: "collection", label: "Collection", cls: "border-fuchsia-500 bg-fuchsia-500/10" },
     { payload: "subworkflow", label: "Sub-workflow", cls: "border-teal-500 bg-teal-500/10" },
     { payload: "send_sms", label: "Send SMS", cls: "border-amber-500 bg-amber-500/10" },
+    { payload: "call_goal", label: "Call Goal", cls: "border-yellow-500 bg-yellow-500/10" },
     { payload: "return", label: "Return result", cls: "border-lime-500 bg-lime-500/10" },
     { payload: "end", label: "End call", cls: "border-rose-500 bg-rose-500/10" },
   ];
@@ -1225,7 +1242,9 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           errors.push({ text: "Start call has no arrows out — the call can never move past the opening.", suggestion: "Click + on Start and add a connector for each reply you expect after the opening." });
         continue;
       }
-      if (!reach.has(n.id)) warnings.push({ text: `“${lb}” can never be reached from Start.`, suggestion: "Connect an arrow to it, or delete it." });
+      // A Call Goal box is a deliberately floating call-wide checklist — never
+      // "reached" and never wired, so the unreachable warning doesn't apply.
+      if (!reach.has(n.id) && ct !== "call_goal") warnings.push({ text: `“${lb}” can never be reached from Start.`, suggestion: "Connect an arrow to it, or delete it." });
       if (ct === "scenario" && !d.scenarioId && !(lineDrafts[n.id]?.text ?? "").trim())
         errors.push({ text: `“${lb}” has no line to speak.`, suggestion: "Click the box and type what the agent should say there." });
       if (d.scenarioId) {
@@ -2436,28 +2455,30 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
 
                 {sd.kind === "step" && (
                   <>
-                    {["scenario", "collection", "send_sms", "end", "transfer"].includes(content) &&
+                    {["scenario", "collection", "send_sms", "end", "transfer", "call_goal"].includes(content) &&
                       (() => {
                         const stmts = (sd.config.statements as string[]) ?? [];
                         const setStmts = (arr: string[]) => patchConfig(selNode.id, { statements: arr });
+                        const isGoal = content === "call_goal";
                         return (
-                          <details className="rounded-lg border border-gray-800" open={stmts.length > 0}>
+                          <details className="rounded-lg border border-gray-800" open={isGoal || stmts.length > 0}>
                             <summary className="cursor-pointer px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-300">
-                              Additional statements ({stmts.length})
+                              {isGoal ? "Call goals" : "Additional statements"} ({stmts.length})
                             </summary>
                             <div className="p-2.5">
                             {stmts.map((s, i) => (
                               <div key={i} className="mb-1.5 flex items-start gap-1.5">
+                                {isGoal && <span className="mt-2 shrink-0 text-[11px] font-semibold text-yellow-300">{i + 1}.</span>}
                                 <textarea
                                   className={inputCls + " min-h-[44px] resize-y"}
                                   value={s}
                                   onChange={(e) => setStmts(stmts.map((x, j) => (j === i ? e.target.value : x)))}
-                                  placeholder="e.g. Also — this offer expires Sunday."
+                                  placeholder={isGoal ? "e.g. Mention the 20 free spins on their account." : "e.g. Also — this offer expires Sunday."}
                                 />
                                 <button
                                   onClick={() => setStmts(stmts.filter((_, j) => j !== i))}
                                   className="mt-1 shrink-0 text-sm text-gray-500 hover:text-rose-400"
-                                  title="Remove statement"
+                                  title={isGoal ? "Remove goal" : "Remove statement"}
                                 >
                                   ×
                                 </button>
@@ -2467,13 +2488,15 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                               onClick={() => setStmts([...stmts, ""])}
                               className="rounded-md border border-dashed border-gray-600 px-2 py-1 text-[11px] text-gray-400 transition hover:border-indigo-500 hover:text-indigo-300"
                             >
-                              + Add statement
+                              {isGoal ? "+ Add goal" : "+ Add statement"}
                             </button>
-                            {stmts.length > 0 && (
-                              <p className="mt-1 text-[10px] text-gray-600">
-                                Spoken with the box&rsquo;s line, in order, inside the SAME single reply.
-                              </p>
-                            )}
+                            <p className="mt-1 text-[10px] text-gray-600">
+                              {isGoal
+                                ? "The observer tracks each goal against what's actually said, in priority order (1 first). The call won't wrap until every goal is covered — no repeats once said."
+                                : stmts.length > 0
+                                  ? "Spoken with the box’s line, in order, inside the SAME single reply."
+                                  : ""}
+                            </p>
                             </div>
                           </details>
                         );

@@ -311,6 +311,19 @@ export async function composeArmedBriefing(
     else for (const s of unsaid) if (!owedOffer.includes(s)) owedOffer.push(s);
   }
 
+  // Call Goal boxes (VOZ-208/210): a FLOATING call-wide checklist authored in
+  // the builder — statements the call must cover, in priority (authored) order.
+  // The flow never routes through these boxes (no edges), so the walker ignores
+  // them; the observer just reconciles each statement sentence-level like a
+  // required offer and appends any unsaid part to the required set. Supplements
+  // `must:` tags — the must-say list can now live in one visible box.
+  for (const n of graph.nodes) {
+    if (contentTypeOf(n) !== "call_goal") continue;
+    for (const g of ((cfgOf(n).statements as string[]) ?? []).map((x) => (x ?? "").trim()).filter(Boolean)) {
+      for (const s of unsaidSentences(g, corpusTokens)) if (!owedOffer.includes(s)) owedOffer.push(s);
+    }
+  }
+
   const obs: ObserverCtx = { corpusStems, counter: { covered: 0 }, coveredFacts };
   const briefing = await compileStageBriefing(graph, targetId, handlers, obs);
   if (!briefing) return null;
@@ -323,7 +336,7 @@ export async function composeArmedBriefing(
   for (const nid of visited) {
     if (nid === targetId) continue;
     const n = graph.nodes.find((x) => x.id === nid);
-    if (!n) continue;
+    if (!n || contentTypeOf(n) === "call_goal") continue; // goals are tracked call-wide, not as passed-through debts
     for (const s of (((cfgOf(n).statements as string[]) ?? []).map((x) => (x ?? "").trim()).filter(Boolean))) {
       for (const unsaid of unsaidSentences(s, corpusTokens)) if (!debts.includes(unsaid)) debts.push(unsaid);
     }
@@ -339,7 +352,7 @@ export async function composeArmedBriefing(
   // Required offer NOT YET MENTIONED (VOZ-205/206): the SPECIFIC unsaid
   // sentences of the core offer (not a whole-line all-or-nothing). At an End
   // node, the wording hard-refuses to close until the offer is out.
-  const missing = owedOffer.slice(0, 4);
+  const missing = owedOffer.slice(0, 6);
   if (missing.length) {
     const targetNode = graph.nodes.find((n) => n.id === targetId);
     const atEnd = !!targetNode && contentTypeOf(targetNode) === "end";

@@ -9,6 +9,7 @@ export type Content =
   | "send_sms"
   | "transfer"
   | "return"
+  | "call_goal"
   | "end";
 
 export const CONTENT_META: Record<Content, { label: string; color: string; terminal?: boolean }> = {
@@ -20,6 +21,12 @@ export const CONTENT_META: Record<Content, { label: string; color: string; termi
   send_sms: { label: "Send SMS", color: "border-amber-500 bg-amber-500/10" },
   transfer: { label: "Transfer", color: "border-orange-500 bg-orange-500/10", terminal: true },
   return: { label: "Return result", color: "border-lime-500 bg-lime-500/10", terminal: true },
+  // Call Goal: a FLOATING checklist of statements the call must cover. Not a
+  // conversation step — it has no connectors (terminal:true suppresses them) and
+  // no incoming edge; the observer reads its statements call-wide and tracks each
+  // against the transcript. terminal here means "no connectors in the builder",
+  // NOT a flow endpoint — QA never counts it as a way to end the call.
+  call_goal: { label: "Call Goal", color: "border-yellow-500 bg-yellow-500/10", terminal: true },
   end: { label: "End Call", color: "border-rose-500 bg-rose-500/10", terminal: true },
 };
 

@@ -16,7 +16,7 @@
 // It runs against the REAL shared DB — cleanup matters; don't kill it
 // mid-run without re-running so cleanup can finish.
 //
-// Coverage (49 assertions):
+// Coverage (51 assertions):
 //  B1-B7  brief-ahead core: routed turns inject NO spoken line — only one
 //         non-triggering [CURRENT STAGE] menu; menu rendering (members,
 //         word-for-word marks, else ladder, statement riders); stage
@@ -37,6 +37,8 @@
 //         surfaced as NOT YET MENTIONED and clears once delivered
 //  O8     sentence-level OWED (VOZ-204/207): a multi-sentence statement cut off
 //         after sentence 1 re-serves ONLY the unsaid sentences, not the whole line
+//  O9     Call Goal box (VOZ-208/210): a floating call-wide checklist statement
+//         is surfaced as NOT YET MENTIONED and clears once the agent says it
 //  R1-R2  interruption arbiter: noise that cut the agent off triggers a
 //         resume nudge; late noise does not
 import { createClient } from "@supabase/supabase-js";
@@ -530,6 +532,34 @@ try {
     const owedSection = armed.split("Still OWED")[1] ?? "";
     check("O8 owed re-serves the UNSAID sentences (bonus + text)", /Still OWED/.test(armed) && /three hundred percent/.test(owedSection) && /text you the details/.test(owedSection), armed.slice(-320));
     check("O8 owed does NOT re-serve the already-said sentence (free spins)", owedSection.length > 0 && !/twenty free spins/.test(owedSection), owedSection.slice(0, 300));
+  }
+
+  // ── O9: Call Goal box (VOZ-208/210) — a FLOATING checklist statement (no edges)
+  // is tracked call-wide: surfaced as NOT YET MENTIONED, then clears once said. ──
+  {
+    const scriptGoal = await script("tmp-brief-callgoal", ({ conn, node, edge }) => {
+      const a1 = conn(null, true), a2 = conn(null, true), a3 = conn(null, true);
+      const start = node("start", "Start call", { mode: "agent_first", opening: "", openingDelivery: "verbatim", connectors: [a1] }, null, 0, 0);
+      const A = node("step", "Stage A", { contentType: "collection", collectionId: colA.id, connectors: [a2] }, null, 0, 200);
+      const B = node("step", "Stage B", { contentType: "collection", collectionId: colB.id, connectors: [a3] }, null, 0, 400);
+      const end = node("step", "End call", { contentType: "end" }, null, 0, 600);
+      // FLOATING Call Goal box — no edges to or from it.
+      const goalBox = node("step", "Call Goal", { contentType: "call_goal", statements: ["You have the emerald jackpot unlocked on your account."] }, null, 320, 200);
+      return { nodes: [start, A, B, end, goalBox], edges: [edge(start, a1, A), edge(A, a2, B), edge(B, a3, end)] };
+    });
+    await activate(scriptGoal);
+    const c = newCall();
+    controlMsgs = [];
+    await say(c, "well alright then let us hear what this is all about");
+    await sleep(1800);
+    let armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O9 call-goal surfaced as NOT YET MENTIONED", /NOT YET MENTIONED/.test(armed) && /emerald jackpot/.test(armed), armed.slice(-260));
+    await say(c, "Good news — you have the emerald jackpot unlocked on your account.", "assistant");
+    controlMsgs = [];
+    await say(c, "oh nice, tell me a bit more about that please");
+    await sleep(1800);
+    armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    check("O9 call-goal clears once delivered", armed.length > 0 && !/emerald jackpot/.test(armed), armed.slice(-260));
   }
 } finally {
   try {
