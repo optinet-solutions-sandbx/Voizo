@@ -3,6 +3,7 @@ import {
   buildChildPayload,
   clampCallEndToLegalCap,
   legalCallEndCap,
+  resolveBaseAssistantId,
   type RecurringParent,
 } from "./recurringSpawn";
 
@@ -117,6 +118,34 @@ describe("buildChildPayload cio_workspace inheritance (VOZ-198)", () => {
     expect("cio_workspace" in absent).toBe(false);
     const nulled = buildChildPayload({ parent: { ...parent, cio_workspace: null }, ...common });
     expect("cio_workspace" in nulled).toBe(false);
+  });
+});
+
+describe("resolveBaseAssistantId (VOZ-213: wizard script parents persist no base pick)", () => {
+  const scriptParent = { base_assistant_id: null, agent_mode: "script" as const, script_id: "scr-1" };
+
+  it("script parent without a base → falls back to the designated script-base env", () => {
+    expect(resolveBaseAssistantId(scriptParent, "env-base")).toBe("env-base");
+  });
+
+  it("a parent's own base always wins over the env fallback", () => {
+    expect(resolveBaseAssistantId({ ...scriptParent, base_assistant_id: "own" }, "env-base")).toBe("own");
+    expect(resolveBaseAssistantId({ base_assistant_id: "own", agent_mode: "assistant" }, "env-base")).toBe("own");
+  });
+
+  it("assistant-mode / legacy parents get NO fallback (the env id is a script-base, fail closed)", () => {
+    expect(resolveBaseAssistantId({ base_assistant_id: null, agent_mode: "assistant" }, "env-base")).toBeNull();
+    expect(resolveBaseAssistantId({ base_assistant_id: null }, "env-base")).toBeNull();
+  });
+
+  it("script parent with NO script_id gets NO fallback (mirrors the clone route: script mode without a script must fail loudly, not dial degraded)", () => {
+    expect(resolveBaseAssistantId({ ...scriptParent, script_id: null }, "env-base")).toBeNull();
+    expect(resolveBaseAssistantId({ base_assistant_id: null, agent_mode: "script" }, "env-base")).toBeNull();
+  });
+
+  it("script parent without a base and no/blank env → null (spawn_failed names the env var)", () => {
+    expect(resolveBaseAssistantId(scriptParent, undefined)).toBeNull();
+    expect(resolveBaseAssistantId(scriptParent, "   ")).toBeNull();
   });
 });
 

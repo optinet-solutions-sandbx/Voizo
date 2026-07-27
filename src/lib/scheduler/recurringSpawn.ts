@@ -286,6 +286,29 @@ export function isDueToday(
 
 // ── Spawn orchestration ──────────────────────────────────────────────────
 
+/**
+ * The base assistant a spawn clones from (VOZ-213). Wizard-created recurring
+ * SCRIPT parents persist no base pick — the Base-agent picker is optional in
+ * script mode (VOZ-168), and unlike the Fixed path there is no clone-at-create
+ * step to echo the designated base back — so fall back to the env-designated
+ * script-base, the same rule /api/vapi/clone-assistant applies. Assistant-mode
+ * parents get NO fallback: the env id is a script-base, not a generic default
+ * (fail closed, same posture as the clone route).
+ */
+export function resolveBaseAssistantId(
+  parent: Pick<RecurringParent, "base_assistant_id" | "agent_mode" | "script_id">,
+  scriptBaseEnv: string | null | undefined,
+): string | null {
+  if (parent.base_assistant_id) return parent.base_assistant_id;
+  // script_id required, exactly like the clone route (400s without one): a
+  // "script" parent with no script would otherwise clone the script-base as a
+  // plain assistant — no stages, silently degraded. Better to fail loudly below.
+  if (parent.agent_mode === "script" && parent.script_id && scriptBaseEnv?.trim()) {
+    return scriptBaseEnv.trim();
+  }
+  return null;
+}
+
 export async function spawnChildIfDue(
   supabase: SupabaseClient,
   vapiKey: string,
@@ -293,11 +316,29 @@ export async function spawnChildIfDue(
   now: Date,
   leasedBudget: number,
 ): Promise<SpawnOutcome> {
+  // VOZ-213: resolve a script parent's missing base BEFORE the guard, so every
+  // downstream read (guard, createClone, buildChildPayload) sees the resolved
+  // id and spawned children persist a real base for resume/rebind.
+  parent = {
+    ...parent,
+    base_assistant_id: resolveBaseAssistantId(parent, process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID),
+  };
   if (!parent.recurrence_pattern || !parent.timezone || !parent.base_assistant_id) {
-    return {
-      result: "spawn_failed",
-      details: "parent missing recurrence_pattern, timezone, or base_assistant_id",
-    };
+    // Name the exact gap: the old 3-fields-in-one message hid which field was
+    // missing for 3 days while the 07-24 realtime parents failed every tick.
+    const missing = [
+      !parent.recurrence_pattern && "recurrence_pattern",
+      !parent.timezone && "timezone",
+      !parent.base_assistant_id &&
+        (parent.agent_mode === "script"
+          ? parent.script_id
+            ? "base_assistant_id (script parent and VAPI_SCRIPT_BASE_ASSISTANT_ID is unset)"
+            : "base_assistant_id (script parent with NO script_id — set a script or a base agent)"
+          : "base_assistant_id"),
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return { result: "spawn_failed", details: `parent missing ${missing}` };
   }
   if (parent.segment_id == null) {
     return {
