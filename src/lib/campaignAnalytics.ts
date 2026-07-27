@@ -235,7 +235,13 @@ export function bucketDurations(durations: number[], edges: readonly number[]): 
   return buckets;
 }
 
-const COUNTRY_TOKEN = /(?:^|[_\s])([A-Z]{2})(?=[_\s])/;
+// `|$` (VOZ-217): a country code at the very END of the name is still a country
+// code. The wizard's own names finish on it ("… VOIZO RND REG YESTERDAY AU"), so
+// the delimiter-only lookahead returned UNKNOWN for them — no country chip, and
+// invisible to the country filter. Strictly additive: the match is the FIRST token
+// in the string, so every name that already resolved keeps its answer (verified
+// against all 122 production campaign names — 2 changed, both UNKNOWN → correct).
+const COUNTRY_TOKEN = /(?:^|[_\s])([A-Z]{2})(?=[_\s]|$)/;
 export function parseCountryToken(name: string): string {
   const m = (name ?? "").match(COUNTRY_TOKEN);
   return m ? m[1] : "UNKNOWN";

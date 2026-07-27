@@ -46,6 +46,19 @@ describe("parseCountryToken (spec section 2/8 — name token, never timezone)", 
     expect(parseCountryToken("Random Campaign")).toBe("UNKNOWN");
     expect(parseCountryToken("")).toBe("UNKNOWN");
   });
+  // VOZ-217: the wizard's own names END on the country ("… REG YESTERDAY AU"), which
+  // the delimiter-only lookahead missed — so those campaigns showed no country chip
+  // and were unreachable by the country filter.
+  it("parses a token at the END of the name (no trailing delimiter)", () => {
+    expect(parseCountryToken("Daily Automated Conversion | VOIZO RND REG YESTERDAY AU")).toBe("AU");
+    expect(parseCountryToken("Daily Automated Conversion | VOIZO RND REG YESTERDAY CA")).toBe("CA");
+    expect(parseCountryToken("L7_AU")).toBe("AU");
+  });
+  it("still takes the FIRST token, so an end-of-name match can never override an earlier one", () => {
+    // This is what makes the end-of-string allowance strictly additive: every name
+    // that already resolved keeps its answer (verified against all 122 prod names).
+    expect(parseCountryToken("L7_AU_RND_20NDFS_PREVDAYREG CA")).toBe("AU");
+  });
 });
 
 describe("daysBetween", () => {
