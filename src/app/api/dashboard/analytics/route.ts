@@ -94,7 +94,8 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "campaigns_v2",
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, system_prompt, start_at, created_at, end_at, timezone",
+      // cio_workspace: the brand scope shown on the Global Performance header (VOZ-216).
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, system_prompt, start_at, created_at, end_at, timezone",
       "id",
     ),
     // SMS-sent series/columns (Slice 3): windowed, scoped to in-filter campaigns below.
@@ -187,7 +188,14 @@ export async function GET(request: NextRequest) {
   ]);
   const inWindowLive = live.filter((c) => windowedCampaignIds.has(c.id));
   const campaignOptions = inWindowLive
-    .map((c) => ({ id: c.id, name: c.name, startAt: c.start_at ?? c.created_at ?? null }))
+    // `brand` rides along (VOZ-216): the section header derives its distinct brand
+    // scope from these — the in-window campaigns are exactly what the KPIs cover.
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      startAt: c.start_at ?? c.created_at ?? null,
+      brand: c.cio_workspace ?? null,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
   // Country filter options (replaces the agent filter, Val 2026-07-07): distinct parsed countries
   // among the in-window campaigns, by the SAME L7_<CC>_ parse used for filter membership. Campaigns

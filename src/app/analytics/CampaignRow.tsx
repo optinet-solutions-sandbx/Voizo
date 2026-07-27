@@ -8,9 +8,9 @@
 
 import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronRight, Flag, Users, Calendar, Repeat } from "lucide-react";
+import { ChevronRight, Flag, Users, Calendar, Repeat, Building2 } from "lucide-react";
 import type { PerfMetric, PerfRow, DisplayStatus } from "@/lib/dashboardAnalytics";
-import { formatCampaign } from "@/lib/campaignDisplay";
+import { formatCampaign, brandLabel } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import { SegBar, MetricRow } from "./PerformanceCards";
@@ -52,6 +52,8 @@ export interface CampaignRowData {
   id: string;
   name: string;
   country: string;
+  /** Brand routing label (campaigns_v2.cio_workspace). null = the default brand. */
+  cioWorkspace: string | null;
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
@@ -138,7 +140,11 @@ export default function CampaignRow({
           <button
             type="button"
             onClick={onToggle}
-            className="flex items-center gap-1.5 text-left min-w-0 group"
+            // max-w-full: a <button>'s auto width is shrink-to-fit (form control),
+            // so a long nowrap name makes it WIDER than the grid cell and the text
+            // paints across the Status column (VOZ-214, Val 2026-07-27). Capping at
+            // the cell width is what lets the span's `truncate` actually engage.
+            className="flex max-w-full items-center gap-1.5 text-left min-w-0 group"
             aria-label={expanded ? "Collapse call records" : "Expand call records"}
           >
             <ChevronRight size={14} className={`text-[var(--text-3)] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
@@ -167,6 +173,14 @@ export default function CampaignRow({
             {trailing}
           </div>
           <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[10px] text-[var(--text-3)]">
+            {/* Brand first (VOZ-216): with several brands live, "whose campaign is
+                this?" is the first question a row has to answer. Tinted so it reads
+                as an owner, not another neutral fact like country/date. No tooltip —
+                the brand name explains itself, and "Customer.io workspace" is
+                plumbing the operator never needs (Jasiel 2026-07-27). */}
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+              <Building2 size={10} /> {brandLabel(c.cioWorkspace)}
+            </span>
             {c.country !== "UNKNOWN" && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-2)]">
                 <Flag size={10} /> {c.country}

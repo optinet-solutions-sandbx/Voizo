@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import type { TodayPerfDay } from "@/lib/dashboardAnalytics";
-import { formatCampaign } from "@/lib/campaignDisplay";
+import { formatCampaign, distinctBrandLabels } from "@/lib/campaignDisplay";
 import PromptModal from "./PromptModal";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
@@ -26,6 +26,7 @@ interface Row {
   id: string;
   name: string;
   country: string;
+  cioWorkspace: string | null; // brand (VOZ-216)
   displayStatus: DisplayStatus;
   scheduleType: "fixed" | "recurring";
   voiceId: string | null;
@@ -171,6 +172,10 @@ export default function CampaignTable() {
     .filter((r) => !hidden.has(r.displayStatus) && activeInRange(r, fromMs, toMs))
     .sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
 
+  // Brands present in the CURRENTLY-LISTED rows (post status/date filter) — the
+  // scope line must describe what's on screen, not everything in the database.
+  const visibleBrands = distinctBrandLabels(visible.map((r) => r.cioWorkspace));
+
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageRows = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -226,6 +231,13 @@ export default function CampaignTable() {
           </button>
         )}
         <span className="text-[11px] text-[var(--text-3)]">{from || to ? "activity in range · lifetime totals" : "all campaigns · lifetime totals"}</span>
+        {/* Brand scope of the rows actually listed (VOZ-216) — moves with the filters. */}
+        {visibleBrands.length > 0 && (
+          <span className="text-[11px] text-[var(--text-3)]">
+            · {visibleBrands.length === 1 ? "brand" : "brands"}:{" "}
+            <span className="text-primary">{visibleBrands.join(" · ")}</span>
+          </span>
+        )}
         {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
@@ -254,6 +266,7 @@ export default function CampaignTable() {
                   id: r.id,
                   name: r.name,
                   country: r.country,
+                  cioWorkspace: r.cioWorkspace,
                   voiceId: r.voiceId,
                   agentLabel: r.agentLabel,
                   baseAssistantId: r.baseAssistantId,

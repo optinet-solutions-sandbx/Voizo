@@ -65,6 +65,40 @@ export function formatCampaign(rawName: string | null | undefined): CampaignDisp
   return { country, offer, runTag, display };
 }
 
+// ── Brand (Customer.io workspace) display — VOZ-216 ──────────────────────────
+// campaigns_v2.cio_workspace stores the ROUTING LABEL (VOZ-198): a join key held
+// byte-for-byte identical to the CUSTOMERIO_WEBHOOK_SIGNING_KEYS /
+// CUSTOMERIO_APP_API_KEYS map keys. Never reformat it at rest — only for display.
+// NULL/blank = a pre-VOZ-198 row = the default workspace.
+//
+// Mirrors CIO_DEFAULT_WORKSPACE in lib/customerio.ts, which is server-side (env +
+// API-key resolution) and must not reach the client bundle. campaignDisplay.test.ts
+// pins the two literals together so neither can drift unnoticed.
+export const DEFAULT_BRAND_WORKSPACE = "lucky7even";
+
+// Operator-facing brand names. A workspace missing here still renders (title-cased
+// from its label) so a newly-configured brand is never blank on the dashboard —
+// add a line only when its marketing spelling differs (e.g. "spinsup" → "SpinsUp").
+const BRAND_NAMES: Record<string, string> = {
+  lucky7even: "Lucky7even",
+  fortuneplay: "Fortune Play",
+};
+
+/** Display name for a campaign's brand. null/blank → the default brand. */
+export function brandLabel(workspace: string | null | undefined): string {
+  const ws = (workspace ?? "").trim().toLowerCase() || DEFAULT_BRAND_WORKSPACE;
+  return BRAND_NAMES[ws] ?? ws.charAt(0).toUpperCase() + ws.slice(1);
+}
+
+/**
+ * Distinct brand names across a set of campaigns, alphabetical — answers "which
+ * brands do these numbers cover?" on the aggregate panels (Today's / Global
+ * Performance), where a per-row chip has nowhere to live.
+ */
+export function distinctBrandLabels(workspaces: (string | null | undefined)[]): string[] {
+  return [...new Set(workspaces.map(brandLabel))].sort((a, b) => a.localeCompare(b));
+}
+
 // Compact, DISTINGUISHING label for legends / breakdowns where many same-offer campaigns
 // appear together: leads with the bits that differ (country + run-date) and drops the shared
 // offer ("20 NDFS + 300% DepMatch" is constant noise across a campaign family). Falls back to

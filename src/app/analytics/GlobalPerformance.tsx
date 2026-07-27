@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, SlidersHorizontal } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import { formatCampaign, promptAgentLabel } from "@/lib/campaignDisplay";
+import { formatCampaign, promptAgentLabel, distinctBrandLabels } from "@/lib/campaignDisplay";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
 import CampaignTable from "./CampaignTable";
@@ -61,7 +61,8 @@ interface AnalyticsResponse {
   dailyVolume: VolumeResult;
   heatmap: HeatmapResult;
   options: {
-    campaigns: { id: string; name: string; startAt: string | null }[];
+    // `brand` = campaigns_v2.cio_workspace (VOZ-216); absent on older API deploys.
+    campaigns: { id: string; name: string; startAt: string | null; brand?: string | null }[];
     countries: { value: string; label: string }[];
     prompts: { sha: string; label: string; baseAssistantId: string | null }[];
   };
@@ -301,6 +302,9 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   const bestPrompt = data?.best.prompt
     ? { ...data.best.prompt, label: promptDisplay(data.best.prompt.key, data.best.prompt.label) }
     : null;
+  // Brands represented in the range's campaigns (VOZ-216). options.campaigns IS the
+  // in-window live set the KPIs aggregate, so this needs no second fetch.
+  const rangeBrands = distinctBrandLabels((data?.options.campaigns ?? []).map((c) => c.brand));
 
   return (
     <section id="global-performance" className="scroll-mt-4">
@@ -311,6 +315,14 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         <span className="text-[13px] text-[var(--text-3)]">
           {data ? `(historical · ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"})` : "(historical, across all campaigns)"}
         </span>
+        {/* Brand scope of these KPIs (VOZ-216): the in-window campaigns the numbers
+            are built from — so "whose performance is this?" needs no drill-down. */}
+        {rangeBrands.length > 0 && (
+          <span className="text-[13px] text-[var(--text-3)]">
+            {rangeBrands.length === 1 ? "brand" : "brands"}:{" "}
+            <span className="text-primary font-medium">{rangeBrands.join(" · ")}</span>
+          </span>
+        )}
       </div>
 
       {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll

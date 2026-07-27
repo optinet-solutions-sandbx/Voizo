@@ -49,7 +49,8 @@ export async function GET(request: NextRequest) {
     fetchAllRows(supabaseAdmin, "calls_v2", "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds", "id"),
     supabaseAdmin
       .from("campaigns_v2")
-      .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at"),
+      // cio_workspace: the per-row brand chip (VOZ-216).
+      .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at"),
     // Players (full roster) + SMS sent are also campaign-LIFETIME totals: the roster has no "last
     // 30 days", and texts-sent reads as a campaign total. fetchAllRows pages past the 1000-row cap.
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id, id, outcome", "id"),

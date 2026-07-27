@@ -64,6 +64,7 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
                 id: c.id,
                 name: c.name,
                 country: c.country,
+                cioWorkspace: c.cioWorkspace,
                 voiceId: c.voiceId,
                 agentLabel: c.agentLabel,
                 baseAssistantId: c.baseAssistantId,

@@ -52,6 +52,7 @@ export interface DashCampaignRow {
   voice_id?: string | null; // ElevenLabs voice
   vapi_assistant_name?: string | null; // the CLONE name (== campaign name); not used for display
   base_assistant_id?: string | null; // the BASE agent this clone came from — resolved to a real name in the UI
+  cio_workspace?: string | null; // brand routing label (VOZ-198); NULL = the default brand. Display via brandLabel().
   start_at?: string | null;
   created_at?: string | null;
   end_at?: string | null;
@@ -158,6 +159,7 @@ export interface RunningCampaignCard {
   id: string;
   name: string;
   country: string;
+  cioWorkspace: string | null; // brand label (VOZ-216) — raw workspace; UI renders via brandLabel()
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
@@ -748,6 +750,7 @@ export interface CampaignTableRow {
   id: string;
   name: string;
   country: string;
+  cioWorkspace: string | null; // brand label (VOZ-216) — raw workspace; UI renders via brandLabel()
   displayStatus: DisplayStatus;
   scheduleType: "fixed" | "recurring";
   voiceId: string | null;
@@ -803,6 +806,7 @@ export function computeCampaignTable(
         id: c.id,
         name: c.name,
         country: parseCountryToken(c.name),
+        cioWorkspace: c.cio_workspace ?? null,
         displayStatus: deriveDisplayStatus({
           rawStatus: c.status ?? null,
           endAtMs: c.end_at ? Date.parse(c.end_at) : null,
@@ -1470,6 +1474,7 @@ export function computeToday(
       id: c.id,
       name: c.name,
       country: parseCountryToken(c.name),
+      cioWorkspace: c.cio_workspace ?? null,
       voiceId: c.voice_id ?? null,
       agentLabel: c.vapi_assistant_name ?? null,
       baseAssistantId: c.base_assistant_id ?? null,

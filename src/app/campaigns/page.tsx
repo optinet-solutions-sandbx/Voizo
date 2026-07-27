@@ -5,8 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, X, Megaphone, Repeat,
-  Pause, Play, Copy, Clock, Download, ChevronRight,
+  Pause, Play, Copy, Clock, Download, ChevronRight, Building2,
 } from "lucide-react";
+import { brandLabel } from "@/lib/campaignDisplay";
 import { triggerDownload } from "@/lib/download";
 import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 import { PlusIcon } from "@/components/icons/animated/plus";
@@ -523,6 +524,12 @@ function CampaignsPageInner() {
                       </div>
                       <StatusBadge status={displayStatusOf(c)} />
                     </div>
+                    {/* Brand (VOZ-216) — same owner-first rule as the desktop table. */}
+                    <div className="ml-10 mb-1.5">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px]">
+                        <Building2 size={10} /> {brandLabel(c.cio_workspace as string | null)}
+                      </span>
+                    </div>
                     <div className="flex items-center gap-1.5 mb-2.5 ml-10">
                       <Clock size={10} className={when.muted ? "text-[var(--text-3)]/50 shrink-0" : "text-[var(--text-3)] shrink-0"} />
                       <p className={`text-[11px] truncate ${when.muted ? "text-[var(--text-3)]" : "text-[var(--text-2)]"}`}>
@@ -618,9 +625,15 @@ function CampaignsPageInner() {
                               >
                                 {name}
                               </Link>
-                              {agentLabel && (
-                                <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">{agentLabel}</p>
-                              )}
+                              {/* Brand + agent on one sub-line (VOZ-216): with several
+                                  brands live, the owner has to be visible without opening
+                                  the campaign. */}
+                              <p className="text-[11px] text-[var(--text-3)] mt-0.5 flex items-center gap-1.5 min-w-0">
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 shrink-0 text-[10px]">
+                                  <Building2 size={10} /> {brandLabel(c.cio_workspace as string | null)}
+                                </span>
+                                {agentLabel && <span className="truncate">{agentLabel}</span>}
+                              </p>
                             </div>
                           </div>
                         </td>

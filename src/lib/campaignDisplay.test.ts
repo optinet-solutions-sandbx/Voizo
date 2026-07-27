@@ -1,5 +1,51 @@
 import { describe, it, expect } from "vitest";
-import { formatCampaign, campaignShortLabel, promptAgentLabel, campaignIdsForCountry } from "./campaignDisplay";
+import {
+  formatCampaign,
+  campaignShortLabel,
+  promptAgentLabel,
+  campaignIdsForCountry,
+  brandLabel,
+  distinctBrandLabels,
+  DEFAULT_BRAND_WORKSPACE,
+} from "./campaignDisplay";
+import { CIO_DEFAULT_WORKSPACE } from "./customerio";
+
+describe("brandLabel (VOZ-216 — which brand is this campaign?)", () => {
+  it("the client-side default brand CANNOT drift from the server's routing default", () => {
+    // A mismatch would label every legacy (NULL cio_workspace) campaign as the
+    // wrong brand on the dashboard while routing kept using the real default.
+    expect(DEFAULT_BRAND_WORKSPACE).toBe(CIO_DEFAULT_WORKSPACE);
+  });
+
+  it("maps the configured brands to their operator-facing names", () => {
+    expect(brandLabel("lucky7even")).toBe("Lucky7even");
+    expect(brandLabel("fortuneplay")).toBe("Fortune Play");
+  });
+
+  it("treats NULL/blank as the default brand (pre-VOZ-198 rows)", () => {
+    expect(brandLabel(null)).toBe("Lucky7even");
+    expect(brandLabel(undefined)).toBe("Lucky7even");
+    expect(brandLabel("   ")).toBe("Lucky7even");
+  });
+
+  it("renders an unmapped future brand instead of going blank", () => {
+    expect(brandLabel("roosterbet")).toBe("Roosterbet");
+    expect(brandLabel(" FortunePlay ")).toBe("Fortune Play"); // trimmed + case-insensitive lookup
+  });
+});
+
+describe("distinctBrandLabels (aggregate-panel brand scope)", () => {
+  it("dedupes, folds NULL into the default, and sorts alphabetically", () => {
+    expect(distinctBrandLabels(["fortuneplay", "lucky7even", null, "lucky7even"])).toEqual([
+      "Fortune Play",
+      "Lucky7even",
+    ]);
+  });
+
+  it("no campaigns → no brands (panel shows nothing, not a phantom default)", () => {
+    expect(distinctBrandLabels([])).toEqual([]);
+  });
+});
 
 describe("formatCampaign", () => {
   it("parses country + NDFS + DepMatch from a VOIZO code", () => {

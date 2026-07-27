@@ -59,7 +59,8 @@ export async function GET(request: NextRequest) {
     fetchAllRows(
       supabaseAdmin,
       "campaigns_v2",
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, start_at, created_at, end_at",
+      // cio_workspace: the brand chip + panel brand-scope line (VOZ-216).
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
       "id",
     ),
     fetchAllRows(

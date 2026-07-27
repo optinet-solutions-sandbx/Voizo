@@ -19,8 +19,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, Globe2, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
+import { Building2, ChevronDown, Globe2, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
 import { deriveAlwaysOnRows, type AlwaysOnRow } from "@/lib/alwaysOn";
+import { brandLabel } from "@/lib/campaignDisplay";
 import { patchCampaignSettings, updateCampaignV2Status } from "@/lib/campaignV2Client";
 import { resolveCallDelay } from "@/lib/campaignV2Shared";
 import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
@@ -261,12 +262,21 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                 </span>
 
                 <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/campaigns/v2/${parentId}`}
-                    className="text-sm font-medium text-[var(--text-1)] hover:text-blue-400 transition truncate block"
-                  >
-                    {(parent.name as string) ?? parentId}
-                  </Link>
+                  {/* Brand beside the name (VOZ-216): two live parents can differ ONLY
+                      by brand ("…REG YESTERDAY AU" exists for both Lucky7even and
+                      Fortune Play), and this row carries Stop/Settings for a real
+                      running campaign — the owner must be unmistakable before clicking. */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Link
+                      href={`/campaigns/v2/${parentId}`}
+                      className="text-sm font-medium text-[var(--text-1)] hover:text-blue-400 transition truncate"
+                    >
+                      {(parent.name as string) ?? parentId}
+                    </Link>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px] shrink-0">
+                      <Building2 size={10} /> {brandLabel(parent.cio_workspace as string | null)}
+                    </span>
+                  </div>
                   <p className="text-[11px] text-[var(--text-3)] mt-0.5 truncate">
                     {parentRunning ? (
                       <span className="text-emerald-400">Schedule live</span>
