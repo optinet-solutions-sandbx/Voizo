@@ -1,7 +1,11 @@
 // SIP Pool Provisioning Script
 // ============================================================
-// Provisions the fixed pool of 5 SIP phone numbers on Vapi and
+// Provisions the fixed pool of SIP phone numbers on Vapi and
 // registers them in vapi_sip_pool. Idempotent and dry-run by default.
+// POOL_SIZE 5 → 20 (VOZ-215, 2026-07-27): existing slots are SKIPped,
+// only the missing ones are created. NOTE: the scheduler's concurrency
+// gate is CAMPAIGN_CONCURRENCY_LIMIT (env, default 3) — raise it in
+// Vercel alongside the pool or the extra slots never lease.
 //
 // Run:
 //   node --env-file=.env.local scripts/sip-pool-provision.mjs
@@ -28,7 +32,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 // ── Configuration ────────────────────────────────────────────
-const POOL_SIZE = 5;
+const POOL_SIZE = 20; // was 5 (Phase 1); 20 per Maria's "support more campaigns" (VOZ-215)
 const SLOT_NAME_PREFIX = "voizo-sip-pool-slot-";
 const SIP_DOMAIN = "sip.vapi.ai";
 const VAPI_BASE = "https://api.vapi.ai";

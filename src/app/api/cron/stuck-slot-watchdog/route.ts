@@ -17,10 +17,13 @@ export const maxDuration = 30;
 // ~2 weeks; no surface signal).
 const STUCK_THRESHOLD_HOURS = 24;
 
-// Quantitative ALERT trigger. At 5-slot pool capacity (current default),
-// 4+ anomalies = pool is nearly exhausted by ghosts. Adjust upward if pool
-// capacity grows.
-const ALERT_COUNT_THRESHOLD = 4;
+// Quantitative ALERT trigger — computed per run as ≥80% of the CURRENT pool,
+// floored at the original 4-of-5 calibration. Derived instead of hardcoded so
+// it is correct on BOTH sides of a pool resize (5 slots today, 20 after
+// VOZ-215's provision --apply) with no deploy-order coupling. The 72h
+// single-lease escalation below still catches slow leaks long before this.
+const ALERT_COUNT_RATIO = 0.8;
+const ALERT_COUNT_MIN = 4;
 
 // Hard-escalation trigger. Any single stuck lease above this is ALERT
 // regardless of how many other anomalies exist. 72h means "this has clearly
@@ -236,10 +239,20 @@ export async function GET(request: NextRequest) {
     )
     .reduce((m, a) => Math.max(m, a.hours_leased), 0);
 
+  // Pool size for the count threshold (ALERT_COUNT_RATIO above). On a count
+  // error, fall back to the floor — the alert-PRONE direction, never quieter.
+  const { count: poolSize, error: poolSizeErr } = await supabaseAdmin
+    .from("vapi_sip_pool")
+    .select("id", { count: "exact", head: true });
+  if (poolSizeErr) {
+    console.warn("[stuck-slot-watchdog] pool-size count failed — using floor threshold:", poolSizeErr);
+  }
+  const alertCountThreshold = Math.max(ALERT_COUNT_MIN, Math.ceil((poolSize ?? 0) * ALERT_COUNT_RATIO));
+
   let severity: Severity;
   if (totalCount === 0) {
     severity = "OK";
-  } else if (totalCount >= ALERT_COUNT_THRESHOLD || maxHours >= ALERT_ESCALATION_HOURS) {
+  } else if (totalCount >= alertCountThreshold || maxHours >= ALERT_ESCALATION_HOURS) {
     severity = "ALERT";
   } else {
     severity = "WARN";
@@ -306,7 +319,7 @@ export async function GET(request: NextRequest) {
       total_count: totalCount,
       max_hours: maxHours,
       threshold_hours: STUCK_THRESHOLD_HOURS,
-      alert_count_threshold: ALERT_COUNT_THRESHOLD,
+      alert_count_threshold: alertCountThreshold,
       alert_escalation_hours: ALERT_ESCALATION_HOURS,
     },
   });
