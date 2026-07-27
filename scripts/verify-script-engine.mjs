@@ -16,7 +16,7 @@
 // It runs against the REAL shared DB — cleanup matters; don't kill it
 // mid-run without re-running so cleanup can finish.
 //
-// Coverage (47 assertions):
+// Coverage (49 assertions):
 //  B1-B7  brief-ahead core: routed turns inject NO spoken line — only one
 //         non-triggering [CURRENT STAGE] menu; menu rendering (members,
 //         word-for-word marks, else ladder, statement riders); stage
@@ -35,6 +35,8 @@
 //         engine pushed even when an interruption kept it out of the transcript
 //  O7     required-offer tracking (VOZ-194): a `must:` fact not yet said is
 //         surfaced as NOT YET MENTIONED and clears once delivered
+//  O8     sentence-level OWED (VOZ-204/207): a multi-sentence statement cut off
+//         after sentence 1 re-serves ONLY the unsaid sentences, not the whole line
 //  R1-R2  interruption arbiter: noise that cut the agent off triggers a
 //         resume nudge; late noise does not
 import { createClient } from "@supabase/supabase-js";
@@ -501,6 +503,33 @@ try {
     await sleep(1800);
     armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
     check("O7 required offer clears once delivered", armed.length > 0 && !/NOT YET MENTIONED/.test(armed), armed.slice(-260));
+  }
+
+  // ── O8: sentence-level OWED (VOZ-204/207) — a multi-sentence statement cut off
+  // after sentence 1 re-serves ONLY the unsaid sentences, not the whole paragraph.
+  {
+    const scriptSen = await script("tmp-brief-sentences", ({ conn, node, edge }) => {
+      const a1 = conn(null, true), a2 = conn(null, true), a3 = conn(null, true);
+      const start = node("start", "Start call", { mode: "agent_first", opening: "", openingDelivery: "verbatim", connectors: [a1] }, null, 0, 0);
+      const A = node("step", "Stage A", { contentType: "collection", collectionId: colA.id, statements: ["You have twenty free spins waiting. Plus a three hundred percent deposit bonus. I will text you the details."], connectors: [a2] }, null, 0, 200);
+      const B = node("step", "Stage B", { contentType: "collection", collectionId: colB.id, connectors: [a3] }, null, 0, 400);
+      const end = node("step", "End call", { contentType: "end" }, null, 0, 600);
+      return { nodes: [start, A, B, end], edges: [edge(start, a1, A), edge(A, a2, B), edge(B, a3, end)] };
+    });
+    await activate(scriptSen);
+    const c = newCall();
+    controlMsgs = [];
+    await say(c, "affirmative dolphin"); // → Stage A, the 3-sentence statement is armed
+    await sleep(1800);
+    // The agent gets out ONLY sentence 1, then is cut off.
+    await say(c, "Right, so you've got twenty free spins waiting there.", "assistant");
+    controlMsgs = [];
+    await say(c, "well alright then tell me a bit more about all this please"); // advance A→B
+    await sleep(1800);
+    const armed = notes().map((m) => m.message?.content ?? "").find((s) => /CURRENT STAGE/.test(s)) ?? "";
+    const owedSection = armed.split("Still OWED")[1] ?? "";
+    check("O8 owed re-serves the UNSAID sentences (bonus + text)", /Still OWED/.test(armed) && /three hundred percent/.test(owedSection) && /text you the details/.test(owedSection), armed.slice(-320));
+    check("O8 owed does NOT re-serve the already-said sentence (free spins)", owedSection.length > 0 && !/twenty free spins/.test(owedSection), owedSection.slice(0, 300));
   }
 } finally {
   try {

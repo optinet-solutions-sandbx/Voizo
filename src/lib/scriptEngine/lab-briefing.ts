@@ -9,6 +9,7 @@
 import type { ListenerHandler, ListenerScriptNode, ListenerScriptEdge } from "./database.types";
 import { getCollectionHandlerIds, agentSaidCorpus, visitedFlowNodeIds, getDeliveredHandlers } from "./lab-db";
 import { contentTypeOf } from "./lab-flow";
+import { corpusTokenSet, unsaidSentences } from "./lab-sentences";
 
 type Graph = { nodes: ListenerScriptNode[]; edges: ListenerScriptEdge[] };
 type Cfg = Record<string, unknown>;
@@ -266,63 +267,88 @@ export async function composeArmedBriefing(
     /* no history → plain briefing */
   }
   const corpusStems = new Set(stemsOf(corpus));
-  // Fact-level coverage (VOZ-177) + interruption resilience (VOZ-178). A fact is
-  // "conveyed" once ANY handler carrying its tag is either detected in the spoken
-  // corpus (stem overlap) OR present in the delivered ledger. The ledger arm is
-  // the interruption-resilient one: a barge-in truncates the transcript so the
-  // spoken corpus misses the line, but the engine still recorded that it pushed
-  // it — without this the observer re-serves the line and the agent repeats it,
-  // exactly what happened when the Val call was talked over.
+  // Sentence-level token set (VOZ-202/203): lets the observer reconcile an
+  // INTENDED line against what was ACTUALLY spoken sentence by sentence, so a
+  // multi-sentence line cut off partway is re-served from where it stopped —
+  // not repeated whole, not marked wholly done.
+  const corpusTokens = corpusTokenSet(corpus);
   // Fact tracking is scoped to THIS script's handlers (see scriptHandlerIds).
   const scriptIds = await scriptHandlerIds(graph);
   const scoped = handlers.filter((h) => scriptIds.has(h.id));
   const deliveredIds = new Set(delivered.map((d) => d.handler_id));
+
+  // REQUIRED fact keys anywhere in this script (`must:`) — tracked spoken-only
+  // below, so they're excluded from the lenient dedup pass.
+  const requiredKeys = new Set<string>();
+  for (const h of scoped) for (const f of requiredFactsOf(h)) requiredKeys.add(f);
+
+  // Covered facts = DEDUP / don't-repeat (VOZ-177/178). Plain `fact:` stays
+  // lenient: conveyed once ANY handler carrying it is in the spoken corpus OR
+  // the delivered ledger (err toward slightly less repetition). `must:` facts
+  // are deliberately NOT credited here — a pushed-but-cut-off offer must never
+  // be marked "already covered"; their coverage is spoken + sentence-level below.
   const coveredFacts = new Set<string>();
   for (const h of scoped) {
-    const facts = factsOf(h);
-    if (!facts.length) continue;
-    if (deliveredIds.has(h.id) || contentCovered(h.response_template, corpusStems)) {
-      for (const f of facts) coveredFacts.add(f);
-    }
+    if (!(deliveredIds.has(h.id) || contentCovered(h.response_template, corpusStems))) continue;
+    for (const f of factsOf(h)) if (!requiredKeys.has(f)) coveredFacts.add(f);
   }
-  const obs: ObserverCtx = { corpusStems, counter: { covered: 0 }, coveredFacts };
-  const briefing = await compileStageBriefing(graph, targetId, handlers, obs);
-  if (!briefing) return null;
-  // Debts: statements of boxes the flow already passed through whose content
-  // never made it into the agent's actual speech.
-  const debts: string[] = [];
-  for (const nid of visited) {
-    if (nid === targetId) continue;
-    const n = graph.nodes.find((x) => x.id === nid);
-    if (!n) continue;
-    for (const s of (((cfgOf(n).statements as string[]) ?? []).map((x) => (x ?? "").trim()).filter(Boolean))) {
-      if (!contentCovered(s, obs.corpusStems) && !debts.includes(s)) debts.push(s);
-    }
-  }
-  const owed = debts.slice(0, 2);
-  let text = owed.length
-    ? briefing +
-      `\nStill OWED from earlier stages — the customer never actually heard these; work each into your NEXT reply naturally, once (own words where it reads as an instruction): ${owed
-        .map((s, i) => `(${i + 1}) "${s}"`)
-        .join(" ")}`
-    : briefing;
 
-  // Required-offer tracking (VOZ-194): the mirror of covered-ground. Any `must:`
-  // fact the call has NOT yet conveyed is surfaced so the agent delivers the
-  // offer before wrapping — the observer now knows both what was already said
-  // (don't repeat) and what has not been said yet (don't forget). The
-  // representative line per fact is the first must:-tagged handler carrying it.
+  // Required-offer reconciliation (VOZ-205): representative line per `must:`
+  // fact, split into sentences, each checked against what was ACTUALLY spoken.
+  // A required fact is satisfied only when EVERY sentence has landed; until then
+  // the SPECIFIC unsaid sentences are what we re-serve (and it's marked covered
+  // for dedup only once fully said).
   const requiredLine = new Map<string, string>();
   for (const h of scoped) {
     const line = (h.response_template ?? "").trim();
     if (!line) continue;
     for (const f of requiredFactsOf(h)) if (!requiredLine.has(f)) requiredLine.set(f, line);
   }
-  const missing = [...requiredLine.keys()].filter((f) => !coveredFacts.has(f)).slice(0, 4);
+  const owedOffer: string[] = [];
+  for (const [f, line] of requiredLine) {
+    const unsaid = unsaidSentences(line, corpusTokens);
+    if (unsaid.length === 0) coveredFacts.add(f);
+    else for (const s of unsaid) if (!owedOffer.includes(s)) owedOffer.push(s);
+  }
+
+  const obs: ObserverCtx = { corpusStems, counter: { covered: 0 }, coveredFacts };
+  const briefing = await compileStageBriefing(graph, targetId, handlers, obs);
+  if (!briefing) return null;
+
+  // OWED debts (VOZ-204): statements of boxes the flow already passed through,
+  // re-served at the SENTENCE level — only the parts the agent didn't actually
+  // say. A barge-in after sentence 1 of a paragraph leaves sentences 2-3 owed,
+  // not the whole thing (single-sentence statements behave exactly as before).
+  const debts: string[] = [];
+  for (const nid of visited) {
+    if (nid === targetId) continue;
+    const n = graph.nodes.find((x) => x.id === nid);
+    if (!n) continue;
+    for (const s of (((cfgOf(n).statements as string[]) ?? []).map((x) => (x ?? "").trim()).filter(Boolean))) {
+      for (const unsaid of unsaidSentences(s, corpusTokens)) if (!debts.includes(unsaid)) debts.push(unsaid);
+    }
+  }
+  const owed = debts.slice(0, 3);
+  let text = owed.length
+    ? briefing +
+      `\nStill OWED from earlier stages — you were cut off before the customer heard these; continue with ONLY the following, once, and do NOT repeat anything you already said (own words where it reads as an instruction): ${owed
+        .map((s, i) => `(${i + 1}) "${s}"`)
+        .join(" ")}`
+    : briefing;
+
+  // Required offer NOT YET MENTIONED (VOZ-205/206): the SPECIFIC unsaid
+  // sentences of the core offer (not a whole-line all-or-nothing). At an End
+  // node, the wording hard-refuses to close until the offer is out.
+  const missing = owedOffer.slice(0, 4);
   if (missing.length) {
+    const targetNode = graph.nodes.find((n) => n.id === targetId);
+    const atEnd = !!targetNode && contentTypeOf(targetNode) === "end";
     text +=
-      `\nNOT YET MENTIONED — the customer still has NOT heard the core offer. You MUST work each of these into the call, once and naturally, BEFORE it ends; do not let the call close while any remain: ` +
-      missing.map((f, i) => `(${i + 1}) "${requiredLine.get(f)}"`).join(" ");
+      `\n${
+        atEnd
+          ? "NOT YET MENTIONED — do NOT let this call end yet: the customer still has NOT heard the core offer. Deliver each of these NOW, once and naturally, before any goodbye:"
+          : "NOT YET MENTIONED — the customer still has NOT heard the core offer. Work each of these into the call, once and naturally, BEFORE it ends; do not let the call close while any remain:"
+      } ` + missing.map((s, i) => `(${i + 1}) "${s}"`).join(" ");
   }
   return { text, covered: obs.counter!.covered, owed: owed.length, missing: missing.length };
 }
