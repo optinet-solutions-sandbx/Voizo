@@ -57,6 +57,15 @@ export interface RecurringParent {
   // operator's chosen gap/tries silently never apply (review finding 2026-07-10).
   retry_interval_minutes?: number | null;
   max_attempts?: number | null;
+  // Voicemail auto-hangup (VOZ-245): the script-call and end-of-call routes look
+  // the flag up by the CLONE's assistant id — which resolves to the CHILD row —
+  // so without passthrough an operator's parent setting never reaches any
+  // campaign that actually dials. Measured 2026-07-28: all 3 realtime parents
+  // had it true, all 3 spawned children ran false, and the kill path (which
+  // would have fired on 86% of voicemails, 133/168 on the FIRST machine
+  // utterance) never ran once — median voicemail call 98s vs 30s in agent mode.
+  // Optional so selects predating the column keep compiling.
+  voicemail_autohangup?: boolean | null;
   // Last-resort SMS (§8): same child-row rule — the end-of-call webhook and
   // the last-resort sweep both read the CHILD campaign.
   sms_last_resort_template?: string | null;
@@ -655,6 +664,13 @@ export function buildChildPayload(args: {
     // Children carry the flag so the scheduler's keep-awake guard can read
     // it off the child row, and the cap so the poll enforces it per day.
     ...(parent.realtime ? { realtime: true, daily_cap: parent.daily_cap ?? null } : {}),
+    // Voicemail auto-hangup (VOZ-245) inherits the same conditional-key way. A
+    // `boolean` test (not truthiness): an operator turning the flag OFF on the
+    // parent must propagate too, while `undefined` (pre-migration select) still
+    // omits the key so DB defaults apply and old rows stay byte-identical.
+    ...(typeof parent.voicemail_autohangup === "boolean"
+      ? { voicemail_autohangup: parent.voicemail_autohangup }
+      : {}),
     // CIO workspace (VOZ-198) inherits the same way: the webhook/poll match
     // children through their parent, but refresh/resume on a child must fetch
     // with the right workspace key. Absent for legacy parents (NULL = default).

@@ -43,7 +43,8 @@ vi.mock("./lab-briefing", () => ({
   compileStandingAnswers: vi.fn(async () => m.standing),
 }));
 
-import { composeScriptClone } from "./composeAssistant";
+import { composeScriptClone, SCRIPT_RULES } from "./composeAssistant";
+import { END_CALL_PHRASES } from "../vapi/cloneAssistant";
 
 beforeEach(() => {
   m.opening = "";
@@ -108,5 +109,41 @@ describe("composeScriptClone — clone-time token hygiene (Ramp 3)", () => {
     m.opening = "Hey, it's Tom from Lucky Seven — got a sec?";
     const cfg = await composeScriptClone({ scriptId: "s1" });
     expect(cfg.firstMessage).toBe("Hey, it's Tom from Lucky Seven — got a sec?");
+  });
+});
+
+// Machine guard (VOZ-245). Script mode does NOT prepend VOIZO_SYSTEM_PREFIX, so
+// agent mode's rule #4 (voicemail/intercept -> end the call) was simply missing:
+// measured 2026-07-28, script agents pitched into answering machines for a median
+// 98s vs 30s in agent mode, and voicemail was 77% of Vapi spend.
+describe("composeScriptClone — machine guard (VOZ-245)", () => {
+  it("ships the machine rule in every composed prompt", async () => {
+    const cfg = await composeScriptClone({ scriptId: "s1", persona: "You are Tom." });
+    expect(cfg.composedPrompt).toContain("NOT A LIVE PERSON");
+    // The rule must outrank the stage, or SCRIPT_RULES #8 ("the NEWEST stage
+    // alone governs") would let a stage briefing talk over it.
+    expect(cfg.composedPrompt).toContain("outranks the stage in hand");
+  });
+
+  it("covers the greetings that actually answered our calls", async () => {
+    const cfg = await composeScriptClone({ scriptId: "s1" });
+    // Sampled from the 168 real voicemails in the 07-27/28 run, including the
+    // AU "message bank" wording and the cases the conclusive-kill tier
+    // deliberately will NOT fire on (a live receptionist could say them).
+    for (const phrase of ["message bank", "record your name", "after the tone", "you've reached", "not in service"]) {
+      expect(cfg.composedPrompt).toContain(phrase);
+    }
+  });
+
+  it("PINS the hangup phrase to createClone's END_CALL_PHRASES", () => {
+    // Script clones ship noTools:true, so the model cannot call endCall — the
+    // ONLY hangup lever is speaking a phrase Vapi recognises. Verified live via
+    // endedReason="assistant-said-end-call-phrase". If someone prunes "goodbye"
+    // from END_CALL_PHRASES, rule 10 becomes a no-op and script mode silently
+    // monologues into voicemail again — so fail here instead.
+    const instructed = SCRIPT_RULES.match(/Say exactly one word, "([^"]+)"/);
+    expect(instructed).not.toBeNull();
+    const spoken = instructed![1].replace(/[.?!]+$/, "").toLowerCase();
+    expect(END_CALL_PHRASES).toContain(spoken);
   });
 });

@@ -130,6 +130,28 @@ export const VOIZO_SYSTEM_PREFIX = [
   ``,
 ].join("\n");
 
+/**
+ * Phrases that end the call when the ASSISTANT speaks them (verified live:
+ * `endedReason="assistant-said-end-call-phrase"`). Exported because SCRIPT mode
+ * depends on it: script clones ship `noTools: true`, so composeAssistant's
+ * machine rule (rule 10, VOZ-245) hangs up on an answering machine by telling
+ * the model to SAY "Goodbye." — which only works while that phrase stays in
+ * this list. `composeAssistant.test.ts` pins the pair; drop "goodbye" here and
+ * that test fails loudly instead of script mode silently monologuing into
+ * voicemail again.
+ */
+export const END_CALL_PHRASES = [
+  "goodbye",
+  "good bye",
+  "have a good day",
+  "have a great day",
+  "have a nice day",
+  "have a wonderful day",
+  "thank you for calling",
+  "talk to you later",
+  "take care",
+];
+
 export interface CreateCloneOverrides {
   /**
    * ElevenLabs voiceId from KNOWN_VOICES. When unset, the clone inherits
@@ -408,17 +430,7 @@ export async function createClone(
     //     for cost-guardrail fields above (silenceTimeoutSeconds,
     //     maxDurationSeconds, voicemailMessage): Voizo owns runtime cost
     //     guardrails; base assistants own persona.
-    endCallPhrases: [
-      "goodbye",
-      "good bye",
-      "have a good day",
-      "have a great day",
-      "have a nice day",
-      "have a wonderful day",
-      "thank you for calling",
-      "talk to you later",
-      "take care",
-    ],
+    endCallPhrases: END_CALL_PHRASES,
     // ── Silent hangup on voicemail (compliance + cost, 2026-05-15) ──
     // When Vapi's voicemail detection fires, it speaks `voicemailMessage` at
     // the beep before ending. The inherited base value ("Please call back

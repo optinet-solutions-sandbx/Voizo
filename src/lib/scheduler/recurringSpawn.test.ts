@@ -91,6 +91,33 @@ describe("buildChildPayload realtime passthrough", () => {
   });
 });
 
+describe("buildChildPayload voicemail_autohangup inheritance (VOZ-245)", () => {
+  // Regression guard for the live 2026-07-28 miss: all 3 realtime parents had the
+  // flag ON, every spawned child ran with the DB default OFF, so the machine-kill
+  // path never fired and voicemail calls ran ~98s instead of ~30s. The routes look
+  // the flag up via the clone's assistant id, which resolves to the CHILD row.
+  it("parent with the flag ON → child carries it (the kill path reads the child row)", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, voicemail_autohangup: true },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.voicemail_autohangup).toBe(true);
+  });
+
+  it("parent with the flag OFF → child carries false (turning it off must propagate too)", () => {
+    const p = buildChildPayload({
+      parent: { ...parent, voicemail_autohangup: false },
+      ...common,
+    }) as Record<string, unknown>;
+    expect(p.voicemail_autohangup).toBe(false);
+  });
+
+  it("flag absent (pre-migration select) → key ABSENT so the DB default applies", () => {
+    const p = buildChildPayload({ parent, ...common });
+    expect("voicemail_autohangup" in p).toBe(false);
+  });
+});
+
 describe("buildChildPayload last-resort SMS inheritance (§8)", () => {
   it("children inherit a set template; absent otherwise (deploy-order safe)", () => {
     const withTemplate = buildChildPayload({

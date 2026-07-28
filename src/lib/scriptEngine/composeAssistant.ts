@@ -8,9 +8,17 @@
 // snapshotCampaignPrompt versions the composed prompt for free.
 //
 // The composed system prompt = wait-phrase ban + persona + universal operating
-// rules + script rules 8-9 + optional [Opening] + [STANDING ANSWERS] + the
+// rules + script rules 8-10 + optional [Opening] + [STANDING ANSWERS] + the
 // entry [CURRENT STAGE]. The webhook pushes each *next* stage as the flow
 // advances; only the entry stage ships in the prompt.
+//
+// Rule 10 (VOZ-245) is script mode's machine guard. Agent mode gets the same
+// protection from VOIZO_SYSTEM_PREFIX rule #4, which script mode deliberately
+// does NOT prepend (this prompt supersedes it) — so the rule was simply absent
+// and script agents monologued the whole offer into answering machines (median
+// voicemail call 98s vs 30s in agent mode, 77% of Vapi spend). It ends the call
+// by SPEAKING a phrase from createClone's END_CALL_PHRASES rather than by
+// calling a tool, because script clones ship `noTools: true`.
 import { getScriptGraph, listHandlers } from "./lab-db";
 import { findEntryNode } from "./lab-flow";
 import { compileStageBriefing, compileStandingAnswers } from "./lab-briefing";
@@ -43,9 +51,10 @@ const WAIT_PHRASE_BAN =
 
 // Script mode (brief-ahead): the graph is compiled into [CURRENT STAGE]
 // sections the model answers from natively — no waiting for injected lines.
-const SCRIPT_RULES =
+export const SCRIPT_RULES =
   `\n8. This call follows a script delivered as [CURRENT STAGE] sections — the NEWEST one alone governs your replies; older ones are void. Every customer turn gets an IMMEDIATE reply chosen from the current stage: pick the path that fits, blend the matching lines into ONE short reply if the customer raised several points, keep facts, prices and terms word-accurate, and say word-for-word lines exactly as written. If nothing in the stage fits, use a fitting [STANDING ANSWERS] entry (briefly, then return to the stage) or the stage's fallback path. Never invent facts, offers, account activity or questions the script didn't supply. NEVER re-answer ground you already covered: "hello?" or "are you there?" gets a ONE-SENTENCE recap of your last point, never the full line again; an interruption means you resume with only what you had not yet said — never restart. Never wait in silence for instructions: the stage in hand IS your instruction.
-9. APPROVED FILLERS — the ONLY words you may add around the scripted lines: "mm-hmm", "uh-huh", "right—", "okay so—", "got it.", "perfect.", "fair question—", "alright—", "sounds good—". At most one per reply; never the same one twice in a call. Pace: calm and unhurried, short sentences, a natural beat between your reply and any extra statements — a longer reply is never a reason to speak faster.`;
+9. APPROVED FILLERS — the ONLY words you may add around the scripted lines: "mm-hmm", "uh-huh", "right—", "okay so—", "got it.", "perfect.", "fair question—", "alright—", "sounds good—". At most one per reply; never the same one twice in a call. Pace: calm and unhurried, short sentences, a natural beat between your reply and any extra statements — a longer reply is never a reason to speak faster.
+10. NOT A LIVE PERSON — END IMMEDIATELY. This outranks the stage in hand. If what you hear is a recording, a greeting or a menu rather than a person answering you — "leave a message", "after the tone", "after the beep", "voicemail", "voice mail", "message bank", "mailbox is full", "can't take your call", "not available right now", "record your name", "you've reached", "press 1", "number is not in service", "call cannot be completed", or any carrier / virtual-receptionist announcement — do NOT greet, pitch, answer, or continue the stage. Say exactly one word, "Goodbye.", and nothing else. Recordings cost money by the minute and never buy anything; hanging up on a real person who happens to quote one of these lines is the rarer and far cheaper mistake.`;
 
 // STT accuracy: bias the transcriber toward campaign vocabulary. createClone
 // merges these into the base assistant's existing keyterms (Deepgram only).
