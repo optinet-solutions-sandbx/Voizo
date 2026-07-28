@@ -16,7 +16,7 @@ type Cfg = Record<string, unknown>;
 /** Observer context threaded through the compiler: what the agent has
  *  already said (as word stems), the facts already conveyed anywhere in the
  *  call (fact-level coverage, VOZ-177), and a tally of the marks made. */
-type ObserverCtx = { corpusStems?: Set<string>; counter?: { covered: number }; coveredFacts?: Set<string> };
+type ObserverCtx = { corpusStems?: Set<string>; corpusTokens?: Set<string>; counter?: { covered: number }; coveredFacts?: Set<string> };
 
 // Fact-level coverage (VOZ-177) + required-offer tracking (VOZ-194).
 // A handler tag declares that its line conveys a shared fact:
@@ -73,10 +73,27 @@ export function contentCovered(line: string, corpusStems: Set<string> | undefine
   return hit / stems.length >= 0.6;
 }
 
-const COVERED_MARK = " — ALREADY COVERED earlier in this call: don't recite it again; one short rephrase at most, only if they ask";
+// Same POINT already made — SENTENCE level (VOZ-241). The stem check above only
+// catches a restatement that reuses similar words; a point reworded in DIFFERENT
+// words (and carrying no fact: tag) slips past it. This second arm marks a line
+// covered when EVERY one of its salient sentences has already been spoken
+// (salient-token overlap: stopwords + bare numbers dropped, terms kept — the same
+// matcher used for owed/required), so "the offer, said again differently" is
+// caught without needing a tag on every line. High bar (ALL sentences said) keeps
+// false positives — which would over-suppress — rare; a partly-said line stays
+// owed, never marked whole.
+export function contentCoveredSentences(line: string, corpusTokens: Set<string> | undefined): boolean {
+  if (!corpusTokens || corpusTokens.size === 0) return false;
+  const t = (line ?? "").trim();
+  if (stemsOf(t).length < 4) return false; // too thin to trust as a distinct "point"
+  return unsaidSentences(t, corpusTokens).length === 0;
+}
+
+const COVERED_MARK = " — ALREADY COVERED earlier in this call: do NOT make this point again on your own, even in different words. Only if the customer EXPLICITLY asks for it again (or clearly didn't hear) give a brief ONE-SENTENCE recap — never the full line";
 
 function markIfCovered(rendered: string, sourceText: string | null | undefined, obs: ObserverCtx | undefined): string {
-  if (!obs || !sourceText || !contentCovered(sourceText, obs.corpusStems)) return rendered;
+  if (!obs || !sourceText) return rendered;
+  if (!contentCovered(sourceText, obs.corpusStems) && !contentCoveredSentences(sourceText, obs.corpusTokens)) return rendered;
   if (obs.counter) obs.counter.covered++;
   return rendered + COVERED_MARK;
 }
@@ -90,8 +107,10 @@ function markIfCovered(rendered: string, sourceText: string | null | undefined, 
 function markIfCoveredHandler(rendered: string, h: ListenerHandler, obs: ObserverCtx | undefined): string {
   if (!obs) return rendered;
   const byStem = contentCovered(h.response_template, obs.corpusStems);
-  const byFact = !byStem && !!obs.coveredFacts?.size && factsOf(h).some((f) => obs.coveredFacts!.has(f));
-  if (!byStem && !byFact) return rendered;
+  // Sentence-level arm (VOZ-241): the same point reworded, even without a fact: tag.
+  const bySent = !byStem && contentCoveredSentences(h.response_template, obs.corpusTokens);
+  const byFact = !byStem && !bySent && !!obs.coveredFacts?.size && factsOf(h).some((f) => obs.coveredFacts!.has(f));
+  if (!byStem && !bySent && !byFact) return rendered;
   if (obs.counter) obs.counter.covered++;
   return rendered + COVERED_MARK;
 }
@@ -216,7 +235,7 @@ export async function compileStageBriefing(graph: Graph, nodeId: string, handler
     `[CURRENT STAGE — "${node.label || "next step"}"]`,
     `This supersedes every earlier CURRENT STAGE section — it ALONE governs your next reply. Answer the customer's next turn through exactly one of these paths:`,
     bullets.join("\n"),
-    `Stage rules: reply IMMEDIATELY — never wait in silence for anything; open with at most ONE approved filler; if the customer raised several points, blend the matching lines into ONE short reply; use ONLY the lines above (plus [STANDING ANSWERS] and approved fillers); where a line reads as an instruction to you ("Explain that…", "Mention…"), do what it says in the customer's language — never read instruction wording aloud; never invent facts, prices, offers, account activity or questions; NEVER re-answer ground you already covered — if the customer says they didn't hear you ("hello?", "are you there?"), give a ONE-SENTENCE recap of your last point, never the full line again; if you were interrupted mid-reply, resume with only the part you had not yet said — never restart; speak at a calm, unhurried pace in short sentences with a natural beat between thoughts — never rush to fit everything in.`,
+    `Stage rules: reply IMMEDIATELY — never wait in silence for anything; open with at most ONE approved filler; if the customer raised several points, blend the matching lines into ONE short reply; use ONLY the lines above (plus [STANDING ANSWERS] and approved fillers); where a line reads as an instruction to you ("Explain that…", "Mention…"), do what it says in the customer's language — never read instruction wording aloud; never invent facts, prices, offers, account activity or questions; SAY EACH POINT ONLY ONCE — never repeat a point you already made (your introduction, the offer, a benefit, the SMS promise, urgency), NOT EVEN IN DIFFERENT WORDS; any line the observer flags as already-said is done — do not bring it up again on your own; if the customer explicitly asks you to repeat it or clearly didn't hear ("hello?", "are you there?"), give a ONE-SENTENCE recap of that point, never the full line again; if you were interrupted mid-reply, resume with only the part you had not yet said — never restart; speak at a calm, unhurried pace in short sentences with a natural beat between thoughts — never rush to fit everything in.`,
   ].join("\n");
 }
 
@@ -324,7 +343,7 @@ export async function composeArmedBriefing(
     }
   }
 
-  const obs: ObserverCtx = { corpusStems, counter: { covered: 0 }, coveredFacts };
+  const obs: ObserverCtx = { corpusStems, corpusTokens, counter: { covered: 0 }, coveredFacts };
   const briefing = await compileStageBriefing(graph, targetId, handlers, obs);
   if (!briefing) return null;
 

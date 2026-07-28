@@ -53,7 +53,8 @@ export const SYSTEM_RULES: SystemRuleSection[] = [
     title: "3. Observer Rules",
     subtitle: "Coverage / dedup / required tracking — what stops repetition and forgetting",
     rules: [
-      { name: "Covered-Ground Marking", spec: 'A line already delivered is tagged "ALREADY COVERED — don’t recite; rephrase only if asked."' },
+      { name: "Covered-Ground Marking", spec: 'A line whose point was already made is tagged "ALREADY COVERED" — strict: the agent must NOT make that point again on its own, not even in different words; a one-sentence recap only if the customer explicitly asks or clearly didn’t hear.', recent: true },
+      { name: "Same-Point Dedup (no tag needed)", spec: "Even with no fact: tag, a line is marked covered when every one of its salient sentences has already been spoken — so the SAME point reworded in different words is caught, not just word-for-word restatements.", recent: true },
       { name: "Fact-Level Dedup (fact: tags)", spec: "Once a fact is conveyed under any wording, every sibling line restating it is marked covered (kills paraphrased re-pitches)." },
       { name: "Required-Offer Tracking (must: tags)", spec: 'A required fact not yet said is surfaced as "NOT YET MENTIONED" so the call can’t wrap without it.' },
       { name: "Call Goal Box", spec: "A floating checklist box (no arrows) lists the statements the call must cover, in priority order; the observer tracks each call-wide and won’t let the call end until all are said. The visible way to author the must-say list.", recent: true },
