@@ -1115,7 +1115,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   // Goal-driven generation (VOZ-236)
   const [genOpen, setGenOpen] = useState(false);
   const [genBrand, setGenBrand] = useState("");
-  const [genGoalsText, setGenGoalsText] = useState("");
+  const [genGoals, setGenGoals] = useState<string[]>([""]); // one field per goal
   const [genPersona, setGenPersona] = useState("");
   const [genBusy, setGenBusy] = useState(false);
   const lastRunEvId = useRef(0);
@@ -1316,7 +1316,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   // assembles a valid graph deterministically, persists it, and self-checks with
   // the simulator. We load the new script and show its simulation report.
   async function genScript() {
-    const goals = genGoalsText.split("\n").map((s) => s.trim()).filter(Boolean);
+    const goals = genGoals.map((s) => s.trim()).filter(Boolean);
     if (!goals.length || !genBrand.trim()) return;
     setGenBusy(true);
     setError(null);
@@ -3242,8 +3242,34 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                 <input className={inputCls} value={genBrand} onChange={(e) => setGenBrand(e.target.value)} placeholder="e.g. Lucky Seven Casino" />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-gray-400">Goals — one per line (what the call must cover)</label>
-                <textarea className={inputCls + " min-h-[120px] resize-y"} value={genGoalsText} onChange={(e) => setGenGoalsText(e.target.value)} placeholder={"20 free spins on their account\n300% deposit bonus on next deposit\nSend the details by SMS\nThe offer is only good today"} />
+                <label className="mb-1 block text-xs text-gray-400">Goals — what the call must cover (add as many as you need)</label>
+                <div className="space-y-1.5">
+                  {genGoals.map((g, i) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <span className="shrink-0 text-[11px] font-semibold text-yellow-300">{i + 1}.</span>
+                      <input
+                        className={inputCls}
+                        value={g}
+                        onChange={(e) => setGenGoals(genGoals.map((x, j) => (j === i ? e.target.value : x)))}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setGenGoals([...genGoals, ""]); } }}
+                        placeholder={i === 0 ? "e.g. 20 free spins on their account" : "another goal…"}
+                      />
+                      <button
+                        onClick={() => setGenGoals(genGoals.length > 1 ? genGoals.filter((_, j) => j !== i) : [""])}
+                        className="shrink-0 px-1 text-sm text-gray-500 hover:text-rose-400"
+                        title="Remove goal"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => setGenGoals([...genGoals, ""])}
+                    className="rounded-md border border-dashed border-gray-600 px-2 py-1 text-[11px] text-gray-400 transition hover:border-yellow-500 hover:text-yellow-300"
+                  >
+                    + Add goal
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-xs text-gray-400">Persona (optional)</label>
@@ -3252,7 +3278,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
             </div>
             <div className="flex justify-end gap-2 border-t border-gray-800 px-5 py-3">
               <button onClick={() => setGenOpen(false)} disabled={genBusy} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">Cancel</button>
-              <button onClick={genScript} disabled={genBusy || !genGoalsText.trim() || !genBrand.trim()} className="rounded-lg bg-yellow-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-yellow-500 disabled:opacity-40">
+              <button onClick={genScript} disabled={genBusy || !genGoals.some((g) => g.trim()) || !genBrand.trim()} className="rounded-lg bg-yellow-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-yellow-500 disabled:opacity-40">
                 {genBusy ? "Generating…" : "Generate script"}
               </button>
             </div>
