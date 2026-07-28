@@ -1517,7 +1517,15 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
     // Exactly one entry point is expected: the Start box, or (in a phase
     // sub-workflow without one) a single unconnected first box.
     const hasStart = nodes.some((n) => (n.data as NodeData).kind === "start");
-    const loose = nodes.filter((n) => (n.data as NodeData).kind !== "start" && !targeted.has(n.id)).length;
+    // A Call Goal box is deliberately floating — no arrows, never "reached", yet
+    // it DOES run (the observer reads its checklist call-wide). Don't count it as
+    // a loose/never-run box.
+    const loose = nodes.filter((n) => {
+      const d = n.data as NodeData;
+      if (d.kind === "start") return false;
+      if ((d.config.contentType as Content) === "call_goal") return false;
+      return !targeted.has(n.id);
+    }).length;
     const allowed = hasStart ? 0 : 1;
     if (loose > allowed) w.push(`${loose - allowed} box(es) are not connected to the flow and will never run.`);
     return w;
