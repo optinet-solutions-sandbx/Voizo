@@ -49,6 +49,7 @@ import LabConfigForm from "@/components/lab/LabConfigForm";
 import type { ListenerScript, ListenerHandler, ListenerCollection, LabCallEvent } from "@/lib/scriptEngine/database.types";
 import { CONTENT_META, metaOf, type Content } from "./scriptContent";
 import { SYSTEM_RULES } from "./systemRules";
+import { simulateScript, type SimReport } from "@/lib/scriptEngine/scriptSimulator";
 
 // Content types + CONTENT_META + metaOf live in ./scriptContent (a pure module,
 // no React/DOM — so the runtime and vitest can read them without the canvas deps).
@@ -1110,6 +1111,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   const [qa, setQa] = useState<QaResult | null>(null);
   const [qaBusy, setQaBusy] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false); // System Rules panel — hidden by default
+  const [sim, setSim] = useState<SimReport | null>(null); // design-time simulation report
   const lastRunEvId = useRef(0);
   // Everything the call has produced so far — feeds the live dock's three
   // views (transcript / listener / thinking).
@@ -1287,6 +1289,21 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
         });
     }
     return { errors, warnings };
+  }
+
+  // Design-time simulation (VOZ-235): run the pure simulator on the CURRENT
+  // canvas — no call, no Vapi credits. Builds the graph from the flow nodes
+  // (statements ride in each box's config; scenario lines come from the linked
+  // Playbook scenarios) and reports goal coverage / repetition / completeness.
+  function runSimulate() {
+    const simGraph = {
+      nodes: nodes.map((n) => {
+        const d = n.data as NodeData;
+        return { id: n.id, script_id: scriptId ?? "", type: d.kind === "start" ? "start" : "step", label: d.label, config: d.config, scenario_id: d.scenarioId ?? null, pos_x: 0, pos_y: 0 };
+      }),
+      edges: edges.map((e) => ({ id: e.id, script_id: scriptId ?? "", source_node_id: e.source, target_node_id: e.target, condition: (e.data as { condition?: Record<string, unknown> } | undefined)?.condition ?? { kind: "any" }, label: "" })),
+    } as unknown as Parameters<typeof simulateScript>[0];
+    setSim(simulateScript(simGraph, scenarios));
   }
 
   // Run button: save → QA → (if clean) the Start button appears in the panel.
@@ -1861,6 +1878,19 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+
+          {/* Simulate — dry-run the script at design time (no call, no credits):
+              goal coverage / repetition / completeness. */}
+          <button
+            onClick={runSimulate}
+            disabled={!scriptId}
+            title="Simulate — dry-run the flow (no call): will it reach every Call Goal, without repetition, and finish?"
+            className="rounded-lg border border-gray-700 p-2 text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
             </svg>
           </button>
 
@@ -3147,6 +3177,62 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
               <button onClick={() => setHistory(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Simulation report — design-time goal/repetition/completeness check (VOZ-235). */}
+      {sim && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" onClick={() => setSim(null)}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-gray-500">Script simulation — no call</p>
+                <p className="text-sm font-bold text-white">
+                  {sim.ok ? <span className="text-emerald-400">✓ Ready</span> : <span className="text-rose-400">✕ Needs fixes</span>}
+                  <span className="ml-2 font-normal text-gray-400">{sim.goals.length} goal{sim.goals.length === 1 ? "" : "s"} · {sim.endPaths} completed path{sim.endPaths === 1 ? "" : "s"}</span>
+                </p>
+              </div>
+              <button onClick={runSimulate} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800">Re-run</button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              {/* Issues */}
+              {sim.issues.length > 0 && (
+                <div className="space-y-1.5">
+                  {sim.issues.map((iss, i) => (
+                    <div key={i} className={`flex gap-2 rounded-lg border px-3 py-2 text-[11px] ${iss.level === "error" ? "border-rose-500/40 bg-rose-500/10 text-rose-200" : "border-amber-500/40 bg-amber-500/10 text-amber-200"}`}>
+                      <span className="shrink-0 font-bold">{iss.level === "error" ? "✕" : "!"}</span>
+                      <span>{iss.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {sim.issues.length === 0 && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">Every goal is delivered on every path, with no repetition, and every path reaches an End. 🎯</p>}
+              {/* Per-goal coverage */}
+              <div>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">Goal coverage</p>
+                <div className="overflow-hidden rounded-lg border border-gray-800">
+                  {sim.goals.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-500">No Call Goals — add a Call Goal box to check the offer is delivered.</p>}
+                  {sim.goals.map((g, i) => (
+                    <div key={i} className={`flex items-start gap-2 px-3 py-2 text-[11px] ${i % 2 ? "bg-gray-900/40" : ""}`}>
+                      <span className="shrink-0">{!g.everCovered ? "❌" : g.guaranteed ? "✅" : "⚠️"}</span>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-gray-200">{g.text}</span>
+                        <span className="ml-1 text-gray-500">
+                          {!g.everCovered ? "— never spoken" : g.guaranteed ? `— always said (${g.deliveredBy.join(", ")})` : `— missed on ${g.missedEndPaths} path(s)`}
+                          {g.deliveredBy.length >= 2 && " · repeated"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-600">Static dry-run of the drawn flow — it checks the offer (statements &amp; scenario lines) reaches every goal on every path. Save the script first if you edited scenario lines inline.</p>
+            </div>
+            <div className="flex justify-end border-t border-gray-800 px-5 py-3">
+              <button onClick={() => setSim(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Close</button>
             </div>
           </div>
         </div>
