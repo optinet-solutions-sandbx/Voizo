@@ -1385,17 +1385,41 @@ async function runScriptFlow(
         variables,
       );
       // Goodbye delivery honours the scenario: exact line → the system speaks
-      // it verbatim with the hangup attached; reword → the model already has
-      // it from the stage menu and says it natively — the delivery watchdog
-      // hangs up once it's voiced (serverless can't run a hangup timer).
+      // it verbatim with the hangup attached; reword → the model voiced it
+      // natively (brief-ahead) as its reply to THIS turn.
       const rewordGoodbye = scn?.delivery === "reword" && !!scn?.response_template;
       currentNodeId = target.id;
       note(text, target, ct, edgeCond, scn?.id ?? null, undefined, rewordGoodbye ? { rewordGoodbye: true } : undefined);
       if (!(await flush())) return true; // lost the race — say nothing
       const controlUrl = await ctl();
-      if (controlUrl && !rewordGoodbye) {
-        const r = await injectSay(controlUrl, text, true);
-        if (!r.ok) setTimeout(() => endCall(controlUrl).catch(() => {}), 4000);
+      if (controlUrl) {
+        if (!rewordGoodbye) {
+          const r = await injectSay(controlUrl, text, true);
+          if (!r.ok) setTimeout(() => endCall(controlUrl).catch(() => {}), 4000);
+        } else {
+          // Reworded goodbye: hang up HERE, in the live request, once the
+          // model's goodbye has landed. On a real call the model voices the
+          // goodbye via brief-ahead *before* this End note, and NOTHING
+          // re-invokes the delivery watchdog until Vapi's first idle nudge
+          // (~11s) — so relying on it left 15s of dead air plus an idle "Take
+          // your time" AFTER the goodbye (Val 2026-07-28). Wait briefly for the
+          // goodbye to be voiced (so we never cut it off), then end. If it
+          // hasn't landed here (e.g. the model is slow, or the harness voices
+          // it later), the rewordGoodbye watchdog note stays the backstop.
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < 2500) {
+            if (await assistantSpeaking(callId).catch(() => false)) break;
+            const ls = await lastAssistantSpeechStop(callId).catch(() => null);
+            if (ls != null && Date.now() - ls < 8000) break; // goodbye just finished
+            await new Promise((r) => setTimeout(r, 300));
+          }
+          await waitForAgentSilence(callId); // let the in-flight goodbye finish
+          const stop = await lastAssistantSpeechStop(callId).catch(() => null);
+          const voicedRecently = stop != null && Date.now() - stop < 12000;
+          if (voicedRecently && !(await assistantSpeaking(callId).catch(() => false))) {
+            await endCall(controlUrl).catch(() => {});
+          }
+        }
       }
       return true;
     }

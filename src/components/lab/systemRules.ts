@@ -42,6 +42,7 @@ export const SYSTEM_RULES: SystemRuleSection[] = [
       { name: "Anti-Repeat Ledger", spec: 'Counts how often each line was delivered; a repeat is downgraded to "shorter, different words".' },
       { name: "Wait-Box Silence Clock", spec: "Advances the silence path after N seconds of total quiet; fires once, never prematurely." },
       { name: "Delivery Watchdog", spec: "If an armed line never actually gets voiced, retrigger once, then log it as undelivered." },
+      { name: "End-Call Hangup", spec: "The End box hangs up in the live turn once the goodbye is voiced — exact line: the system speaks it with the hangup attached; reworded: the model voices it and the engine ends the call right after. No more dead air or an idle 'Take your time' after the goodbye; the watchdog is only a backstop.", recent: true },
       { name: "Universal Fallback", spec: "If a reply fits no stage path, answer from [Standing Answers] and stay put." },
       { name: "Scoped Classifier", spec: "Two-tier (expected intents first, full vocabulary on escalation), scoped to this script’s intents + collections." },
       { name: "Per-Call Script Resolution", spec: "Each campaign call is bound to its script (assistantId → campaign → script_id), never a global default." },
