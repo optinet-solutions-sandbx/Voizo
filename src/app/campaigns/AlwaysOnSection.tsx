@@ -29,6 +29,7 @@ import StyledSelect from "@/components/StyledSelect";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
 import { resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import Toggle from "@/components/ui/Toggle";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -61,6 +62,10 @@ interface SettingsDraft {
   /** VOZ-245: the full text as stored (message + link + opt-out), same single-blob
    *  treatment the edit page uses — the 3-field composition only exists at create. */
   smsTemplateText: string;
+  /** VOZ-249: explicit on/off. The column is "non-empty template = feature on", but
+   *  making the operator infer that from an empty box read as a missing value rather
+   *  than a setting (Jasiel, 2026-07-28). The toggle states it; the text follows. */
+  lastResortEnabled: boolean;
   lastResortText: string;
   callDelayChoice: "now" | "5" | "30" | "60" | "custom";
   callDelayCustomText: string;
@@ -157,6 +162,10 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
       dailyCapText: parent.daily_cap != null ? String(parent.daily_cap) : "",
       smsConsentMode: resolveSmsConsentMode(parent.sms_consent_mode),
       smsTemplateText: (parent.sms_template as string) ?? "",
+      // Seeded from the column's own semantics: a stored template MEANS the
+      // feature is on, so the toggle reflects reality rather than a second flag
+      // that could drift out of sync with it.
+      lastResortEnabled: ((parent.sms_last_resort_template as string) ?? "").trim().length > 0,
       lastResortText: (parent.sms_last_resort_template as string) ?? "",
       callDelayChoice:
         delay == null ? "now" : delay === 5 || delay === 30 || delay === 60 ? (String(delay) as "5" | "30" | "60") : "custom",
@@ -180,6 +189,17 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
     }
     if (isRealtime && capNumber === null) {
       setRowError({ id, message: "Real-time campaigns need a daily cap." });
+      return;
+    }
+    // VOZ-249: mirrors the wizard's check. With the toggle ON and no message, the
+    // save would have written null and silently turned the feature back OFF —
+    // exactly the invisible state the toggle was added to remove.
+    if (
+      draft.smsConsentMode !== "verbal_yes" &&
+      draft.lastResortEnabled &&
+      draft.lastResortText.trim().length === 0
+    ) {
+      setRowError({ id, message: "Last-resort text is on but the message is empty." });
       return;
     }
     const delay = resolveCallDelay(draft.callDelayChoice, draft.callDelayCustomText);
@@ -232,8 +252,14 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
         // Both opt-in modes own a last-resort template (VOZ-245). Gated on the
         // DRAFT's mode, so switching to an opt-in mode and setting the text in the
         // same Save works instead of needing two round-trips.
+        // VOZ-249: the TOGGLE is now the source of truth — off writes null (feature
+        // off) explicitly rather than relying on the operator clearing the box.
         ...(draft.smsConsentMode !== "verbal_yes"
-          ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
+          ? {
+              smsLastResortTemplate: draft.lastResortEnabled
+                ? draft.lastResortText.trim() || null
+                : null,
+            }
           : {}),
         ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
         ...(timezoneChanged ? { timezone: draft.timezone } : {}),
@@ -542,21 +568,44 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                   </div>
 
                   {draft.smsConsentMode !== "verbal_yes" && (
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
-                        Last-resort text
-                        <span className="text-[var(--text-3)] font-normal">
-                          {" "}(sent after the last failed try; empty = off)
-                        </span>
-                      </label>
-                      <textarea
-                        id={`lr-${parentId}`}
-                        rows={2}
-                        value={draft.lastResortText}
-                        onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
-                        placeholder="Empty = off"
-                        className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
-                      />
+                    <div className="flex flex-col gap-2">
+                      {/* VOZ-249: an explicit switch. This used to be "leave the box
+                          empty to turn it off", which reads as a missing value, not a
+                          decision. Same control as the wizard now. */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-medium text-[var(--text-2)]">
+                            Text only as a last resort
+                          </div>
+                          <p className="text-[11px] text-[var(--text-3)] leading-relaxed">
+                            Off: a voicemail gets the offer text right away. On: we call again
+                            instead, and the text goes out only after the last failed try.
+                          </p>
+                        </div>
+                        <Toggle
+                          on={draft.lastResortEnabled}
+                          label="Text only as a last resort"
+                          onChange={(v) => setDraft({ ...draft, lastResortEnabled: v })}
+                        />
+                      </div>
+                      {draft.lastResortEnabled && (
+                        <div className="flex flex-col gap-1.5">
+                          <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
+                            Last-resort message
+                            <span className="text-[var(--text-3)] font-normal">
+                              {" "}(full text, including the link and opt-out line)
+                            </span>
+                          </label>
+                          <textarea
+                            id={`lr-${parentId}`}
+                            rows={2}
+                            value={draft.lastResortText}
+                            onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
+                            placeholder="Sorry we missed you! …"
+                            className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 

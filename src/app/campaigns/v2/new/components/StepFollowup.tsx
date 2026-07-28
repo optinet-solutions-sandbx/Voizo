@@ -2,6 +2,7 @@
 
 import { useMemo, type Dispatch } from "react";
 import { AlertTriangle, MessageSquareText } from "lucide-react";
+import Toggle from "@/components/ui/Toggle";
 
 import {
   SHORTENED_URL_LENGTH, smsSegmentCount,
@@ -343,30 +344,5 @@ export default function StepFollowup({ state, dispatch }: Props) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Custom toggle (HTML mockup styling)
-// ─────────────────────────────────────────────────────────────────────────
-
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  // 40x22 pill with a 16x16 knob. left:3 + (on ? translate 18 : 0)
-  // → off knob spans x=3..19 (margin 3px both sides), on knob spans
-  // x=21..37 (margin 3px both sides). Vertically the knob's top:3 makes
-  // it span y=3..19, centered in the 22px pill (margin 3px above + below).
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      onClick={() => onChange(!on)}
-      className={`relative w-[40px] h-[22px] rounded-full transition-colors flex-shrink-0 ${
-        on ? "bg-blue-500" : "bg-[var(--bg-elevated)]"
-      }`}
-    >
-      <span
-        className={`block absolute top-[3px] left-[3px] w-[16px] h-[16px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-transform duration-200 ${
-          on ? "translate-x-[18px]" : "translate-x-0"
-        }`}
-      />
-    </button>
-  );
-}
+// Toggle moved to @/components/ui/Toggle (VOZ-249) so the always-on Settings
+// drawer can use the SAME control instead of encoding on/off as "empty text box".
