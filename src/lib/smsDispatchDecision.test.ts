@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   decideLastResortSend,
   decideSmsDispatch,
+  parseSmsConsentMode,
   resolveSmsConsentMode,
+  SMS_CONSENT_MODES,
   type SmsDispatchInput,
 } from "./smsDispatchDecision";
 
@@ -75,6 +77,26 @@ describe("decideSmsDispatch — optin_any_pickup (VOZ-245)", () => {
       lastResortTemplate: "Sorry we missed you! ...", campaignStatus: "running",
     };
     expect(decideLastResortSend({ ...ok, mode: "optin_any_pickup" })).toBe(true);
+  });
+});
+
+describe("parseSmsConsentMode — STRICT, for writes (VOZ-245)", () => {
+  it("accepts exactly the three real values", () => {
+    for (const m of SMS_CONSENT_MODES) expect(parseSmsConsentMode(m)).toBe(m);
+    expect(SMS_CONSENT_MODES).toHaveLength(3);
+  });
+
+  it("returns null on anything else so the API 400s instead of coercing", () => {
+    // The read-side resolver coerces to verbal_yes; a WRITE must not, or an
+    // operator's typo would silently narrow dispatch to the strictest policy.
+    for (const bad of [null, undefined, "", "  verbal_yes", "VERBAL_YES", "any_pickup", "optin", 7, {}, []]) {
+      expect(parseSmsConsentMode(bad)).toBeNull();
+    }
+  });
+
+  it("read-side and write-side disagree ON PURPOSE for a bad value", () => {
+    expect(resolveSmsConsentMode("nonsense")).toBe("verbal_yes"); // safe fallback
+    expect(parseSmsConsentMode("nonsense")).toBeNull(); // loud rejection
   });
 });
 

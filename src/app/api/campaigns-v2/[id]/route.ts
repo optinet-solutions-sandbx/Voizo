@@ -5,6 +5,7 @@ import { fetchCampaignV2 } from "@/lib/campaignV2Data";
 import { rejectIfCrossOriginStrict } from "@/lib/csrf";
 import { normalizeOperatorControls } from "@/lib/campaignV2Shared";
 import { buildParentEditUpdate } from "@/lib/parentEdit";
+import { parseSmsConsentMode, SMS_CONSENT_MODES } from "@/lib/smsDispatchDecision";
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 
 /**
@@ -41,7 +42,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /**
  * PATCH /api/campaigns-v2/[id]
  * body: { retryIntervalMinutes?, maxAttempts?, dailyCap?, smsLastResortTemplate?, callDelayMinutes?,
- *         recurrencePattern?, timezone?, segmentId?, goalTarget?, smsTemplate? }
+ *         recurrencePattern?, timezone?, segmentId?, goalTarget?, smsTemplate?, smsConsentMode? }
  *
  * The second line of fields (2026-07-13 edit page) validates via
  * buildParentEditUpdate — invalid explicit input is a 400 the operator can
@@ -90,6 +91,7 @@ export async function PATCH(
     segmentId?: unknown;
     goalTarget?: unknown;
     smsTemplate?: unknown;
+    smsConsentMode?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -131,6 +133,23 @@ export async function PATCH(
       );
     }
     update.daily_cap = null;
+  }
+
+  // SMS consent mode (VOZ-245). Parsed STRICTLY: an unrecognised value is an
+  // operator/client bug, so it 400s rather than being coerced to verbal_yes
+  // (which would silently narrow dispatch) or forwarded to the DB CHECK
+  // constraint as a 500. Like every other field here it edits the PARENT, so it
+  // applies from tomorrow's child — today's already-spawned child keeps the mode
+  // it was born with.
+  if (body.smsConsentMode !== undefined) {
+    const mode = parseSmsConsentMode(body.smsConsentMode);
+    if (!mode) {
+      return NextResponse.json(
+        { error: `smsConsentMode must be one of: ${SMS_CONSENT_MODES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    update.sms_consent_mode = mode;
   }
 
   if (typeof body.smsLastResortTemplate === "string") {

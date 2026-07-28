@@ -28,7 +28,7 @@ import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/Recurre
 import StyledSelect from "@/components/StyledSelect";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
-import { resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
+import { resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -55,6 +55,12 @@ interface SettingsDraft {
   retryGap: number;
   maxTries: number;
   dailyCapText: string;
+  /** VOZ-245: operators can switch dispatch policy here instead of rebuilding the
+   *  campaign. Applies from tomorrow's child, like every other field in this drawer. */
+  smsConsentMode: SmsConsentMode;
+  /** VOZ-245: the full text as stored (message + link + opt-out), same single-blob
+   *  treatment the edit page uses — the 3-field composition only exists at create. */
+  smsTemplateText: string;
   lastResortText: string;
   callDelayChoice: "now" | "5" | "30" | "60" | "custom";
   callDelayCustomText: string;
@@ -149,6 +155,8 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
       retryGap: (parent.retry_interval_minutes as number) ?? 90,
       maxTries: (parent.max_attempts as number) ?? 3,
       dailyCapText: parent.daily_cap != null ? String(parent.daily_cap) : "",
+      smsConsentMode: resolveSmsConsentMode(parent.sms_consent_mode),
+      smsTemplateText: (parent.sms_template as string) ?? "",
       lastResortText: (parent.sms_last_resort_template as string) ?? "",
       callDelayChoice:
         delay == null ? "now" : delay === 5 || delay === 30 || delay === 60 ? (String(delay) as "5" | "30" | "60") : "custom",
@@ -210,8 +218,21 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
         maxAttempts: draft.maxTries,
         dailyCap: capNumber,
         ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
-        // Both opt-in modes own a last-resort template (VOZ-245).
-        ...(resolveSmsConsentMode(parent.sms_consent_mode) !== "verbal_yes"
+        // VOZ-245: send the mode only when the operator actually changed it, so a
+        // no-op Save can't rewrite the column (and can't 400 on a legacy NULL).
+        ...(draft.smsConsentMode !== resolveSmsConsentMode(parent.sms_consent_mode)
+          ? { smsConsentMode: draft.smsConsentMode }
+          : {}),
+        // Message body: only when changed, and never blanked by an empty box —
+        // clearing the template silently disables texting for the whole campaign.
+        ...(draft.smsTemplateText.trim().length > 0 &&
+        draft.smsTemplateText.trim() !== ((parent.sms_template as string) ?? "").trim()
+          ? { smsTemplate: draft.smsTemplateText.trim() }
+          : {}),
+        // Both opt-in modes own a last-resort template (VOZ-245). Gated on the
+        // DRAFT's mode, so switching to an opt-in mode and setting the text in the
+        // same Save works instead of needing two round-trips.
+        ...(draft.smsConsentMode !== "verbal_yes"
           ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
           : {}),
         ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
@@ -472,7 +493,55 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                     </div>
                   )}
 
-                  {resolveSmsConsentMode(parent.sms_consent_mode) !== "verbal_yes" && (
+                  {/* Follow-up text (VOZ-245). Operators previously had to rebuild the
+                      campaign to change either of these. Both live on the PARENT, so
+                      they apply from tomorrow's child. */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] font-medium text-[var(--text-2)]">Who gets the follow-up text</span>
+                    <div className="flex flex-col gap-1">
+                      {([
+                        ["verbal_yes", "Only after the customer says yes on the call"],
+                        ["registered_optin", "Everyone we reach (the list already opted in)"],
+                        ["optin_any_pickup", "Anyone who picks up — even if the call went badly"],
+                      ] as const).map(([value, label]) => (
+                        <label key={value} className="flex items-start gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`consent-${parentId}`}
+                            checked={draft.smsConsentMode === value}
+                            onChange={() => setDraft({ ...draft, smsConsentMode: value })}
+                            className="mt-0.5 accent-blue-500"
+                          />
+                          <span className="text-[11px] text-[var(--text-1)] leading-relaxed">{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-[var(--text-3)]">
+                      &quot;Don&apos;t text me&quot;, &quot;stop calling&quot; and the Do-Not-Call list always win. One text per player.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`tmpl-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
+                      Follow-up text
+                      <span className="text-[var(--text-3)] font-normal">
+                        {" "}(full message, including the link and opt-out line)
+                      </span>
+                    </label>
+                    <textarea
+                      id={`tmpl-${parentId}`}
+                      rows={3}
+                      value={draft.smsTemplateText}
+                      onChange={(e) => setDraft({ ...draft, smsTemplateText: e.target.value })}
+                      placeholder="No message set — texting is off for this campaign."
+                      className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
+                    />
+                    <p className="text-[11px] text-[var(--text-3)]">
+                      Leaving this unchanged is safe; an empty box is ignored rather than clearing the message.
+                    </p>
+                  </div>
+
+                  {draft.smsConsentMode !== "verbal_yes" && (
                     <div className="flex flex-col gap-1.5">
                       <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                         Last-resort text

@@ -113,6 +113,27 @@ export function resolveSmsConsentMode(raw: unknown): SmsConsentMode {
   return raw === "registered_optin" || raw === "optin_any_pickup" ? raw : "verbal_yes";
 }
 
+/** Every value the column accepts, in operator-facing order. Single source for
+ *  the API validator and the UI pickers. */
+export const SMS_CONSENT_MODES: readonly SmsConsentMode[] = [
+  "verbal_yes",
+  "registered_optin",
+  "optin_any_pickup",
+];
+
+/**
+ * WRITE-side counterpart of resolveSmsConsentMode: returns null on anything
+ * unknown instead of coercing. Deliberately strict — a read that cannot parse
+ * should fall back to the safest policy, but a WRITE that cannot parse is an
+ * operator or client bug and must 400 rather than silently store/keep something
+ * else. Also keeps a typo from reaching the DB CHECK constraint as a 500.
+ */
+export function parseSmsConsentMode(raw: unknown): SmsConsentMode | null {
+  return typeof raw === "string" && (SMS_CONSENT_MODES as readonly string[]).includes(raw)
+    ? (raw as SmsConsentMode)
+    : null;
+}
+
 export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
 

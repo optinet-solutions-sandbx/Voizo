@@ -11,6 +11,7 @@
 import type { CampaignV2CreateInput } from "./campaignV2Shared";
 import type { RecurrencePattern } from "./types/recurrence";
 import type { QueueRow } from "./realtimeQueue";
+import type { SmsConsentMode } from "./smsDispatchDecision";
 
 type Row = Record<string, unknown>;
 
@@ -153,6 +154,9 @@ export async function patchCampaignSettings(
     segmentId?: number;
     goalTarget?: number | null;
     smsTemplate?: string | null;
+    /** VOZ-245: dispatch policy, editable from the always-on drawer. Server parses
+     *  it strictly (unknown value = 400, never a silent coercion). */
+    smsConsentMode?: SmsConsentMode;
   },
 ): Promise<Row> {
   const res = await fetch(`/api/campaigns-v2/${id}`, {
