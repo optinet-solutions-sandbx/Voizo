@@ -69,6 +69,10 @@ type SimResult = {
   review: ScriptReview | null;
   reviewError: string | null;
 };
+// Auto-improve (VOZ-240): a proposed edit + the inverse edit used for undo.
+type ScriptEdit = { kind: "node" | "handler"; id: string; field: "statements" | "opening" | "response_template"; value: string | string[] };
+type SuggestionEdit = { kind: "node" | "handler"; id: string; field: "statements" | "opening" | "response_template"; label: string; before: string | string[]; after: string | string[] };
+type Suggestion = { title: string; reason: string; edits: SuggestionEdit[] };
 
 // Content types + CONTENT_META + metaOf live in ./scriptContent (a pure module,
 // no React/DOM — so the runtime and vitest can read them without the canvas deps).
@@ -1133,6 +1137,11 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   const [sim, setSim] = useState<SimResult | null>(null); // design-time simulation (structural + transcripts + read-through)
   const [simBusy, setSimBusy] = useState(false); // simulation in flight
   const [openConvo, setOpenConvo] = useState<number | null>(0); // which transcript is expanded
+  // Auto-improve (VOZ-240): suggestions + in-place fix + undo
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null); // improvement suggestions modal
+  const [improveBusy, setImproveBusy] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [undoBuffer, setUndoBuffer] = useState<ScriptEdit[] | null>(null); // inverse edits to revert the last auto-fix
   // Goal-driven generation (VOZ-236)
   const [genOpen, setGenOpen] = useState(false);
   const [genBrand, setGenBrand] = useState("");
@@ -1353,6 +1362,81 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
       setError(e instanceof Error ? e.message : "Simulation failed");
     } finally {
       setSimBusy(false);
+    }
+  }
+
+  // Auto-improve (VOZ-240): ask the server to propose in-place edits that remove
+  // repetition / close gaps. Saves first so suggestions target the SAVED script
+  // (apply edits DB rows directly). Suggestions are reviewed before anything runs.
+  async function runImprove() {
+    if (!scriptId) return;
+    setError(null);
+    if (dirty) { await handleSave(); }
+    setImproveBusy(true);
+    try {
+      const r = await fetch("/api/lab/improve-script", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scriptId }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error || "Could not get suggestions"); return; }
+      setSuggestions((j.suggestions as Suggestion[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not get suggestions");
+    } finally {
+      setImproveBusy(false);
+    }
+  }
+
+  // Apply a set of in-place edits (auto-fix, no duplicate script) and keep the
+  // returned inverse set so the whole change can be undone in one click.
+  async function applyEdits(edits: ScriptEdit[], undoLabel = "auto-fixed") {
+    if (!scriptId || !edits.length) return;
+    // Dedupe by target (kind:id:field), last write wins — two edits to the same
+    // element would otherwise corrupt the undo snapshot.
+    const seen = new Map<string, ScriptEdit>();
+    for (const e of edits) seen.set(`${e.kind}:${e.id}:${e.field}`, e);
+    const deduped = [...seen.values()];
+    setApplyBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/lab/apply-script-edits", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ edits: deduped }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error || "Apply failed"); return; }
+      setUndoBuffer((j.undo as ScriptEdit[]) ?? null);
+      setScenarios(await listHandlers().catch(() => scenarios));
+      await loadScript(scriptId); // reload canvas with the edited box configs
+      setSuggestions(null);
+      setSim(null);
+      setNotice(`Script ${undoLabel} — ${j.applied} edit${j.applied === 1 ? "" : "s"}. You can undo.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Apply failed");
+    } finally {
+      setApplyBusy(false);
+    }
+  }
+
+  // Undo the last auto-fix: re-apply the inverse edits (which also gives us a
+  // redo set, but a single-level undo is all we expose).
+  async function undoFix() {
+    if (!scriptId || !undoBuffer) return;
+    setApplyBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/lab/apply-script-edits", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ edits: undoBuffer }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error || "Undo failed"); return; }
+      setUndoBuffer(null);
+      setScenarios(await listHandlers().catch(() => scenarios));
+      await loadScript(scriptId);
+      setNotice("Auto-fix undone — script restored.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Undo failed");
+    } finally {
+      setApplyBusy(false);
     }
   }
 
@@ -3386,7 +3470,10 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                   <span className="ml-2 font-normal text-gray-400">{convos.length} simulated call{convos.length === 1 ? "" : "s"} · {sim.structural.goals.length} goal{sim.structural.goals.length === 1 ? "" : "s"}</span>
                 </p>
               </div>
-              <button onClick={runSimulate} disabled={simBusy} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:opacity-40">{simBusy ? "Simulating…" : "Re-run"}</button>
+              <div className="flex items-center gap-2">
+                <button onClick={runImprove} disabled={improveBusy || simBusy} className="rounded-lg border border-yellow-600/50 bg-yellow-600/10 px-2.5 py-1 text-[11px] font-semibold text-yellow-300 hover:bg-yellow-600/20 disabled:opacity-40" title="Suggest edits to remove repetition & close gaps — review before applying">{improveBusy ? "Thinking…" : "✨ Suggest fixes"}</button>
+                <button onClick={runSimulate} disabled={simBusy} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:opacity-40">{simBusy ? "Simulating…" : "Re-run"}</button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
               {/* Summary strip across the simulated calls */}
@@ -3514,6 +3601,64 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
         </div>
         );
       })()}
+
+      {/* Improvement suggestions — review, then auto-fix in place (VOZ-240). */}
+      {suggestions && (() => {
+        const asText = (v: string | string[]) => (Array.isArray(v) ? v.map((x) => `• ${x}`).join("\n") || "(empty)" : v);
+        const allEdits: ScriptEdit[] = suggestions.flatMap((s) => s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after })));
+        return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6" onClick={() => setSuggestions(null)}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-gray-500">Suggested improvements</p>
+                <p className="text-sm font-bold text-white">{suggestions.length === 0 ? "Nothing to fix 🎉" : `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"}`}<span className="ml-2 font-normal text-gray-400">edits the current script — no copy</span></p>
+              </div>
+              {allEdits.length > 0 && (
+                <button onClick={() => applyEdits(allEdits, "auto-fixed")} disabled={applyBusy} className="rounded-lg bg-yellow-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-yellow-500 disabled:opacity-40">{applyBusy ? "Applying…" : `Apply all (${allEdits.length})`}</button>
+              )}
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+              {suggestions.length === 0 && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">No repetition or gaps worth fixing were found in the saved script.</p>}
+              {suggestions.map((s, i) => (
+                <div key={i} className="rounded-xl border border-gray-800 bg-gray-900/40">
+                  <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-semibold text-yellow-200">{s.title}</p>
+                      {s.reason && <p className="mt-0.5 text-[11px] text-gray-400">{s.reason}</p>}
+                    </div>
+                    <button onClick={() => applyEdits(s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after })), "auto-fixed")} disabled={applyBusy} className="shrink-0 rounded-lg border border-yellow-600/50 bg-yellow-600/10 px-2.5 py-1 text-[10px] font-semibold text-yellow-300 hover:bg-yellow-600/20 disabled:opacity-40">Apply</button>
+                  </div>
+                  <div className="space-y-2 px-3 py-2">
+                    {s.edits.map((e, k) => (
+                      <div key={k} className="text-[11px]">
+                        <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">{e.label}</p>
+                        <p className="whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-rose-200/80 line-through decoration-rose-400/40">{asText(e.before)}</p>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-200">{asText(e.after)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between border-t border-gray-800 px-5 py-3">
+              <p className="text-[10px] text-gray-600">Applying edits the existing boxes/lines in place. You can undo it in one click afterward.</p>
+              <button onClick={() => setSuggestions(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Close</button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Undo the last auto-fix — floating banner, present until undone or a new fix runs (VOZ-240). */}
+      {undoBuffer && (
+        <div className="fixed left-1/2 top-4 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-full border border-gray-700 bg-gray-950/95 px-4 py-2 shadow-2xl">
+          <span className="text-[12px] text-gray-200">Script was auto-fixed.</span>
+          <button onClick={undoFix} disabled={applyBusy} className="rounded-full border border-yellow-600/60 bg-yellow-600/15 px-3 py-1 text-[11px] font-semibold text-yellow-300 hover:bg-yellow-600/25 disabled:opacity-40">{applyBusy ? "Undoing…" : "↶ Undo auto-fix"}</button>
+          <button onClick={() => setUndoBuffer(null)} className="text-[14px] leading-none text-gray-500 hover:text-gray-300" title="Dismiss (keep the fix)">×</button>
+        </div>
+      )}
 
       {/* System Rules — hidden-by-default reference of the backend rules the
           engine enforces beyond the visible script (VOZ-232). */}
