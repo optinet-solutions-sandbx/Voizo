@@ -73,6 +73,10 @@ export function normalizePlan(raw: unknown, fallbackBrand: string): ScriptPlan {
  *  → End, plus a floating Call Goal box. All connectors are `any` (advance on any
  *  reply); the concern collection is the off-path answer bank + the End close. */
 export function buildScriptFromPlan(plan: ScriptPlan): AssembledScript {
+  // intent_key is a UNIQUE routing id across the whole table — a deterministic
+  // slug (gen_beat_0_free_spins) collides the moment two scripts are generated
+  // with similar goals. A per-generation nonce keeps them readable AND unique.
+  const nonce = randomUUID().slice(0, 6);
   const handlers: HandlerRow[] = [];
   const mkHandler = (h: Partial<HandlerRow> & { intent_key: string; response_template: string; name: string }): HandlerRow => {
     const row: HandlerRow = {
@@ -86,7 +90,7 @@ export function buildScriptFromPlan(plan: ScriptPlan): AssembledScript {
   // Beat scenarios (proactive), tagged fact:<slug> so the observer dedupes them.
   const beatHandlers = plan.beats.map((b, i) =>
     mkHandler({
-      name: `Gen - ${b.label}`, intent_key: `gen_beat_${i}_${slug(b.label, String(i))}`,
+      name: `Gen - ${b.label}`, intent_key: `gen_${nonce}_beat_${i}_${slug(b.label, String(i))}`,
       description: `proactively cover: ${b.label}`, response_template: b.line,
       tags: ["gen", `fact:beat_${i}`],
     }),
@@ -94,13 +98,13 @@ export function buildScriptFromPlan(plan: ScriptPlan): AssembledScript {
   // Concern scenarios (Q&A collection members).
   const concernHandlers = plan.concerns.map((c, i) =>
     mkHandler({
-      name: `Gen - ${c.name}`, intent_key: `gen_concern_${i}_${slug(c.name, String(i))}`,
+      name: `Gen - ${c.name}`, intent_key: `gen_${nonce}_concern_${i}_${slug(c.name, String(i))}`,
       description: c.when, response_template: c.answer, tags: ["gen"],
     }),
   );
   // Close (reworded goodbye).
   const closeHandler = mkHandler({
-    name: "Gen - Close", intent_key: "gen_close", description: "warm close",
+    name: "Gen - Close", intent_key: `gen_${nonce}_close`, description: "warm close",
     response_template: plan.close, action_type: "end_call", tags: ["gen"],
   });
 

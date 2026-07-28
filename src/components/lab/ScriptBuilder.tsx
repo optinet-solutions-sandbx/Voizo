@@ -1328,7 +1328,17 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
       });
       const j = await r.json();
       if (!r.ok) { setError(j.error || "Generation failed"); return; }
-      setScripts(await listScripts().catch(() => scripts));
+      // Refresh the Playbook lists so the generated scenarios + collection MEMBERS
+      // actually render (they exist in the DB but the builder can't show a box's
+      // line / a collection's name until its handler/collection is in state).
+      const [scs, hs, cols] = await Promise.all([
+        listScripts().catch(() => scripts),
+        listHandlers().catch(() => scenarios),
+        listCollections().catch(() => collections),
+      ]);
+      setScripts(scs);
+      setScenarios(hs);
+      setCollections(cols);
       await loadScript(j.scriptId);
       setGenOpen(false);
       setSim(j.sim ?? null); // show the generated script's simulation immediately

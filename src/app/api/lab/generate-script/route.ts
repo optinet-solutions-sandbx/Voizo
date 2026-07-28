@@ -29,7 +29,7 @@ Return ONLY JSON of this exact shape:
 Rules:
 - One beat per goal, in a sensible order. Each beat's line must actually deliver that goal using distinctive content words (e.g. "free spins", "deposit bonus"), not only numbers.
 - Keep every line short and spoken-natural (no markdown, no lists inside lines).
-- 3-6 concerns covering the obvious objections (who's calling, is this legit, not interested, don't text me, how it works).
+- concerns = a RICH anticipated-questions bank of 7-10 members (this becomes a Collection of multiple scenarios). Always cover, at minimum: who is calling / which brand, is this legit or a scam, how did you get my number, not interested, "don't text me" / opt-out, how do I claim or use the offer, and 2-3 more that fit THIS brand and offer (e.g. can't log in / forgot password, wagering or terms, is it free, when does it expire). Each concern has a distinct "when" (the customer's trigger) and a short "answer".
 - goals = the required checklist (echo the user's goals, tightened to concrete nouns).
 - Never invent prices/terms the user didn't provide; keep specifics only from the goals.`;
 
@@ -56,11 +56,11 @@ export async function POST(request: NextRequest) {
       { role: "user", content: `Brand: ${brand}\n${persona ? `Persona hint: ${persona}\n` : ""}Goals the call must accomplish:\n${goals.map((g) => `- ${g}`).join("\n")}` },
     ],
     response_format: { type: "json_object" },
-    max_completion_tokens: 1600,
+    max_completion_tokens: 2600,
   };
   if (!model.startsWith("gpt-5")) {
     params.temperature = 0.4;
-    params.max_tokens = 1600;
+    params.max_tokens = 2600;
     delete params.max_completion_tokens;
   }
   let raw: unknown;
