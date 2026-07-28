@@ -11,6 +11,53 @@ function num(o: Partial<RunFlowNumber>): RunFlowNumber {
   return { created_at: iso(-1000 + seq), phone_e164: `+10000000${seq}`, outcome: "pending", attempt_count: 0, ...o };
 }
 
+// VOZ-249: the detail page's progress bar now renders done/inProgress/awaitingRetry as
+// stacked slices over a "not tried yet" track. That is only honest if the four buckets
+// partition the list exactly — a gap would under-fill the bar, an overlap would overflow it
+// and silently mis-state how far a live campaign has actually got.
+describe("deriveRunFlow — the four buckets must PARTITION the list (progress-bar invariant)", () => {
+  it("holds for a realistic live mix", () => {
+    seq = 0;
+    const f = deriveRunFlow(
+      [
+        num({ outcome: "sent_sms" }),
+        num({ outcome: "not_interested" }),
+        num({ outcome: "unreached" }),
+        num({ outcome: "in_progress" }),
+        num({ outcome: "pending_retry", next_attempt_at: iso(30), attempt_count: 1 }),
+        num({ outcome: "pending_retry", next_attempt_at: iso(-5), attempt_count: 1 }),
+        num({ outcome: "pending" }),
+      ],
+      { maxAttempts: 3, nowMs: NOW },
+    );
+    expect(f.total).toBe(7);
+    expect(f.done + f.inProgress + f.awaitingRetry + f.pending).toBe(f.total);
+    expect(f.done).toBe(3); // the three terminal ones only
+  });
+
+  it("holds at the extremes (all settled, all waiting, all untried, empty)", () => {
+    const cases: RunFlowNumber[][] = [
+      [num({ outcome: "unreached" }), num({ outcome: "sent_sms" })],
+      [num({ outcome: "pending_retry", next_attempt_at: iso(10), attempt_count: 1 })],
+      [num({ outcome: "pending" }), num({ outcome: "pending" })],
+      [],
+    ];
+    for (const numbers of cases) {
+      const f = deriveRunFlow(numbers, { maxAttempts: 3, nowMs: NOW });
+      expect(f.done + f.inProgress + f.awaitingRetry + f.pending).toBe(f.total);
+      // and no bucket may go negative, which would invert a bar slice
+      for (const n of [f.done, f.inProgress, f.awaitingRetry, f.pending]) expect(n).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("an UNKNOWN future outcome still lands in exactly one bucket (counted settled, not lost)", () => {
+    seq = 0;
+    const f = deriveRunFlow([num({ outcome: "some_new_outcome_we_add_later" })], { maxAttempts: 3, nowMs: NOW });
+    expect(f.total).toBe(1);
+    expect(f.done + f.inProgress + f.awaitingRetry + f.pending).toBe(1);
+  });
+});
+
 describe("deriveRunFlow", () => {
   it("running campaign: now-dialing, up-next, counts, next retry window", () => {
     seq = 0;

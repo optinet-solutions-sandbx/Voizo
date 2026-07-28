@@ -16,6 +16,7 @@ import DynamicSchedule from "@/components/DynamicSchedule";
 import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { useCampaignExport, type ExportType } from "@/lib/useCampaignExport";
 import { useMagnetic } from "@/components/useMagnetic";
+import { isSmsSent } from "@/lib/dashboardAnalytics";
 
 type Row = Record<string, unknown>;
 
@@ -528,9 +529,16 @@ export default function CampaignV2DetailPage() {
   // (2026-06-22); a 'sent'-only text on a non-reporting route still sits under 'Awaiting retry'. So
   // this SMS-log count can still exceed the sent_sms + sms_delivered buckets. Surfaces the true texted
   // total (Ernie ticket 2026-06-16). Uses the same per-phone map that drives the per-row SMS column.
+  // VOZ-249: this used to hand-roll `status === "sent"`, which SILENTLY DROPPED every
+  // delivered text — 592 of 936 all-time (63%). Campaigns whose texts all got a delivery
+  // receipt showed "0 Texted" beside 124 real sends, and today's run only looked right
+  // because Mobivate's receipts stopped arriving. isSmsSent is the ONE app-wide definition
+  // (dashboardAnalytics.ts, 2026-07-02: sent|delivered; excludes queued/failed/undelivered)
+  // that the dashboard's SMS cards and the records drawer already use — reusing it is what
+  // makes this chip reconcile with every other surface instead of drifting again.
   const textedCount = useMemo(() => {
     let n = 0;
-    for (const row of smsByPhone.values()) if ((row.status as string) === "sent") n++;
+    for (const row of smsByPhone.values()) if (isSmsSent(row.status as string)) n++;
     return n;
   }, [smsByPhone]);
 

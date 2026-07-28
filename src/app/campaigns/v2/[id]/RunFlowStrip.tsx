@@ -40,7 +40,16 @@ export default function RunFlowStrip({
     [numbers, maxAttempts, nowMs],
   );
 
-  const pctDone = flow.total > 0 ? Math.round((flow.done / flow.total) * 100) : 0;
+  // VOZ-249: the bar used to be a single done/total fill, which read as "we have barely
+  // started" on a campaign that had already phoned everyone and was only waiting on retry
+  // windows (4 of 21 settled = 19% full, while 21 of 21 had actually been dialled). These
+  // four slices account for EVERY contact, so the bar can no longer imply idle work that
+  // is really in flight. Colours match the counters underneath (blue settled, emerald
+  // dialling, amber waiting) and the leftover track is the not-yet-tried remainder.
+  const pct = (n: number) => (flow.total > 0 ? (n / flow.total) * 100 : 0);
+  const pctDone = pct(flow.done);
+  const pctInProgress = pct(flow.inProgress);
+  const pctAwaitingRetry = pct(flow.awaitingRetry);
   const retryAt = fmtTime(flow.nextRetryAt);
 
   return (
@@ -79,9 +88,23 @@ export default function RunFlowStrip({
         )}
       </div>
 
-      {/* Progress through the list */}
-      <div className="h-2 rounded-full bg-[var(--bg-elevated)] overflow-hidden">
-        <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${pctDone}%` }} />
+      {/* Progress through the list — every contact accounted for (VOZ-249). */}
+      <div
+        className="h-2 rounded-full bg-[var(--bg-elevated)] overflow-hidden flex"
+        title={
+          `${flow.done} settled · ${flow.inProgress} dialling now · ${flow.awaitingRetry} waiting for a retry window · ` +
+          `${flow.pending} not tried yet — of ${flow.total} contacts`
+        }
+      >
+        {pctDone > 0 && (
+          <div className="h-full bg-blue-500 transition-all" style={{ width: `${pctDone}%` }} />
+        )}
+        {pctInProgress > 0 && (
+          <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pctInProgress}%` }} />
+        )}
+        {pctAwaitingRetry > 0 && (
+          <div className="h-full bg-amber-400/70 transition-all" style={{ width: `${pctAwaitingRetry}%` }} />
+        )}
       </div>
 
       <div className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-2 text-[11px] text-[var(--text-3)]">
