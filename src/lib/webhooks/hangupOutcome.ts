@@ -1,0 +1,99 @@
+// hangupOutcome — PURE mapping from a FreeSWITCH hangup to our call status,
+// terminal outcome, and the duration we persist (VOZ-247).
+//
+// Extracted from src/app/api/webhooks/freeswitch/voice-status/route.ts for the
+// same reason smsDispatchDecision was: this decides how EVERY call is counted,
+// so it belongs in a unit-testable function rather than inline in the route.
+//
+// ── The bug this fixes ──────────────────────────────────────────────────────
+// The shim used to send FreeSWITCH's `duration`, which is TOTAL channel time —
+// it includes ringing. The route then treated `NORMAL_CLEARING && duration > 0`
+// as a completed conversation. A phone that rang 25s and was never answered
+// clears NORMAL_CLEARING with duration=25, so it was logged as a COMPLETED CALL
+// with 25 seconds of "talk time".
+//
+// Measured on the 2026-07-27/28 realtime run: of 660 calls we called
+// "connected", only 210 had ever reached Vapi. The other 450 returned 404 on a
+// direct Vapi lookup, had no recording, no transcript and no ended_reason, and
+// their durations topped out at 38s — the ring window. Reported answer rate was
+// 92%; the real rate was 29.5%. Every one of those also burned a retry attempt.
+//
+// ── The fix ─────────────────────────────────────────────────────────────────
+// `billsec` is answer-to-hangup time (0 when never answered) and `answer_stamp`
+// exists only on an answered channel. Either one settles "did a human pick up",
+// which `duration` cannot. answer_stamp is preferred because a call answered and
+// dropped inside a second can round billsec to 0 while still being a real answer.
+//
+// Backward compatible ON PURPOSE: the Vercel route and the EC2 shim deploy
+// separately, so for a window one runs new code against the other's old payload.
+// When neither new field is present we fall back to the legacy duration>0 rule,
+// which is exactly today's behavior — so deploy order does not matter.
+
+export type CallStatus = "completed" | "busy" | "no_answer" | "failed" | "canceled";
+export type TerminalOutcome = "completed" | "busy" | "no_answer" | "failed" | "canceled";
+
+export interface HangupSignals {
+  /** FreeSWITCH `duration`: TOTAL channel seconds, INCLUDING ring. Legacy field. */
+  totalSeconds: number;
+  /** FreeSWITCH `billsec`: answer→hangup seconds, 0 if never answered. Null when
+   *  the shim predates VOZ-247. */
+  talkSeconds: number | null;
+  /** FreeSWITCH `answer_stamp`: present only on an answered channel. Null/absent
+   *  when unanswered OR when the shim predates VOZ-247. */
+  answerStamp: string | null;
+}
+
+export interface HangupOutcome {
+  status: CallStatus;
+  terminalOutcome: TerminalOutcome;
+  /** What to persist as calls_v2.duration_seconds — talk time when we know it,
+   *  else the legacy total. Never the ring window on an unanswered call. */
+  durationSeconds: number;
+  /** True/false once the shim reports it; null on a legacy payload. Persisted so
+   *  analytics can separate "we know it was answered" from "we cannot tell". */
+  answered: boolean | null;
+}
+
+/**
+ * Did a human (or a machine) actually pick up? Null means the payload carries no
+ * answer evidence at all — a legacy shim — and the caller must fall back.
+ */
+export function resolveAnswered(s: HangupSignals): boolean | null {
+  // answer_stamp first: authoritative, and survives a sub-second answer that
+  // rounds billsec down to 0.
+  if (typeof s.answerStamp === "string" && s.answerStamp.trim().length > 0) return true;
+  if (typeof s.talkSeconds === "number") return s.talkSeconds > 0;
+  return null; // legacy payload — no answer evidence either way
+}
+
+export function mapHangup(hangupCause: string | null, s: HangupSignals): HangupOutcome {
+  const cause = (hangupCause || "").toUpperCase();
+  const answered = resolveAnswered(s);
+  // Talk time when the shim reports it; otherwise the legacy total. On an
+  // unanswered call talkSeconds is 0, which is the honest number — the ring
+  // window is not conversation.
+  const durationSeconds = typeof s.talkSeconds === "number" ? s.talkSeconds : s.totalSeconds;
+
+  // Unambiguous causes first — they never depend on answer state.
+  if (cause === "USER_BUSY") return { status: "busy", terminalOutcome: "busy", durationSeconds, answered };
+  if (cause === "NO_ANSWER" || cause === "ALLOTTED_TIMEOUT") {
+    return { status: "no_answer", terminalOutcome: "no_answer", durationSeconds, answered };
+  }
+  if (cause === "ORIGINATOR_CANCEL") {
+    return { status: "canceled", terminalOutcome: "canceled", durationSeconds, answered };
+  }
+
+  // NORMAL_CLEARING is the ambiguous one: both a real conversation and a
+  // spam-filtered/unanswered leg clear "normally". Answer evidence decides it.
+  if (cause === "NORMAL_CLEARING") {
+    if (answered === true) return { status: "completed", terminalOutcome: "completed", durationSeconds, answered };
+    if (answered === false) return { status: "no_answer", terminalOutcome: "no_answer", durationSeconds, answered };
+    // Legacy payload: preserve the pre-VOZ-247 rule verbatim so a shim that has
+    // not been redeployed yet behaves exactly as it does today.
+    return s.totalSeconds > 0
+      ? { status: "completed", terminalOutcome: "completed", durationSeconds, answered }
+      : { status: "no_answer", terminalOutcome: "no_answer", durationSeconds, answered };
+  }
+
+  return { status: "failed", terminalOutcome: "failed", durationSeconds, answered };
+}

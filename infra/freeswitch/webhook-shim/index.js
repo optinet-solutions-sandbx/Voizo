@@ -146,7 +146,18 @@ function translateEvent(event) {
     call_uuid: get("Unique-ID") || get("uuid"),
     event_name: event.getHeader("Event-Name"),
     hangup_cause: get("Hangup-Cause") || get("hangup_cause"),
+    // TOTAL channel seconds, INCLUDING ring. Kept for backward compatibility so
+    // an un-redeployed Voizo build keeps behaving exactly as before — but it is
+    // NOT evidence of a conversation. See talk_seconds below.
     duration: get("variable_duration") || get("duration") || get("billsec"),
+    // VOZ-247. `duration` includes ringing, so Voizo was logging a phone that
+    // rang 25s and was never answered as a 25-second COMPLETED call (450 such
+    // rows in the 2026-07-27/28 run; reported answer rate 92% vs a real 29.5%).
+    // billsec is answer->hangup only, and is "0" when nobody picked up.
+    talk_seconds: get("billsec"),
+    // answer_stamp exists ONLY on an answered channel, so it settles the
+    // question even when a pickup-and-drop rounds billsec down to 0.
+    answer_stamp: get("answer_stamp"),
     timestamp: event.getHeader("Event-Date-Timestamp"),
   };
 }
@@ -183,9 +194,14 @@ function start() {
         return;
       }
 
+      // total vs talk is the whole point of VOZ-247 — log both so an operator can
+      // see at a glance that a 25s/0s line is a ring, not a conversation. This is
+      // also the deploy check: `journalctl -u voizo-webhook-shim` must show
+      // talk= and answered= after a redeploy.
       console.log(
         `[shim] event received — call=${payload.voizo_call_id} ` +
-        `cause=${payload.hangup_cause} duration=${payload.duration}`,
+        `cause=${payload.hangup_cause} total=${payload.duration}s talk=${payload.talk_seconds}s ` +
+        `answered=${payload.answer_stamp ? "yes" : "no"}`,
       );
       postToVoizo(payload);
     });

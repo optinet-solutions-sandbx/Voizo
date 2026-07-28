@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
+import { mapHangup } from "@/lib/webhooks/hangupOutcome";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -35,39 +36,24 @@ interface ShimPayload {
   call_uuid: string | null;
   event_name: string | null;
   hangup_cause: string | null;
+  /** FreeSWITCH `duration`: TOTAL channel seconds INCLUDING ring. Kept for the
+   *  legacy path — do NOT treat a non-zero value as evidence of a conversation. */
   duration: string | null;
+  /** VOZ-247: FreeSWITCH `billsec` — answer→hangup seconds, "0" when never
+   *  answered. Absent until the EC2 shim is redeployed. */
+  talk_seconds?: string | null;
+  /** VOZ-247: FreeSWITCH `answer_stamp` — present only on an answered channel. */
+  answer_stamp?: string | null;
   timestamp: string | null;
 }
 
-/**
- * Map FreeSWITCH hangup causes to our internal call status + terminal outcome.
- * Reference: https://freeswitch.org/confluence/display/FREESWITCH/Hangup+Cause+Code+Table
- *
- * `duration` is used to disambiguate NORMAL_CLEARING after a real connect (completed)
- * from NORMAL_CLEARING on an unanswered leg (spam-filtered 480s often surface this way).
- */
-function mapHangup(
-  hangupCause: string | null,
-  duration: number,
-): { status: string; terminalOutcome: "completed" | "busy" | "no_answer" | "failed" | "canceled" } {
-  const cause = (hangupCause || "").toUpperCase();
-
-  if (cause === "NORMAL_CLEARING" && duration > 0) {
-    return { status: "completed", terminalOutcome: "completed" };
-  }
-  if (cause === "USER_BUSY") return { status: "busy", terminalOutcome: "busy" };
-  if (cause === "NO_ANSWER" || cause === "ALLOTTED_TIMEOUT") {
-    return { status: "no_answer", terminalOutcome: "no_answer" };
-  }
-  if (cause === "ORIGINATOR_CANCEL") return { status: "canceled", terminalOutcome: "canceled" };
-
-  // NORMAL_CLEARING with 0 duration = carrier dropped before real answer
-  if (cause === "NORMAL_CLEARING" && duration === 0) {
-    return { status: "no_answer", terminalOutcome: "no_answer" };
-  }
-
-  return { status: "failed", terminalOutcome: "failed" };
-}
+// mapHangup moved to @/lib/webhooks/hangupOutcome (VOZ-247) so the rule that
+// decides how EVERY call is counted is unit-tested rather than inline here.
+// It now keys "was this a conversation?" off billsec / answer_stamp instead of
+// total channel time — `duration` includes RING, so a phone that rang 25s
+// unanswered used to be logged as a 25-second completed call (450 such rows in
+// the 07-27/28 run alone). Falls back to the old duration>0 rule when the shim
+// has not been redeployed yet, so the two deploys are order-independent.
 
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
@@ -94,15 +80,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing voizo_* identifiers" }, { status: 400 });
   }
 
-  const duration = payload.duration ? parseInt(payload.duration, 10) || 0 : 0;
-  const { status, terminalOutcome } = mapHangup(payload.hangup_cause, duration);
+  // parseInt("0") is 0 which is falsy, so `|| 0` is safe here; but a MISSING
+  // talk_seconds must stay null (legacy shim) rather than collapse to 0, or
+  // every call would read as unanswered during the deploy window.
+  const totalSeconds = payload.duration ? parseInt(payload.duration, 10) || 0 : 0;
+  const talkSeconds =
+    typeof payload.talk_seconds === "string" && payload.talk_seconds.trim() !== ""
+      ? parseInt(payload.talk_seconds, 10) || 0
+      : null;
+  const { status, terminalOutcome, durationSeconds, answered } = mapHangup(payload.hangup_cause, {
+    totalSeconds,
+    talkSeconds,
+    answerStamp: payload.answer_stamp ?? null,
+  });
+  console.log(
+    `[freeswitch.voice-status] cause=${payload.hangup_cause} total=${totalSeconds}s ` +
+      `talk=${talkSeconds === null ? "n/a(legacy shim)" : `${talkSeconds}s`} ` +
+      `answered=${answered === null ? "unknown" : answered} -> status=${status} call=${callId}`,
+  );
 
   const updatePayload: Record<string, unknown> = {
     status,
     ended_at: new Date().toISOString(),
-    duration_seconds: duration,
+    // TALK time once the shim reports it — never the ring window (VOZ-247).
+    duration_seconds: durationSeconds,
     // Persist the RAW FreeSWITCH hangup cause (carrier/outbound-leg "why") alongside the coarse
-    // `status`. mapHangup() above still derives status from it; this keeps the granular cause for
+    // `status`. mapHangup() still derives status from it; this keeps the granular cause for
     // failure-mix observability (was discarded before). See call-observability migration.
     hangup_cause: payload.hangup_cause,
   };
