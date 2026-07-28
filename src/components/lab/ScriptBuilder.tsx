@@ -49,7 +49,26 @@ import LabConfigForm from "@/components/lab/LabConfigForm";
 import type { ListenerScript, ListenerHandler, ListenerCollection, LabCallEvent } from "@/lib/scriptEngine/database.types";
 import { CONTENT_META, metaOf, type Content } from "./scriptContent";
 import { SYSTEM_RULES } from "./systemRules";
-import { simulateScript, type SimReport } from "@/lib/scriptEngine/scriptSimulator";
+import { type SimReport } from "@/lib/scriptEngine/scriptSimulator";
+
+// Design-time simulation payload from POST /api/lab/simulate-script (VOZ-239).
+type ReviewRepeat = { point: string; boxes?: string[]; severity?: "high" | "medium" | "low" };
+type ScriptReview = { repetition?: ReviewRepeat[]; summary?: string };
+type ConvoTurn = { speaker: "agent" | "customer"; text: string };
+type SimConversation = {
+  persona: string; behavior: string; failed?: boolean;
+  transcript: ConvoTurn[];
+  goalsCovered: { goal: string; covered: boolean }[];
+  repetition: { point: string; count?: number }[];
+  endedCleanly: boolean; notes: string;
+};
+type SimResult = {
+  structural: SimReport;
+  goals: string[];
+  conversations: SimConversation[];
+  review: ScriptReview | null;
+  reviewError: string | null;
+};
 
 // Content types + CONTENT_META + metaOf live in ./scriptContent (a pure module,
 // no React/DOM — so the runtime and vitest can read them without the canvas deps).
@@ -1111,7 +1130,9 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   const [qa, setQa] = useState<QaResult | null>(null);
   const [qaBusy, setQaBusy] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false); // System Rules panel — hidden by default
-  const [sim, setSim] = useState<SimReport | null>(null); // design-time simulation report
+  const [sim, setSim] = useState<SimResult | null>(null); // design-time simulation (structural + transcripts + read-through)
+  const [simBusy, setSimBusy] = useState(false); // simulation in flight
+  const [openConvo, setOpenConvo] = useState<number | null>(0); // which transcript is expanded
   // Goal-driven generation (VOZ-236)
   const [genOpen, setGenOpen] = useState(false);
   const [genBrand, setGenBrand] = useState("");
@@ -1297,19 +1318,42 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
     return { errors, warnings };
   }
 
-  // Design-time simulation (VOZ-235): run the pure simulator on the CURRENT
-  // canvas — no call, no Vapi credits. Builds the graph from the flow nodes
-  // (statements ride in each box's config; scenario lines come from the linked
-  // Playbook scenarios) and reports goal coverage / repetition / completeness.
-  function runSimulate() {
+  // Design-time simulation (VOZ-235/239): NO call, NO Vapi credits. Two passes:
+  //  • structural (deterministic) — goal coverage, dead ends, unreachable boxes;
+  //  • read-through (LLM) — the server READS the whole script and flags SEMANTIC
+  //    repetition (the same point made in different words) + coverage, which a
+  //    token check can't see. That pass takes a few seconds, hence the spinner.
+  async function runSimulate() {
     const simGraph = {
       nodes: nodes.map((n) => {
         const d = n.data as NodeData;
         return { id: n.id, script_id: scriptId ?? "", type: d.kind === "start" ? "start" : "step", label: d.label, config: d.config, scenario_id: d.scenarioId ?? null, pos_x: 0, pos_y: 0 };
       }),
       edges: edges.map((e) => ({ id: e.id, script_id: scriptId ?? "", source_node_id: e.source, target_node_id: e.target, condition: (e.data as { condition?: Record<string, unknown> } | undefined)?.condition ?? { kind: "any" }, label: "" })),
-    } as unknown as Parameters<typeof simulateScript>[0];
-    setSim(simulateScript(simGraph, scenarios));
+    };
+    setSimBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/lab/simulate-script", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nodes: simGraph.nodes, edges: simGraph.edges }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error || "Simulation failed"); return; }
+      setOpenConvo(0);
+      setSim({
+        structural: j.structural as SimReport,
+        goals: (j.goals as string[]) ?? [],
+        conversations: (j.conversations as SimConversation[]) ?? [],
+        review: (j.review as ScriptReview) ?? null,
+        reviewError: (j.reviewError as string) ?? null,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Simulation failed");
+    } finally {
+      setSimBusy(false);
+    }
   }
 
   // Goal-driven generation (VOZ-236): the endpoint has the LLM draft the content,
@@ -1341,7 +1385,9 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
       setCollections(cols);
       await loadScript(j.scriptId);
       setGenOpen(false);
-      setSim(j.sim ?? null); // show the generated script's simulation immediately
+      // Show the generated script's structural self-check immediately; the user
+      // can hit "Re-run" to play out the 10 conversation transcripts.
+      setSim(j.sim ? { structural: j.sim as SimReport, goals: (j.goals as string[]) ?? [], conversations: [], review: null, reviewError: null } : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed");
     } finally {
@@ -1939,13 +1985,20 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
               goal coverage / repetition / completeness. */}
           <button
             onClick={runSimulate}
-            disabled={!scriptId}
-            title="Simulate — dry-run the flow (no call): will it reach every Call Goal, without repetition, and finish?"
+            disabled={!scriptId || simBusy}
+            title="Simulate — read-through the flow (no call): will it reach every Call Goal, without repeating itself, and finish?"
             className="rounded-lg border border-gray-700 p-2 text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-            </svg>
+            {simBusy ? (
+              <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+              </svg>
+            )}
           </button>
 
           {/* System Rules — hidden-by-default reference of the backend rules
@@ -3296,26 +3349,135 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
         </div>
       )}
 
-      {/* Simulation report — design-time goal/repetition/completeness check (VOZ-235). */}
-      {sim && (
+      {/* Busy overlay while the AI reads the script (VOZ-239). */}
+      {simBusy && !sim && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div className="relative flex flex-col items-center gap-3 rounded-2xl border border-gray-700 bg-gray-950 px-8 py-7 shadow-2xl">
+            <svg className="h-7 w-7 animate-spin text-yellow-400" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <p className="text-sm font-semibold text-white">Simulating calls…</p>
+            <p className="text-[11px] text-gray-500">Playing out 10 conversations against the script — no call, no credits.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Simulation report — 10 dry-run transcripts + structural/read-through (VOZ-235/239). */}
+      {sim && (() => {
+        const rep = sim.review?.repetition ?? [];
+        const hardRepeat = rep.some((r) => (r.severity ?? "medium") === "high");
+        const convos = sim.conversations;
+        const withRepeat = convos.filter((c) => c.repetition.length > 0).length;
+        const cleanEnd = convos.filter((c) => c.endedCleanly).length;
+        const allGoals = convos.filter((c) => c.goalsCovered.length > 0 && c.goalsCovered.every((g) => g.covered)).length;
+        const ready = sim.structural.ok && !hardRepeat && (convos.length === 0 || withRepeat === 0);
+        const sev = (s?: string) => (s === "high" ? "border-rose-500/40 bg-rose-500/10 text-rose-200" : s === "low" ? "border-gray-600/40 bg-gray-700/20 text-gray-300" : "border-amber-500/40 bg-amber-500/10 text-amber-200");
+        return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" onClick={() => setSim(null)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
+          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
             <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3">
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-gray-500">Script simulation — no call</p>
+                <p className="text-[10px] uppercase tracking-wider text-gray-500">Script simulation — no call, no credits</p>
                 <p className="text-sm font-bold text-white">
-                  {sim.ok ? <span className="text-emerald-400">✓ Ready</span> : <span className="text-rose-400">✕ Needs fixes</span>}
-                  <span className="ml-2 font-normal text-gray-400">{sim.goals.length} goal{sim.goals.length === 1 ? "" : "s"} · {sim.endPaths} completed path{sim.endPaths === 1 ? "" : "s"}</span>
+                  {ready ? <span className="text-emerald-400">✓ Looks good</span> : <span className="text-amber-400">Review needed</span>}
+                  <span className="ml-2 font-normal text-gray-400">{convos.length} simulated call{convos.length === 1 ? "" : "s"} · {sim.structural.goals.length} goal{sim.structural.goals.length === 1 ? "" : "s"}</span>
                 </p>
               </div>
-              <button onClick={runSimulate} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800">Re-run</button>
+              <button onClick={runSimulate} disabled={simBusy} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:opacity-40">{simBusy ? "Simulating…" : "Re-run"}</button>
             </div>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-              {/* Issues */}
-              {sim.issues.length > 0 && (
+              {/* Summary strip across the simulated calls */}
+              {convos.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { n: `${allGoals}/${convos.length}`, l: "covered every goal", good: allGoals === convos.length },
+                    { n: `${withRepeat}/${convos.length}`, l: "repeated a point", good: withRepeat === 0 },
+                    { n: `${cleanEnd}/${convos.length}`, l: "ended cleanly", good: cleanEnd === convos.length },
+                  ].map((s, i) => (
+                    <div key={i} className={`rounded-lg border px-3 py-2 text-center ${s.good ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+                      <p className={`text-lg font-bold ${s.good ? "text-emerald-300" : "text-amber-300"}`}>{s.n}</p>
+                      <p className="text-[10px] text-gray-400">{s.l}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Script-level repetition (read-through) — the reliable catcher */}
+              {rep.length > 0 && (
                 <div className="space-y-1.5">
-                  {sim.issues.map((iss, i) => (
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Repeated points in the script <span className="font-normal normal-case text-gray-600">— same idea, even reworded</span></p>
+                  {rep.map((r, i) => (
+                    <div key={i} className={`rounded-lg border px-3 py-2 text-[11px] ${sev(r.severity)}`}>
+                      <span className="font-semibold uppercase text-[9px] tracking-wider opacity-70">{r.severity ?? "medium"}</span>
+                      <p className="mt-0.5">{r.point}</p>
+                      {(r.boxes?.length ?? 0) > 0 && <p className="mt-0.5 text-[10px] opacity-70">Across: {r.boxes!.join(" · ")}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* The 10 transcripts */}
+              {convos.length > 0 && (
+                <div>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">Simulated conversations</p>
+                  <div className="space-y-2">
+                    {convos.map((c, i) => {
+                      const total = c.goalsCovered.length;
+                      const covered = c.goalsCovered.filter((g) => g.covered).length;
+                      const open = openConvo === i;
+                      return (
+                        <div key={i} className="overflow-hidden rounded-lg border border-gray-800">
+                          <button onClick={() => setOpenConvo(open ? null : i)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-900/50">
+                            <span className={`shrink-0 text-gray-500 transition ${open ? "rotate-90" : ""}`}>▸</span>
+                            <span className="flex-1 text-[12px] font-semibold text-gray-200">{c.persona}</span>
+                            {c.failed ? (
+                              <span className="rounded-full bg-rose-500/15 px-2 py-px text-[9px] font-semibold text-rose-300">failed</span>
+                            ) : (
+                              <>
+                                {c.repetition.length > 0 && <span className="rounded-full bg-amber-500/15 px-2 py-px text-[9px] font-semibold text-amber-300">↻ {c.repetition.length} repeat{c.repetition.length === 1 ? "" : "s"}</span>}
+                                {total > 0 && <span className={`rounded-full px-2 py-px text-[9px] font-semibold ${covered === total ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>{covered}/{total} goals</span>}
+                                {!c.endedCleanly && <span className="rounded-full bg-gray-600/30 px-2 py-px text-[9px] font-semibold text-gray-300">cut off</span>}
+                              </>
+                            )}
+                          </button>
+                          {open && !c.failed && (
+                            <div className="border-t border-gray-800 bg-gray-950 px-3 py-3">
+                              <p className="mb-2 text-[10px] italic text-gray-500">Customer: {c.behavior}</p>
+                              <div className="space-y-1.5">
+                                {c.transcript.map((t, k) => (
+                                  <div key={k} className={`flex ${t.speaker === "agent" ? "justify-start" : "justify-end"}`}>
+                                    <div className={`max-w-[78%] rounded-2xl px-3 py-1.5 text-[11px] leading-snug ${t.speaker === "agent" ? "rounded-tl-sm bg-gray-800 text-gray-100" : "rounded-tr-sm bg-indigo-600/80 text-white"}`}>
+                                      <span className="mb-0.5 block text-[8px] font-semibold uppercase tracking-wider opacity-50">{t.speaker}</span>
+                                      {t.text}
+                                    </div>
+                                  </div>
+                                ))}
+                                {c.transcript.length === 0 && <p className="text-[11px] text-gray-500">No transcript returned.</p>}
+                              </div>
+                              {c.repetition.length > 0 && (
+                                <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
+                                  <p className="text-[10px] font-semibold text-amber-300">Repeated in this call:</p>
+                                  {c.repetition.map((r, k) => <p key={k} className="text-[10px] text-amber-200/90">• {r.point}{r.count ? ` (×${r.count})` : ""}</p>)}
+                                </div>
+                              )}
+                              {c.notes && <p className="mt-2 text-[10px] text-gray-500">{c.notes}</p>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Structural: flow issues + per-goal coverage */}
+              {sim.structural.issues.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Flow checks</p>
+                  {sim.structural.issues.map((iss, i) => (
                     <div key={i} className={`flex gap-2 rounded-lg border px-3 py-2 text-[11px] ${iss.level === "error" ? "border-rose-500/40 bg-rose-500/10 text-rose-200" : "border-amber-500/40 bg-amber-500/10 text-amber-200"}`}>
                       <span className="shrink-0 font-bold">{iss.level === "error" ? "✕" : "!"}</span>
                       <span>{iss.text}</span>
@@ -3323,34 +3485,35 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                   ))}
                 </div>
               )}
-              {sim.issues.length === 0 && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">Every goal is delivered on every path, with no repetition, and every path reaches an End. 🎯</p>}
-              {/* Per-goal coverage */}
               <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">Goal coverage</p>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">Goal coverage <span className="font-normal normal-case text-gray-600">(every possible path)</span></p>
                 <div className="overflow-hidden rounded-lg border border-gray-800">
-                  {sim.goals.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-500">No Call Goals — add a Call Goal box to check the offer is delivered.</p>}
-                  {sim.goals.map((g, i) => (
+                  {sim.structural.goals.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-500">No Call Goals — add a Call Goal box to check the offer is delivered.</p>}
+                  {sim.structural.goals.map((g, i) => (
                     <div key={i} className={`flex items-start gap-2 px-3 py-2 text-[11px] ${i % 2 ? "bg-gray-900/40" : ""}`}>
                       <span className="shrink-0">{!g.everCovered ? "❌" : g.guaranteed ? "✅" : "⚠️"}</span>
                       <div className="min-w-0 flex-1">
                         <span className="text-gray-200">{g.text}</span>
                         <span className="ml-1 text-gray-500">
                           {!g.everCovered ? "— never spoken" : g.guaranteed ? `— always said (${g.deliveredBy.join(", ")})` : `— missed on ${g.missedEndPaths} path(s)`}
-                          {g.deliveredBy.length >= 2 && " · repeated"}
                         </span>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-              <p className="text-[10px] text-gray-600">Static dry-run of the drawn flow — it checks the offer (statements &amp; scenario lines) reaches every goal on every path. Save the script first if you edited scenario lines inline.</p>
+
+              {convos.length === 0 && !sim.reviewError && <p className="rounded-lg border border-gray-700 bg-gray-900/40 px-3 py-2 text-[11px] text-gray-400">Structural self-check only. Hit <span className="font-semibold text-gray-200">Re-run</span> to play out 10 conversations against this script.</p>}
+              {sim.reviewError && <p className="text-[10px] text-amber-500/80">AI simulation unavailable ({sim.reviewError}). Showing structural checks only.</p>}
+              <p className="text-[10px] text-gray-600">Dry-run only — an AI plays both the agent (following your script) and the customer. It approximates a real call to preview coverage &amp; repetition; it is not the live engine. Save the script first if you edited scenario lines inline.</p>
             </div>
             <div className="flex justify-end border-t border-gray-800 px-5 py-3">
               <button onClick={() => setSim(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Close</button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* System Rules — hidden-by-default reference of the backend rules the
           engine enforces beyond the visible script (VOZ-232). */}
