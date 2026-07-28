@@ -3458,6 +3458,9 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
         const allGoals = convos.filter((c) => c.goalsCovered.length > 0 && c.goalsCovered.every((g) => g.covered)).length;
         const ready = sim.structural.ok && !hardRepeat && (convos.length === 0 || withRepeat === 0);
         const sev = (s?: string) => (s === "high" ? "border-rose-500/40 bg-rose-500/10 text-rose-200" : s === "low" ? "border-gray-600/40 bg-gray-700/20 text-gray-300" : "border-amber-500/40 bg-amber-500/10 text-amber-200");
+        // Suggest-fixes lives INSIDE this box — you can't auto-fix without simulating first.
+        const asText = (v: string | string[]) => (Array.isArray(v) ? v.map((x) => `• ${x}`).join("\n") || "(empty)" : v);
+        const allEdits: ScriptEdit[] = suggestions ? suggestions.flatMap((s) => s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after }))) : [];
         return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" onClick={() => setSim(null)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
@@ -3476,6 +3479,48 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
               </div>
             </div>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              {/* ── Suggested fixes (auto-fix) — rendered INSIDE the simulation box (VOZ-240/242) ── */}
+              {improveBusy && !suggestions && (
+                <p className="rounded-xl border border-yellow-600/30 bg-yellow-600/5 px-3 py-2 text-[11px] text-yellow-200">Reading the script for repetition &amp; gaps…</p>
+              )}
+              {suggestions && (
+                <div className="rounded-xl border border-yellow-600/40 bg-yellow-600/[0.06] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-yellow-300">✨ Suggested fixes{suggestions.length > 0 ? ` (${suggestions.length})` : ""}</p>
+                    <div className="flex items-center gap-2">
+                      {allEdits.length > 0 && (
+                        <button onClick={() => applyEdits(allEdits, "auto-fixed")} disabled={applyBusy} className="rounded-lg bg-yellow-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-yellow-500 disabled:opacity-40">{applyBusy ? "Applying…" : `Apply all (${allEdits.length})`}</button>
+                      )}
+                      <button onClick={() => setSuggestions(null)} disabled={applyBusy} className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:opacity-40">Dismiss</button>
+                    </div>
+                  </div>
+                  {suggestions.length === 0 && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">No repetition or gaps worth fixing in the saved script. 🎉</p>}
+                  <div className="space-y-2">
+                    {suggestions.map((s, si) => (
+                      <div key={si} className="rounded-lg border border-gray-800 bg-gray-900/50">
+                        <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-[12px] font-semibold text-yellow-200">{s.title}</p>
+                            {s.reason && <p className="mt-0.5 text-[11px] text-gray-400">{s.reason}</p>}
+                          </div>
+                          <button onClick={() => applyEdits(s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after })), "auto-fixed")} disabled={applyBusy} className="shrink-0 rounded-lg border border-yellow-600/50 bg-yellow-600/10 px-2.5 py-1 text-[10px] font-semibold text-yellow-300 hover:bg-yellow-600/20 disabled:opacity-40">Apply</button>
+                        </div>
+                        <div className="space-y-2 px-3 py-2">
+                          {s.edits.map((e, k) => (
+                            <div key={k} className="text-[11px]">
+                              <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">{e.label}</p>
+                              <p className="whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-rose-200/80 line-through decoration-rose-400/40">{asText(e.before)}</p>
+                              <p className="mt-1 whitespace-pre-wrap rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-200">{asText(e.after)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[10px] text-gray-500">Applies to THIS script in place — no duplicate. After it applies you can test a call, then use “↶ Undo auto-fix” if it didn’t help.</p>
+                </div>
+              )}
+
               {/* Summary strip across the simulated calls */}
               {convos.length > 0 && (
                 <div className="grid grid-cols-3 gap-2">
@@ -3596,55 +3641,6 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
             </div>
             <div className="flex justify-end border-t border-gray-800 px-5 py-3">
               <button onClick={() => setSim(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Close</button>
-            </div>
-          </div>
-        </div>
-        );
-      })()}
-
-      {/* Improvement suggestions — review, then auto-fix in place (VOZ-240). */}
-      {suggestions && (() => {
-        const asText = (v: string | string[]) => (Array.isArray(v) ? v.map((x) => `• ${x}`).join("\n") || "(empty)" : v);
-        const allEdits: ScriptEdit[] = suggestions.flatMap((s) => s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after })));
-        return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6" onClick={() => setSuggestions(null)}>
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-gray-500">Suggested improvements</p>
-                <p className="text-sm font-bold text-white">{suggestions.length === 0 ? "Nothing to fix 🎉" : `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"}`}<span className="ml-2 font-normal text-gray-400">edits the current script — no copy</span></p>
-              </div>
-              {allEdits.length > 0 && (
-                <button onClick={() => applyEdits(allEdits, "auto-fixed")} disabled={applyBusy} className="rounded-lg bg-yellow-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-yellow-500 disabled:opacity-40">{applyBusy ? "Applying…" : `Apply all (${allEdits.length})`}</button>
-              )}
-            </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
-              {suggestions.length === 0 && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">No repetition or gaps worth fixing were found in the saved script.</p>}
-              {suggestions.map((s, i) => (
-                <div key={i} className="rounded-xl border border-gray-800 bg-gray-900/40">
-                  <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-[12px] font-semibold text-yellow-200">{s.title}</p>
-                      {s.reason && <p className="mt-0.5 text-[11px] text-gray-400">{s.reason}</p>}
-                    </div>
-                    <button onClick={() => applyEdits(s.edits.map((e) => ({ kind: e.kind, id: e.id, field: e.field, value: e.after })), "auto-fixed")} disabled={applyBusy} className="shrink-0 rounded-lg border border-yellow-600/50 bg-yellow-600/10 px-2.5 py-1 text-[10px] font-semibold text-yellow-300 hover:bg-yellow-600/20 disabled:opacity-40">Apply</button>
-                  </div>
-                  <div className="space-y-2 px-3 py-2">
-                    {s.edits.map((e, k) => (
-                      <div key={k} className="text-[11px]">
-                        <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">{e.label}</p>
-                        <p className="whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-rose-200/80 line-through decoration-rose-400/40">{asText(e.before)}</p>
-                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-200">{asText(e.after)}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between border-t border-gray-800 px-5 py-3">
-              <p className="text-[10px] text-gray-600">Applying edits the existing boxes/lines in place. You can undo it in one click afterward.</p>
-              <button onClick={() => setSuggestions(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Close</button>
             </div>
           </div>
         </div>
