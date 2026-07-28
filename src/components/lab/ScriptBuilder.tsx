@@ -1112,6 +1112,12 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   const [qaBusy, setQaBusy] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false); // System Rules panel — hidden by default
   const [sim, setSim] = useState<SimReport | null>(null); // design-time simulation report
+  // Goal-driven generation (VOZ-236)
+  const [genOpen, setGenOpen] = useState(false);
+  const [genBrand, setGenBrand] = useState("");
+  const [genGoalsText, setGenGoalsText] = useState("");
+  const [genPersona, setGenPersona] = useState("");
+  const [genBusy, setGenBusy] = useState(false);
   const lastRunEvId = useRef(0);
   // Everything the call has produced so far — feeds the live dock's three
   // views (transcript / listener / thinking).
@@ -1304,6 +1310,33 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
       edges: edges.map((e) => ({ id: e.id, script_id: scriptId ?? "", source_node_id: e.source, target_node_id: e.target, condition: (e.data as { condition?: Record<string, unknown> } | undefined)?.condition ?? { kind: "any" }, label: "" })),
     } as unknown as Parameters<typeof simulateScript>[0];
     setSim(simulateScript(simGraph, scenarios));
+  }
+
+  // Goal-driven generation (VOZ-236): the endpoint has the LLM draft the content,
+  // assembles a valid graph deterministically, persists it, and self-checks with
+  // the simulator. We load the new script and show its simulation report.
+  async function genScript() {
+    const goals = genGoalsText.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!goals.length || !genBrand.trim()) return;
+    setGenBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/lab/generate-script", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ goals, brand: genBrand.trim(), persona: genPersona.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error || "Generation failed"); return; }
+      setScripts(await listScripts().catch(() => scripts));
+      await loadScript(j.scriptId);
+      setGenOpen(false);
+      setSim(j.sim ?? null); // show the generated script's simulation immediately
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Generation failed");
+    } finally {
+      setGenBusy(false);
+    }
   }
 
   // Run button: save → QA → (if clean) the Start button appears in the panel.
@@ -1878,6 +1911,17 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+
+          {/* Generate — draft a starter script from goals (LLM content + safe assembly). */}
+          <button
+            onClick={() => setGenOpen(true)}
+            title="Generate a starter script from your call goals"
+            className="rounded-lg border border-gray-700 p-2 text-gray-300 transition hover:bg-gray-800 hover:text-yellow-300"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
             </svg>
           </button>
 
@@ -3176,6 +3220,40 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
             <div className="flex justify-end border-t border-gray-800 px-5 py-3">
               <button onClick={() => setHistory(null)} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generate from goals (VOZ-236) — the LLM drafts content, the server assembles + validates. */}
+      {genOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" onClick={() => !genBusy && setGenOpen(false)}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div onClick={(e) => e.stopPropagation()} className="relative flex max-h-[82vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl">
+            <div className="border-b border-gray-800 px-5 py-3">
+              <p className="text-[10px] uppercase tracking-wider text-gray-500">Generate from goals</p>
+              <p className="text-sm font-bold text-white">Draft a starter script</p>
+              <p className="mt-0.5 text-[11px] text-gray-500">Lists the goals; we draft a flow (opener → beats → Q&amp;A → close) + a Call Goal box, then validate it. A scaffold to review, not final.</p>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Brand / campaign</label>
+                <input className={inputCls} value={genBrand} onChange={(e) => setGenBrand(e.target.value)} placeholder="e.g. Lucky Seven Casino" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Goals — one per line (what the call must cover)</label>
+                <textarea className={inputCls + " min-h-[120px] resize-y"} value={genGoalsText} onChange={(e) => setGenGoalsText(e.target.value)} placeholder={"20 free spins on their account\n300% deposit bonus on next deposit\nSend the details by SMS\nThe offer is only good today"} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Persona (optional)</label>
+                <input className={inputCls} value={genPersona} onChange={(e) => setGenPersona(e.target.value)} placeholder="e.g. Victor, friendly, calling from Lucky Seven" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-gray-800 px-5 py-3">
+              <button onClick={() => setGenOpen(false)} disabled={genBusy} className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">Cancel</button>
+              <button onClick={genScript} disabled={genBusy || !genGoalsText.trim() || !genBrand.trim()} className="rounded-lg bg-yellow-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-yellow-500 disabled:opacity-40">
+                {genBusy ? "Generating…" : "Generate script"}
               </button>
             </div>
           </div>
