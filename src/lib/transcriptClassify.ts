@@ -190,7 +190,11 @@ export function isConclusiveVoicemail(utterance: string): boolean {
 // Assent words a human says to agree. NOT "please" alone (politeness — fires on
 // machine "Please leave a message"/"Please hold"). Bare "y" tolerated (STT "Yes"
 // -> "Y."), and bare "k" for the same reason (observed in real calls as "k." and
-// "Right. k. Thank you.") via the o?k(?:ay)? shape.
+// "Right. k. Thank you.") as its own `|k` alternative. NOT `o?k(?:ay)?` — that
+// shape also matches the bare word "kay", so a customer saying "This is Kay."
+// registered as consent (session code-review finding, 2026-07-28). With `k` as
+// a separate alternative, \b after it rejects "kay" (k→a is not a boundary)
+// while "k.", "ok", "okay" all still match.
 //
 // "no worries" / "no problem" (VOZ-245, 2026-07-28): plain agreement in AU
 // English — our largest volume — and previously unreachable, because the bare
@@ -207,7 +211,7 @@ export function isConclusiveVoicemail(utterance: string): boolean {
 // are in the agent's own approved-filler list, so they signal listening, not
 // agreement. Vague-but-real agreement needs a model, not a lexicon — see VOZ-246.
 const ASSENT_WORD =
-  /\b(?:y(?:eah|es|up|ep)?|sure|of course|o?k(?:ay)?|alright|all right|fine|correct|go (?:ahead|on)|carry on|fire away|sounds (?:good|great|perfect)|will do|definitely|absolutely|no worries|no problem)\b/i;
+  /\b(?:y(?:eah|es|up|ep)?|sure|of course|ok(?:ay)?|k|alright|all right|fine|correct|go (?:ahead|on)|carry on|fire away|sounds (?:good|great|perfect)|will do|definitely|absolutely|no worries|no problem)\b/i;
 
 /**
  * An explicit customer INSTRUCTION to send (VOZ-245). Stronger consent than

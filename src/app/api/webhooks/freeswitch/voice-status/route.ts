@@ -93,12 +93,6 @@ export async function POST(request: NextRequest) {
     talkSeconds,
     answerStamp: payload.answer_stamp ?? null,
   });
-  console.log(
-    `[freeswitch.voice-status] cause=${payload.hangup_cause} total=${totalSeconds}s ` +
-      `talk=${talkSeconds === null ? "n/a(legacy shim)" : `${talkSeconds}s`} ` +
-      `answered=${answered === null ? "unknown" : answered} -> status=${status} call=${callId}`,
-  );
-
   const updatePayload: Record<string, unknown> = {
     status,
     ended_at: new Date().toISOString(),
@@ -138,6 +132,15 @@ export async function POST(request: NextRequest) {
     // a no-op for us. Returning 200 prevents shim retry storms.
     return NextResponse.json({ received: true, idempotent: "already processed" });
   }
+
+  // Log AFTER the claim (code-review finding, 2026-07-28): shim retries and
+  // duplicate ESL deliveries otherwise emit duplicate classification lines,
+  // which overcounts in log-based reconciliation. One line per claimed call.
+  console.log(
+    `[freeswitch.voice-status] cause=${payload.hangup_cause} total=${totalSeconds}s ` +
+      `talk=${talkSeconds === null ? "n/a(legacy shim)" : `${talkSeconds}s`} ` +
+      `answered=${answered === null ? "unknown" : answered} -> status=${status} call=${callId}`,
+  );
 
   // Update campaign_numbers_v2 — apply terminal outcome logic
   const { data: numRow } = await supabaseAdmin

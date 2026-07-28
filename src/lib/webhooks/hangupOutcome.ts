@@ -49,8 +49,11 @@ export interface HangupOutcome {
   /** What to persist as calls_v2.duration_seconds — talk time when we know it,
    *  else the legacy total. Never the ring window on an unanswered call. */
   durationSeconds: number;
-  /** True/false once the shim reports it; null on a legacy payload. Persisted so
-   *  analytics can separate "we know it was answered" from "we cannot tell". */
+  /** True/false once the shim reports it; null on a legacy payload. Surfaced in
+   *  the voice-status log line only — calls_v2 has NO `answered` column today, so
+   *  do not query for one. If analytics ever needs the durable tri-state
+   *  (answered / not answered / legacy-unknown), that is a small migration plus
+   *  one key in the route's updatePayload. */
   answered: boolean | null;
 }
 

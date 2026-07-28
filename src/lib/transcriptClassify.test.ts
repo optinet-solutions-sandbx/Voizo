@@ -144,6 +144,18 @@ describe("hasGenuineCustomerConsent — send-instructions + AU idioms (VOZ-245)"
     expect(hasGenuineCustomerConsent(`${offer}\nUser: Right. k. Thank you.`)).toBe(true);
   });
 
+  it("the name 'Kay' is NOT consent (code-review regression, 2026-07-28)", () => {
+    // The first cut used `o?k(?:ay)?`, which also matches the bare word "kay" —
+    // so a customer introducing themselves registered as agreeing to the text.
+    // `k` must be its own alternative: \b after it rejects "kay" (k→a is not a
+    // word boundary) while "k." / "ok" / "okay" keep matching.
+    for (const reply of ["This is Kay.", "Kay speaking.", "Hi, Kay here.", "My name is Kay"]) {
+      expect(hasGenuineCustomerConsent(`${offer}\nUser: ${reply}`)).toBe(false);
+    }
+    // and the intended matches still hold
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: OK then`)).toBe(true);
+  });
+
   it("counts AU grant-idioms that a bare 'no' used to veto", () => {
     expect(hasGenuineCustomerConsent(`${offer}\nUser: Yeah no worries.`)).toBe(true);
     expect(hasGenuineCustomerConsent(`${offer}\nUser: No worries.`)).toBe(true);
