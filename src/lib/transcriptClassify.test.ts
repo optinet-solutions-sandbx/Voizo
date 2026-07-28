@@ -122,6 +122,69 @@ describe("hasGenuineCustomerConsent (2026-06-04)", () => {
   });
 });
 
+// VOZ-245 (2026-07-28): the lexicon was widened in ONE direction after measuring
+// 134 real offers. It already counted 65%; the rejections were mostly correct
+// (declines, garbled STT, undetected machines). The genuine misses were all
+// explicit send-instructions plus the STT "k" — and the AU grant-idiom, which a
+// bare "no" was vetoing. Net effect on real traffic: 65% -> 67%.
+describe("hasGenuineCustomerConsent — send-instructions + AU idioms (VOZ-245)", () => {
+  const offer = "AI: Can I send you the details via SMS?";
+
+  it("counts an explicit instruction to send — stronger consent than 'okay'", () => {
+    // All observed verbatim in real calls and previously thrown away.
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: You can send me an SMS.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Send it over.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Send me the link.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Please do.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: You could text me.`)).toBe(true);
+  });
+
+  it("counts the STT-collapsed 'k' (sibling of the existing bare 'Y.')", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: k.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Right. k. Thank you.`)).toBe(true);
+  });
+
+  it("counts AU grant-idioms that a bare 'no' used to veto", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Yeah no worries.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: No worries.`)).toBe(true);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: No problem.`)).toBe(true);
+  });
+
+  it("STILL refuses 'yeah nah' — an AU REFUSAL that looks like an idiom", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Yeah nah.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Nah you're right.`)).toBe(false);
+  });
+
+  it("STILL refuses the mirror-image send phrasing (negation is checked first)", () => {
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: You don't have to send the SMS.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Please don't send it.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Do not text me.`)).toBe(false);
+  });
+
+  it("STILL refuses real declines that happen to be polite", () => {
+    // Measured: gratitude appears on BOTH sides, so it can never be a consent
+    // signal on its own. These are the actual decline wordings from prod.
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: No. Thank you.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: I'm good. Thank you.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: No thanks.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Not too keen, mate.`)).toBe(false);
+  });
+
+  it("STILL refuses gratitude and backchannel alone", () => {
+    for (const reply of ["Thank you.", "Thanks", "Cheers", "Mm-hmm", "Uh-huh", "Whatever", "I guess"]) {
+      expect(hasGenuineCustomerConsent(`${offer}\nUser: ${reply}`)).toBe(false);
+    }
+  });
+
+  it("STILL refuses machine greetings that mention sending a message", () => {
+    // The widened send-instruction pattern must not read carrier boilerplate as
+    // a customer instruction — isVoicemail screens the turn first.
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Your message will be sent as a text message to the person you called.`)).toBe(false);
+    expect(hasGenuineCustomerConsent(`${offer}\nUser: Please record your message after the beep.`)).toBe(false);
+    for (const t of Object.values(MISSED_MACHINES)) expect(hasGenuineCustomerConsent(t)).toBe(false);
+  });
+});
+
 // ── #4 (2026-06-08): machines isVoicemail MISSED — caused /reviews contamination + (pre-patch)
 // false goal_reached. Verified machine answers from the labeled L7_AU_VOIZO set (28/05–05/06).
 const MISSED_MACHINES = {

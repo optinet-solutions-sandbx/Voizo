@@ -187,13 +187,48 @@ export function isConclusiveVoicemail(utterance: string): boolean {
 // screened, negation-guarded) — never the agent's own scripted line. Conservative
 // on label-less transcripts. First-cut lexicon/window; calibrated by validation.
 
-// Assent words a human says to agree. NOT "please" (politeness — fires on machine
-// "Please leave a message"/"Please hold"). Bare "y" tolerated (STT "Yes" -> "Y.").
+// Assent words a human says to agree. NOT "please" alone (politeness — fires on
+// machine "Please leave a message"/"Please hold"). Bare "y" tolerated (STT "Yes"
+// -> "Y."), and bare "k" for the same reason (observed in real calls as "k." and
+// "Right. k. Thank you.") via the o?k(?:ay)? shape.
+//
+// "no worries" / "no problem" (VOZ-245, 2026-07-28): plain agreement in AU
+// English — our largest volume — and previously unreachable, because the bare
+// "no" in CONSENT_NEGATION vetoed the turn before the assent could count. Paired
+// with the negation guard below; "yeah nah" (an AU REFUSAL) must still be vetoed,
+// which it is, on the separate "nah" alternative.
+//
+// NOT added, deliberately (measured 2026-07-28 over 134 real offers): gratitude
+// ("thank you", "thanks", "cheers") and backchannel ("mm-hmm", "uh-huh").
+// Gratitude appears on BOTH sides in our own transcripts — "Okay. Thank you."
+// agrees while "No. Thank you." / "I'm good. Thank you." / "No thanks" refuse —
+// so counting it would have flipped real declines into consent (and, in
+// verbal_yes campaigns, texted people who had just said no). Backchannel noises
+// are in the agent's own approved-filler list, so they signal listening, not
+// agreement. Vague-but-real agreement needs a model, not a lexicon — see VOZ-246.
 const ASSENT_WORD =
-  /\b(?:y(?:eah|es|up|ep)?|sure|of course|ok(?:ay)?|alright|all right|fine|correct|go (?:ahead|on)|carry on|fire away|sounds (?:good|great|perfect)|will do|definitely|absolutely)\b/i;
+  /\b(?:y(?:eah|es|up|ep)?|sure|of course|o?k(?:ay)?|alright|all right|fine|correct|go (?:ahead|on)|carry on|fire away|sounds (?:good|great|perfect)|will do|definitely|absolutely|no worries|no problem)\b/i;
 
+/**
+ * An explicit customer INSTRUCTION to send (VOZ-245). Stronger consent than
+ * "okay" — the customer is directing the action — yet it used to fall through
+ * because no bare assent word appears: "You can send me an SMS.", "Send it
+ * over.", "Please do." were all observed in real calls and thrown away.
+ *
+ * Safe against the mirror-image phrasing ("you don't have to send the SMS",
+ * also observed) because CONSENT_NEGATION is checked FIRST and catches the
+ * "don't"; and against machine greetings because isVoicemail screens the turn
+ * before either pattern runs.
+ */
+const SEND_INSTRUCTION =
+  /\b(?:(?:you can|you could|please|feel free to|go ahead and)\s+(?:send|text)|send (?:it|that|them|those|me|the (?:sms|text|link|details|info))|text (?:it|me|that)|please do)\b/i;
+
+// The bare "no" alternative must not swallow the AU grant-idioms above ("yeah no
+// worries", "no problem"). Mirrors the same negative-lookahead trick the
+// SMS_DECLINE_PATTERNS use for "don't mind/worry/forget". Every other refusal
+// shape is untouched: "no thanks", "No. Thank you.", "nah", "yeah nah".
 const CONSENT_NEGATION =
-  /\b(?:no|nope|nah|don'?t|do not|not (?:interested|now|really)|rather not|leave it|forget it|never|stop)\b/i;
+  /\b(?:no(?!\s+(?:worries|worry|problem|probs|stress|dramas))|nope|nah|don'?t|do not|not (?:interested|now|really)|rather not|leave it|forget it|never|stop)\b/i;
 
 // AI turn that offers OR confirms sending an SMS (need not be a question).
 const AI_SMS_MENTION =
@@ -205,8 +240,8 @@ function isGenuineAssentTurn(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
   if (isVoicemail(t)) return false; // machine-screen the assent turn itself
-  if (CONSENT_NEGATION.test(t)) return false;
-  return ASSENT_WORD.test(t);
+  if (CONSENT_NEGATION.test(t)) return false; // MUST stay above both patterns below
+  return ASSENT_WORD.test(t) || SEND_INSTRUCTION.test(t);
 }
 
 /**
