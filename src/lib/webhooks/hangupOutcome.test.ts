@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapHangup, resolveAnswered, type HangupSignals } from "./hangupOutcome";
+import { mapHangup, resolveAnswered, resolveAttemptCount, type HangupSignals } from "./hangupOutcome";
 
 // Legacy payload = what a not-yet-redeployed shim sends: total duration only.
 const legacy = (totalSeconds: number): HangupSignals => ({
@@ -91,6 +91,35 @@ describe("mapHangup — unambiguous causes are unchanged", () => {
 
   it("a BUSY that somehow reports talk time still persists that talk time", () => {
     expect(mapHangup("USER_BUSY", modern(5, 4)).durationSeconds).toBe(4);
+  });
+});
+
+describe("resolveAttemptCount — ghost calls must not burn two attempts (VOZ-248)", () => {
+  it("normal call: voice-status owns the increment", () => {
+    expect(resolveAttemptCount({ current: 0, wasGhost: false })).toBe(1);
+    expect(resolveAttemptCount({ current: 2, wasGhost: false })).toBe(3);
+    expect(resolveAttemptCount({ current: null, wasGhost: false })).toBe(1);
+  });
+
+  it("recovered ghost: fireCall's catch ALREADY counted it, so hold the number", () => {
+    // Double-counting here would retire the player at 2 real dials on a
+    // max_attempts=3 campaign — invisible except as "we stopped calling early".
+    expect(resolveAttemptCount({ current: 1, wasGhost: true })).toBe(1);
+    expect(resolveAttemptCount({ current: 3, wasGhost: true })).toBe(3);
+  });
+
+  it("a ghost never pushes the player OVER the operator's cap by itself", () => {
+    const maxAttempts = 3;
+    // 2 real dials so far, third dial ghosted (fireCall counted it -> 3).
+    const afterGhost = resolveAttemptCount({ current: 3, wasGhost: true });
+    expect(afterGhost).toBe(3);
+    expect(afterGhost >= maxAttempts).toBe(true); // retires exactly on time, not early
+    // Same player, had the call NOT ghosted: also 3. Behaviour is identical.
+    expect(resolveAttemptCount({ current: 2, wasGhost: false })).toBe(3);
+  });
+
+  it("null current is treated as 0 in both modes", () => {
+    expect(resolveAttemptCount({ current: null, wasGhost: true })).toBe(0);
   });
 });
 

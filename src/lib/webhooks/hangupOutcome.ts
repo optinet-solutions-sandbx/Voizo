@@ -69,6 +69,24 @@ export function resolveAnswered(s: HangupSignals): boolean | null {
   return null; // legacy payload — no answer evidence either way
 }
 
+/**
+ * How many attempts the player has used once THIS hangup is accounted for
+ * (VOZ-248).
+ *
+ * Normally voice-status owns the increment: it is the first thing to learn the
+ * call ended. But a GHOST call was already counted by fireCall's catch, which
+ * marked the row 'failed' when the shim timed out — so counting again would burn
+ * two of the player's three attempts for a single dial and retire them a call
+ * early, silently.
+ *
+ * Extracted and tested rather than inlined because the failure is invisible: the
+ * player just stops being called sooner than the operator's max_attempts says.
+ */
+export function resolveAttemptCount(args: { current: number | null; wasGhost: boolean }): number {
+  const current = args.current ?? 0;
+  return args.wasGhost ? current : current + 1;
+}
+
 export function mapHangup(hangupCause: string | null, s: HangupSignals): HangupOutcome {
   const cause = (hangupCause || "").toUpperCase();
   const answered = resolveAnswered(s);

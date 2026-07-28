@@ -20,7 +20,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
-import { mapHangup } from "@/lib/webhooks/hangupOutcome";
+import { mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -127,7 +127,47 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }
 
-  if (!claimedRows || claimedRows.length === 0) {
+  // ── Ghost-call recovery (VOZ-248) ──────────────────────────────────────────
+  // A shim/ESL timeout makes fireCall's catch mark the row 'failed' (dialer.ts)
+  // even though bgapi is BACKGROUND and FreeSWITCH went on to place the call.
+  // 'failed' is terminal, so the claim above missed and the REAL outcome used to
+  // be discarded: status stuck 'failed', duration NULL, and — worst — chain-next
+  // never ran, so the campaign sat idle until the scheduler's resume sweep.
+  // Measured 2026-07-27/28: 27 of 251 calls that actually reached Vapi (10.8%).
+  //
+  // A hangup event ARRIVING for a failed row with NO hangup_cause is itself
+  // proof the call was real — a genuinely-failed originate never produces one.
+  // So this second claim is self-identifying and cannot touch a real failure.
+  // Kept as a SEPARATE atomic UPDATE rather than widening the filter above:
+  // whichever claim wins tells us unambiguously whether this was a ghost, with
+  // no extra read and no race (both are single filtered UPDATEs, so exactly one
+  // concurrent invocation can win either).
+  let wasGhost = false;
+  let claimed = claimedRows;
+  if (!claimed || claimed.length === 0) {
+    const { data: ghostRows, error: ghostErr } = await supabaseAdmin
+      .from("calls_v2")
+      .update(updatePayload)
+      .eq("id", callId)
+      .eq("status", "failed")
+      .is("hangup_cause", null)
+      .select("id");
+    if (ghostErr) {
+      console.error("[freeswitch.voice-status] ghost claim error:", ghostErr);
+      return NextResponse.json({ error: "DB error" }, { status: 500 });
+    }
+    if (ghostRows && ghostRows.length > 0) {
+      claimed = ghostRows;
+      wasGhost = true;
+      console.warn(
+        `[freeswitch.voice-status] GHOST RECOVERED (VOZ-248): call=${callId} was marked ` +
+          `'failed' by a shim timeout but really connected — corrected to status=${status}, ` +
+          `duration=${durationSeconds}s. attempt_count left as-is (fireCall already counted it).`,
+      );
+    }
+  }
+
+  if (!claimed || claimed.length === 0) {
     // Row already terminal (idempotent retry) or unknown callId. Either way,
     // a no-op for us. Returning 200 prevents shim retry storms.
     return NextResponse.json({ received: true, idempotent: "already processed" });
@@ -149,7 +189,11 @@ export async function POST(request: NextRequest) {
     .eq("id", numberId)
     .single();
 
-  const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
+  // Ghost rows (VOZ-248) must NOT be counted twice: fireCall's catch already
+  // incremented attempt_count and stamped last_attempted_at before this handler
+  // ever saw the call. Without this, a recovered ghost would burn 2 of the
+  // player's 3 attempts for a single dial and retire them a call early.
+  const newAttemptCount = resolveAttemptCount({ current: numRow?.attempt_count ?? null, wasGhost });
 
   const { data: campaign } = await supabaseAdmin
     .from("campaigns_v2")
@@ -243,6 +287,29 @@ export async function POST(request: NextRequest) {
       });
     }
     return NextResponse.json({ received: true, next: "outside call window — paused" });
+  }
+
+  // Ghost-only in-flight guard (VOZ-248). Normal chain-next needs no such check:
+  // it runs the instant a call ends, so nothing else can be dialling. A RECOVERED
+  // ghost is different — its hangup event can land a minute or more late, and
+  // because the row read 'failed' (not in-flight) the scheduler's resume sweep
+  // will already have started the NEXT call. Chaining here would then put two
+  // concurrent calls on a campaign that owns exactly ONE SIP slot and clone.
+  // The in-flight call's own chain-next continues the loop, so skipping is safe.
+  // Scoped to wasGhost so the normal path stays byte-identical.
+  if (wasGhost) {
+    const { count: inFlight } = await supabaseAdmin
+      .from("calls_v2")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .in("status", ["initiated", "ringing", "in_progress", "answered"]);
+    if (inFlight && inFlight > 0) {
+      console.log(
+        `[freeswitch.voice-status] ghost recovered but ${inFlight} call(s) already in flight ` +
+          `for campaign=${campaignId} — skipping chain-next (the live call will continue it).`,
+      );
+      return NextResponse.json({ received: true, ghostRecovered: true, next: "in flight elsewhere" });
+    }
   }
 
   const nextNumber = await findNextNumber(campaignId);
