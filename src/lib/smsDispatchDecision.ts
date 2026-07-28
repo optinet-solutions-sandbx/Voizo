@@ -28,7 +28,28 @@
 // on machine greetings ("No message can be left…"), and a voicemail has no human to genuinely
 // decline, so the follow-up wins.
 
-export type SmsConsentMode = "verbal_yes" | "registered_optin";
+//   optin_any_pickup — VOZ-245 (Val, 2026-07-28). Same consent basis as
+//                      registered_optin (the registration "Receive SMS Promos"
+//                      tick), but a LOWER trigger bar: every answered line gets
+//                      the one text regardless of how the conversation went.
+//                      Sluggish, incomprehensible, early hang-up and
+//                      answered-in-silence all count as reached — conversation
+//                      quality is not a consent signal, and the offer link IS
+//                      the payload. In other words: registered_optin minus the
+//                      humanConversation gate.
+//
+//                      Why the gate was safe to drop: it existed (review H3) to
+//                      stop an agent monologuing into an UNDETECTED machine from
+//                      arming a text — but this mode already texts DETECTED
+//                      voicemail as a missed-call follow-up, so the gate was
+//                      blocking the ambiguous cases while the certain ones went
+//                      through. Either way the text lands on the number the CRM
+//                      gave us for that player.
+//
+//                      Measured on the 2026-07-27/28 realtime run: verbal_yes
+//                      sent 6 (of 14 real humans who had heard the SMS offer),
+//                      registered_optin would send 201, this mode 230.
+export type SmsConsentMode = "verbal_yes" | "registered_optin" | "optin_any_pickup";
 
 export interface SmsDispatchInput {
   mode: SmsConsentMode;
@@ -67,6 +88,9 @@ export interface SmsDispatchDecision {
     | "customer_declined_sms"
     | "no_human_conversation"
     | "registered_optin_reached"
+    /** optin_any_pickup (VOZ-245): answered line, no veto — distinct from
+     *  registered_optin_reached so logs show WHICH bar the send cleared. */
+    | "any_pickup_reached"
     | "registered_optin_voicemail_followup"
     | "voicemail_redial_first"
     | "goal_not_reached"
@@ -74,10 +98,25 @@ export interface SmsDispatchDecision {
     | "verbal_consent";
 }
 
+/**
+ * Map the raw `campaigns_v2.sms_consent_mode` column to a mode. Unknown, NULL and
+ * pre-migration values fall back to `verbal_yes` — the most-gated policy, so a
+ * bad read can never widen dispatch.
+ *
+ * This is deliberately the ONLY place the column is interpreted (VOZ-245). It
+ * used to be an inline ternary duplicated in processEndOfCall and
+ * lastResortSweep, which meant adding a third mode silently degraded any caller
+ * that hadn't learned about it — the same "consent-mode drift" shape as the
+ * 0-SMS incident. One resolver, so a new mode reaches every caller at once.
+ */
+export function resolveSmsConsentMode(raw: unknown): SmsConsentMode {
+  return raw === "registered_optin" || raw === "optin_any_pickup" ? raw : "verbal_yes";
+}
+
 export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
 
-  if (i.mode === "registered_optin") {
+  if (i.mode === "registered_optin" || i.mode === "optin_any_pickup") {
     // Missed-call follow-up (2026-06-11 EOD, Jasiel: agreed with Val off-thread, announced in
     // the GC): a voicemail pickup gets the text too — the player opted in at registration and
     // the offer link IS the payload. CHECKED BEFORE customerDeclinedSms (2026-06-25 fix): the
@@ -98,12 +137,24 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
       return { attempt: true, reason: "registered_optin_voicemail_followup" };
     }
     if (i.customerDeclinedSms) return { attempt: false, reason: "customer_declined_sms" };
-    if (!i.humanConversation) return { attempt: false, reason: "no_human_conversation" };
+    // optin_any_pickup (VOZ-245) skips this gate: an answered line IS the trigger,
+    // so a pickup where nobody spoke (28 such calls in the 07-27/28 run — mostly
+    // undetected machines) still gets the text. Jasiel/Val chose "treat as
+    // reached, text immediately" over routing them to the last-resort path.
+    // NOTE the gate sits BELOW the voicemail branch on purpose in both modes —
+    // see the 2026-06-25 ordering note above; hoisting the decline check above
+    // voicemail silently dropped ~9 of these texts in simulation.
+    if (i.mode === "registered_optin" && !i.humanConversation) {
+      return { attempt: false, reason: "no_human_conversation" };
+    }
     // 2026-06-16 (Ernie ticket, Val approved): the announce requirement is REMOVED — a reached
     // human (not opted-out, no explicit "don't text me", not suppressed) is texted. Consent is the
     // signup opt-in, not the call; agents announced on only ~5% of live calls, so the old gate
     // dropped texts to nearly every reached human. agentAnnouncedSms stays only as observability.
-    return { attempt: true, reason: "registered_optin_reached" };
+    return {
+      attempt: true,
+      reason: i.mode === "optin_any_pickup" ? "any_pickup_reached" : "registered_optin_reached",
+    };
   }
 
   // verbal_yes: voicemail remains an absolute veto (a machine cannot consent).
@@ -146,7 +197,10 @@ export function decideLastResortSend(args: {
   return (
     args.outcome === "unreached" &&
     (args.attemptCount ?? 0) >= args.maxAttempts &&
-    args.mode === "registered_optin" &&
+    // Both opt-in modes qualify (VOZ-245): the last-resort text is a property of
+    // the registration consent basis, not of the trigger bar. Omitting
+    // optin_any_pickup here would silently disable last-resort for it.
+    (args.mode === "registered_optin" || args.mode === "optin_any_pickup") &&
     args.smsEnabled &&
     typeof args.lastResortTemplate === "string" &&
     args.lastResortTemplate.trim().length > 0 &&

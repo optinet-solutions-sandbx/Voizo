@@ -20,7 +20,7 @@
 // the missing column errors → logged, sweep skipped, tick unaffected.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decideLastResortSend, type SmsConsentMode } from "../smsDispatchDecision";
+import { decideLastResortSend, resolveSmsConsentMode, type SmsConsentMode } from "../smsDispatchDecision";
 import { getMobivateConfigError, sendSMS } from "../mobivate";
 
 /** Cost + budget bound: sends are not latency-critical (the player already
@@ -69,11 +69,12 @@ export async function runLastResortSweep(
     if (sent >= SENDS_PER_TICK) break;
 
     const template = ((c.sms_last_resort_template as string) ?? "").trim();
-    const mode: SmsConsentMode =
-      c.sms_consent_mode === "registered_optin" ? "registered_optin" : "verbal_yes";
+    const mode: SmsConsentMode = resolveSmsConsentMode(c.sms_consent_mode);
     // Cheap campaign-level short-circuit; decideLastResortSend re-checks per
-    // number (single source of truth for the policy).
-    if (!template || c.sms_enabled !== true || mode !== "registered_optin") continue;
+    // number (single source of truth for the policy). Phrased as "is verbal_yes"
+    // rather than "is not registered_optin" (VOZ-245) so any future opt-in mode
+    // is included by default instead of being silently skipped here.
+    if (!template || c.sms_enabled !== true || mode === "verbal_yes") continue;
 
     const campaignId = c.id as string;
     const campaignName = (c.name as string) ?? campaignId;

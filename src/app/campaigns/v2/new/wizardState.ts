@@ -14,6 +14,7 @@
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
 import { parsePhoneList, resolveCallDelay, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
+import type { SmsConsentMode } from "@/lib/smsDispatchDecision";
 import { allowedTimezonesForCountry, audienceTzGuard, detectAudienceCountry } from "@/lib/audienceCountry";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
 import { clockHHMMInTimezone, isWithinCallWindowAt, resolveStartAt } from "@/lib/scheduleWindow";
@@ -196,8 +197,12 @@ export interface WizardState {
 
   // Step 4 — Follow-up SMS
   smsEnabled: boolean;
-  /** Dispatch policy: verbal_yes = on-call yes required (default); registered_optin = client-attested signup opt-in (2026-06-11). */
-  smsConsentMode: "verbal_yes" | "registered_optin";
+  /** Dispatch policy: verbal_yes = on-call yes required (default);
+   *  registered_optin = client-attested signup opt-in (2026-06-11);
+   *  optin_any_pickup = same opt-in basis, any answered line counts (VOZ-245).
+   *  Reuses the decision module's union so the wizard cannot drift from the
+   *  policy it configures. */
+  smsConsentMode: SmsConsentMode;
   smsMessage: string;
   smsLink: string;
   smsOptout: string;
@@ -626,7 +631,9 @@ function composedSmsTemplate(state: WizardState): string {
  *  Null unless the operator turned the feature on in registered_optin mode —
  *  a null column keeps the campaign on today's behavior. */
 function composedLastResortTemplate(state: WizardState): string | null {
-  if (!state.smsEnabled || state.smsConsentMode !== "registered_optin" || !state.smsLastResortEnabled) {
+  // Both opt-in modes support last resort (VOZ-245) — for optin_any_pickup it
+  // governs detected voicemail only; a silent pickup is texted immediately.
+  if (!state.smsEnabled || state.smsConsentMode === "verbal_yes" || !state.smsLastResortEnabled) {
     return null;
   }
   const parts = [
@@ -810,7 +817,7 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   // early and would otherwise skip it.
   if (
     state.smsEnabled &&
-    state.smsConsentMode === "registered_optin" &&
+    state.smsConsentMode !== "verbal_yes" &&
     state.smsLastResortEnabled &&
     state.smsLastResortMessage.trim().length === 0
   ) {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decideLastResortSend, decideSmsDispatch, type SmsDispatchInput } from "./smsDispatchDecision";
+import {
+  decideLastResortSend,
+  decideSmsDispatch,
+  resolveSmsConsentMode,
+  type SmsDispatchInput,
+} from "./smsDispatchDecision";
 
 const base: SmsDispatchInput = {
   mode: "verbal_yes",
@@ -12,6 +17,81 @@ const base: SmsDispatchInput = {
   customerDeclinedSms: false,
   humanConversation: false,
 };
+
+// VOZ-245 (Val, 2026-07-28): registered_optin minus the humanConversation gate.
+// Every answered line gets the one text; only an on-call "stop calling" or an
+// explicit "don't text me" veto it, and detected voicemail keeps its own branch
+// so the last-resort setting still governs machines.
+describe("decideSmsDispatch — optin_any_pickup (VOZ-245)", () => {
+  const anyPickup: SmsDispatchInput = { ...base, mode: "optin_any_pickup" };
+
+  it("texts a pickup where NOBODY SPOKE — the case registered_optin vetoes", () => {
+    // 28 such calls in the 07-27/28 run (agent talked 77-118s, zero customer
+    // turns). Jasiel/Val chose "treat as reached, text immediately".
+    expect(decideSmsDispatch(anyPickup)).toEqual({ attempt: true, reason: "any_pickup_reached" });
+    expect(decideSmsDispatch({ ...anyPickup, mode: "registered_optin" }))
+      .toEqual({ attempt: false, reason: "no_human_conversation" });
+  });
+
+  it("texts a real conversation regardless of quality (no goal, no verbal consent)", () => {
+    expect(decideSmsDispatch({ ...anyPickup, humanConversation: true }))
+      .toEqual({ attempt: true, reason: "any_pickup_reached" });
+  });
+
+  it('an on-call "stop calling" still wins over everything', () => {
+    expect(decideSmsDispatch({ ...anyPickup, humanConversation: true, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+    // even on a voicemail pickup
+    expect(decideSmsDispatch({ ...anyPickup, voicemailDetected: true, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+
+  it('an explicit "don\'t text me" from a live human still vetoes', () => {
+    expect(decideSmsDispatch({ ...anyPickup, humanConversation: true, customerDeclinedSms: true }))
+      .toEqual({ attempt: false, reason: "customer_declined_sms" });
+  });
+
+  it("ORDERING: voicemail is judged BEFORE the decline check", () => {
+    // Load-bearing (2026-06-25 fix, re-verified for this mode): the SMS-decline
+    // classifier false-positives on machine greetings ("No message can be left
+    // on this service..."). Hoisting the decline check above voicemail dropped
+    // ~9 of these texts in simulation against the real run.
+    expect(decideSmsDispatch({ ...anyPickup, voicemailDetected: true, customerDeclinedSms: true }))
+      .toEqual({ attempt: true, reason: "registered_optin_voicemail_followup" });
+  });
+
+  it("respects last-resort: a voicemail re-dials instead of texting now", () => {
+    expect(decideSmsDispatch({ ...anyPickup, voicemailDetected: true, lastResortMode: true }))
+      .toEqual({ attempt: false, reason: "voicemail_redial_first" });
+    // ...but a SILENT PICKUP is not a voicemail, so it still texts immediately
+    // (that is exactly the fork Jasiel/Val settled).
+    expect(decideSmsDispatch({ ...anyPickup, lastResortMode: true }))
+      .toEqual({ attempt: true, reason: "any_pickup_reached" });
+  });
+
+  it("qualifies for the last-resort text like the other opt-in mode", () => {
+    const ok = {
+      outcome: "unreached", attemptCount: 3, maxAttempts: 3, smsEnabled: true,
+      lastResortTemplate: "Sorry we missed you! ...", campaignStatus: "running",
+    };
+    expect(decideLastResortSend({ ...ok, mode: "optin_any_pickup" })).toBe(true);
+  });
+});
+
+describe("resolveSmsConsentMode — the single place the DB column is interpreted", () => {
+  it("maps the three known values", () => {
+    expect(resolveSmsConsentMode("verbal_yes")).toBe("verbal_yes");
+    expect(resolveSmsConsentMode("registered_optin")).toBe("registered_optin");
+    expect(resolveSmsConsentMode("optin_any_pickup")).toBe("optin_any_pickup");
+  });
+
+  it("falls back to the MOST-GATED mode on anything unknown", () => {
+    // A bad/absent read must never widen dispatch.
+    for (const bad of [null, undefined, "", "REGISTERED_OPTIN", "any_pickup", 7, {}]) {
+      expect(resolveSmsConsentMode(bad)).toBe("verbal_yes");
+    }
+  });
+});
 
 describe("decideSmsDispatch — verbal_yes (today's behavior preserved)", () => {
   it("sends on goal + genuine verbal consent", () => {

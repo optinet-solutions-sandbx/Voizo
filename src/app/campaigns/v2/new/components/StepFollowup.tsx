@@ -27,7 +27,7 @@ export default function StepFollowup({ state, dispatch }: Props) {
 
   // Last-resort variant, same composition rules (message + link + opt-out).
   const lastResortActive =
-    state.smsEnabled && state.smsConsentMode === "registered_optin" && state.smsLastResortEnabled;
+    state.smsEnabled && state.smsConsentMode !== "verbal_yes" && state.smsLastResortEnabled;
   const lastResortDeliveredLength = useMemo(() => {
     const msgLen = state.smsLastResortMessage.trim().length;
     const urlLen = state.smsLink.trim() ? SHORTENED_URL_LENGTH : 0;
@@ -129,13 +129,34 @@ export default function StepFollowup({ state, dispatch }: Props) {
                   </span>
                 </span>
               </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="smsConsentMode"
+                  checked={state.smsConsentMode === "optin_any_pickup"}
+                  onChange={() => setSms("smsConsentMode", "optin_any_pickup")}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-[var(--text-1)]">To anyone who picks up the phone</span>
+                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
+                    Widest reach, same opted-in lists. Counts a pickup as reached even if the
+                    call went badly — rushed, hard to follow, hung up early, or answered in
+                    silence. &quot;Don&apos;t text me&quot;, &quot;stop calling&quot; and the
+                    Do-Not-Call list still win, and it is still one text per player.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         )}
 
-        {/* Last-resort mode (VOZ-132 §8) — registered_optin only. The editable
-            message field is how per-campaign compliance wording gets applied. */}
-        {state.smsEnabled && state.smsConsentMode === "registered_optin" && (
+        {/* Last-resort mode (VOZ-132 §8) — both opt-in modes (VOZ-245). The editable
+            message field is how per-campaign compliance wording gets applied.
+            NOTE for optin_any_pickup: this governs detected VOICEMAIL only. A
+            pickup where nobody spoke is treated as reached and texted right away
+            (Jasiel/Val, 2026-07-28) — it is not a voicemail, so it never waits. */}
+        {state.smsEnabled && state.smsConsentMode !== "verbal_yes" && (
           <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)] flex flex-col gap-3">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">

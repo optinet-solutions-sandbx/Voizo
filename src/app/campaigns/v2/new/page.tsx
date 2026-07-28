@@ -38,6 +38,7 @@ import StepAgent, { type Assistant, type ScriptOption } from "./components/StepA
 import StepSchedule from "./components/StepSchedule";
 import StepFollowup from "./components/StepFollowup";
 import StepReview from "./components/StepReview";
+import { resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
 
 /**
  * Route entrypoint. `useSearchParams()` in Next.js 16 requires a Suspense
@@ -340,7 +341,7 @@ function WizardPage({
           type: "SET_SMS_FIELDS",
           payload: {
             smsEnabled: !!src.sms_enabled,
-            smsConsentMode: src.sms_consent_mode === "registered_optin" ? "registered_optin" : "verbal_yes",
+            smsConsentMode: resolveSmsConsentMode(src.sms_consent_mode),
             smsMessage: sms.message,
             smsLink: sms.link,
             smsOptout: sms.optout,

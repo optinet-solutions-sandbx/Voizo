@@ -9,6 +9,9 @@
 // without dragging the admin client in. Server code imports them from here too.
 
 import type { RecurrencePattern } from "./types/recurrence";
+// Type-only (erased at compile time) and smsDispatchDecision has NO imports of
+// its own, so this cannot drag anything into the client bundle.
+import type { SmsConsentMode } from "./smsDispatchDecision";
 
 export type CallWindow = {
   day: "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
@@ -40,7 +43,11 @@ export interface CampaignV2CreateInput {
   smsEnabled: boolean;
   smsTemplate?: string | null;
   smsOnGoalReachedOnly?: boolean;
-  smsConsentMode?: "verbal_yes" | "registered_optin"; // Dispatch policy (2026-06-11): verbal_yes = on-call yes required (default); registered_optin = client-attested signup opt-in, send on agent announce.
+  // Dispatch policy. verbal_yes = on-call yes required (default); registered_optin
+  // = client-attested signup opt-in (2026-06-11); optin_any_pickup = same opt-in
+  // basis, every answered line counts as reached (VOZ-245). Imported from the
+  // decision module so this stays one union, not a copy that can drift.
+  smsConsentMode?: SmsConsentMode;
   numbers: string[];
   /** E.164 → raw player name for the imported numbers (greet-by-name Ramp 1,
    *  2026-07-17). Optional + CIO-import-only; the insert applies it per final

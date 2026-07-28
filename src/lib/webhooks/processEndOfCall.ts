@@ -12,7 +12,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
-import { decideSmsDispatch, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 
 export async function processEndOfCall(message: Record<string, unknown>): Promise<NextResponse> {
   const vapiCall = message.call as Record<string, unknown> | undefined;
@@ -411,8 +411,7 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
       campaign = sel.data as SmsCampaignConfig | null;
     }
   }
-  const smsMode: SmsConsentMode =
-    campaign?.sms_consent_mode === "registered_optin" ? "registered_optin" : "verbal_yes";
+  const smsMode: SmsConsentMode = resolveSmsConsentMode(campaign?.sms_consent_mode);
   const decision = decideSmsDispatch({
     mode: smsMode,
     goalReached,
@@ -427,13 +426,18 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
       typeof campaign?.sms_last_resort_template === "string" &&
       campaign.sms_last_resort_template.trim().length > 0,
   });
-  // registered_optin supersedes the legacy sms_on_goal_reached_only flag (the
+  // Both opt-in modes supersede the legacy sms_on_goal_reached_only flag (the
   // mode IS the policy); verbal_yes keeps the original §6 three-condition check.
+  // Expressed as "not verbal_yes" (VOZ-245) so a future opt-in mode inherits this
+  // instead of silently failing the configured check and never texting.
   const smsConfigured =
     campaign?.sms_enabled === true &&
     Boolean(campaign?.sms_template) &&
-    (smsMode === "registered_optin" || campaign?.sms_on_goal_reached_only === true);
-  const registeredDispatchIntent = smsMode === "registered_optin" && decision.attempt && smsConfigured;
+    (smsMode !== "verbal_yes" || campaign?.sms_on_goal_reached_only === true);
+  // Drives the sent_sms outcome label as well as dispatch, so it must cover
+  // every opt-in mode — otherwise an optin_any_pickup player who WAS texted
+  // would still be labelled not_interested (Val's original complaint).
+  const registeredDispatchIntent = smsMode !== "verbal_yes" && decision.attempt && smsConfigured;
 
   // ── Update campaign_numbers_v2 outcome ──
   // Adversarial review C2 (2026-05-08): guard against late Vapi end-of-call
@@ -531,7 +535,7 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
   // (c) Independent compliance gate on the irreversible action (2026-06-04):
   // never dispatch SMS without consent evidence, regardless of how goal_reached
   // was set (covers native-successEvaluation rows too).
-  if (!decision.attempt && (goalReached || smsMode === "registered_optin")) {
+  if (!decision.attempt && (goalReached || smsMode !== "verbal_yes")) {
     console.log(`[sms-gate] mode=${smsMode} attempt=false reason=${decision.reason}. vapiCallId=${vapiCallId}`);
   }
   if (decision.attempt && campaign) {

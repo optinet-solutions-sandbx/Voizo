@@ -28,6 +28,7 @@ import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/Recurre
 import StyledSelect from "@/components/StyledSelect";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
+import { resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -209,7 +210,8 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
         maxAttempts: draft.maxTries,
         dailyCap: capNumber,
         ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
-        ...(parent.sms_consent_mode === "registered_optin"
+        // Both opt-in modes own a last-resort template (VOZ-245).
+        ...(resolveSmsConsentMode(parent.sms_consent_mode) !== "verbal_yes"
           ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
           : {}),
         ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
@@ -470,7 +472,7 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                     </div>
                   )}
 
-                  {parent.sms_consent_mode === "registered_optin" && (
+                  {resolveSmsConsentMode(parent.sms_consent_mode) !== "verbal_yes" && (
                     <div className="flex flex-col gap-1.5">
                       <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
                         Last-resort text
