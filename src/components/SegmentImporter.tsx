@@ -6,6 +6,7 @@ import StyledSelect from "@/components/StyledSelect";
 import { usePinnedSegments } from "@/lib/pinnedSegments";
 import { parseJsonBody } from "@/lib/jsonBody";
 import { nameByE164 } from "@/lib/campaignV2Shared";
+import { fetchAllSegmentMembers } from "@/lib/segmentMemberPager";
 
 /** Mirrors CIO_DEFAULT_WORKSPACE in src/lib/customerio.ts (server-only module —
  *  never import it into a client component; the label string is the contract).
@@ -23,6 +24,17 @@ interface Member {
   name: string | null;
   phone: string | null;
   email: string | null;
+}
+
+/** One segment's fetched membership. `complete` = the WHOLE segment was
+ *  fetched (pagination reached the last page); false = stopped at the
+ *  operator's import limit or the 10k page ceiling. Kept alongside the
+ *  members so the summary can be honest about which one it is showing —
+ *  the old single-page fetch said "200 of 200" against a 2,071-member
+ *  segment because it had no way to know it was looking at a fraction. */
+interface FetchedSegment {
+  members: Member[];
+  complete: boolean;
 }
 
 interface Props {
@@ -110,13 +122,71 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
 
   // Multi-select state
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
-  const [membersBySegment, setMembersBySegment] = useState<Map<number, Member[]>>(new Map());
+  const [membersBySegment, setMembersBySegment] = useState<Map<number, FetchedSegment>>(new Map());
   const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
+
+  // Operator's per-segment import ceiling. Blank = the whole segment ("whatever
+  // number is in Customer.io is the number Voizo imports"). A value (e.g. 1000)
+  // caps the fetch AND the import — the load-test knob.
+  const [importCapRaw, setImportCapRaw] = useState("");
+  const importCap = useMemo(() => {
+    const n = parseInt(importCapRaw, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [importCapRaw]);
+
+  // Live per-segment fetch counter ("Fetching… N so far") — a 2,000-member
+  // segment pages for a couple of minutes at CIO's rate limit; the operator
+  // must see motion, not a frozen spinner.
+  const [fetchProgress, setFetchProgress] = useState<Map<number, number>>(new Map());
+  const progressTotal = useMemo(
+    () => [...fetchProgress.values()].reduce((a, b) => a + b, 0),
+    [fetchProgress],
+  );
+
+  /** Follow the members route's cursor to the segment's end (or importCap).
+   *  Throws on any page failure — never returns a silent partial. */
+  const pagedMemberFetch = useCallback(async (segmentId: number): Promise<FetchedSegment> => {
+    const fetchPage = async (start?: string) => {
+      const startQ = start ? `&start=${encodeURIComponent(start)}` : "";
+      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${startQ}${wsQuery}`);
+      if (!res.ok) {
+        const body = await parseJsonBody(res);
+        throw new Error(body.error || `Failed (${res.status})`);
+      }
+      const body = await res.json();
+      return {
+        members: (body.members ?? []) as Member[],
+        next: (body.next ?? null) as string | null,
+      };
+    };
+    try {
+      return await fetchAllSegmentMembers<Member>(fetchPage, {
+        cap: importCap,
+        onProgress: (n) => setFetchProgress((prev) => new Map(prev).set(segmentId, n)),
+      });
+    } finally {
+      setFetchProgress((prev) => {
+        const next = new Map(prev);
+        next.delete(segmentId);
+        return next;
+      });
+    }
+  }, [wsQuery, importCap]);
+
+  /** Cap applied at USE time, so lowering the limit after a full fetch needs
+   *  no refetch and the cache stays as-fetched. */
+  const capMembers = useCallback(
+    (entry: FetchedSegment | null | undefined): Member[] => {
+      const members = entry?.members ?? [];
+      return importCap !== null ? members.slice(0, importCap) : members;
+    },
+    [importCap],
+  );
 
   // Single-select state (row click without checkbox)
   const [singleSelectedId, setSingleSelectedId] = useState<number | null>(null);
   const [singleSelectedName, setSingleSelectedName] = useState<string | null>(null);
-  const [singleMembers, setSingleMembers] = useState<Member[] | null>(null);
+  const [singleResult, setSingleResult] = useState<FetchedSegment | null>(null);
   const [singleLoading, setSingleLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
 
@@ -137,7 +207,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
     setMembersBySegment(new Map());
     setSingleSelectedId(null);
     setSingleSelectedName(null);
-    setSingleMembers(null);
+    setSingleResult(null);
     setMembersError(null);
     (async () => {
       try {
@@ -180,23 +250,20 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
     return ordered.slice(0, 50);
   }, [segments, search, pinnedIds]);
 
-  // Fetch members for a segment (cached in membersBySegment)
+  // Fetch a segment's FULL membership (paginated; cached in membersBySegment).
   const fetchSegmentMembers = useCallback(async (segmentId: number): Promise<Member[]> => {
-    // Return cached if available
+    // Cache is reusable when it holds the whole segment, or already holds at
+    // least as many members as the current import limit needs.
     const cached = membersBySegment.get(segmentId);
-    if (cached) return cached;
+    if (cached && (cached.complete || (importCap !== null && cached.members.length >= importCap))) {
+      return capMembers(cached);
+    }
 
     setLoadingIds((prev) => new Set(prev).add(segmentId));
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
-      if (!res.ok) {
-        const body = await parseJsonBody(res);
-        throw new Error(body.error || `Failed (${res.status})`);
-      }
-      const body = await res.json();
-      const members = body.members ?? [];
-      setMembersBySegment((prev) => new Map(prev).set(segmentId, members));
-      return members;
+      const result = await pagedMemberFetch(segmentId);
+      setMembersBySegment((prev) => new Map(prev).set(segmentId, result));
+      return result.members;
     } finally {
       setLoadingIds((prev) => {
         const next = new Set(prev);
@@ -204,7 +271,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
         return next;
       });
     }
-  }, [membersBySegment]);
+  }, [membersBySegment, importCap, capMembers, pagedMemberFetch]);
 
   // Checkbox toggle — multi-select mode
   // Uses functional setState to avoid stale-closure race when
@@ -213,7 +280,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
     // Clear single-select state when using checkboxes
     setSingleSelectedId(null);
     setSingleSelectedName(null);
-    setSingleMembers(null);
+    setSingleResult(null);
     setMembersError(null);
 
     const wasChecked = checkedIds.has(segmentId);
@@ -243,17 +310,10 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
 
     setSingleSelectedId(segmentId);
     setSingleSelectedName(segmentName);
-    setSingleMembers(null);
+    setSingleResult(null);
     setSingleLoading(true);
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
-      if (!res.ok) {
-        const body = await parseJsonBody(res);
-        setMembersError(body.error || `Failed to load members (${res.status})`);
-        return;
-      }
-      const body = await res.json();
-      setSingleMembers(body.members ?? []);
+      setSingleResult(await pagedMemberFetch(segmentId));
     } catch (err) {
       setMembersError(err instanceof Error ? err.message : "Network error");
     } finally {
@@ -268,7 +328,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
       const all: Member[] = [];
       const seen = new Set<string>();
       for (const segId of checkedIds) {
-        const members = membersBySegment.get(segId) ?? [];
+        const members = capMembers(membersBySegment.get(segId));
         for (const m of members) {
           if (!seen.has(m.id)) {
             seen.add(m.id);
@@ -278,11 +338,29 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
       }
       return all;
     }
-    return singleMembers;
-  }, [isMultiMode, checkedIds, membersBySegment, singleMembers]);
+    return singleResult ? capMembers(singleResult) : null;
+  }, [isMultiMode, checkedIds, membersBySegment, singleResult, capMembers]);
 
   const membersWithPhone = displayMembers?.filter((m) => m.phone) ?? [];
   const isLoading = isMultiMode ? loadingIds.size > 0 : singleLoading;
+
+  // Coverage honesty for the summary bar: is what we're showing the WHOLE
+  // segment(s), or a truncation — and if truncated, by what?
+  const coverageNote = useMemo(() => {
+    const entries: FetchedSegment[] = isMultiMode
+      ? [...checkedIds]
+          .map((id) => membersBySegment.get(id))
+          .filter((e): e is FetchedSegment => e !== undefined)
+      : singleResult
+        ? [singleResult]
+        : [];
+    if (entries.length === 0) return null;
+    const cappedByLimit =
+      importCap !== null && entries.some((e) => e.members.length > importCap || !e.complete);
+    if (cappedByLimit) return `first ${importCap!.toLocaleString()} per segment (import limit)`;
+    if (entries.some((e) => !e.complete)) return "partial — 10,000-member page ceiling";
+    return "full segment";
+  }, [isMultiMode, checkedIds, membersBySegment, singleResult, importCap]);
 
   // Summary label
   const selectionLabel = useMemo(() => {
@@ -323,7 +401,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
     setCheckedIds(new Set());
     setSingleSelectedId(null);
     setSingleSelectedName(null);
-    setSingleMembers(null);
+    setSingleResult(null);
     setMembersBySegment(new Map());
     setSearch("");
   }
@@ -344,14 +422,10 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
     });
     setMembersError(null);
     try {
-      const res = await fetch(`/api/customerio/segments/${segmentId}/members?limit=200${wsQuery}`);
-      if (!res.ok) {
-        const body = await parseJsonBody(res);
-        setMembersError(body.error || `Failed to load members (${res.status})`);
-        return;
-      }
-      const body = await res.json();
-      const members = (body.members ?? []) as Member[];
+      // Paginated like every other path — the chip imports DIRECTLY (no
+      // preview), so a single-page fetch here would silently ship a fraction
+      // of the segment into the campaign.
+      const { members } = await pagedMemberFetch(segmentId);
       const phones = members
         .map((m) => m.phone)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
@@ -385,6 +459,15 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
       {membersError && !expanded && (
         <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
           {membersError}
+        </div>
+      )}
+
+      {/* Chip imports run while the card is collapsed — surface the
+          pagination progress here or a multi-minute fetch looks frozen. */}
+      {!expanded && fetchProgress.size > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-[var(--text-3)] px-1">
+          <Loader2 size={11} className="animate-spin" />
+          Fetching members… {progressTotal.toLocaleString()} so far
         </div>
       )}
 
@@ -483,6 +566,34 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
                   className="w-full pl-9 pr-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
+
+              {/* Import limit — blank = the whole segment. Selection follows
+                  CIO pagination to the segment's end, so the count in
+                  Customer.io is the count Voizo imports; this knob caps it
+                  (e.g. a 1,000-player load test on a 2,071-member segment). */}
+              <div className="flex items-center gap-2">
+                <label htmlFor="segment-import-limit" className="text-xs font-medium text-[var(--text-2)] shrink-0">
+                  Import limit
+                </label>
+                <input
+                  id="segment-import-limit"
+                  type="number"
+                  min={1}
+                  value={importCapRaw}
+                  onChange={(e) => setImportCapRaw(e.target.value)}
+                  placeholder="all"
+                  className="w-24 px-2 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <span className="text-[11px] text-[var(--text-3)]">blank = every member in the segment</span>
+              </div>
+
+              {/* Live pagination progress — big segments stream in over pages */}
+              {fetchProgress.size > 0 && (
+                <div className="flex items-center gap-2 text-xs text-[var(--text-3)]">
+                  <Loader2 size={12} className="animate-spin" />
+                  Fetching members… {progressTotal.toLocaleString()} so far
+                </div>
+              )}
 
               {/* Multi-select hint (hidden in single-select-only mode) */}
               {!singleSelectOnly && checkedIds.size > 0 && (
@@ -619,6 +730,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
                           <p className="text-sm text-[var(--text-1)] font-medium">{selectionLabel}</p>
                           <p className="text-xs text-[var(--text-3)] mt-0.5">
                             <span className="text-[var(--text-2)] font-semibold">{membersWithPhone.length}</span> of {displayMembers.length} contacts have phone numbers
+                            {coverageNote && <span> — {coverageNote}</span>}
                           </p>
                         </div>
                         {(membersWithPhone.length > 0 || !isMultiMode) && (
