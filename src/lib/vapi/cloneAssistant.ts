@@ -58,6 +58,157 @@ const KNOWN_VOICE_IDS = new Set<string>([...Object.keys(KNOWN_VOICES), ...VOICE_
 const voiceLabel = (voiceId: string): string | null =>
   KNOWN_VOICES[voiceId] ?? VOICE_OPTIONS.find((v) => v.voiceId === voiceId)?.label ?? null;
 
+// ── Pinned intent for the SHARED script-base assistant ("Val - Voice Agent") ──
+// Clone-hardening pass, 2026-07-29. The base is a mutable shared dependency —
+// the Script Builder lab, the Vapi dashboard, and humans all write to it, and
+// clones inherit whatever it holds at spawn time via {...base}. Its voice
+// drifted 3x in two weeks (Cal → Mark-Casual → Hope) with zero signal. This
+// constant is the version-controlled statement of what the base is SUPPOSED to
+// hold; createClone diffs the live base against it and WARNS on divergence.
+//
+// Rules of the pin:
+// - An INTENTIONAL retune (e.g. optimizeStreamingLatency 2→3, Jas 2026-07-29)
+//   alerts until this pin is updated. That is the feature: the one-line pin
+//   update records the intent in git instead of only in a dashboard.
+// - voiceId is DELIBERATELY not pinned — Val's voice decision is pending
+//   (2026-07-29 female-voice incident). When she decides, add `voiceId: "…"`
+//   to the voice block below.
+// - Values verified against GET /assistant/7255c115… on 2026-07-29 (~13:03Z).
+export const EXPECTED_SCRIPT_BASE = {
+  voice: { provider: "11labs", model: "eleven_turbo_v2_5", speed: 1.1, optimizeStreamingLatency: 3 },
+  transcriber: { provider: "deepgram", model: "flux-general-en", language: "en" },
+  model: { provider: "openai", model: "gpt-5.2", maxTokens: 150 },
+} as const;
+
+/** Diff a live base assistant against EXPECTED_SCRIPT_BASE. Pure. Returns
+ *  human-readable mismatch lines; empty = base matches pinned intent. Only
+ *  keys named in the pin are compared, so unpinned fields (voiceId, keyterm
+ *  contents, confidenceThreshold…) never false-positive. */
+export function diffBaseAgainstPin(base: Record<string, unknown>): string[] {
+  const drift: string[] = [];
+  const section = (name: string, expected: Record<string, unknown>) => {
+    const actual = (base[name] ?? {}) as Record<string, unknown>;
+    for (const [k, want] of Object.entries(expected)) {
+      if (actual[k] !== want) {
+        drift.push(`${name}.${k}: pinned ${JSON.stringify(want)}, base has ${JSON.stringify(actual[k])}`);
+      }
+    }
+  };
+  section("voice", EXPECTED_SCRIPT_BASE.voice);
+  section("transcriber", EXPECTED_SCRIPT_BASE.transcriber);
+  section("model", EXPECTED_SCRIPT_BASE.model);
+
+  // Tripwires — fields whose PRESENCE is the defect:
+  // Flux owns end-of-turn detection; smart endpointing must stay OFF (Jas,
+  // 2026-07-29 — same finding as the composeAssistant START_SPEAKING_PLAN fix).
+  const ssp = base.startSpeakingPlan as Record<string, unknown> | undefined;
+  if (ssp?.smartEndpointingPlan) {
+    drift.push("startSpeakingPlan.smartEndpointingPlan is set — must be OFF (Flux owns end-of-turn)");
+  }
+  // The Vapi dashboard's stale panels stamp their defaults on save (documented
+  // 2026-07-09 incident). temperature is unset by intent, so its presence
+  // fingerprints a careless panel save before anything else drifts.
+  const model = base.model as Record<string, unknown> | undefined;
+  if (model && model.temperature !== undefined) {
+    drift.push(`model.temperature=${JSON.stringify(model.temperature)} is set — intent is unset (stale-panel-save fingerprint)`);
+  }
+  // Keyterm biasing is the STT accuracy strategy (brand names + consent words).
+  // Empty means the chips were wiped, or the transcriber moved to a provider
+  // the clone path cannot bias (the Soniox trap, 2026-07-29).
+  const tr = base.transcriber as Record<string, unknown> | undefined;
+  const keyterm = tr?.keyterm;
+  if (!Array.isArray(keyterm) || keyterm.length === 0) {
+    drift.push("transcriber.keyterm is empty — STT domain biasing lost");
+  }
+  return drift;
+}
+
+/** Diff the created clone (Vapi's POST response) against the exact payload we
+ *  sent, on the fields that break a campaign SILENTLY when they don't land.
+ *  Pure. Extra fields Vapi adds (ids, server defaults) are fine — dropping or
+ *  mutating something we sent is not. */
+export function diffCloneAgainstPayload(
+  created: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): string[] {
+  const out: string[] = [];
+  const obj = (v: unknown) => (v ?? {}) as Record<string, unknown>;
+
+  // Every PRIMITIVE key we sent in a section must come back verbatim.
+  // Arrays/objects are skipped here and handled case-by-case below.
+  const primitives = (name: string) => {
+    const want = obj(payload[name]);
+    const got = obj(created[name]);
+    for (const [k, v] of Object.entries(want)) {
+      if (v === undefined || typeof v === "object") continue;
+      if (got[k] !== v) out.push(`${name}.${k}: sent ${JSON.stringify(v)}, created has ${JSON.stringify(got[k])}`);
+    }
+  };
+  primitives("voice");
+  primitives("transcriber");
+  primitives("model");
+  primitives("startSpeakingPlan");
+  primitives("stopSpeakingPlan");
+
+  if (payload.firstMessageMode !== undefined && created.firstMessageMode !== payload.firstMessageMode) {
+    out.push(`firstMessageMode: sent ${JSON.stringify(payload.firstMessageMode)}, created has ${JSON.stringify(created.firstMessageMode)}`);
+  }
+
+  // Smart endpointing must not APPEAR on the clone when we didn't send it —
+  // Vapi-side defaulting would silently reintroduce the double end-of-turn bug.
+  if (!obj(payload.startSpeakingPlan).smartEndpointingPlan && obj(created.startSpeakingPlan).smartEndpointingPlan) {
+    out.push("startSpeakingPlan.smartEndpointingPlan: absent in payload but present on the created clone");
+  }
+
+  // Keyterms: everything we sent must survive (reordering/superset is fine).
+  const sentKt = obj(payload.transcriber).keyterm;
+  if (Array.isArray(sentKt) && sentKt.length > 0) {
+    const gotRaw = obj(created.transcriber).keyterm;
+    const gotKt = new Set(Array.isArray(gotRaw) ? (gotRaw as unknown[]) : []);
+    const missing = sentKt.filter((k) => !gotKt.has(k));
+    if (missing.length > 0) {
+      out.push(`transcriber.keyterm: ${missing.length} sent keyterm(s) missing (${missing.slice(0, 5).join(", ")})`);
+    }
+  }
+
+  // noTools (script clones): tools we removed must stay removed.
+  const sentTools = obj(payload.model).tools;
+  if (Array.isArray(sentTools) && sentTools.length === 0) {
+    const gotTools = obj(created.model).tools;
+    if (Array.isArray(gotTools) && gotTools.length > 0) {
+      out.push(`model.tools: sent none, created has ${gotTools.length}`);
+    }
+  }
+
+  // Webhook routing — the silent killer: without it end-of-call never arrives,
+  // goal_reached never sets, SMS never dispatches, and the dashboard shows
+  // "completed" forever. (server.secret is deliberately excluded — Vapi redacts
+  // it on read; check isServerUrlSecretSet instead. Known VOZ-187 gotcha.)
+  const sentUrl = obj(payload.server).url;
+  if (sentUrl && obj(created.server).url !== sentUrl) {
+    out.push(`server.url: sent ${JSON.stringify(sentUrl)}, created has ${JSON.stringify(obj(created.server).url)}`);
+  }
+
+  // The system prompt is the one string that IS the agent.
+  const sys = (m: unknown): string | null => {
+    const msgs = obj(m).messages;
+    if (!Array.isArray(msgs)) return null;
+    const s = msgs.find((x) => (x as Record<string, unknown>)?.role === "system") as
+      | Record<string, unknown>
+      | undefined;
+    return typeof s?.content === "string" ? s.content : null;
+  };
+  const sentSys = sys(payload.model);
+  const gotSys = sys(created.model);
+  if (sentSys !== null && gotSys !== sentSys) {
+    out.push(
+      `model.messages: system prompt differs (sent ${sentSys.length} chars, created ${gotSys === null ? "none" : `${gotSys.length} chars`})`,
+    );
+  }
+
+  return out;
+}
+
 /** Alignment checker + self-heal (VOZ-252): confirm a freshly-created clone
  *  actually speaks with the voice the SCRIPT specified — regardless of what the
  *  shared base assistant is currently set to on the Vapi dashboard — and if it
@@ -70,26 +221,40 @@ export async function ensureCloneVoice(
   cloneId: string,
   expectedVoiceId: string,
 ): Promise<{ aligned: boolean; actual: string | null; repatched: boolean }> {
-  const read = async (): Promise<string | null> => {
+  // Reads the clone's WHOLE voice object, not just the id, so the re-patch below
+  // can merge over it (VOZ-254). Returning only the id is what made the original
+  // re-patch a wholesale replace.
+  const readVoice = async (): Promise<Record<string, unknown> | null> => {
     const res = await fetch(`https://api.vapi.ai/assistant/${cloneId}`, {
       headers: { Authorization: `Bearer ${vapiPrivateKey}` },
       cache: "no-store",
     });
     if (!res.ok) return null;
-    const a = (await res.json()) as { voice?: { voiceId?: string } };
-    return a?.voice?.voiceId ?? null;
+    const a = (await res.json()) as { voice?: Record<string, unknown> };
+    return a?.voice ?? null;
   };
+  const idOf = (v: Record<string, unknown> | null): string | null =>
+    typeof v?.voiceId === "string" ? v.voiceId : null;
   try {
-    const actual = await read();
+    const current = await readVoice();
+    const actual = idOf(current);
     if (actual === null) return { aligned: true, actual: null, repatched: false }; // couldn't read → don't block
     if (actual === expectedVoiceId) return { aligned: true, actual, repatched: false };
-    // Drifted — force it back to the script's voice.
+    // Drifted — force it back to the script's voice, MERGING over the clone's
+    // existing voice. A wholesale { provider, voiceId } body drops every tuned
+    // knob (model eleven_turbo_v2_5, speed 1.1, optimizeStreamingLatency 2) —
+    // the same nested-object mistake VOZ-128 fixed for stopSpeakingPlan, and the
+    // 2026-05-07 clone-drift incident referenced in the voice-merge note below.
+    // `provider` leads the spread so a voice that somehow carries none still
+    // ships one (the pre-VOZ-254 body always did), while a real provider wins.
     await fetch(`https://api.vapi.ai/assistant/${cloneId}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${vapiPrivateKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ voice: { provider: "11labs", voiceId: expectedVoiceId } }),
+      body: JSON.stringify({
+        voice: { provider: "11labs", ...current, voiceId: expectedVoiceId },
+      }),
     });
-    const after = await read();
+    const after = idOf(await readVoice());
     return { aligned: after === expectedVoiceId, actual: after, repatched: true };
   } catch {
     return { aligned: true, actual: null, repatched: false };
@@ -245,8 +410,20 @@ export interface VapiClone {
   [key: string]: unknown;
 }
 
+/** Post-create verification report (clone-hardening pass, 2026-07-29).
+ *  WARNINGS ONLY — never affects ok/fail. Optional so every existing caller
+ *  keeps compiling; absent only if the verification itself threw. */
+export interface CloneVerification {
+  /** Live base vs EXPECTED_SCRIPT_BASE. Only populated when cloning the
+   *  designated script base (VAPI_SCRIPT_BASE_ASSISTANT_ID); other bases
+   *  have no pin. */
+  baseDrift: string[];
+  /** Created clone (POST response) vs the exact payload we sent. */
+  cloneMismatches: string[];
+}
+
 export type CreateCloneResult =
-  | { ok: true; clone: VapiClone }
+  | { ok: true; clone: VapiClone; verification?: CloneVerification }
   | { ok: false; status: number; error: string };
 
 /**
@@ -632,5 +809,38 @@ export async function createClone(
   }
 
   const clone = (await createRes.json()) as VapiClone;
-  return { ok: true, clone };
+
+  // ── 4. Verify what was actually created (warnings only — NEVER blocks) ──
+  // Two diffs, zero extra network: the base was already fetched above (intent
+  // source), and Vapi's POST response IS the created assistant (result).
+  //   baseDrift       — live base vs the version-controlled EXPECTED_SCRIPT_BASE
+  //                     pin; catches upstream drift (lab saves, dashboard edits)
+  //                     that the payload would faithfully propagate.
+  //   cloneMismatches — created clone vs the exact payload sent; catches Vapi
+  //                     dropping/normalizing fields on create.
+  // A drifted clone still returns ok:true — the point is to HEAR about drift at
+  // spawn time (console here, Slack in recurringSpawn) instead of from a player.
+  let verification: CloneVerification | undefined;
+  try {
+    const designated = process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+    const baseDrift =
+      designated && baseAssistantId === designated
+        ? diffBaseAgainstPin(base as Record<string, unknown>)
+        : [];
+    const cloneMismatches = diffCloneAgainstPayload(
+      clone as unknown as Record<string, unknown>,
+      clonePayload as unknown as Record<string, unknown>,
+    );
+    verification = { baseDrift, cloneMismatches };
+    if (baseDrift.length > 0) {
+      console.warn(`[createClone] BASE DRIFT vs pinned intent (${baseDrift.length}): ${baseDrift.join(" | ")}`);
+    }
+    if (cloneMismatches.length > 0) {
+      console.warn(`[createClone] CLONE MISMATCH vs payload (${cloneMismatches.length}): ${cloneMismatches.join(" | ")}`);
+    }
+  } catch (err) {
+    console.warn("[createClone] verification skipped (non-fatal):", err instanceof Error ? err.message : String(err));
+  }
+
+  return { ok: true, clone, verification };
 }

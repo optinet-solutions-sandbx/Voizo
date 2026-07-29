@@ -495,6 +495,29 @@ export async function spawnChildIfDue(
   }
   const clone = cloneResult.clone;
 
+  // ── Config-drift alarm (clone-hardening pass, 2026-07-29) ──
+  // createClone verified the live base against its version-controlled pin and
+  // the created clone against the exact payload sent. Spawn is the UNATTENDED
+  // path — nobody watches a console at 22:30 — so drift goes to Slack. Warnings
+  // only: a drifted clone still spawns; the alarm exists so we hear about drift
+  // within a minute instead of from a player (the Hope incident ran ~36h dark).
+  // Worst case is one WARN per spawn (3/day today) — signal, not spam, so no
+  // dedup table. Lazy import per this file's convention (the slack module's
+  // chain must not load at module scope in tests).
+  const verification = cloneResult.verification;
+  if (verification && (verification.baseDrift.length > 0 || verification.cloneMismatches.length > 0)) {
+    try {
+      const { postSlackAlert } = await import("../alerts/slack");
+      await postSlackAlert("WARN", "Clone config drift at spawn", [
+        `${parent.name}: clone ${clone.id}`,
+        ...verification.baseDrift.map((d) => `base: ${d}`),
+        ...verification.cloneMismatches.map((d) => `clone: ${d}`),
+      ]);
+    } catch {
+      // Alerting must never break a spawn.
+    }
+  }
+
   // ── 8. Lease a slot ──
   let slot;
   try {
