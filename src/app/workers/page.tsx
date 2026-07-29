@@ -111,7 +111,7 @@ function WorkersPageInner() {
             <span className="absolute inset-0 rounded-full bg-blue-500 animate-ping opacity-50" />
           </span>
           <strong className="text-[var(--text-1)] font-semibold">{onCall}</strong>
-          <span className="text-[var(--text-3)]">/{slots.length || 5} active</span>
+          <span className="text-[var(--text-3)]">/{slots.length} active</span>
         </span>
         <span className="inline-flex items-center gap-1.5 text-[var(--text-2)]">
           <span className="w-2 h-2 rounded-full bg-amber-500" />

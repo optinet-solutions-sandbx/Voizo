@@ -1,6 +1,6 @@
 // src/app/workers/WorkerPoolPanel.tsx
 //
-// Right-side panel listing all 5 anonymous slots with status, location,
+// Right-side panel listing every anonymous slot with status, location,
 // campaign, and live call activity. Bidirectional hover/select with the
 // globe pins.
 

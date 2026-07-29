@@ -25,7 +25,7 @@ export interface SipPoolSlot {
 /**
  * Lease the lowest-numbered free slot atomically.
  *
- * Returns the slot row, or null if the pool is exhausted (all 5 leased).
+ * Returns the slot row, or null if the pool is exhausted (every slot leased).
  * The slot is bound to the assistant_id immediately; campaign_id stays
  * NULL until linkSlot() is called from the campaign-create flow.
  *

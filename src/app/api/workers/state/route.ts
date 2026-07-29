@@ -6,7 +6,7 @@ import { disguiseIfGhost } from "@/lib/ghost/workerDisguise";
  * GET /api/workers/state
  *
  * Read-only snapshot of the SIP pool, formatted for the Workers dashboard's
- * 5-second polling loop (design doc §5.2). Returns all 5 slots regardless of
+ * 5-second polling loop (design doc §5.2). Returns every slot regardless of
  * status — free slots come back as "anonymous" (no city/timezone), leased
  * slots carry their campaign's metadata so the UI can derive city + UTC offset
  * client-side via Intl.DateTimeFormat.
