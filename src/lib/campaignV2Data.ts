@@ -19,6 +19,30 @@
 
 import { supabaseAdmin } from "./supabaseServer";
 import { normalizeOperatorControls, type CampaignV2CreateInput } from "./campaignV2Shared";
+import { KNOWN_VOICES } from "./vapi/cloneAssistant";
+
+// VOZ-251: script campaigns share ONE base assistant, and a clone with no
+// voiceId re-inherits the base's CURRENT voice — so a base voice edit bleeds
+// into every script campaign on its next clone (fixed launch, and each daily
+// recurring spawn). Pin the voice at create so each campaign is frozen to its
+// own voice. Best-effort + guarded: only pins a voice the clone allowlist
+// accepts (else a later re-clone would 400), and never blocks a create.
+async function resolveScriptBaseVoiceId(baseAssistantId: string | null | undefined): Promise<string | null> {
+  const key = process.env.VAPI_PRIVATE_KEY;
+  if (!baseAssistantId || !key) return null;
+  try {
+    const r = await fetch(`https://api.vapi.ai/assistant/${baseAssistantId}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    const a = (await r.json()) as { voice?: { voiceId?: string } };
+    const vid = a?.voice?.voiceId ?? null;
+    return vid && KNOWN_VOICES[vid] ? vid : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function createCampaignV2(input: CampaignV2CreateInput) {
   // Recurring parents save directly as 'running' (active schedule definition);
@@ -26,6 +50,17 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   // draft→running flow gated by start_at + the queue-gate.
   const campaignType = input.campaignType ?? "fixed";
   const status = campaignType === "recurring" ? "running" : "draft";
+
+  // Pin a script campaign's voice to its base's current voice (VOZ-251) so it
+  // never drifts when the shared base is retuned. Non-script + operator-picked
+  // voices keep their explicit voiceId untouched.
+  let resolvedVoiceId = input.voiceId || null;
+  if (!resolvedVoiceId && input.agentMode === "script") {
+    // Fixed script campaigns carry a base_assistant_id; recurring parents don't
+    // (they clone the env script base at spawn) — fall back to it so recurring
+    // campaigns pin their voice too.
+    resolvedVoiceId = await resolveScriptBaseVoiceId(input.baseAssistantId || process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID);
+  }
 
   const { data: campaign, error: campaignError } = await supabaseAdmin
     .from("campaigns_v2")
@@ -36,7 +71,7 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       vapi_sip_uri: input.vapiSipUri || null,
       vapi_pool_slot_id: input.vapiPoolSlotId || null,
       base_assistant_id: input.baseAssistantId || null,
-      voice_id: input.voiceId || null,
+      voice_id: resolvedVoiceId,
       segment_id: input.segmentId ?? null,
       system_prompt: input.systemPrompt,
       timezone: input.timezone,

@@ -42,6 +42,10 @@ export const KNOWN_VOICES: Record<string, string> = {
   "pHqSZYhjNK8nDCPRglTL": "Alex",
   "1IthILLNX448pH19aMvC": "Matthew",
   "pNInz6obpgDQGcFmaJgB": "Adam",
+  // The script base assistant ("Val") ships a female 11labs voice. Allowlisting
+  // it lets a script campaign PIN it as its own voice_id (VOZ-251) instead of
+  // silently re-inheriting the shared base's voice on every clone/daily spawn.
+  "OYTbf65OHHFELVut7v2H": "Val (female)",
 };
 
 /**
