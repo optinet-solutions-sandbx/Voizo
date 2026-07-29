@@ -226,11 +226,18 @@ export async function POST(req: Request) {
       ],
       interruptionPhrases: ["stop", "wait", "hold on", "no no", "excuse me", "actually", "question"],
     },
-    // Wait for the customer to actually finish before replying (smart
-    // endpointing coalesces split finals) — but keep the wait short: fillers
-    // only buy time if they start the instant the customer stops, and the
-    // supersede/lock guards already handle fragment stragglers.
-    startSpeakingPlan: { waitSeconds: 0.5, smartEndpointingPlan: { provider: "vapi" } },
+    // Wait for the customer to actually finish before replying — but keep the
+    // wait short: fillers only buy time if they start the instant the customer
+    // stops, and the supersede/lock guards already handle fragment stragglers.
+    //
+    // NO smartEndpointingPlan — deliberately, and this site matters most. The
+    // PATCH below targets the SHARED script-base assistant, which transcribes
+    // with Deepgram Flux; Flux owns end-of-turn detection and Vapi warns the two
+    // must not both be on. Sending smart endpointing from here re-enabled it on
+    // the donor every time an operator hit Save Configuration, so fixing only
+    // the engine's own constant would have left the base being re-broken from
+    // the lab. Jas: "Smart Endpointing should be OFF" (2026-07-29).
+    startSpeakingPlan: { waitSeconds: 0.5 },
   };
 
   const patchRes = await fetch(`${VAPI_BASE}/assistant/${assistantId}`, {

@@ -77,9 +77,17 @@ const STOP_SPEAKING_PLAN = {
   interruptionPhrases: ["stop", "wait", "hold on", "no no", "excuse me", "actually", "question"],
 };
 
-// Smart endpointing coalesces split finals; keep the wait short so fillers can
-// start the instant the customer stops.
-const START_SPEAKING_PLAN = { waitSeconds: 0.5, smartEndpointingPlan: { provider: "vapi" } };
+// NO smartEndpointingPlan — deliberately. The script base assistant transcribes
+// with Deepgram Flux, which does its OWN end-of-turn detection, and Vapi's own
+// panel warns the two must not both be on ("make sure your Smart Endpointing
+// Plan is disabled to leverage Flux end-of-turn detection"). The base is
+// correctly configured with it off; because script mode REPLACES the base's
+// startSpeakingPlan rather than inheriting it, this constant was silently
+// forcing smart endpointing back on for every script clone — two competing
+// end-of-turn mechanisms on every live call. Jas: "Smart Endpointing should be
+// OFF" (2026-07-29). waitSeconds stays short so fillers can start the instant
+// the customer stops, and matches what the base itself carries.
+const START_SPEAKING_PLAN = { waitSeconds: 0.5 };
 
 // Dead-air plan: the listener loop is transcript-driven, so customer silence
 // otherwise means nothing happens. The watchdog's noise filter knows these

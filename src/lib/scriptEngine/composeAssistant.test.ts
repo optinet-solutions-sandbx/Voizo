@@ -147,3 +147,16 @@ describe("composeScriptClone — machine guard (VOZ-245)", () => {
     expect(END_CALL_PHRASES).toContain(spoken);
   });
 });
+
+// ── Smart endpointing must stay OFF: the script base transcribes with Deepgram
+// Flux, which owns end-of-turn detection, and Vapi warns the two must not both
+// be enabled. Script mode REPLACES the base's startSpeakingPlan instead of
+// inheriting it, so a stray smartEndpointingPlan here silently overrides a
+// correctly-configured base on every live call. This is the pin.
+describe("composeScriptClone — Flux owns end-of-turn, so no smart endpointing", () => {
+  it("ships a startSpeakingPlan with NO smartEndpointingPlan", async () => {
+    const cfg = await composeScriptClone({ scriptId: "s1", persona: "You are Tom." });
+    expect(cfg.startSpeakingPlan).not.toHaveProperty("smartEndpointingPlan");
+    expect(cfg.startSpeakingPlan).toEqual({ waitSeconds: 0.5 });
+  });
+});
