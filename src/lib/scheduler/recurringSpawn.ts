@@ -458,16 +458,25 @@ export async function spawnChildIfDue(
     const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
     try {
       const { composeScriptClone } = await import("../scriptEngine/composeAssistant");
+      const { getScript } = await import("../scriptEngine/lab-db");
+      // Live-track (VOZ-252): each day's child speaks the SCRIPT's CURRENT voice,
+      // never whatever the shared base drifted to. Falls back to the pinned
+      // parent voice, then base inherit.
+      const scriptVoiceId = (await getScript(parent.script_id!).catch(() => null))?.voice_id ?? parent.voice_id ?? null;
       const scriptClone = await composeScriptClone({
         scriptId: parent.script_id,
         persona: parent.system_prompt,
       });
       cloneResult = await createClone(vapiKey, parent.base_assistant_id, {
-        voiceId: parent.voice_id ?? undefined,
+        voiceId: scriptVoiceId ?? undefined,
         campaignName: `${parent.name} (${todayStr})`,
         scriptClone,
         serverUrl,
       });
+      if (cloneResult.ok && scriptVoiceId) {
+        const { ensureCloneVoice } = await import("../vapi/cloneAssistant");
+        await ensureCloneVoice(vapiKey, cloneResult.clone.id, scriptVoiceId).catch(() => {});
+      }
     } catch (err) {
       return {
         result: "spawn_failed",

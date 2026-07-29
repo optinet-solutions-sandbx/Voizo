@@ -206,6 +206,10 @@ export type Database = {
           /** VOZ-188: who the agent is for THIS script — test calls speak it,
            *  the wizard previews it. '' = fall back to identity/global/default. */
           persona: string;
+          /** VOZ-252: the voice THIS script speaks with (ElevenLabs voiceId from
+           *  VOICE_OPTIONS). Source of truth for the campaign clone's voice; null
+           *  = inherit the base assistant voice (legacy). */
+          voice_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -215,6 +219,7 @@ export type Database = {
           description?: string;
           collection_id?: string | null;
           persona?: string;
+          voice_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -224,6 +229,7 @@ export type Database = {
           description?: string;
           collection_id?: string | null;
           persona?: string;
+          voice_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };

@@ -2613,6 +2613,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                   setScripts((ss) => ss.map((s) => (s.id === scriptId ? { ...s, persona: p } : s)))
                 }
                 scriptName={name}
+                scriptVoiceId={scripts.find((s) => s.id === scriptId)?.voice_id ?? null}
                 onArmed={(id) => setActiveScriptId(id)}
               />
             </div>

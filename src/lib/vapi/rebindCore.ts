@@ -89,13 +89,21 @@ export async function executeRebindCore(
     const eocUrl = process.env.VAPI_WEBHOOK_URL ?? "https://voizo-eight.vercel.app/api/webhooks/vapi/end-of-call";
     const serverUrl = eocUrl.replace(/\/end-of-call$/, "/script-call");
     const { composeScriptClone } = await import("@/lib/scriptEngine/composeAssistant");
+    const { getScript } = await import("@/lib/scriptEngine/lab-db");
+    // VOZ-252: resume/rebind speaks the SCRIPT's voice (live-track), falling back
+    // to the campaign's pinned voice then base inherit.
+    const scriptVoiceId = (await getScript(campaign.script_id).catch(() => null))?.voice_id ?? campaign.voice_id ?? null;
     const scriptClone = await composeScriptClone({ scriptId: campaign.script_id, persona: campaign.system_prompt });
     cloneResult = await createClone(vapiPrivateKey, campaign.base_assistant_id, {
-      voiceId: campaign.voice_id ?? undefined,
+      voiceId: scriptVoiceId ?? undefined,
       campaignName: campaign.name ?? undefined,
       scriptClone,
       serverUrl,
     });
+    if (cloneResult.ok && scriptVoiceId) {
+      const { ensureCloneVoice } = await import("@/lib/vapi/cloneAssistant");
+      await ensureCloneVoice(vapiPrivateKey, cloneResult.clone.id, scriptVoiceId).catch(() => {});
+    }
   } else {
     cloneResult = await createClone(vapiPrivateKey, campaign.base_assistant_id, {
       voiceId: campaign.voice_id ?? undefined,

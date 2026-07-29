@@ -56,10 +56,18 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
   // voices keep their explicit voiceId untouched.
   let resolvedVoiceId = input.voiceId || null;
   if (!resolvedVoiceId && input.agentMode === "script") {
-    // Fixed script campaigns carry a base_assistant_id; recurring parents don't
-    // (they clone the env script base at spawn) — fall back to it so recurring
-    // campaigns pin their voice too.
-    resolvedVoiceId = await resolveScriptBaseVoiceId(input.baseAssistantId || process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID);
+    // Prefer the SCRIPT's own voice (VOZ-252) — the source of truth. select('*')
+    // (not select('voice_id')) so this is safe before the column migration runs.
+    if (input.scriptId) {
+      const { data: scr } = await supabaseAdmin.from("listener_scripts").select("*").eq("id", input.scriptId).maybeSingle();
+      const sv = (scr as { voice_id?: string | null } | null)?.voice_id ?? null;
+      if (sv) resolvedVoiceId = sv;
+    }
+    // Fall back to the base's current voice (VOZ-251) — fixed script campaigns
+    // carry a base_assistant_id; recurring parents use the env script base.
+    if (!resolvedVoiceId) {
+      resolvedVoiceId = await resolveScriptBaseVoiceId(input.baseAssistantId || process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID);
+    }
   }
 
   const { data: campaign, error: campaignError } = await supabaseAdmin

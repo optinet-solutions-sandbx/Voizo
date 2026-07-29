@@ -95,7 +95,11 @@ export async function POST(request: NextRequest) {
     // the original in the Script Builder without disturbing a live campaign or
     // the original's pipeline. Deep-copies nodes + edges (fresh ids).
     const scriptName = body.scriptName as string | undefined;
-    const { duplicateScript, deleteScript } = await import("@/lib/scriptEngine/lab-db");
+    const { duplicateScript, deleteScript, getScript } = await import("@/lib/scriptEngine/lab-db");
+    // The SCRIPT's own voice is the source of truth (VOZ-252) — force the clone
+    // to it so it never inherits whatever the shared "Val" base is currently set
+    // to from testing another script. null → legacy inherit behavior.
+    const scriptVoiceId = (await getScript(scriptId).catch(() => null))?.voice_id ?? null;
     const copyName = `${scriptName ?? "Script"} — campaign: ${campaignName ?? "untitled"}`.slice(0, 200);
     let copy;
     try {
@@ -115,10 +119,15 @@ export async function POST(request: NextRequest) {
     const { composeScriptClone } = await import("@/lib/scriptEngine/composeAssistant");
     const persona = (body.persona as string | undefined) ?? systemPrompt;
     const scriptClone = await composeScriptClone({ scriptId: copy.id, persona });
-    cloneResult = await createClone(key, scriptBase, { voiceId, campaignName, scriptClone, serverUrl });
+    cloneResult = await createClone(key, scriptBase, { voiceId: scriptVoiceId ?? voiceId, campaignName, scriptClone, serverUrl });
     // Clone failed → the script copy is orphaned; best-effort remove it.
     if (!cloneResult.ok) {
       await deleteScript(copy.id).catch(() => {});
+    } else if (scriptVoiceId) {
+      // Checker: make sure the clone actually speaks the script's voice.
+      const { ensureCloneVoice } = await import("@/lib/vapi/cloneAssistant");
+      const chk = await ensureCloneVoice(key, cloneResult.clone.id, scriptVoiceId);
+      if (!chk.aligned) console.warn(`[clone-assistant] voice mismatch for ${cloneResult.clone.id}: wanted ${scriptVoiceId}, got ${chk.actual}`);
     }
   } else {
     // ── 1-3. Validate input + fetch base + build & POST clone (via helper) ──

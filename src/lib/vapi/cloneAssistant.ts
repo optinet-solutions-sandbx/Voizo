@@ -33,6 +33,8 @@ import type { ScriptCloneConfig } from "@/lib/scriptEngine/composeAssistant";
  * unset, the clone inherits base.voice wholesale (provider + voiceId + every
  * voice knob) — see voice merge logic below.
  */
+import { VOICE_OPTIONS } from "../scriptEngine/voices";
+
 export const KNOWN_VOICES: Record<string, string> = {
   "3jR9BuQAOPMWUjWpi0ll": "Stephen",
   "UgBBYS2sOqTuMpoF3BR0": "Mark",
@@ -47,6 +49,52 @@ export const KNOWN_VOICES: Record<string, string> = {
   // silently re-inheriting the shared base's voice on every clone/daily spawn.
   "OYTbf65OHHFELVut7v2H": "Val (female)",
 };
+
+// Any voiceId the app can legitimately request: the campaign-clone allowlist
+// (KNOWN_VOICES) PLUS every voice the Script Builder exposes (VOICE_OPTIONS).
+// A script can pin any VOICE_OPTIONS voice (VOZ-252), so the clone must accept
+// it too — otherwise forcing the script's voice would 400.
+const KNOWN_VOICE_IDS = new Set<string>([...Object.keys(KNOWN_VOICES), ...VOICE_OPTIONS.map((v) => v.voiceId)]);
+const voiceLabel = (voiceId: string): string | null =>
+  KNOWN_VOICES[voiceId] ?? VOICE_OPTIONS.find((v) => v.voiceId === voiceId)?.label ?? null;
+
+/** Alignment checker + self-heal (VOZ-252): confirm a freshly-created clone
+ *  actually speaks with the voice the SCRIPT specified — regardless of what the
+ *  shared base assistant is currently set to on the Vapi dashboard — and if it
+ *  drifted, re-PATCH it to the right voice and re-check. This is the "checker to
+ *  the agent" that makes us SURE the clone matches the script config. Best-
+ *  effort: read/patch failures never throw (the deterministic create-payload
+ *  override is the primary guarantee; this is the verification on top). */
+export async function ensureCloneVoice(
+  vapiPrivateKey: string,
+  cloneId: string,
+  expectedVoiceId: string,
+): Promise<{ aligned: boolean; actual: string | null; repatched: boolean }> {
+  const read = async (): Promise<string | null> => {
+    const res = await fetch(`https://api.vapi.ai/assistant/${cloneId}`, {
+      headers: { Authorization: `Bearer ${vapiPrivateKey}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const a = (await res.json()) as { voice?: { voiceId?: string } };
+    return a?.voice?.voiceId ?? null;
+  };
+  try {
+    const actual = await read();
+    if (actual === null) return { aligned: true, actual: null, repatched: false }; // couldn't read → don't block
+    if (actual === expectedVoiceId) return { aligned: true, actual, repatched: false };
+    // Drifted — force it back to the script's voice.
+    await fetch(`https://api.vapi.ai/assistant/${cloneId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${vapiPrivateKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ voice: { provider: "11labs", voiceId: expectedVoiceId } }),
+    });
+    const after = await read();
+    return { aligned: after === expectedVoiceId, actual: after, repatched: true };
+  } catch {
+    return { aligned: true, actual: null, repatched: false };
+  }
+}
 
 /**
  * Voizo runtime safety policy — fields the clone MUST have regardless of base.
@@ -217,7 +265,7 @@ export async function createClone(
 
   const { voiceId, systemPrompt, campaignName, serverUrl, scriptClone } = overrides;
 
-  if (voiceId && !KNOWN_VOICES[voiceId]) {
+  if (voiceId && !KNOWN_VOICE_IDS.has(voiceId)) {
     return { ok: false, status: 400, error: "Unknown voiceId" };
   }
 
@@ -243,7 +291,7 @@ export async function createClone(
   const base = await baseRes.json();
 
   // ── 2. Build clone payload ──
-  const voiceName = voiceId ? KNOWN_VOICES[voiceId] : null;
+  const voiceName = voiceId ? voiceLabel(voiceId) : null;
   const voiceSuffix = voiceName ? ` (${voiceName})` : "";
   const baseName = campaignName
     ? campaignName

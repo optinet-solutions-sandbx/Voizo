@@ -32,9 +32,12 @@ type Props = {
   onArmed?: (id: string) => void;
   /** VOZ-189: the open script's name, for the Save success notice. */
   scriptName?: string;
+  /** VOZ-252: the voice saved on this script — initializes the picker so a Save
+   *  doesn't clobber the script's voice with the default. */
+  scriptVoiceId?: string | null;
 };
 
-export default function LabConfigForm({ onAssistantChange, scriptId = null, scriptPersona = "", onPersonaSaved, onArmed, scriptName = "" }: Props) {
+export default function LabConfigForm({ onAssistantChange, scriptId = null, scriptPersona = "", onPersonaSaved, onArmed, scriptName = "", scriptVoiceId = null }: Props) {
   // ── Agent ──
   const [assistants, setAssistants] = useState<{ id: string; name: string }[]>([]);
   const [assistantId, setAssistantId] = useState("");
@@ -54,7 +57,14 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
   // Set once the operator types in the persona box for the open script —
   // async prefills must never overwrite typing.
   const personaDirty = useRef(false);
-  const [voiceId, setVoiceId] = useState<string>(VOICE_OPTIONS[0].voiceId);
+  const [voiceId, setVoiceId] = useState<string>(
+    scriptVoiceId && VOICE_OPTIONS.some((v) => v.voiceId === scriptVoiceId) ? scriptVoiceId : VOICE_OPTIONS[0].voiceId,
+  );
+  // Re-sync the picker to the script's saved voice when a different script opens
+  // (VOZ-252) — otherwise a Save would overwrite it with the default.
+  useEffect(() => {
+    if (scriptVoiceId && VOICE_OPTIONS.some((v) => v.voiceId === scriptVoiceId)) setVoiceId(scriptVoiceId);
+  }, [scriptVoiceId]);
   const [serverOverride, setServerOverride] = useState("");
   const [envBaseUrl, setEnvBaseUrl] = useState<string | null>(null);
 
@@ -153,6 +163,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
           suggestedPersona.current = null;
           onPersonaSaved?.(persona.trim());
         }
+        // Persist the picked voice ON THE SCRIPT (VOZ-252) — the campaign clone
+        // pins from here, so it's independent of the shared base agent's state.
+        await updateScript(scriptId, { voice_id: voiceId });
       }
 
       if (!assistantId) {
