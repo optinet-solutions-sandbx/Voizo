@@ -6,14 +6,14 @@ import { DEFAULT_SHORT_PROMPT } from "@/lib/scriptEngine/lab-tools";
 import { getLabSettings, saveLabSettings, updateScript } from "@/lib/scriptEngine/lab-db-client";
 
 const inputCls =
-  "w-full rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none disabled:opacity-50";
+  "w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none disabled:opacity-50";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
     <section className="space-y-2.5">
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{title}</p>
-        {hint && <p className="text-[11px] text-gray-600">{hint}</p>}
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)]">{title}</p>
+        {hint && <p className="text-[11px] text-[var(--text-3)]">{hint}</p>}
       </div>
       {children}
     </section>
@@ -215,7 +215,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       <Section title="Lab Agent" hint="The politician — pick a dedicated test assistant; saving overwrites its tools + webhook.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label htmlFor="lab-assistant" className="mb-1 block text-xs text-gray-400">Assistant</label>
+            <label htmlFor="lab-assistant" className="mb-1 block text-xs text-[var(--text-3)]">Assistant</label>
             <select
               id="lab-assistant"
               className={inputCls + " [color-scheme:dark]"}
@@ -231,7 +231,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
             </select>
           </div>
           <div>
-            <label htmlFor="lab-voice" className="mb-1 block text-xs text-gray-400">Voice</label>
+            <label htmlFor="lab-voice" className="mb-1 block text-xs text-[var(--text-3)]">Voice</label>
             <select
               id="lab-voice"
               className={inputCls + " [color-scheme:dark]"}
@@ -288,11 +288,11 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       <Section title="Listener Tuning" hint="How aggressively the staff whispers.">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label htmlFor="lab-router-model" className="mb-1 block text-xs text-gray-400">Router Model</label>
+            <label htmlFor="lab-router-model" className="mb-1 block text-xs text-[var(--text-3)]">Router Model</label>
             <input id="lab-router-model" className={inputCls} value={routerModel} onChange={(e) => setRouterModel(e.target.value)} />
           </div>
           <div>
-            <label htmlFor="lab-cooldown" className="mb-1 block text-xs text-gray-400">Injection Cooldown (ms)</label>
+            <label htmlFor="lab-cooldown" className="mb-1 block text-xs text-[var(--text-3)]">Injection Cooldown (ms)</label>
             <input
               id="lab-cooldown"
               className={inputCls}
@@ -304,9 +304,9 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
           </div>
         </div>
         <div>
-          <label htmlFor="lab-threshold" className="mb-1 block text-xs text-gray-400">
-            Confidence Threshold: <span className="font-semibold text-gray-200">{threshold.toFixed(2)}</span>
-            <span className="ml-1 text-gray-600">(below this, the agent handles it alone)</span>
+          <label htmlFor="lab-threshold" className="mb-1 block text-xs text-[var(--text-3)]">
+            Confidence Threshold: <span className="font-semibold text-[var(--text-1)]">{threshold.toFixed(2)}</span>
+            <span className="ml-1 text-[var(--text-3)]">(below this, the agent handles it alone)</span>
           </label>
           <input
             id="lab-threshold"
@@ -319,14 +319,14 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
             className="w-full accent-indigo-500"
           />
         </div>
-        <label className="flex items-center gap-2 text-sm text-gray-300">
+        <label className="flex items-center gap-2 text-sm text-[var(--text-2)]">
           <input
             type="checkbox"
             checked={triggerResponse}
             onChange={(e) => setTriggerResponse(e.target.checked)}
           />
           Trigger immediate response on injection
-          <span className="text-[10px] text-gray-600">(off = context-only; safer against double-talk)</span>
+          <span className="text-[10px] text-[var(--text-3)]">(off = context-only; safer against double-talk)</span>
         </label>
       </Section>
 
@@ -344,7 +344,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
           <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
             control ✓
           </span>
-          <span className="rounded-full bg-gray-700 px-2 py-0.5 text-[11px] text-gray-300">
+          <span className="rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] text-[var(--text-2)]">
             {configured.webhookUrl}
           </span>
         </div>
@@ -354,7 +354,7 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       <button
         onClick={handleSave}
         disabled={saving}
-        className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
+        className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-px disabled:opacity-40"
       >
         {saving ? "Saving & configuring…" : "Save Configuration"}
       </button>

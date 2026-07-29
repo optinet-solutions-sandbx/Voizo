@@ -18,7 +18,7 @@ import {
 import type { ListenerCollection, ListenerHandler } from "@/lib/scriptEngine/database.types";
 
 const inputCls =
-  "w-full rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none";
+  "w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none";
 
 type Props = {
   /** Notifies the page when the active collection changes (id, name|null) */
@@ -259,11 +259,11 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     const checked = members.has(h.id);
     const isEditing = editingId === h.id;
     return (
-      <div key={h.id} className="rounded border border-transparent hover:border-gray-700/60">
-        <div className="flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800">
+      <div key={h.id} className="rounded border border-transparent hover:border-[var(--border)]/60">
+        <div className="flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--bg-hover)]">
           <input type="checkbox" checked={checked} onChange={() => toggleMember(h.id)} className="cursor-pointer" />
           <span className="text-xs">{checked ? "✅" : "⬜"}</span>
-          <span className="min-w-0 flex-1 truncate text-sm text-gray-200">{h.name}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-1)]">{h.name}</span>
           {(h.tags ?? []).slice(0, 1).map((t) => (
             <span key={t} className="shrink-0 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[9px] text-purple-300">
               {t}
@@ -271,7 +271,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
           ))}
           <button
             onClick={() => (isEditing ? setEditingId(null) : startEdit(h))}
-            className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-gray-200"
+            className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
             title="Edit scenario inline"
           >
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -280,7 +280,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
           </button>
           <button
             onClick={() => handleDuplicateScenario(h.id)}
-            className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-indigo-300"
+            className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-primary"
             title="Duplicate scenario"
           >
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -289,7 +289,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
           </button>
         </div>
         {isEditing && editDraft && (
-          <div className="space-y-1.5 border-t border-gray-700/60 bg-gray-900/60 px-2 py-2">
+          <div className="space-y-1.5 border-t border-[var(--border)]/60 bg-[var(--bg-elevated)] px-2 py-2">
             <input
               className={inputCls}
               value={editDraft.name}
@@ -328,7 +328,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
               </button>
               <button
                 onClick={() => { setEditingId(null); setEditDraft(null); }}
-                className="shrink-0 rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition hover:bg-gray-800"
+                className="shrink-0 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
               >
                 Cancel
               </button>
@@ -344,16 +344,16 @@ export default function CollectionsManager({ onActiveChange }: Props) {
       {error && <p className="text-xs text-red-400">{error}</p>}
 
       {/* Active collection banner */}
-      <div className="rounded-lg border border-gray-700 bg-gray-900/50 px-3 py-2.5">
-        <p className="text-[11px] uppercase tracking-wider text-gray-500">Active for test calls</p>
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5">
+        <p className="text-[11px] uppercase tracking-wider text-[var(--text-3)]">Active for test calls</p>
         <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-gray-200">
+          <p className="text-sm font-medium text-[var(--text-1)]">
             {activeId ? collections.find((c) => c.id === activeId)?.name ?? "—" : "All scenarios (no collection)"}
           </p>
           {activeId && (
             <button
               onClick={() => handleSetActive(null)}
-              className="rounded-lg border border-gray-700 px-2.5 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800"
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
             >
               Clear
             </button>
@@ -373,7 +373,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
         <button
           onClick={handleCreate}
           disabled={busy || !newName.trim()}
-          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
+          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-px disabled:opacity-40"
         >
           + Create
         </button>
@@ -383,7 +383,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
       <div className="space-y-1.5">
         {collections.length > 0 && (
           <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-3)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <input
@@ -391,15 +391,15 @@ export default function CollectionsManager({ onActiveChange }: Props) {
               value={listQuery}
               onChange={(e) => setListQuery(e.target.value)}
               placeholder="Search collections…"
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 py-1.5 pl-8 pr-3 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1.5 pl-8 pr-3 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none"
             />
           </div>
         )}
         {collections.length === 0 && (
-          <p className="py-4 text-center text-sm text-gray-500">No collections yet — create one above.</p>
+          <p className="py-4 text-center text-sm text-[var(--text-3)]">No collections yet — create one above.</p>
         )}
         {collections.length > 0 && visibleCollections.length === 0 && (
-          <p className="py-4 text-center text-sm text-gray-500">No collections match “{listQuery}”.</p>
+          <p className="py-4 text-center text-sm text-[var(--text-3)]">No collections match “{listQuery}”.</p>
         )}
         {visibleCollections.map((c) => {
           const isActive = c.id === activeId;
@@ -408,7 +408,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
             <div
               key={c.id}
               className={`rounded-lg border px-3 py-2 ${
-                isSelected ? "border-indigo-500 bg-indigo-500/5" : "border-gray-700 bg-gray-900/40"
+                isSelected ? "border-primary bg-primary/5" : "border-[var(--border)] bg-[var(--bg-elevated)]"
               }`}
             >
               <div className="flex items-center gap-2">
@@ -417,7 +417,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                   key={c.name}
                   onBlur={(e) => e.target.value.trim() !== c.name && handleRename(c.id, e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                  className="flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm font-medium text-gray-200 hover:border-gray-700 focus:border-indigo-500 focus:bg-gray-800 focus:outline-none"
+                  className="flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm font-medium text-[var(--text-1)] hover:border-[var(--border)] focus:border-primary focus:bg-[var(--bg-elevated)] focus:outline-none"
                 />
                 {isActive && (
                   <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
@@ -427,27 +427,27 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                 <button
                   onClick={() => handleSetActive(c.id)}
                   disabled={isActive}
-                  className="shrink-0 rounded-lg border border-gray-700 px-2 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+                  className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
                 >
                   Set active
                 </button>
                 <button
                   onClick={() => (isSelected ? setSelectedId(null) : selectCollection(c.id))}
-                  className="shrink-0 rounded-lg border border-gray-700 px-2 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800"
+                  className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
                 >
                   {isSelected ? "Close" : "Edit scenarios"}
                 </button>
                 <button
                   onClick={() => handleDuplicateCollection(c.id)}
                   disabled={busy}
-                  className="shrink-0 rounded-lg border border-gray-700 px-2 py-1 text-[11px] text-gray-300 transition hover:bg-gray-800 hover:text-indigo-300 disabled:opacity-40"
+                  className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] hover:text-primary disabled:opacity-40"
                   title="Duplicate this collection and all its scenarios (independent copies)"
                 >
                   Duplicate
                 </button>
                 <button
                   onClick={() => handleDelete(c.id)}
-                  className="shrink-0 rounded p-1 text-gray-500 transition hover:bg-gray-700 hover:text-rose-400"
+                  className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
                   title="Delete collection"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -458,7 +458,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
 
               {/* Member editor */}
               {isSelected && (
-                <div className="mt-2 border-t border-gray-700/60 pt-2">
+                <div className="mt-2 border-t border-[var(--border)]/60 pt-2">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <input
                       className={inputCls}
@@ -466,17 +466,17 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Filter scenarios…"
                     />
-                    <span className="shrink-0 text-[11px] text-gray-500">{members.size} selected</span>
+                    <span className="shrink-0 text-[11px] text-[var(--text-3)]">{members.size} selected</span>
                   </div>
-                  <div className="max-h-80 space-y-1 overflow-y-auto rounded-lg border border-gray-700 p-1.5">
+                  <div className="max-h-80 space-y-1 overflow-y-auto rounded-lg border border-[var(--border)] p-1.5">
                     <p className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-400/80">
                       In this collection ({inCollection.length})
                     </p>
                     {inCollection.length === 0 && (
-                      <p className="px-2 py-1 text-xs text-gray-600">None yet — tick scenarios below to add them.</p>
+                      <p className="px-2 py-1 text-xs text-[var(--text-3)]">None yet — tick scenarios below to add them.</p>
                     )}
                     {inCollection.map(renderRow)}
-                    <p className="mt-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                    <p className="mt-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)]">
                       Available scenarios ({available.length})
                     </p>
                     {available.map(renderRow)}

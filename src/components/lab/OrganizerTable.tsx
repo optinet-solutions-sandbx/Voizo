@@ -11,14 +11,14 @@ import {
 import type { ListenerHandler } from "@/lib/scriptEngine/database.types";
 
 const inputCls =
-  "w-full rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none";
+  "w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none";
 
 const ACTION_COLORS: Record<string, string> = {
-  answer: "bg-indigo-500/15 text-indigo-300",
+  answer: "bg-primary/15 text-primary",
   give_offer: "bg-emerald-500/15 text-emerald-300",
   send_sms: "bg-amber-500/15 text-amber-300",
   end_call: "bg-rose-500/15 text-rose-300",
-  ignore: "bg-gray-700 text-gray-400",
+  ignore: "bg-[var(--bg-elevated)] text-[var(--text-3)]",
 };
 
 const STARTER_HANDLERS = [
@@ -275,10 +275,10 @@ export default function OrganizerTable() {
 
 
   return (
-    <div className="rounded-xl border border-gray-700 bg-gray-800/50 overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-gray-700 px-4 py-3">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3">
         <div className="relative flex-1">
-          <svg className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-3)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
@@ -286,14 +286,14 @@ export default function OrganizerTable() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search scenarios…"
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 py-1.5 pl-8 pr-3 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1.5 pl-8 pr-3 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none"
           />
         </div>
         {allTags.length > 0 && (
           <select
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
-            className="shrink-0 rounded-lg border border-gray-700 bg-gray-800 px-2.5 py-1.5 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none [color-scheme:dark]"
+            className="shrink-0 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] focus:border-primary focus:outline-none [color-scheme:dark]"
           >
             <option value="">All tags</option>
             {allTags.map((t) => (
@@ -305,7 +305,7 @@ export default function OrganizerTable() {
         )}
         <button
           onClick={() => setDraft({ ...EMPTY_DRAFT })}
-          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
+          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-px"
         >
           + Add Scenario
         </button>
@@ -313,15 +313,15 @@ export default function OrganizerTable() {
 
       {error && <p className="px-4 py-2 text-xs text-red-400">{error}</p>}
 
-      {loading && <p className="px-4 py-8 text-center text-sm text-gray-500">Loading scenarios...</p>}
+      {loading && <p className="px-4 py-8 text-center text-sm text-[var(--text-3)]">Loading scenarios...</p>}
 
       {!loading && handlers.length === 0 && !draft && (
         <div className="px-4 py-8 text-center">
-          <p className="mb-3 text-sm text-gray-500">No scenarios yet.</p>
+          <p className="mb-3 text-sm text-[var(--text-3)]">No scenarios yet.</p>
           <button
             onClick={handleSeed}
             disabled={seeding}
-            className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-700 disabled:opacity-40"
+            className="rounded-lg border border-[var(--border-2)] px-4 py-2 text-sm font-medium text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
           >
             {seeding ? "Adding..." : "Add starter scenarios (greeting, pricing, offer, SMS, goodbye)"}
           </button>
@@ -329,13 +329,13 @@ export default function OrganizerTable() {
       )}
 
       {!loading && handlers.length > 0 && filtered.length === 0 && (
-        <p className="px-4 py-8 text-center text-sm text-gray-500">No scenarios match your filters.</p>
+        <p className="px-4 py-8 text-center text-sm text-[var(--text-3)]">No scenarios match your filters.</p>
       )}
 
       {paginated.map((h) => (
         <div
           key={h.id}
-          className={`flex flex-wrap items-center gap-3 border-b border-gray-700/50 px-4 py-3 last:border-b-0 ${
+          className={`flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3 last:border-b-0 ${
             h.enabled ? "" : "opacity-50"
           }`}
         >
@@ -343,7 +343,7 @@ export default function OrganizerTable() {
             onClick={() => handleToggle(h)}
             title={h.enabled ? "Disable" : "Enable"}
             className={`relative h-5 w-9 shrink-0 rounded-full transition ${
-              h.enabled ? "bg-emerald-600" : "bg-gray-600"
+              h.enabled ? "bg-emerald-600" : "bg-[var(--bg-elevated)]"
             }`}
           >
             <span
@@ -355,23 +355,23 @@ export default function OrganizerTable() {
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-gray-200">{h.name}</span>
+              <span className="text-sm font-medium text-[var(--text-1)]">{h.name}</span>
               {(h.tags ?? []).map((t) => (
                 <span key={t} className="rounded-full bg-purple-500/15 px-2 py-0.5 text-[10px] font-medium text-purple-300">
                   {t}
                 </span>
               ))}
-              <code className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
+              <code className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--text-3)]">
                 {h.intent_key}
               </code>
               <span
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  ACTION_COLORS[h.action_type] ?? "bg-gray-700 text-gray-300"
+                  ACTION_COLORS[h.action_type] ?? "bg-[var(--bg-elevated)] text-[var(--text-2)]"
                 }`}
               >
                 {h.action_type}
               </span>
-              <span className="rounded-full bg-gray-700/60 px-2 py-0.5 text-[10px] text-gray-400">
+              <span className="rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-3)]">
                 {h.mode}
               </span>
               <span
@@ -388,13 +388,13 @@ export default function OrganizerTable() {
               >
                 {h.delivery === "verbatim" ? "verbatim" : "reword"}
               </span>
-              <span className="text-[10px] text-gray-600">p{h.priority}</span>
+              <span className="text-[10px] text-[var(--text-3)]">p{h.priority}</span>
             </div>
             {h.description && (
-              <p className="mt-0.5 truncate text-xs text-gray-500">{h.description}</p>
+              <p className="mt-0.5 truncate text-xs text-[var(--text-3)]">{h.description}</p>
             )}
             {h.response_template && (
-              <p className="mt-0.5 truncate text-xs text-gray-400 italic">
+              <p className="mt-0.5 truncate text-xs text-[var(--text-3)] italic">
                 → {h.response_template}
               </p>
             )}
@@ -417,7 +417,7 @@ export default function OrganizerTable() {
                   enabled: h.enabled,
                 });
               }}
-              className="rounded p-1.5 text-gray-500 transition hover:bg-gray-700 hover:text-gray-200"
+              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
               title="Edit"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -426,7 +426,7 @@ export default function OrganizerTable() {
             </button>
             <button
               onClick={() => handleDuplicate(h.id)}
-              className="rounded p-1.5 text-gray-500 transition hover:bg-gray-700 hover:text-indigo-300"
+              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-primary"
               title="Duplicate"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -435,7 +435,7 @@ export default function OrganizerTable() {
             </button>
             <button
               onClick={() => handleDelete(h.id)}
-              className="rounded p-1.5 text-gray-500 transition hover:bg-gray-700 hover:text-rose-400"
+              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
               title="Delete"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -448,25 +448,25 @@ export default function OrganizerTable() {
 
       {/* Pagination */}
       {!loading && filtered.length > PAGE_SIZE && (
-        <div className="flex items-center justify-between gap-2 border-t border-gray-700 px-4 py-2.5">
-          <p className="text-[11px] text-gray-500">
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-2.5">
+          <p className="text-[11px] text-[var(--text-3)]">
             {(pageClamped - 1) * PAGE_SIZE + 1}–{Math.min(pageClamped * PAGE_SIZE, filtered.length)} of {filtered.length}
           </p>
           <div className="flex gap-2">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={pageClamped === 1}
-              className="rounded-lg border border-gray-700 px-2.5 py-1 text-xs text-gray-300 transition hover:bg-gray-700 disabled:opacity-40"
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
             >
               Prev
             </button>
-            <span className="px-1 py-1 text-xs text-gray-500">
+            <span className="px-1 py-1 text-xs text-[var(--text-3)]">
               {pageClamped} / {totalPages}
             </span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={pageClamped === totalPages}
-              className="rounded-lg border border-gray-700 px-2.5 py-1 text-xs text-gray-300 transition hover:bg-gray-700 disabled:opacity-40"
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
             >
               Next
             </button>
@@ -480,14 +480,14 @@ export default function OrganizerTable() {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
           <div
             onClick={(e) => e.stopPropagation()}
-            className="relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-700 bg-gray-900 p-5 shadow-2xl space-y-3"
+            className="relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-2xl space-y-3"
           >
-            <h3 className="text-base font-bold text-white">
+            <h3 className="text-base font-bold text-[var(--text-1)]">
               {draft.id ? "Edit Scenario" : "New Scenario"}
             </h3>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-400">Name</label>
+              <label className="mb-1 block text-xs text-[var(--text-3)]">Name</label>
               <input
                 className={inputCls}
                 value={draft.name}
@@ -497,7 +497,7 @@ export default function OrganizerTable() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-400">
+              <label className="mb-1 block text-xs text-[var(--text-3)]">
                 When should the agent use this?
               </label>
               <textarea
@@ -510,9 +510,9 @@ export default function OrganizerTable() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-400">
+              <label className="mb-1 block text-xs text-[var(--text-3)]">
                 Response{" "}
-                <span className="text-gray-600">
+                <span className="text-[var(--text-3)]">
                   {draft.delivery === "verbatim"
                     ? "(spoken word-for-word — write the exact line)"
                     : "(briefing — the agent rewords this in its own voice)"}
@@ -532,7 +532,7 @@ export default function OrganizerTable() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-400">Delivery</label>
+              <label className="mb-1 block text-xs text-[var(--text-3)]">Delivery</label>
               <div className="flex gap-2">
                 {(["verbatim", "reword"] as const).map((d) => (
                   <button
@@ -544,7 +544,7 @@ export default function OrganizerTable() {
                         ? d === "verbatim"
                           ? "border-sky-500 bg-sky-500/15 text-sky-300"
                           : "border-amber-500 bg-amber-500/15 text-amber-300"
-                        : "border-gray-700 text-gray-400 hover:bg-gray-800"
+                        : "border-[var(--border)] text-[var(--text-3)] hover:bg-[var(--bg-hover)]"
                     }`}
                   >
                     {d === "verbatim" ? "Verbatim (say exactly)" : "Reword (agent rephrases)"}
@@ -554,8 +554,8 @@ export default function OrganizerTable() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-400">
-                Priority <span className="text-gray-600">(lower wins when two could apply)</span>
+              <label className="mb-1 block text-xs text-[var(--text-3)]">
+                Priority <span className="text-[var(--text-3)]">(lower wins when two could apply)</span>
               </label>
               <input
                 className={inputCls}
@@ -568,8 +568,8 @@ export default function OrganizerTable() {
             {/* Tags — optional, only once the scenario exists */}
             {draft.id && (
               <div>
-                <label className="mb-1 block text-xs text-gray-400">
-                  Tags <span className="text-gray-600">(optional — for organizing &amp; filtering)</span>
+                <label className="mb-1 block text-xs text-[var(--text-3)]">
+                  Tags <span className="text-[var(--text-3)]">(optional — for organizing &amp; filtering)</span>
                 </label>
                 {draft.tags.length > 0 && (
                   <div className="mb-1.5 flex flex-wrap gap-1.5">
@@ -603,7 +603,7 @@ export default function OrganizerTable() {
                     type="button"
                     onClick={() => addTag(newTag)}
                     disabled={!newTag.trim()}
-                    className="shrink-0 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+                    className="shrink-0 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
                   >
                     Add
                   </button>
@@ -617,7 +617,7 @@ export default function OrganizerTable() {
                           key={t}
                           type="button"
                           onClick={() => addTag(t)}
-                          className="rounded-full border border-gray-700 px-2 py-0.5 text-[10px] text-gray-400 transition hover:bg-gray-800 hover:text-gray-200"
+                          className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
                         >
                           + {t}
                         </button>
@@ -631,14 +631,14 @@ export default function OrganizerTable() {
               <button
                 onClick={() => setDraft(null)}
                 disabled={saving}
-                className="flex-1 rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+                className="flex-1 rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveDraft}
                 disabled={saving || !draft.name.trim()}
-                className="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
+                className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:-translate-y-px disabled:opacity-40"
               >
                 {saving ? "Saving..." : draft.id ? "Save Changes" : "Add Scenario"}
               </button>

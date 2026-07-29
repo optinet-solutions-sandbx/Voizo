@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import ScriptBuilder from "@/components/lab/ScriptBuilder";
+import { SectionTick } from "@/app/analytics/SectionIsland";
 import { listScripts, createScript, deleteScript, getLabSettings } from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerScript } from "@/lib/scriptEngine/database.types";
 
@@ -12,7 +13,7 @@ const PAGE_SIZE = 10;
 
 export default function ScriptBuilderPage() {
   return (
-    <Suspense fallback={<div className="px-4 py-10 text-sm text-gray-500 sm:px-6">Loading…</div>}>
+    <Suspense fallback={<div className="px-4 py-10 text-sm text-[var(--text-3)] sm:px-6">Loading…</div>}>
       <ScriptBuilderInner />
     </Suspense>
   );
@@ -108,18 +109,21 @@ function ScriptBuilderInner() {
 
   // ── List view ──
   return (
-    <div className="flex flex-col px-4 py-6 pb-[env(safe-area-inset-bottom)] sm:px-6 sm:py-8">
-      <header className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Script Builder</h1>
-          <p className="mt-1 text-sm text-gray-500">
+    <div className="p-4 w-full max-w-[1400px] mx-auto flex flex-col">
+      <header className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <SectionTick color="#4d90f0" />
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">Script Builder</h1>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--text-3)]">
             {filtered.length} of {scripts.length} script{scripts.length !== 1 ? "s" : ""} — open one to edit its
             call flow, or create a new one.
           </p>
         </div>
         <Link
           href="/playbook"
-          className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-gray-600 px-3 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-700 hover:text-white"
+          className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-[var(--border-2)] px-3 py-2 text-sm font-medium text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
         >
           <BookOpen className="h-4 w-4" />
           Playbook
@@ -129,7 +133,7 @@ function ScriptBuilderInner() {
       {/* Create + search */}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-3)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
@@ -137,31 +141,31 @@ function ScriptBuilderInner() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search scripts..."
-            className="w-full rounded-lg border border-gray-700 bg-gray-800/50 py-2.5 pl-10 pr-4 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-card)] py-2.5 pl-10 pr-4 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none"
           />
         </div>
         <button
           onClick={openCreate}
-          className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500"
+          className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-px"
         >
           + New Script
         </button>
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-gray-700 bg-gray-800/50 overflow-hidden">
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
         {!loading && !error && filtered.length > 0 && (
-          <div className="hidden sm:grid grid-cols-[1fr_180px_90px] gap-4 border-b border-gray-700 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+          <div className="hidden sm:grid grid-cols-[1fr_180px_90px] gap-4 border-b border-[var(--border)] px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)]">
             <span>Name</span>
             <span>Last updated</span>
             <span />
           </div>
         )}
 
-        {loading && <p className="px-5 py-10 text-center text-sm text-gray-500">Loading scripts...</p>}
+        {loading && <p className="px-5 py-10 text-center text-sm text-[var(--text-3)]">Loading scripts...</p>}
         {!loading && error && <p className="px-5 py-10 text-center text-sm text-red-400">{error}</p>}
         {!loading && !error && filtered.length === 0 && (
-          <p className="px-5 py-10 text-center text-sm text-gray-500">
+          <p className="px-5 py-10 text-center text-sm text-[var(--text-3)]">
             {scripts.length === 0 ? "No scripts yet — create your first one above." : "No scripts match your search."}
           </p>
         )}
@@ -170,23 +174,23 @@ function ScriptBuilderInner() {
           <div
             key={s.id}
             onClick={() => openScript(s.id)}
-            className="grid cursor-pointer grid-cols-[1fr_auto] sm:grid-cols-[1fr_180px_90px] items-center gap-4 border-b border-gray-700/50 px-5 py-3.5 transition last:border-b-0 hover:bg-gray-700/30"
+            className="grid cursor-pointer grid-cols-[1fr_auto] sm:grid-cols-[1fr_180px_90px] items-center gap-4 border-b border-[var(--border)] px-5 py-3.5 transition last:border-b-0 hover:bg-[var(--bg-elevated)]"
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-gray-200">{s.name}</span>
+                <span className="truncate text-sm font-medium text-[var(--text-1)]">{s.name}</span>
                 {s.id === activeId && (
                   <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
                     Active
                   </span>
                 )}
               </div>
-              {s.description && <p className="truncate text-xs text-gray-500">{s.description}</p>}
-              <p className="mt-0.5 text-[11px] text-gray-600 sm:hidden">
+              {s.description && <p className="truncate text-xs text-[var(--text-3)]">{s.description}</p>}
+              <p className="mt-0.5 text-[11px] text-[var(--text-3)] sm:hidden">
                 {new Date(s.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
               </p>
             </div>
-            <span className="hidden sm:block text-sm text-gray-400">
+            <span className="hidden sm:block text-sm text-[var(--text-3)]">
               {new Date(s.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
               {", "}
               {new Date(s.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
@@ -194,13 +198,13 @@ function ScriptBuilderInner() {
             <div className="flex justify-end gap-1">
               <button
                 onClick={(e) => { e.stopPropagation(); openScript(s.id); }}
-                className="rounded-lg border border-gray-600 px-2.5 py-1 text-xs text-gray-300 transition hover:bg-gray-700"
+                className="rounded-lg border border-[var(--border-2)] px-2.5 py-1 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
               >
                 Open
               </button>
               <button
                 onClick={(e) => handleDelete(e, s.id)}
-                className="rounded p-1.5 text-gray-500 transition hover:bg-gray-700 hover:text-rose-400"
+                className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
                 title="Delete"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -215,21 +219,21 @@ function ScriptBuilderInner() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="mt-4 flex items-center justify-between gap-2">
-          <p className="text-xs text-gray-500">Page {pageClamped} of {totalPages} · {filtered.length} scripts</p>
+          <p className="text-xs text-[var(--text-3)]">Page {pageClamped} of {totalPages} · {filtered.length} scripts</p>
           <div className="flex gap-2">
             <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageClamped === 1}
-              className="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-400 transition hover:text-gray-200 disabled:opacity-40">
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text-3)] transition hover:text-[var(--text-1)] disabled:opacity-40">
               Previous
             </button>
             <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageClamped === totalPages}
-              className="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-400 transition hover:text-gray-200 disabled:opacity-40">
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text-3)] transition hover:text-[var(--text-1)] disabled:opacity-40">
               Next
             </button>
           </div>
         </div>
       )}
 
-      <p className="mt-4 text-xs text-gray-600">
+      <p className="mt-4 text-xs text-[var(--text-3)]">
         Tip: open a script to edit its flow on the canvas. Set one “active” inside the builder to drive test calls.
       </p>
 
@@ -237,10 +241,10 @@ function ScriptBuilderInner() {
       {showCreate && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => !busy && setShowCreate(false)}>
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-          <div onClick={(e) => e.stopPropagation()} className="relative w-full max-w-md space-y-4 rounded-2xl border border-gray-700 bg-gray-900 p-5 shadow-2xl">
-            <h3 className="text-base font-bold text-white">New script</h3>
+          <div onClick={(e) => e.stopPropagation()} className="relative w-full max-w-md space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-[var(--text-1)]">New script</h3>
             <div>
-              <label className="mb-1 block text-xs text-gray-400">Script name</label>
+              <label className="mb-1 block text-xs text-[var(--text-3)]">Script name</label>
               <input
                 autoFocus
                 type="text"
@@ -251,7 +255,7 @@ function ScriptBuilderInner() {
                   else if (e.key === "Escape" && !busy) setShowCreate(false);
                 }}
                 placeholder="e.g. Lucky7 AU Reactivation"
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none"
               />
             </div>
             {error && <p className="text-xs text-red-400">{error}</p>}
@@ -259,14 +263,14 @@ function ScriptBuilderInner() {
               <button
                 onClick={() => setShowCreate(false)}
                 disabled={busy}
-                className="flex-1 rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+                className="flex-1 rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
                 disabled={busy || !newName.trim()}
-                className="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
+                className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:-translate-y-px disabled:opacity-40"
               >
                 {busy ? "Creating…" : "Create script"}
               </button>
