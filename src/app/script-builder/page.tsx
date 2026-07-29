@@ -34,6 +34,7 @@ function ScriptBuilderInner() {
   const [page, setPage] = useState(1);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false); // "New script" modal
 
   async function reload() {
     setLoading(true);
@@ -68,12 +69,19 @@ function ScriptBuilderInner() {
   const pageClamped = Math.min(page, totalPages);
   const paginated = filtered.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE);
 
+  function openCreate() {
+    setNewName("");
+    setError(null);
+    setShowCreate(true);
+  }
+
   async function handleCreate() {
     if (!newName.trim()) return;
     setBusy(true);
     try {
       const s = await createScript(newName.trim());
       setNewName("");
+      setShowCreate(false);
       openScript(s.id); // jump straight into the builder
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create");
@@ -132,23 +140,12 @@ function ScriptBuilderInner() {
             className="w-full rounded-lg border border-gray-700 bg-gray-800/50 py-2.5 pl-10 pr-4 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
           />
         </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-            placeholder="New script name…"
-            className="w-48 rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
-          />
-          <button
-            onClick={handleCreate}
-            disabled={busy || !newName.trim()}
-            className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
-          >
-            + New Script
-          </button>
-        </div>
+        <button
+          onClick={openCreate}
+          className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500"
+        >
+          + New Script
+        </button>
       </div>
 
       {/* Table */}
@@ -235,6 +232,48 @@ function ScriptBuilderInner() {
       <p className="mt-4 text-xs text-gray-600">
         Tip: open a script to edit its flow on the canvas. Set one “active” inside the builder to drive test calls.
       </p>
+
+      {/* New-script modal — name it here, then jump into the builder. */}
+      {showCreate && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => !busy && setShowCreate(false)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div onClick={(e) => e.stopPropagation()} className="relative w-full max-w-md space-y-4 rounded-2xl border border-gray-700 bg-gray-900 p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-white">New script</h3>
+            <div>
+              <label className="mb-1 block text-xs text-gray-400">Script name</label>
+              <input
+                autoFocus
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreate();
+                  else if (e.key === "Escape" && !busy) setShowCreate(false);
+                }}
+                placeholder="e.g. Lucky7 AU Reactivation"
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowCreate(false)}
+                disabled={busy}
+                className="flex-1 rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-800 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={busy || !newName.trim()}
+                className="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-40"
+              >
+                {busy ? "Creating…" : "Create script"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

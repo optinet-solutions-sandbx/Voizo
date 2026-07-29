@@ -44,6 +44,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
   // selected-first ordering (item D) so rows don't reshuffle as you toggle.
   const [openMemberIds, setOpenMemberIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const [listQuery, setListQuery] = useState(""); // filters the collection list (parity with Scenarios)
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -250,6 +251,10 @@ export default function CollectionsManager({ onActiveChange }: Props) {
 
   const selected = collections.find((c) => c.id === selectedId) ?? null;
 
+  // Filter the collection list by name — same searchability as Scenarios.
+  const lq = listQuery.trim().toLowerCase();
+  const visibleCollections = lq ? collections.filter((c) => c.name.toLowerCase().includes(lq)) : collections;
+
   function renderRow(h: ListenerHandler) {
     const checked = members.has(h.id);
     const isEditing = editingId === h.id;
@@ -374,12 +379,29 @@ export default function CollectionsManager({ onActiveChange }: Props) {
         </button>
       </div>
 
-      {/* Collection list */}
+      {/* Search + Collection list */}
       <div className="space-y-1.5">
+        {collections.length > 0 && (
+          <div className="relative">
+            <svg className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              value={listQuery}
+              onChange={(e) => setListQuery(e.target.value)}
+              placeholder="Search collections…"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 py-1.5 pl-8 pr-3 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+        )}
         {collections.length === 0 && (
           <p className="py-4 text-center text-sm text-gray-500">No collections yet — create one above.</p>
         )}
-        {collections.map((c) => {
+        {collections.length > 0 && visibleCollections.length === 0 && (
+          <p className="py-4 text-center text-sm text-gray-500">No collections match “{listQuery}”.</p>
+        )}
+        {visibleCollections.map((c) => {
           const isActive = c.id === activeId;
           const isSelected = c.id === selectedId;
           return (
