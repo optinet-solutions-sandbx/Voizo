@@ -20,6 +20,14 @@ describe("reconcileAssistantId — VOZ-253 (lab agent vs stale stored id)", () =
     expect(reconcileAssistantId("", LAB)).toBe("2e5e1cdc-lab");
   });
 
+  it("VOZ-268 — a BRAND NEW script (nothing stored) still lands on the lab agent, so it cannot be skipped", () => {
+    // The mandatory guarantee: combined with the picker having no empty option,
+    // a fresh script auto-selects the lab agent instead of offering "none".
+    for (const stored of ["", null as unknown as string, undefined as unknown as string]) {
+      expect(reconcileAssistantId(stored, LAB)).toBe("2e5e1cdc-lab");
+    }
+  });
+
   it("leaves the selection alone while the list is empty (not loaded, or fetch failed)", () => {
     expect(reconcileAssistantId(DONOR, [])).toBe(DONOR);
   });

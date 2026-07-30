@@ -150,7 +150,12 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       // from here). Script mode leaves the global short_prompt untouched —
       // the persona lives on the script row instead (VOZ-188).
       await saveLabSettings({
-        lab_assistant_id: assistantId || null,
+        // VOZ-268: only ever WRITE a real id, never null. Clearing this column
+        // breaks the ▶ test call, which resolves the agent from the DB
+        // (ScriptBuilder.startRun) and refuses when it is empty — so one save
+        // made with the agent list unloaded used to disable test calls until
+        // someone re-picked. Omitting the key leaves the good value in place.
+        ...(assistantId ? { lab_assistant_id: assistantId } : {}),
         // VOZ-189: Save arms the open script — what you just edited is what
         // test calls run (same rule as ▶). Legacy mode never touches the slot.
         ...(scriptId ? { active_script_id: scriptId } : { short_prompt: shortPrompt }),
@@ -178,7 +183,15 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
       }
 
       if (!assistantId) {
-        setNotice("Settings saved. Select an assistant to push the prompt and configure tools.");
+        // VOZ-268: this WAS a soft notice, which read like success while the
+        // prompt + tools were never pushed — a following ▶ would then run the
+        // agent's stale config. There is no legitimate "skipped the lab agent"
+        // case (the picker has no empty option), so this is now the honest
+        // failure: the only way here is the agent list not loading.
+        setError(
+          "Your text is saved, but the lab agent didn't load — the prompt and tools were NOT pushed, " +
+            "so a ▶ test call would run stale config. Check VAPI_LAB_ASSISTANT_ID, then Save again.",
+        );
         return;
       }
 
@@ -221,23 +234,40 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
 
   return (
     <div className="space-y-5">
-      <Section title="Lab Agent" hint="The politician — pick a dedicated test assistant; saving overwrites its tools + webhook.">
+      <Section title="Lab Agent" hint="The dedicated test assistant. Saving overwrites ITS tools + webhook — never production's.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label htmlFor="lab-assistant" className="mb-1 block text-xs text-[var(--text-3)]">Assistant</label>
+            {/* VOZ-268: no empty option. The lab agent is not a choice — the list
+                route serves exactly the one assistant the write routes accept
+                (everything else 403s), and reconcileAssistantId auto-selects it.
+                An "I picked nothing" state only ever produced a half-save that
+                skipped the prompt/tools push and NULLed lab_assistant_id, which
+                then broke the ▶ test call. When no agent is available at all
+                there is nothing to pick, so this becomes a disabled status line. */}
             <select
               id="lab-assistant"
               className={inputCls + " [color-scheme:dark]"}
               value={assistantId}
               onChange={(e) => setAssistantId(e.target.value)}
+              disabled={assistants.length === 0}
+              aria-describedby={assistants.length === 0 ? "lab-assistant-unavailable" : undefined}
             >
-              <option value="">Select an assistant…</option>
-              {assistants.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
+              {assistants.length === 0 ? (
+                <option value="">Lab agent unavailable — check VAPI_LAB_ASSISTANT_ID</option>
+              ) : (
+                assistants.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))
+              )}
             </select>
+            {assistants.length === 0 && (
+              <p id="lab-assistant-unavailable" className="mt-1 text-[11px] text-amber-400">
+                Test calls and config pushes are unavailable until the lab agent loads.
+              </p>
+            )}
           </div>
           <div>
             <label htmlFor="lab-voice" className="mb-1 block text-xs text-[var(--text-3)]">Voice</label>
