@@ -6,7 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import ScriptBuilder from "@/components/lab/ScriptBuilder";
 import { SectionTick } from "@/app/analytics/SectionIsland";
-import { listScripts, createScript, deleteScript, getLabSettings } from "@/lib/scriptEngine/lab-db-client";
+import { listScripts, createScript } from "@/lib/scriptEngine/lab-db-client";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Client";
 import type { ListenerScript } from "@/lib/scriptEngine/database.types";
 
 const PAGE_SIZE = 10;
@@ -28,7 +29,8 @@ function ScriptBuilderInner() {
   const backToList = () => router.push("/script-builder");
 
   const [scripts, setScripts] = useState<ListenerScript[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // Scripts a running/paused campaign is using → shown locked (production), not test.
+  const [usedScriptIds, setUsedScriptIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -40,9 +42,14 @@ function ScriptBuilderInner() {
   async function reload() {
     setLoading(true);
     try {
-      const [scs, settings] = await Promise.all([listScripts(), getLabSettings().catch(() => null)]);
+      const [scs, camps] = await Promise.all([listScripts(), fetchCampaignsV2().catch(() => [])]);
       setScripts(scs);
-      setActiveId(settings?.active_script_id ?? null);
+      // A running/paused campaign references its template by script_id — lock those.
+      const used = new Set<string>();
+      for (const c of camps as { status?: string; script_id?: string | null }[]) {
+        if ((c.status === "running" || c.status === "paused") && c.script_id) used.add(c.script_id);
+      }
+      setUsedScriptIds(used);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load scripts — did you run the scripts migration?");
@@ -88,17 +95,6 @@ function ScriptBuilderInner() {
       setError(e instanceof Error ? e.message : "Failed to create");
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function handleDelete(e: React.MouseEvent, id: string) {
-    e.stopPropagation();
-    if (!window.confirm("Delete this script and its flow?")) return;
-    try {
-      await deleteScript(id);
-      reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
     }
   }
 
@@ -179,9 +175,15 @@ function ScriptBuilderInner() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium text-[var(--text-1)]">{s.name}</span>
-                {s.id === activeId && (
-                  <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                    Active
+                {usedScriptIds.has(s.id) && (
+                  <span
+                    className="shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+                    title="In use by a running campaign — open it and unlock before editing"
+                  >
+                    <svg className="h-2.5 w-2.5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                    </svg>
+                    In use
                   </span>
                 )}
               </div>
@@ -195,22 +197,11 @@ function ScriptBuilderInner() {
               {", "}
               {new Date(s.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
             </span>
-            <div className="flex justify-end gap-1">
-              <button
-                onClick={(e) => { e.stopPropagation(); openScript(s.id); }}
-                className="rounded-lg border border-[var(--border-2)] px-2.5 py-1 text-xs text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
-              >
-                Open
-              </button>
-              <button
-                onClick={(e) => handleDelete(e, s.id)}
-                className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
-                title="Delete"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
+            {/* Row opens on click; delete lives inside the editor (avoids misclicks). */}
+            <div className="flex justify-end text-[var(--text-3)]">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
             </div>
           </div>
         ))}
@@ -234,7 +225,8 @@ function ScriptBuilderInner() {
       )}
 
       <p className="mt-4 text-xs text-[var(--text-3)]">
-        Tip: open a script to edit its flow on the canvas. Set one “active” inside the builder to drive test calls.
+        Tip: click a script to edit its flow. A script marked <span className="text-amber-300">In use</span> is live in a
+        running campaign — open it and unlock before editing. Delete lives inside the editor.
       </p>
 
       {/* New-script modal — name it here, then jump into the builder. */}

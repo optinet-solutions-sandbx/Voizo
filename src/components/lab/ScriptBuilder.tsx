@@ -46,6 +46,7 @@ import {
 } from "@/lib/scriptEngine/lab-db-client";
 import { getVapi, vapiErrorText } from "@/lib/scriptEngine/vapi";
 import LabConfigForm from "@/components/lab/LabConfigForm";
+import { fetchCampaignsV2 } from "@/lib/campaignV2Client";
 import type { ListenerScript, ListenerHandler, ListenerCollection, LabCallEvent } from "@/lib/scriptEngine/database.types";
 import { CONTENT_META, metaOf, type Content } from "./scriptContent";
 import { SYSTEM_RULES } from "./systemRules";
@@ -399,6 +400,11 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   const [scenarios, setScenarios] = useState<ListenerHandler[]>([]);
   const [collections, setCollections] = useState<ListenerCollection[]>([]);
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null);
+  // Lock (VOZ-255): a script a running/paused campaign uses reads as production —
+  // editing it can affect that live campaign, so Save/Delete are gated behind an
+  // explicit unlock. usedScriptIds = script_ids referenced by running campaigns.
+  const [usedScriptIds, setUsedScriptIds] = useState<Set<string>>(new Set());
+  const [unlocked, setUnlocked] = useState(false);
   // The VAPI assistant test calls dial — same setting the Listener Lab uses.
   const [labAssistantId, setLabAssistantId] = useState<string>("");
   // The full Lab configuration, opened via the cog into the right drawer.
@@ -586,16 +592,22 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const [scs, hs, cols, settings] = await Promise.all([
+        const [scs, hs, cols, settings, camps] = await Promise.all([
           listScripts(),
           listHandlers(),
           listCollections(),
           getLabSettings(),
+          fetchCampaignsV2().catch(() => []),
         ]);
         setScripts(scs);
         setScenarios(hs);
         setCollections(cols);
         setActiveScriptId(settings?.active_script_id ?? null);
+        const used = new Set<string>();
+        for (const c of camps as { status?: string; script_id?: string | null }[]) {
+          if ((c.status === "running" || c.status === "paused") && c.script_id) used.add(c.script_id);
+        }
+        setUsedScriptIds(used);
         setLabAssistantId(((settings as unknown as { lab_assistant_id?: string } | null)?.lab_assistant_id ?? "") as string);
         if (initialScriptId) loadScript(initialScriptId);
         else if (scs.length && !scriptId) loadScript(scs[0].id);
@@ -1960,6 +1972,10 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
   // keyed by scenario intent key; saved to the Playbook scenario on blur.
   const [connDescDrafts, setConnDescDrafts] = useState<Record<string, string>>({});
 
+  // Lock state: in use by a running campaign, and not yet unlocked by the operator.
+  const inUse = !!scriptId && usedScriptIds.has(scriptId);
+  const locked = inUse && !unlocked;
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[var(--bg-app)]">
       {/* Top bar */}
@@ -2003,6 +2019,31 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
             >
               Test calls run “{scripts.find((s) => s.id === activeScriptId)?.name ?? "another script"}”
             </span>
+          )}
+
+          {/* Lock (VOZ-255): in use by a running campaign — unlock before editing */}
+          {inUse && (
+            <button
+              type="button"
+              onClick={() => setUnlocked((u) => !u)}
+              title={locked
+                ? "In use by a running campaign. Click to unlock editing — safe, since each campaign runs its own frozen copy, but be deliberate."
+                : "Editing unlocked. Click to re-lock."}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                locked
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+                  : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+              }`}
+            >
+              <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                {locked ? (
+                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                ) : (
+                  <path d="M10 2a5 5 0 00-5 5v1H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2H7V7a3 3 0 116 0 1 1 0 102 0 5 5 0 00-5-5z" />
+                )}
+              </svg>
+              {locked ? "In use — Unlock to edit" : "Unlocked"}
+            </button>
           )}
 
           {/* Active toggle (off by default) */}
@@ -2122,7 +2163,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           </button>
 
           {/* Save */}
-          <button onClick={handleSave} disabled={!scriptId || busy || !dirty} title={dirty ? "Save" : "No changes to save"} className="rounded-lg bg-primary p-2 text-white transition hover:-translate-y-px disabled:opacity-40">
+          <button onClick={handleSave} disabled={!scriptId || busy || !dirty || locked} title={locked ? "Locked — this script is used by a running campaign. Unlock to save." : dirty ? "Save" : "No changes to save"} className="rounded-lg bg-primary p-2 text-white transition hover:-translate-y-px disabled:opacity-40">
             {busy ? (
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeDasharray="42" strokeLinecap="round" /></svg>
             ) : (
@@ -2146,7 +2187,7 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
           </button>
 
           {/* Delete */}
-          <button onClick={handleDeleteScript} disabled={!scriptId} title="Delete script" className="rounded-lg border border-[var(--border)] p-2 text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400 disabled:opacity-40">
+          <button onClick={handleDeleteScript} disabled={!scriptId || locked} title={locked ? "Locked — this script is used by a running campaign. Unlock to delete." : "Delete script"} className="rounded-lg border border-[var(--border)] p-2 text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400 disabled:opacity-40">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
