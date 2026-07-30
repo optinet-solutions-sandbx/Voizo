@@ -70,12 +70,17 @@ const voiceLabel = (voiceId: string): string | null =>
 // - An INTENTIONAL retune (e.g. optimizeStreamingLatency 2→3, Jas 2026-07-29)
 //   alerts until this pin is updated. That is the feature: the one-line pin
 //   update records the intent in git instead of only in a dashboard.
-// - voiceId is DELIBERATELY not pinned — Val's voice decision is pending
-//   (2026-07-29 female-voice incident). When she decides, add `voiceId: "…"`
-//   to the voice block below.
-// - Values verified against GET /assistant/7255c115… on 2026-07-29 (~13:03Z).
+// - voiceId PINNED 2026-07-30: Mark, UgBBYS2sOqTuMpoF3BR0 — Jas's decision,
+//   verified BY EAR on live spawned campaigns. Ear-verification is mandatory
+//   for any future change here: voice labels in this repo are human-typed text
+//   and one of them ("Val - Mark - Casual & Relaxed", 1SM7GgM6…) turned out to
+//   be a FEMALE voice wearing a male name. Neither the Vapi API nor its
+//   dashboard can name voices from Val's ElevenLabs account (bare id shown =
+//   not in Vapi's library), so no label or API check can substitute for an ear.
+// - Values verified against GET /assistant/7255c115… on 2026-07-29 (~13:03Z);
+//   voiceId against live calls' costs[].voice.voiceId on 2026-07-30.
 export const EXPECTED_SCRIPT_BASE = {
-  voice: { provider: "11labs", model: "eleven_turbo_v2_5", speed: 1.1, optimizeStreamingLatency: 3 },
+  voice: { provider: "11labs", voiceId: "UgBBYS2sOqTuMpoF3BR0", model: "eleven_turbo_v2_5", speed: 1.1, optimizeStreamingLatency: 3 },
   transcriber: { provider: "deepgram", model: "flux-general-en", language: "en" },
   model: { provider: "openai", model: "gpt-5.2", maxTokens: 150 },
 } as const;

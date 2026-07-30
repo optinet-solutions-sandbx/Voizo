@@ -212,12 +212,12 @@ describe("clone config verification (base pin + payload echo)", () => {
     vi.unstubAllEnvs();
   });
 
-  // Base Val's API truth as verified 2026-07-29 (~13:03Z) — the clean fixture.
-  // Deliberately includes UNPINNED fields (voiceId=Hope, confidenceThreshold)
-  // to prove the pin ignores them.
+  // Base Val's verified truth — the clean fixture. voiceId=Mark since the
+  // 2026-07-30 pin (Jas's ear-verified decision); confidenceThreshold stays as
+  // an UNPINNED field to prove the pin ignores what it doesn't name.
   const CLEAN_BASE = () => ({
     name: "Val - Voice Agent",
-    voice: { provider: "11labs", model: "eleven_turbo_v2_5", speed: 1.1, optimizeStreamingLatency: 3, voiceId: "OYTbf65OHHFELVut7v2H" },
+    voice: { provider: "11labs", model: "eleven_turbo_v2_5", speed: 1.1, optimizeStreamingLatency: 3, voiceId: "UgBBYS2sOqTuMpoF3BR0" },
     transcriber: { provider: "deepgram", model: "flux-general-en", language: "en", confidenceThreshold: 0.4, keyterm: ["SMS", "free spins", "Lucky Seven"] },
     model: { provider: "openai", model: "gpt-5.2", maxTokens: 150, messages: [{ role: "system", content: "You are Harper." }] },
     startSpeakingPlan: { waitSeconds: 0.5 },
@@ -226,8 +226,14 @@ describe("clone config verification (base pin + payload echo)", () => {
   });
 
   describe("diffBaseAgainstPin", () => {
-    it("passes today's verified base config clean — including the unpinned voiceId", () => {
+    it("passes the verified base config clean (unpinned fields like confidenceThreshold ignored)", () => {
       expect(diffBaseAgainstPin(CLEAN_BASE())).toEqual([]);
+    });
+
+    it("flags a voiceId drift — the entire 2026-07 voice saga's point", () => {
+      const base = CLEAN_BASE();
+      base.voice.voiceId = "OYTbf65OHHFELVut7v2H"; // Hope — the incident value
+      expect(diffBaseAgainstPin(base).some((d) => d.includes("voice.voiceId"))).toBe(true);
     });
 
     it("flags a transcriber provider switch (the Soniox trap)", () => {
