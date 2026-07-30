@@ -116,10 +116,26 @@ export default function OrganizerTable() {
   const [tagFilter, setTagFilter] = useState("");
   const [page, setPage] = useState(1);
   const [newTag, setNewTag] = useState("");
+  // In-use lock (VOZ-256): scenarios a running campaign uses are locked; the
+  // operator unlocks a row before editing (edits affect the live campaign).
+  const [usedIds, setUsedIds] = useState<Set<string>>(new Set());
+  const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
+  const toggleUnlock = (id: string) =>
+    setUnlockedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   async function reload() {
     try {
-      setHandlers(await listHandlers());
+      const [hs, inUse] = await Promise.all([
+        listHandlers(),
+        fetch("/api/lab/in-use").then((r) => r.json()).catch(() => ({ scenarioIds: [] })),
+      ]);
+      setHandlers(hs);
+      setUsedIds(new Set((inUse.scenarioIds as string[]) ?? []));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load scenarios");
@@ -262,17 +278,6 @@ export default function OrganizerTable() {
     }
   }
 
-  async function handleToggle(h: ListenerHandler) {
-    try {
-      await updateHandler(h.id, { enabled: !h.enabled });
-      setHandlers((hs) =>
-        hs.map((x) => (x.id === h.id ? { ...x, enabled: !x.enabled } : x))
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to toggle scenario");
-    }
-  }
-
 
   return (
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
@@ -332,26 +337,36 @@ export default function OrganizerTable() {
         <p className="px-4 py-8 text-center text-sm text-[var(--text-3)]">No scenarios match your filters.</p>
       )}
 
-      {paginated.map((h) => (
+      {paginated.map((h) => {
+        const inUse = usedIds.has(h.id);
+        const locked = inUse && !unlockedIds.has(h.id);
+        return (
         <div
           key={h.id}
-          className={`flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3 last:border-b-0 ${
-            h.enabled ? "" : "opacity-50"
-          }`}
+          className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3 last:border-b-0"
         >
-          <button
-            onClick={() => handleToggle(h)}
-            title={h.enabled ? "Disable" : "Enable"}
-            className={`relative h-5 w-9 shrink-0 rounded-full transition ${
-              h.enabled ? "bg-emerald-600" : "bg-[var(--bg-elevated)]"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
-                h.enabled ? "left-[18px]" : "left-0.5"
+          {inUse ? (
+            <button
+              onClick={() => toggleUnlock(h.id)}
+              title={locked
+                ? "In use by a running campaign — click to unlock before editing (edits affect the live campaign)"
+                : "Unlocked — click to re-lock"}
+              className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition ${
+                locked
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+                  : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
               }`}
-            />
-          </button>
+            >
+              <svg className="h-2.5 w-2.5" fill="currentColor" viewBox="0 0 20 20">
+                {locked
+                  ? <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                  : <path d="M10 2a5 5 0 00-5 5v1H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2H7V7a3 3 0 116 0 1 1 0 102 0 5 5 0 00-5-5z" />}
+              </svg>
+              In use
+            </button>
+          ) : (
+            <span className="shrink-0 text-[10px] font-medium text-[var(--text-3)]">Not in use</span>
+          )}
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -402,6 +417,7 @@ export default function OrganizerTable() {
 
           <div className="flex shrink-0 gap-1">
             <button
+              disabled={locked}
               onClick={() => {
                 setDraft({
                   id: h.id,
@@ -417,8 +433,8 @@ export default function OrganizerTable() {
                   enabled: h.enabled,
                 });
               }}
-              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
-              title="Edit"
+              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-30 disabled:cursor-not-allowed"
+              title={locked ? "In use — unlock to edit" : "Edit"}
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -434,9 +450,10 @@ export default function OrganizerTable() {
               </svg>
             </button>
             <button
+              disabled={locked}
               onClick={() => handleDelete(h.id)}
-              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
-              title="Delete"
+              className="rounded p-1.5 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed"
+              title={locked ? "In use — unlock to delete" : "Delete"}
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -444,7 +461,8 @@ export default function OrganizerTable() {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Pagination */}
       {!loading && filtered.length > PAGE_SIZE && (

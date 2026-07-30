@@ -52,7 +52,7 @@ export default function PlaybookPage() {
         </button>
       </div>
 
-      {tab === "scenarios" ? <OrganizerTable /> : <CollectionsManager onActiveChange={() => {}} />}
+      {tab === "scenarios" ? <OrganizerTable /> : <CollectionsManager />}
     </div>
   );
 }

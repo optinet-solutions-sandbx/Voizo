@@ -12,18 +12,12 @@ import {
   listHandlers,
   updateHandler,
   duplicateHandler,
-  getLabSettings,
-  saveLabSettings,
 } from "@/lib/scriptEngine/lab-db-client";
 import type { ListenerCollection, ListenerHandler } from "@/lib/scriptEngine/database.types";
 
 const inputCls =
   "w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none";
 
-type Props = {
-  /** Notifies the page when the active collection changes (id, name|null) */
-  onActiveChange?: (id: string | null, name: string | null) => void;
-};
 
 /** Inline scenario edit (item C) — the core content editable without leaving
  *  the collection. Full editing (tags/action/priority) stays on the Playbook. */
@@ -34,10 +28,20 @@ type EditDraft = {
   delivery: ListenerHandler["delivery"];
 };
 
-export default function CollectionsManager({ onActiveChange }: Props) {
+export default function CollectionsManager() {
   const [collections, setCollections] = useState<ListenerCollection[]>([]);
   const [handlers, setHandlers] = useState<ListenerHandler[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // In-use lock (VOZ-256): collections a running campaign uses are locked; the
+  // operator unlocks a row before editing (edits affect the live campaign).
+  const [usedIds, setUsedIds] = useState<Set<string>>(new Set());
+  const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
+  const toggleUnlock = (id: string) =>
+    setUnlockedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [members, setMembers] = useState<Set<string>>(new Set());
   // Membership captured when the collection was OPENED — drives the
@@ -56,17 +60,17 @@ export default function CollectionsManager({ onActiveChange }: Props) {
 
   async function loadAll() {
     try {
-      const [cols, hs, settings] = await Promise.all([
+      const [cols, hs, inUse] = await Promise.all([
         listCollections(),
         listHandlers(),
-        getLabSettings(),
+        fetch("/api/lab/in-use").then((r) => r.json()).catch(() => ({ collectionIds: [] })),
       ]);
       setCollections(cols);
       // first_message is prompt material; connector matchers (ignore +
       // listener) are their script's routing plumbing — neither is
       // collectible content.
       setHandlers(hs.filter((h) => h.intent_key !== "first_message" && !(h.action_type === "ignore" && h.mode === "listener")));
-      setActiveId(settings?.active_collection_id ?? null);
+      setUsedIds(new Set((inUse.collectionIds as string[]) ?? []));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load — did you run the migration?");
@@ -130,7 +134,6 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     try {
       await updateCollection(id, { name: trimmed });
       await loadAll();
-      if (activeId === id) onActiveChange?.(id, trimmed);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to rename");
     }
@@ -139,11 +142,6 @@ export default function CollectionsManager({ onActiveChange }: Props) {
   async function handleDelete(id: string) {
     if (!window.confirm("Delete this collection? Scenarios are not deleted, only the bundle.")) return;
     try {
-      if (activeId === id) {
-        await saveLabSettings({ active_collection_id: null });
-        setActiveId(null);
-        onActiveChange?.(null, null);
-      }
       await deleteCollection(id);
       if (selectedId === id) setSelectedId(null);
       await loadAll();
@@ -165,17 +163,6 @@ export default function CollectionsManager({ onActiveChange }: Props) {
       setError(e instanceof Error ? e.message : "Failed to save scenarios");
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function handleSetActive(id: string | null) {
-    try {
-      await saveLabSettings({ active_collection_id: id });
-      setActiveId(id);
-      const name = id ? collections.find((c) => c.id === id)?.name ?? null : null;
-      onActiveChange?.(id, name);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to set active");
     }
   }
 
@@ -254,6 +241,9 @@ export default function CollectionsManager({ onActiveChange }: Props) {
   // Filter the collection list by name — same searchability as Scenarios.
   const lq = listQuery.trim().toLowerCase();
   const visibleCollections = lq ? collections.filter((c) => c.name.toLowerCase().includes(lq)) : collections;
+  // The open collection is locked when a running campaign uses it and it hasn't
+  // been unlocked — its member editor is view-only until then.
+  const selectedLocked = !!selectedId && usedIds.has(selectedId) && !unlockedIds.has(selectedId);
 
   function renderRow(h: ListenerHandler) {
     const checked = members.has(h.id);
@@ -261,7 +251,7 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     return (
       <div key={h.id} className="rounded border border-transparent hover:border-[var(--border)]/60">
         <div className="flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--bg-hover)]">
-          <input type="checkbox" checked={checked} onChange={() => toggleMember(h.id)} className="cursor-pointer" />
+          <input type="checkbox" checked={checked} disabled={selectedLocked} onChange={() => toggleMember(h.id)} className="cursor-pointer disabled:cursor-not-allowed" />
           <span className="text-xs">{checked ? "✅" : "⬜"}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-1)]">{h.name}</span>
           {(h.tags ?? []).slice(0, 1).map((t) => (
@@ -270,9 +260,10 @@ export default function CollectionsManager({ onActiveChange }: Props) {
             </span>
           ))}
           <button
+            disabled={selectedLocked}
             onClick={() => (isEditing ? setEditingId(null) : startEdit(h))}
-            className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)]"
-            title="Edit scenario inline"
+            className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-30 disabled:cursor-not-allowed"
+            title={selectedLocked ? "In use — unlock to edit" : "Edit scenario inline"}
           >
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -343,24 +334,6 @@ export default function CollectionsManager({ onActiveChange }: Props) {
     <div className="space-y-4">
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      {/* Active collection banner */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5">
-        <p className="text-[11px] uppercase tracking-wider text-[var(--text-3)]">Active for test calls</p>
-        <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-[var(--text-1)]">
-            {activeId ? collections.find((c) => c.id === activeId)?.name ?? "—" : "All scenarios (no collection)"}
-          </p>
-          {activeId && (
-            <button
-              onClick={() => handleSetActive(null)}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* Create */}
       <div className="flex gap-2">
         <input
@@ -402,7 +375,8 @@ export default function CollectionsManager({ onActiveChange }: Props) {
           <p className="py-4 text-center text-sm text-[var(--text-3)]">No collections match “{listQuery}”.</p>
         )}
         {visibleCollections.map((c) => {
-          const isActive = c.id === activeId;
+          const inUse = usedIds.has(c.id);
+          const locked = inUse && !unlockedIds.has(c.id);
           const isSelected = c.id === selectedId;
           return (
             <div
@@ -415,22 +389,33 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                 <input
                   defaultValue={c.name}
                   key={c.name}
+                  disabled={locked}
                   onBlur={(e) => e.target.value.trim() !== c.name && handleRename(c.id, e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                  className="flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm font-medium text-[var(--text-1)] hover:border-[var(--border)] focus:border-primary focus:bg-[var(--bg-elevated)] focus:outline-none"
+                  className="flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm font-medium text-[var(--text-1)] hover:border-[var(--border)] focus:border-primary focus:bg-[var(--bg-elevated)] focus:outline-none disabled:opacity-70"
                 />
-                {isActive && (
-                  <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                    Active
-                  </span>
+                {inUse ? (
+                  <button
+                    onClick={() => toggleUnlock(c.id)}
+                    title={locked
+                      ? "In use by a running campaign — click to unlock before editing (edits affect the live campaign)"
+                      : "Unlocked — click to re-lock"}
+                    className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition ${
+                      locked
+                        ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+                        : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                    }`}
+                  >
+                    <svg className="h-2.5 w-2.5" fill="currentColor" viewBox="0 0 20 20">
+                      {locked
+                        ? <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                        : <path d="M10 2a5 5 0 00-5 5v1H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2H7V7a3 3 0 116 0 1 1 0 102 0 5 5 0 00-5-5z" />}
+                    </svg>
+                    In use
+                  </button>
+                ) : (
+                  <span className="shrink-0 text-[10px] font-medium text-[var(--text-3)]">Not in use</span>
                 )}
-                <button
-                  onClick={() => handleSetActive(c.id)}
-                  disabled={isActive}
-                  className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                >
-                  Set active
-                </button>
                 <button
                   onClick={() => (isSelected ? setSelectedId(null) : selectCollection(c.id))}
                   className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-2)] transition hover:bg-[var(--bg-hover)]"
@@ -447,8 +432,9 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                 </button>
                 <button
                   onClick={() => handleDelete(c.id)}
-                  className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400"
-                  title="Delete collection"
+                  disabled={locked}
+                  className="shrink-0 rounded p-1 text-[var(--text-3)] transition hover:bg-[var(--bg-hover)] hover:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={locked ? "In use — unlock to delete" : "Delete collection"}
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -482,9 +468,12 @@ export default function CollectionsManager({ onActiveChange }: Props) {
                     {available.map(renderRow)}
                   </div>
                   {notice && <p className="mt-1.5 text-xs text-emerald-400">{notice}</p>}
+                  {selectedLocked && (
+                    <p className="mt-1.5 text-xs text-amber-300">In use by a running campaign — click “In use” above to unlock before changing members.</p>
+                  )}
                   <button
                     onClick={handleSaveMembers}
-                    disabled={busy}
+                    disabled={busy || selectedLocked}
                     className="mt-2 w-full rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-40"
                   >
                     {busy ? "Saving…" : `Save scenarios for ${selected?.name ?? "collection"}`}
