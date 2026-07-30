@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { shapeQueueRows, type QueueRow } from "@/lib/realtimeQueue";
+import { fetchAllRows, sortRowsByCreatedAt } from "@/lib/supabaseFetchAll";
 
 /**
  * GET /api/campaigns-v2/[id]/detail
@@ -37,27 +38,22 @@ export async function GET(
     return NextResponse.json({ error: "Invalid campaign ID" }, { status: 400 });
   }
 
-  const [numbersRes, callsRes, smsRes] = await Promise.all([
-    supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("*")
-      .eq("campaign_id", id)
-      .order("created_at", { ascending: true }),
-    supabaseAdmin
-      .from("calls_v2")
-      .select("*")
-      .eq("campaign_id", id)
-      .order("created_at", { ascending: false }),
-    supabaseAdmin
-      .from("sms_messages_v2")
-      .select("*")
-      .eq("campaign_id", id)
-      .order("created_at", { ascending: false }),
+  // Paged reads (fetchAllRows): a bare .select() is clamped by PostgREST at
+  // 1000 rows — max-rows clamps EVERYTHING, including explicit ranges (measured
+  // 2026-07-30: the 2,058-number CA reactivation child rendered as "1000
+  // numbers, 238 done" while 1,058 pending rows were invisible). Paging must
+  // order by unique id (bulk imports share created_at); each table's original
+  // response order is re-applied below. Error contract unchanged: fetchAllRows
+  // is best-effort per table (logs loudly, returns what it got) — same
+  // degrade-to-partial the bare reads had.
+  const [numbersAll, callsAll, smsAll] = await Promise.all([
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "*", "id", { column: "campaign_id", value: id }),
+    fetchAllRows(supabaseAdmin, "calls_v2", "*", "id", { column: "campaign_id", value: id }),
+    fetchAllRows(supabaseAdmin, "sms_messages_v2", "*", "id", { column: "campaign_id", value: id }),
   ]);
-
-  if (numbersRes.error) console.error(`[campaigns-v2/detail] numbers query failed for ${id}:`, numbersRes.error);
-  if (callsRes.error) console.error(`[campaigns-v2/detail] calls query failed for ${id}:`, callsRes.error);
-  if (smsRes.error) console.error(`[campaigns-v2/detail] sms query failed for ${id}:`, smsRes.error);
+  const numbers = sortRowsByCreatedAt(numbersAll, "asc");
+  const calls = sortRowsByCreatedAt(callsAll, "desc");
+  const sms = sortRowsByCreatedAt(smsAll, "desc");
 
   // Queue (VOZ-186): a realtime child also surfaces its parent's 'waiting'
   // claims — players between signup and dial row (call delay / cap gate),
@@ -73,31 +69,30 @@ export async function GET(
     .maybeSingle();
   if (camp?.realtime === true && camp.parent_campaign_id) {
     const parentId = camp.parent_campaign_id as string;
-    const [parentRes, waitingRes] = await Promise.all([
+    // Same clamp applies here (2,072 seen rows exist for the CA parent — a
+    // fully-waiting day would truncate). cio_id is unique within one parent,
+    // so it is the stable paging key; shapeQueueRows sorts oldest-first itself.
+    const [parentRes, waitingRows] = await Promise.all([
       supabaseAdmin
         .from("campaigns_v2")
         .select("call_delay_minutes")
         .eq("id", parentId)
         .maybeSingle(),
-      supabaseAdmin
-        .from("realtime_seen_members")
-        .select("cio_id, display_name, phone_e164, first_seen_at")
-        .eq("parent_campaign_id", parentId)
-        .eq("status", "waiting"),
+      fetchAllRows(supabaseAdmin, "realtime_seen_members", "cio_id, display_name, phone_e164, first_seen_at", "cio_id", [
+        { column: "parent_campaign_id", value: parentId },
+        { column: "status", value: "waiting" },
+      ]),
     ]);
-    if (waitingRes.error) {
-      console.error(`[campaigns-v2/detail] queue query failed for ${id}:`, waitingRes.error);
-    }
     queue = shapeQueueRows(
-      waitingRes.data ?? [],
+      waitingRows,
       (parentRes.data?.call_delay_minutes as number | null) ?? null,
     );
   }
 
   return NextResponse.json({
-    numbers: numbersRes.data ?? [],
-    calls: callsRes.data ?? [],
-    sms: smsRes.data ?? [],
+    numbers,
+    calls,
+    sms,
     queue,
   });
 }

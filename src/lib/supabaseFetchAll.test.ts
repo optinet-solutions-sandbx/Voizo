@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchAllRows } from "./supabaseFetchAll";
+import { fetchAllRows, sortRowsByCreatedAt } from "./supabaseFetchAll";
 
 // fetchAllRows paginates past PostgREST's default 1000-row cap by issuing
 // successive .range() requests ordered by a stable key. These tests pin that
@@ -8,11 +8,17 @@ import { fetchAllRows } from "./supabaseFetchAll";
 type Row = Record<string, unknown>;
 
 function makeClient(pageResults: Array<{ data: Row[] | null; error: unknown }>) {
-  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
-  let current: { table?: string; columns?: string; eq?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
+  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
+  let current: { table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
   const builder = {
     select(columns: string) { current.columns = columns; return builder; },
-    eq(col: string, val: unknown) { current.eq = [col, val]; return builder; },
+    // A second .eq() call lands in eq2 (multi-filter support) — first call keeps
+    // the `eq` slot so the original assertions stay intact.
+    eq(col: string, val: unknown) {
+      if (current.eq) current.eq2 = [col, val];
+      else current.eq = [col, val];
+      return builder;
+    },
     gte(col: string, val: unknown) { current.gte = [col, val]; return builder; },
     lt(col: string, val: unknown) { current.lt = [col, val]; return builder; },
     order(col: string, opts: unknown) { current.order = [col, opts]; return builder; },
@@ -131,5 +137,84 @@ describe("fetchAllRows", () => {
     expect(out).toHaveLength(1007);
     expect(log[0].lt).toEqual(["created_at", "2026-07-02T00:00:00Z"]);
     expect(log[1].lt).toEqual(["created_at", "2026-07-02T00:00:00Z"]); // re-applied on each paged request
+  });
+
+  // ── VOZ truncation fix additions ──────────────────────────────────────────
+
+  it("accepts an ARRAY of eq filters, applying each to every page (queue read: parent + status)", async () => {
+    const { client, log } = makeClient([
+      { data: rows(1000), error: null },
+      { data: rows(20), error: null },
+    ]);
+    const out = await fetchAllRows(client, "realtime_seen_members", "cio_id", "cio_id", [
+      { column: "parent_campaign_id", value: "parent-1" },
+      { column: "status", value: "waiting" },
+    ]);
+    expect(out).toHaveLength(1020);
+    for (const entry of log) {
+      expect(entry.eq).toEqual(["parent_campaign_id", "parent-1"]);
+      expect(entry.eq2).toEqual(["status", "waiting"]);
+    }
+  });
+
+  it("failFast: a page error THROWS instead of degrading to partial rows (export contract)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client } = makeClient([
+      { data: rows(1000), error: null },
+      { data: null, error: { message: "boom" } },
+    ]);
+    await expect(
+      fetchAllRows(client, "campaign_numbers_v2", "*", "id", undefined, undefined, undefined, {
+        failFast: true,
+      }),
+    ).rejects.toThrow(/campaign_numbers_v2/);
+    spy.mockRestore();
+  });
+
+  it("failFast default (absent/false) keeps the degrade-to-partial contract", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client } = makeClient([
+      { data: rows(1000), error: null },
+      { data: null, error: { message: "boom" } },
+    ]);
+    const out = await fetchAllRows(client, "calls_v2", "*");
+    expect(out).toHaveLength(1000); // partial, loudly logged — unchanged behavior
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe("sortRowsByCreatedAt", () => {
+  const r = (id: string, created_at: string | null): Row => ({ id, created_at });
+
+  it("ascending for display after a stable-id paged fetch", () => {
+    const out = sortRowsByCreatedAt(
+      [r("b", "2026-07-29T12:00:00Z"), r("a", "2026-07-29T11:00:00Z")],
+      "asc",
+    );
+    expect(out.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+
+  it("descending (calls/sms newest-first contract)", () => {
+    const out = sortRowsByCreatedAt(
+      [r("old", "2026-07-28T09:00:00Z"), r("new", "2026-07-30T09:00:00Z")],
+      "desc",
+    );
+    expect(out.map((x) => x.id)).toEqual(["new", "old"]);
+  });
+
+  it("is STABLE on equal timestamps (bulk inserts share created_at — id page order must survive)", () => {
+    const t = "2026-07-29T15:55:43.61085+00:00"; // the CA import: 2k rows, one timestamp
+    const out = sortRowsByCreatedAt([r("r1", t), r("r2", t), r("r3", t)], "asc");
+    expect(out.map((x) => x.id)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it("sorts null/garbage created_at LAST in both directions and does not mutate its input", () => {
+    const input = [r("x", null), r("a", "2026-07-29T11:00:00Z"), r("g", "not-a-date")];
+    const asc = sortRowsByCreatedAt(input, "asc");
+    const desc = sortRowsByCreatedAt(input, "desc");
+    expect(asc.map((x) => x.id)).toEqual(["a", "x", "g"]);
+    expect(desc.map((x) => x.id)).toEqual(["a", "x", "g"]);
+    expect(input.map((x) => x.id)).toEqual(["x", "a", "g"]); // untouched
   });
 });

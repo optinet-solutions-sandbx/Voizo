@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import {
   deriveAttemptTag,
   type AttemptTag,
@@ -119,13 +120,24 @@ export async function GET(
     ? (typeParam as ExportType)
     : "all";
 
-  // Single literal SELECT string (the .select() inference requires one literal —
-  // no concatenation). `voicemail` + `duration_seconds` are required so each
-  // call can be tagged with the unified taxonomy POST-FETCH (the filter is a
-  // per-call tag rule, not an outcome enum, so it can't be a server WHERE).
-  const query = supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select(
+  // Paged fetch (fetchAllRows). The previous `.range(0, 9999)` here was a false
+  // comfort: PostgREST's max-rows clamps EVERY request — measured 2026-07-30,
+  // an explicit 0-9999 range still returned exactly 1000 rows (content-range
+  // 0-999/2058), so a 2k-lead campaign exported a silently-partial CSV. Paging
+  // by unique id is the only honest read. failFast: a partial export IS the
+  // same lie, so a mid-run page failure must 500 (the route's existing error
+  // contract), never return a shorter file. Embedded calls_v2 / sms_messages_v2
+  // arrays ride along per parent row, unbounded as before.
+  //
+  // The SELECT string is passed through as one literal-shaped template;
+  // `voicemail` + `duration_seconds` are required so each call can be tagged
+  // with the unified taxonomy POST-FETCH (the filter is a per-call tag rule,
+  // not an outcome enum, so it can't be a server WHERE).
+  let numbers: Awaited<ReturnType<typeof fetchAllRows>>;
+  try {
+    numbers = await fetchAllRows(
+      supabaseAdmin,
+      "campaign_numbers_v2",
       `
       phone_e164,
       outcome,
@@ -150,26 +162,21 @@ export async function GET(
         updated_at
       )
     `,
-    )
-    .eq("campaign_id", campaignId)
-    // Explicit upper bound. PostgREST defaults to 1000 rows when no range is
-    // requested, which silently truncates exports for any campaign with >1000
-    // leads. 10k is a generous PoC ceiling — anything larger should paginate
-    // (separate follow-up). Note: this caps the lead (campaign_numbers_v2)
-    // rows; embedded calls_v2 / sms_messages_v2 arrays are not separately
-    // bounded per PostgREST behavior.
-    .range(0, 9999);
-
-  const { data: numbers, error } = await query;
-  if (error) {
+      "id",
+      { column: "campaign_id", value: campaignId },
+      undefined,
+      undefined,
+      { failFast: true },
+    );
+  } catch (err) {
     // Log server-side with full detail; return generic message to the
     // client to avoid leaking column / constraint / RLS hints. Behind
     // Basic Auth so impact is bounded, but least-disclosure is the rule.
-    console.error("[export-metadata] supabase query failed:", error);
+    console.error("[export-metadata] supabase query failed:", err);
     return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 
-  let processed = ((numbers as unknown as RawNumber[] | null) ?? []).map((n) => {
+  let processed = (numbers as unknown as RawNumber[]).map((n) => {
     const sortedCalls = Array.isArray(n.calls)
       ? [...n.calls].sort(
           (a, b) =>
