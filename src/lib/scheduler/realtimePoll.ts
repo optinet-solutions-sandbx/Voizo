@@ -169,18 +169,47 @@ export async function rolloverLeftovers(
   }
   if (!prev) return { carried: 0 }; // first-ever day
 
-  const { data: rows, error: rowsErr } = await supabase
-    .from("campaign_numbers_v2")
-    .select("id, phone_e164, attempt_count, outcome, display_name")
-    .eq("campaign_id", prev.id as string)
-    .in("outcome", ["pending", "pending_retry"]);
-  if (rowsErr) {
-    console.error(`[realtimePoll.rollover] leftover query failed for ${prev.id}:`, rowsErr);
+  // Paged leftover read. The bare .in() select this replaces was clamped by
+  // PostgREST max-rows at 1000 rows — measured 2026-07-30 on the CA
+  // reactivation child: 1,820 open rows, 1,000 returned, 820 players silently
+  // stranded with a success log. Stranding is PERMANENT for a realtime lane:
+  // the poll re-admits nobody (every segment member is already seen/queued)
+  // and the next day's rollover reads only the MOST RECENT prior child. Same
+  // defect class as VOZ-264; this file already pages the seen-table scan in
+  // pollRealtimeParent. Two eq fetches because fetchAllRows has no `.in()` —
+  // the outcomes are disjoint sets; the id-dedupe below guards the race of a
+  // row changing outcome between the two fetches.
+  //
+  // failFast, whole-or-nothing: fetchAllRows' default degrades to PARTIAL rows
+  // on a mid-run page error — here that would carry 1,000, close them, and
+  // strand the tail, i.e. reintroduce this exact bug through the error path.
+  // A thrown error instead carries nothing (the old error contract): all rows
+  // stay open and the spawn itself still succeeds via the caller's catch.
+  const LEFTOVER_COLS = "id, phone_e164, attempt_count, outcome, display_name";
+  let rows: Array<Record<string, unknown>>;
+  try {
+    const pending = await fetchAllRows(supabase, "campaign_numbers_v2", LEFTOVER_COLS, "id", [
+      { column: "campaign_id", value: prev.id as string },
+      { column: "outcome", value: "pending" },
+    ], undefined, undefined, { failFast: true });
+    const retry = await fetchAllRows(supabase, "campaign_numbers_v2", LEFTOVER_COLS, "id", [
+      { column: "campaign_id", value: prev.id as string },
+      { column: "outcome", value: "pending_retry" },
+    ], undefined, undefined, { failFast: true });
+    const seen = new Set<string>();
+    rows = [...pending, ...retry].filter((r) => {
+      const rowId = String(r.id);
+      if (seen.has(rowId)) return false;
+      seen.add(rowId);
+      return true;
+    });
+  } catch (err) {
+    console.error(`[realtimePoll.rollover] leftover query failed for ${prev.id}:`, err);
     return { carried: 0 };
   }
 
   const { carry, closeIds } = partitionRollover(
-    (rows ?? []) as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name: string | null }>,
+    rows as unknown as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name: string | null }>,
   );
   if (carry.length > 0) {
     const { error: insErr } = await supabase.from("campaign_numbers_v2").insert(
@@ -198,16 +227,24 @@ export async function rolloverLeftovers(
     }
     // Stomp-guard on outcome (matches the sweeper style): a late webhook that
     // flipped a row terminal between our SELECT and now is not overwritten.
-    const { error: closeErr } = await supabase
-      .from("campaign_numbers_v2")
-      .update({ outcome: "unreached" })
-      .in("id", closeIds)
-      .in("outcome", ["pending", "pending_retry"]);
-    if (closeErr) {
-      // Carried AND old rows still open → yesterday's child would re-carry
-      // on a hypothetical re-spawn, but the per-day idempotency makes that
-      // impossible today; loud-log and move on.
-      console.error(`[realtimePoll.rollover] close update failed:`, closeErr);
+    // CHUNKED at 200 ids: the .in(id) filter rides the request URL, and now
+    // that the carry reaches past 1000 rows a single unchunked close (~1.8k
+    // uuids ≈ 70KB of query string) blows the header/URL cap — same limit the
+    // theme drill-down hit (chunk 500→200, undici header cap). Per-batch
+    // failure loud-logs and continues (the old single-shot contract).
+    for (let i = 0; i < closeIds.length; i += 200) {
+      const batch = closeIds.slice(i, i + 200);
+      const { error: closeErr } = await supabase
+        .from("campaign_numbers_v2")
+        .update({ outcome: "unreached" })
+        .in("id", batch)
+        .in("outcome", ["pending", "pending_retry"]);
+      if (closeErr) {
+        // Carried AND old rows still open → yesterday's child would re-carry
+        // on a hypothetical re-spawn, but the per-day idempotency makes that
+        // impossible today; loud-log and move on.
+        console.error(`[realtimePoll.rollover] close update failed (batch at ${i}):`, closeErr);
+      }
     }
   }
 

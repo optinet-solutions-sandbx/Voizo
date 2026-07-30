@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   decideAdmission,
   diffNewMembers,
@@ -6,7 +6,9 @@ import {
   expectedCountryForTimezone,
   partitionRollover,
   pollRealtimeParent,
+  rolloverLeftovers,
 } from "./realtimePoll";
+import { fetchAllRows } from "../supabaseFetchAll";
 
 // ── Mocks for the pollRealtimeParent workspace-threading test (VOZ-198) ────
 // Everything else in this file tests pure functions and touches none of these.
@@ -307,5 +309,160 @@ describe("pollRealtimeParent threads the parent's cio_workspace into every CIO c
     expect(pm.getSegmentMembers.mock.calls[0][2]).toBe("fortuneplay");
     expect(pm.lookup).toHaveBeenCalled();
     expect(pm.lookup.mock.calls[0][1]).toBe("fortuneplay");
+  });
+});
+
+// ── rolloverLeftovers — the 1000-row clamp (VOZ-264's scheduler sibling) ───
+//
+// PostgREST max-rows clamps EVERY read at 1000 rows. Measured 2026-07-30 on the
+// CA reactivation child: 1,820 open rows, the unpaged leftover query returned
+// 1,000, and 820 players were silently stranded — the realtime poll re-admits
+// nobody (every segment member is already seen/queued) and the next day's
+// rollover reads only the MOST RECENT prior child, so a stranded row is never
+// examined again. These tests drive rolloverLeftovers against a mock client
+// that SIMULATES the clamp (never more than 1000 rows per request), with the
+// real fetchAllRows implementation restored over the module mock.
+describe("rolloverLeftovers — paginates past the 1000-row clamp", () => {
+  type Row = Record<string, unknown>;
+
+  const PREV = {
+    id: "prev-child",
+    name: "CA (2026-07-29)",
+    status: "paused",
+    vapi_assistant_id: null,
+    vapi_pool_slot_id: null,
+  };
+
+  // 1,100 pending + 720 pending_retry (= 1,820 open, spanning 2 pages) + 3
+  // terminal rows that must NOT carry. Zero-padded ids sort lexicographically.
+  function dataset(): Row[] {
+    const rows: Row[] = [];
+    for (let i = 0; i < 1100; i++)
+      rows.push({
+        id: `p${String(i).padStart(4, "0")}`,
+        campaign_id: "prev-child",
+        phone_e164: `+1416555${String(i).padStart(4, "0")}`,
+        attempt_count: 0,
+        outcome: "pending",
+        display_name: i === 0 ? "Vicky Seavers" : null,
+      });
+    for (let i = 0; i < 720; i++)
+      rows.push({
+        id: `r${String(i).padStart(4, "0")}`,
+        campaign_id: "prev-child",
+        phone_e164: `+1647555${String(i).padStart(4, "0")}`,
+        attempt_count: 2,
+        outcome: "pending_retry",
+        display_name: null,
+      });
+    rows.push({ id: "t0001", campaign_id: "prev-child", phone_e164: "+10000000001", attempt_count: 1, outcome: "sent_sms", display_name: null });
+    rows.push({ id: "t0002", campaign_id: "prev-child", phone_e164: "+10000000002", attempt_count: 3, outcome: "unreached", display_name: null });
+    rows.push({ id: "t0003", campaign_id: "prev-child", phone_e164: "+10000000003", attempt_count: 1, outcome: "sms_delivered", display_name: null });
+    return rows;
+  }
+
+  // Chainable mock: serves the prev-child lookup, applies eq/in filters over
+  // the dataset with the 1000-row clamp on EVERY read (range or not), captures
+  // inserts and close-update batches, returns 0 in-flight calls, and answers
+  // the child-close update with closed=null (skips the Vapi cleanup import).
+  // `failPagesFrom`: offset at which reads start erroring (whole-or-nothing test).
+  function makeClient(rows: Row[], opts?: { failPagesFrom?: number }) {
+    const inserted: Row[][] = [];
+    const closeBatches: string[][] = [];
+    function builder(table: string) {
+      const q: {
+        eqs: Array<[string, unknown]>;
+        ins: Array<[string, unknown[]]>;
+        insertArg?: Row[];
+        updateArg?: Row;
+        range?: [number, number];
+        head?: boolean;
+      } = { eqs: [], ins: [] };
+      const resolve = (): unknown => {
+        if (table === "calls_v2") return { count: 0, error: null };
+        if (table === "campaign_numbers_v2" && q.insertArg) {
+          inserted.push(q.insertArg);
+          return { error: null };
+        }
+        if (table === "campaign_numbers_v2" && q.updateArg) {
+          const idIn = q.ins.find(([col]) => col === "id");
+          closeBatches.push((idIn ? idIn[1] : []) as string[]);
+          return { error: null };
+        }
+        if (table === "campaign_numbers_v2") {
+          let out = rows.filter((r) => q.eqs.every(([c, v]) => r[c] === v));
+          for (const [col, vals] of q.ins) out = out.filter((r) => vals.includes(r[col]));
+          out = [...out].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+          const from = q.range ? q.range[0] : 0;
+          if (opts?.failPagesFrom !== undefined && from >= opts.failPagesFrom) {
+            return { data: null, error: { message: "boom page" } };
+          }
+          const to = q.range ? q.range[1] : Infinity;
+          // PostgREST max-rows: never more than 1000 per request, range or not.
+          return { data: out.slice(from, Math.min(to + 1, from + 1000)), error: null };
+        }
+        return { data: null, error: null };
+      };
+      const b: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "neq", "lt", "in", "order", "limit", "range", "update", "insert"]) {
+        b[m] = (...args: unknown[]) => {
+          if (m === "eq") q.eqs.push(args as [string, unknown]);
+          if (m === "in") q.ins.push(args as [string, unknown[]]);
+          if (m === "insert") q.insertArg = args[0] as Row[];
+          if (m === "update") q.updateArg = args[0] as Row;
+          if (m === "range") q.range = [args[0] as number, args[1] as number];
+          return b;
+        };
+      }
+      b.maybeSingle = () =>
+        Promise.resolve(q.updateArg ? { data: null, error: null } : { data: PREV, error: null });
+      b.then = (onF: (v: unknown) => unknown, onR: (e: unknown) => unknown) =>
+        Promise.resolve(resolve()).then(onF, onR);
+      return b;
+    }
+    return { client: { from: builder } as never, inserted, closeBatches };
+  }
+
+  beforeEach(async () => {
+    // The module-level mock stubs fetchAllRows to [] for the poll test above;
+    // rollover needs the REAL pagination behavior.
+    const actual = await vi.importActual<typeof import("../supabaseFetchAll")>("../supabaseFetchAll");
+    vi.mocked(fetchAllRows).mockImplementation(actual.fetchAllRows);
+  });
+
+  it("carries ALL 1,820 open rows (not the first 1000) and closes exactly those, in <=200-id batches", async () => {
+    const { client, inserted, closeBatches } = makeClient(dataset());
+
+    const result = await rolloverLeftovers(client, "parent-1", "child-new", "2026-07-30T04:00:00Z");
+
+    expect(result.carried).toBe(1820);
+    // One insert containing every open row, none of the terminal ones.
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toHaveLength(1820);
+    expect(inserted[0].every((r) => r.campaign_id === "child-new" && r.outcome === "pending")).toBe(true);
+    const byPhone = new Map(inserted[0].map((r) => [r.phone_e164, r]));
+    expect(byPhone.get("+14165550000")?.display_name).toBe("Vicky Seavers"); // name survives at volume
+    expect(byPhone.get("+16475550000")?.attempt_count).toBe(2); // retry count survives (max-tries spans days)
+    expect(byPhone.has("+10000000001")).toBe(false); // terminal rows do not carry
+    // Close covers every carried row and only carried rows — chunked for URL
+    // safety (the .in(id) filter rides the query string; ~1.8k uuids blow it).
+    const closedIds = closeBatches.flat();
+    expect(closedIds).toHaveLength(1820);
+    expect(new Set(closedIds).size).toBe(1820);
+    expect(closeBatches.every((b) => b.length <= 200)).toBe(true);
+    expect(closedIds).not.toContain("t0001");
+  });
+
+  it("whole-or-nothing: a mid-run page failure carries NOTHING (a partial carry would close 1000 and strand the tail)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client, inserted, closeBatches } = makeClient(dataset(), { failPagesFrom: 1000 });
+
+    const result = await rolloverLeftovers(client, "parent-1", "child-new", "2026-07-30T04:00:00Z");
+
+    expect(result.carried).toBe(0);
+    expect(inserted).toHaveLength(0); // no partial insert
+    expect(closeBatches).toHaveLength(0); // no rows closed — all stay open for the next spawn
+    expect(spy).toHaveBeenCalled(); // loud, never silent
+    spy.mockRestore();
   });
 });
