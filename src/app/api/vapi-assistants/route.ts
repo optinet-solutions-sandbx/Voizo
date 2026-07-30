@@ -1,11 +1,16 @@
 /**
  * GET /api/vapi-assistants — the Script Builder lab's assistant list (VOZ-186).
  *
- * DELIBERATELY returns exactly ONE assistant: the designated script base
- * (VAPI_SCRIPT_BASE_ASSISTANT_ID). Team decision 2026-07-22: the lab tests the
- * SAME assistant real script campaigns clone from, so what Val hears in a test
- * call is what campaigns get. Listing the whole account here (the source app's
- * behavior) invited testing against — and overwriting — the wrong agent.
+ * DELIBERATELY returns exactly ONE assistant: whichever one the lab is allowed
+ * to touch (VAPI_LAB_ASSISTANT_ID, falling back to the clone donor). Listing the
+ * whole account here (the source app's behavior) invited testing against — and
+ * overwriting — the wrong agent.
+ *
+ * Team decision 2026-07-22 pointed this at the SAME assistant script campaigns
+ * clone from, so what Val heard in a test call was what campaigns got. VOZ-253
+ * separates them: that sharing meant every lab Save also rewrote production's
+ * donor. This route must resolve the same id as the two write routes, or the
+ * dropdown would offer an agent they refuse to write.
  *
  * Response is a BARE array [{id, name}] — the shape the ported LabConfigForm
  * expects (unlike /api/vapi/assistants, which boxes it as {assistants} for the
@@ -16,16 +21,18 @@
  */
 
 import { NextResponse } from "next/server";
+// Relative import — vitest does not resolve "@/" (testable-route convention).
+import { labAssistantId, LAB_ASSISTANT_ENV_HINT } from "../../../lib/scriptEngine/lab-assistant";
 
 export async function GET() {
-  const id = process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+  const id = labAssistantId();
   const key = process.env.VAPI_PRIVATE_KEY;
   if (!id || !key) {
     console.error(
-      "[vapi-assistants] VAPI_SCRIPT_BASE_ASSISTANT_ID / VAPI_PRIVATE_KEY not set — the lab has no test agent",
+      `[vapi-assistants] ${LAB_ASSISTANT_ENV_HINT} / VAPI_PRIVATE_KEY not set — the lab has no test agent`,
     );
     return NextResponse.json(
-      { error: "VAPI_SCRIPT_BASE_ASSISTANT_ID is not configured" },
+      { error: `${LAB_ASSISTANT_ENV_HINT} is not configured` },
       { status: 500 },
     );
   }

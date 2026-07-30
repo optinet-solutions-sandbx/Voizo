@@ -5,26 +5,28 @@
  * lab config panel: GET pre-fills the panel, PATCH pushes prompt/voice/settings
  * when the operator hits Save Configuration. The panel was ported to Voizo
  * without this route — Save silently failed. One adaptation: the source app's
- * hardcoded fallback assistant is replaced by VAPI_SCRIPT_BASE_ASSISTANT_ID
- * (the ONE shared test/clone-donor agent — team decision 2026-07-22).
+ * hardcoded fallback assistant is replaced by the lab's resolved assistant
+ * (VAPI_LAB_ASSISTANT_ID, falling back to the clone donor — see lab-assistant).
  *
  * Server-side only — the Vapi private key never leaves this handler.
  */
 
 import { NextResponse } from "next/server";
+// Relative import — vitest does not resolve "@/" (testable-route convention).
+import { labAssistantId, LAB_ASSISTANT_ENV_HINT } from "../../../lib/scriptEngine/lab-assistant";
 
 const VAPI_BASE = "https://api.vapi.ai";
 
 function resolveEnv(bodyId?: string | null): { assistantId?: string; key?: string; err?: NextResponse } {
   const key = process.env.VAPI_PRIVATE_KEY;
-  const assistantId = bodyId || process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+  const assistantId = bodyId || labAssistantId();
   if (!key) {
     return { err: NextResponse.json({ error: "VAPI_PRIVATE_KEY is not set" }, { status: 500 }) };
   }
   if (!assistantId) {
     return {
       err: NextResponse.json(
-        { error: "assistantId missing and VAPI_SCRIPT_BASE_ASSISTANT_ID is not set" },
+        { error: `assistantId missing and ${LAB_ASSISTANT_ENV_HINT} is not set` },
         { status: 500 },
       ),
     };
@@ -33,11 +35,15 @@ function resolveEnv(bodyId?: string | null): { assistantId?: string; key?: strin
   // without this, any Basic-Auth holder could PATCH a LIVE campaign clone's
   // prompt/voice through the lab. The dropdown offers one agent; the API
   // enforces the same policy.
-  const designated = process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+  //
+  // VOZ-253: "designated" is now the LAB's assistant, not necessarily the clone
+  // donor — so once VAPI_LAB_ASSISTANT_ID is set this guard also rejects writes
+  // to the donor itself, which is the entire point.
+  const designated = labAssistantId();
   if (designated && assistantId !== designated) {
     return {
       err: NextResponse.json(
-        { error: "The lab only operates on the designated script-base assistant" },
+        { error: "The lab only operates on its own designated assistant" },
         { status: 403 },
       ),
     };

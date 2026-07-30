@@ -28,6 +28,9 @@ function patchReq(body: unknown): Request {
 beforeEach(() => {
   process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID = "asst-1";
   process.env.VAPI_PRIVATE_KEY = "key-1";
+  // Order-independence: the VOZ-253 cases below set this, and every other test
+  // in this file asserts the fallback behaviour.
+  delete process.env.VAPI_LAB_ASSISTANT_ID;
 });
 
 afterEach(() => {
@@ -82,5 +85,40 @@ describe("/api/vapi-assistant — pinned to the designated script base", () => {
     const res = await GET(new Request("http://localhost/api/vapi-assistant?assistantId=other"));
     expect(res.status).toBe(403);
     expect(calls.length).toBe(0);
+  });
+});
+
+describe("/api/vapi-assistant — VOZ-253: the lab writes its OWN assistant, not the clone donor", () => {
+  it("writes VAPI_LAB_ASSISTANT_ID when set, never touching the donor", async () => {
+    process.env.VAPI_LAB_ASSISTANT_ID = "asst-lab";
+    const calls = mockVapi({ model: { messages: [] }, voice: { provider: "11labs", voiceId: "old" } });
+
+    const res = await PATCH(patchReq({ voice: { provider: "11labs", voiceId: "new-voice" } }));
+    expect(res.status).toBe(200);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c.url).toContain("asst-lab");
+      expect(c.url).not.toContain("asst-1"); // the donor's id appears nowhere
+    }
+  });
+
+  it("403s a write aimed at the clone donor once the lab has its own assistant", async () => {
+    // This is the 2026-07-28 female-voice path: a lab Save landing on the donor,
+    // inherited by every clone at the next spawn. It must not reach Vapi at all.
+    process.env.VAPI_LAB_ASSISTANT_ID = "asst-lab";
+    const calls = mockVapi({ model: { messages: [] } });
+
+    const res = await PATCH(patchReq({ assistantId: "asst-1", voice: { provider: "11labs", voiceId: "hope" } }));
+    expect(res.status).toBe(403);
+    expect(calls.length).toBe(0);
+  });
+
+  it("falls back to the donor when unset, so this ships inert until the env var exists", async () => {
+    const calls = mockVapi({ model: { messages: [] }, voice: {} });
+
+    const res = await PATCH(patchReq({ voice: { provider: "11labs", voiceId: "x" } }));
+    expect(res.status).toBe(200);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.url.includes("asst-1"))).toBe(true);
   });
 });

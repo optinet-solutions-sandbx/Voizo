@@ -17,6 +17,7 @@ import { LAB_TOOLS, LAB_OPERATING_RULES, DEFAULT_SHORT_PROMPT } from "../../../.
 import { getLabSettings, saveLabSettings, listHandlers, getScriptGraph, getScript } from "../../../../lib/scriptEngine/lab-db";
 import { compileStageBriefing, compileStandingAnswers } from "../../../../lib/scriptEngine/lab-briefing";
 import { findEntryNode } from "../../../../lib/scriptEngine/lab-flow";
+import { labAssistantId } from "../../../../lib/scriptEngine/lab-assistant";
 
 const VAPI_BASE = "https://api.vapi.ai";
 
@@ -45,10 +46,15 @@ export async function POST(req: Request) {
   // configuring any other assistant would repoint a LIVE campaign clone's
   // webhook at the lab and replace its tools — end-of-call/SMS would die
   // silently for that campaign.
-  const designated = process.env.VAPI_SCRIPT_BASE_ASSISTANT_ID;
+  //
+  // VOZ-253: this is the LAB's assistant now (VAPI_LAB_ASSISTANT_ID when set).
+  // This route is the heaviest writer of the three — prompt, tools, transcriber
+  // keyterms, server.url and all three speaking plans — so pointing it away from
+  // the clone donor is what actually ends the repaint class.
+  const designated = labAssistantId();
   if (designated && assistantId !== designated) {
     return NextResponse.json(
-      { error: "The lab only operates on the designated script-base assistant" },
+      { error: "The lab only operates on its own designated assistant" },
       { status: 403 },
     );
   }
@@ -231,12 +237,13 @@ export async function POST(req: Request) {
     // stops, and the supersede/lock guards already handle fragment stragglers.
     //
     // NO smartEndpointingPlan — deliberately, and this site matters most. The
-    // PATCH below targets the SHARED script-base assistant, which transcribes
-    // with Deepgram Flux; Flux owns end-of-turn detection and Vapi warns the two
-    // must not both be on. Sending smart endpointing from here re-enabled it on
-    // the donor every time an operator hit Save Configuration, so fixing only
-    // the engine's own constant would have left the base being re-broken from
-    // the lab. Jas: "Smart Endpointing should be OFF" (2026-07-29).
+    // PATCH below targets the lab's assistant, which transcribes with Deepgram
+    // Flux; Flux owns end-of-turn detection and Vapi warns the two must not both
+    // be on. Sending smart endpointing from here re-enabled it every time an
+    // operator hit Save Configuration, so fixing only the engine's own constant
+    // would have left it being re-broken from the lab. Jas: "Smart Endpointing
+    // should be OFF" (2026-07-29). Still true after VOZ-253 split the lab off
+    // the donor: the lab assistant is a clone of it, so it runs Flux too.
     startSpeakingPlan: { waitSeconds: 0.5 },
   };
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { VOICE_OPTIONS } from "@/lib/scriptEngine/voices";
 import { DEFAULT_SHORT_PROMPT } from "@/lib/scriptEngine/lab-tools";
 import { getLabSettings, saveLabSettings, updateScript } from "@/lib/scriptEngine/lab-db-client";
+import { reconcileAssistantId } from "./assistantChoice";
 
 const inputCls =
   "w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-sm text-[var(--text-1)] placeholder-[var(--text-3)] focus:border-primary focus:outline-none disabled:opacity-50";
@@ -127,6 +128,14 @@ export default function LabConfigForm({ onAssistantChange, scriptId = null, scri
   }, [scriptId]);
 
   useEffect(() => {
+    // The fetched list is authoritative — see assistantChoice. A stale
+    // lab_assistant_id (the clone donor, from before VAPI_LAB_ASSISTANT_ID) would
+    // otherwise sit selected here and 403 on Save.
+    const resolved = reconcileAssistantId(assistantId, assistants);
+    if (resolved !== assistantId) {
+      setAssistantId(resolved);
+      return;
+    }
     const a = assistants.find((x) => x.id === assistantId);
     if (a) onAssistantChange(a.id, a.name);
   }, [assistantId, assistants]);
