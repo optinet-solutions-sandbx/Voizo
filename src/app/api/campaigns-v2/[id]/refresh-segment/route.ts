@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList, nameByE164 } from "@/lib/campaignV2Shared";
 import { parseJsonBody } from "@/lib/jsonBody";
+import { fetchAllRows, updateRowsIn } from "@/lib/supabaseFetchAll";
 
 // Up to: paginated customer.io fetch (~10-30s for segments <500 at the
 // 10 req/sec rate limit), Supabase SELECTs, batched INSERT + UPDATE.
@@ -157,18 +158,26 @@ export async function POST(
   // normalized phone so they line up with the rows inserted below.
   const namesByPhone = nameByE164(segmentResult.entries);
 
-  // ── 3. Read the source's existing campaign_numbers_v2 rows ──
-  const { data: existingRows, error: existingErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select("phone_e164, outcome")
-    .eq("campaign_id", id);
-
-  if (existingErr) {
+  // ── 3. Read the source's existing campaign_numbers_v2 rows (paged — VOZ-266) ──
+  // The bare select was clamped at 1000 rows, so on a large campaign the diff
+  // saw only half the existing rows, classified known players as "new", and
+  // the commit INSERT then died on unique (campaign_id, phone_e164) — a loud
+  // failure built on a silently wrong read. failFast: a partial view of the
+  // campaign makes every bucket of the diff wrong.
+  let existingRows: Array<Record<string, unknown>>;
+  try {
+    existingRows = await fetchAllRows(
+      supabaseAdmin, "campaign_numbers_v2", "phone_e164, outcome", "id",
+      { column: "campaign_id", value: id },
+      undefined, undefined, { failFast: true },
+    );
+  } catch (err) {
+    console.error(`[campaigns-v2/refresh-segment] existing read failed for ${id}:`, err);
     return NextResponse.json({ error: "Failed to read existing numbers" }, { status: 500 });
   }
 
   const existingByPhone = new Map<string, string>();
-  for (const r of existingRows ?? []) {
+  for (const r of existingRows) {
     existingByPhone.set(r.phone_e164 as string, r.outcome as string);
   }
 
@@ -262,19 +271,21 @@ export async function POST(
 
   let softMarkedCount = 0;
   if (toRemove.length > 0) {
-    // PostgREST .in() practical limit is ~1000. PoC scale is well under;
-    // batch in chunks of 500 if a future deployment grows segments.
-    const { error: updateErr, count } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .update({ outcome: "removed_from_segment" }, { count: "exact" })
-      .eq("campaign_id", id)
-      .in("outcome", Array.from(SOFT_MARKABLE_OUTCOMES))
-      .in("phone_e164", toRemove);
-    if (updateErr) {
-      console.error(`[campaigns-v2/refresh-segment] UPDATE failed:`, updateErr);
-      // Partial state: INSERTs succeeded, UPDATE failed. Operator can re-run
-      // refresh — INSERTs are idempotent (no-op on second run because the
-      // toAdd set will be empty), UPDATE will retry.
+    // Chunked at 200 (VOZ-266): the phone list rides the URL, and an unchunked
+    // .in() never leaves the client at >=1000 phones. The old comment's "batch
+    // in chunks of 500 if a future deployment grows segments" future arrived.
+    const { count, errors } = await updateRowsIn(
+      supabaseAdmin, "campaign_numbers_v2", { outcome: "removed_from_segment" },
+      "phone_e164", toRemove,
+      (q) => q.eq("campaign_id", id).in("outcome", Array.from(SOFT_MARKABLE_OUTCOMES)),
+    );
+    softMarkedCount = count;
+    if (errors.length > 0) {
+      console.error(`[campaigns-v2/refresh-segment] UPDATE failed (${errors.length} chunk(s)):`, errors);
+      // Partial state: INSERTs succeeded, some soft-mark chunks failed.
+      // Operator can re-run refresh — INSERTs are idempotent (no-op on second
+      // run because the toAdd set will be empty), the UPDATE retries the
+      // still-pending remainder.
       return NextResponse.json(
         {
           error:
@@ -283,11 +294,11 @@ export async function POST(
           committed: true,
           partial: true,
           insertedCount,
+          softMarkedCount,
         },
         { status: 500 },
       );
     }
-    softMarkedCount = count ?? toRemove.length;
   }
 
   // ── 7. Audit log ──

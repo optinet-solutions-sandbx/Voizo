@@ -40,7 +40,7 @@ export async function fetchAllRows(
   eq?: { column: string; value: string } | Array<{ column: string; value: string }>,
   gte?: { column: string; value: string },
   lt?: { column: string; value: string },
-  opts?: { failFast?: boolean },
+  opts?: { failFast?: boolean; inFilter?: { column: string; values: readonly string[] } },
 ): Promise<Row[]> {
   const eqs = eq ? (Array.isArray(eq) ? eq : [eq]) : [];
   const all: Row[] = [];
@@ -48,6 +48,9 @@ export async function fetchAllRows(
     const from = page * PAGE_SIZE;
     let query = client.from(table).select(columns);
     for (const f of eqs) query = query.eq(f.column, f.value);
+    // Small enumerated sets only (e.g. outcome IN (pending, pending_retry)) —
+    // the values ride the URL, so a LARGE list belongs in fetchRowsIn instead.
+    if (opts?.inFilter) query = query.in(opts.inFilter.column, [...opts.inFilter.values]);
     if (gte) query = query.gte(gte.column, gte.value);
     if (lt) query = query.lt(lt.column, lt.value);
     const { data, error } = await query
@@ -76,6 +79,96 @@ export async function fetchAllRows(
     }
   }
   return all;
+}
+
+// ── .in() list chunking ─────────────────────────────────────────────────────
+//
+// The row-count clamp is not the only PostgREST limit: an .in() filter rides
+// the request URL, and our own HTTP client refuses large ones — measured
+// 2026-07-30: 1,000 phones (15.7KB of URL) throws UND_ERR_HEADERS_OVERFLOW
+// before the request leaves; 2,100 draws a 400 from the edge; 500 still
+// passes. Chunk size 200 is the proven-margin precedent (theme drill-down).
+// supabase-js swallows the throw into { data: null, error }, so an unchecked
+// call site reads `.data ?? []` and gets a silently-EMPTY result — which is
+// how the resume/duplicate safety buckets reported "0 suppressed, 0 DNC" on
+// large campaigns. These helpers chunk the list and refuse to be silent.
+
+const IN_CHUNK = 200;
+
+/** The filter methods a per-chunk query builder must offer. The real
+ *  supabase-js builder satisfies this structurally. */
+export interface ChunkFilterable {
+  eq(column: string, value: unknown): ChunkFilterable;
+  neq(column: string, value: unknown): ChunkFilterable;
+  gt(column: string, value: unknown): ChunkFilterable;
+  in(column: string, values: readonly unknown[]): ChunkFilterable;
+}
+
+/**
+ * SELECT rows where `inColumn` is in `values`, chunked at 200 per request.
+ * `applyFilters` re-applies any extra .eq/.neq/.gt/.in on every chunk.
+ * THROWS on any chunk error — for safety-bucket reads (suppression, DNC,
+ * overlap), a partial or empty result is exactly the lie being fixed.
+ * Each chunk returns at most 200 rows, so the row clamp cannot bite either.
+ */
+export async function fetchRowsIn(
+  client: SupabaseClient,
+  table: string,
+  columns: string,
+  inColumn: string,
+  values: readonly string[],
+  applyFilters?: (q: ChunkFilterable) => ChunkFilterable,
+): Promise<Row[]> {
+  const all: Row[] = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const chunk = values.slice(i, i + IN_CHUNK);
+    let q = client.from(table).select(columns) as unknown as ChunkFilterable;
+    if (applyFilters) q = applyFilters(q);
+    // The chunked in-filter goes LAST so applyFilters cannot displace it.
+    const { data, error } = await (q.in(inColumn, chunk) as unknown as PromiseLike<{
+      data: Row[] | null;
+      error: { message?: string } | null;
+    }>);
+    if (error) {
+      throw new Error(`fetchRowsIn(${table}) chunk at ${i} failed: ${error.message ?? "unknown"}`);
+    }
+    all.push(...(data ?? []));
+  }
+  return all;
+}
+
+/**
+ * UPDATE rows where `inColumn` is in `values`, chunked at 200 per request.
+ * Continues past a failed chunk (loud-logged, reported in `errors`) so one
+ * bad batch doesn't strand the rest — the CALLER owns the partial-state
+ * response policy. `count` sums the rows each successful chunk touched.
+ */
+export async function updateRowsIn(
+  client: SupabaseClient,
+  table: string,
+  patch: Row,
+  inColumn: string,
+  values: readonly string[],
+  applyFilters?: (q: ChunkFilterable) => ChunkFilterable,
+): Promise<{ count: number; errors: Array<{ at: number; message: string }> }> {
+  let count = 0;
+  const errors: Array<{ at: number; message: string }> = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const chunk = values.slice(i, i + IN_CHUNK);
+    let q = client.from(table).update(patch, { count: "exact" }) as unknown as ChunkFilterable;
+    if (applyFilters) q = applyFilters(q);
+    const { error, count: chunkCount } = await (q.in(inColumn, chunk) as unknown as PromiseLike<{
+      error: { message?: string } | null;
+      count: number | null;
+    }>);
+    if (error) {
+      console.error(`[updateRowsIn] ${table} chunk at ${i} failed:`, error);
+      errors.push({ at: i, message: error.message ?? "unknown" });
+      continue;
+    }
+    count += chunkCount ?? 0;
+  }
+  return { count, errors };
 }
 
 /**

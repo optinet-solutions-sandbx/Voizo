@@ -6,6 +6,8 @@ import { executeRebindCore } from "@/lib/vapi/rebindCore";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 import { parseJsonBody } from "@/lib/jsonBody";
+import { fetchAllRows, fetchRowsIn, updateRowsIn } from "@/lib/supabaseFetchAll";
+import { MAX_CANDIDATES } from "@/lib/audienceLimits";
 
 // Up to: paginated customer.io fetch (~10-30s, segments under 500), three
 // Supabase diff queries, two soft-mark UPDATEs, optional Vapi rebind chain
@@ -141,24 +143,28 @@ export async function POST(
     );
   }
 
-  // ── 2. Read pending phones ──
-  const { data: pendingRows, error: pendingErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select("phone_e164")
-    .eq("campaign_id", id)
-    .in("outcome", ["pending", "pending_retry"]);
-
-  if (pendingErr) {
+  // ── 2. Read pending phones (paged — VOZ-266; see resume-diff for the full
+  //       story: the clamped read blinded the size guard and fed the buckets
+  //       an .in() list our HTTP client refuses at >=1000 phones) ──
+  let pendingPhones: string[];
+  try {
+    const pendingRows = await fetchAllRows(
+      supabaseAdmin, "campaign_numbers_v2", "phone_e164", "id",
+      { column: "campaign_id", value: id },
+      undefined, undefined,
+      { failFast: true, inFilter: { column: "outcome", values: ["pending", "pending_retry"] } },
+    );
+    pendingPhones = pendingRows.map((r) => r.phone_e164 as string);
+  } catch (err) {
+    console.error(`[campaigns-v2/resume] pending read failed for ${id}:`, err);
     return NextResponse.json({ error: "Failed to read pending numbers" }, { status: 500 });
   }
 
-  const pendingPhones = (pendingRows ?? []).map((r) => r.phone_e164 as string);
-
-  if (pendingPhones.length > 1000) {
+  if (pendingPhones.length > MAX_CANDIDATES) {
     return NextResponse.json(
       {
         error:
-          `Pending set is ${pendingPhones.length} phones; current diff implementation caps at 1000.`,
+          `Pending set is ${pendingPhones.length} phones; current diff implementation caps at ${MAX_CANDIDATES}.`,
       },
       { status: 413 },
     );
@@ -175,20 +181,21 @@ export async function POST(
     const recentCutoffIso = new Date(
       Date.now() - RECENT_CALL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
-    const { data: recentRows, error: recentErr } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("phone_e164")
-      .neq("campaign_id", id)
-      .in("phone_e164", pendingPhones)
-      .in("outcome", CONTACT_OUTCOMES)
-      .gt("last_attempted_at", recentCutoffIso);
-    if (recentErr) {
+    try {
+      // Chunked (VOZ-266) — an unchunked .in() throws inside the client at
+      // >=1000 phones; fetchRowsIn fails loud instead of skipping the guard.
+      const recentRows = await fetchRowsIn(
+        supabaseAdmin, "campaign_numbers_v2", "phone_e164", "phone_e164", pendingPhones,
+        (q) => q.neq("campaign_id", id).in("outcome", CONTACT_OUTCOMES).gt("last_attempted_at", recentCutoffIso),
+      );
+      recentSet = new Set(recentRows.map((r) => r.phone_e164 as string));
+    } catch (err) {
+      console.error(`[campaigns-v2/resume] recent-call bucket failed for ${id}:`, err);
       return NextResponse.json(
         { error: "Failed to compute recent-call bucket" },
         { status: 500 },
       );
     }
-    recentSet = new Set((recentRows ?? []).map((r) => r.phone_e164 as string));
   }
 
   if (pendingPhones.length > 0 && skipOutOfSegment) {
@@ -227,47 +234,51 @@ export async function POST(
   let softMarkedRecentlyCalled = 0;
   let softMarkedOutOfSegment = 0;
 
+  // Both soft-marks are chunked (VOZ-266): the phone list rides the URL, and
+  // one unchunked batch above ~1000 phones never leaves the client. A failed
+  // chunk is reported, the remaining chunks still apply, and each site keeps
+  // its original partial-state 500 contract (operator re-runs; the outcome
+  // guard makes retries idempotent).
   if (recentSet.size > 0) {
-    const { error: updateErr, count } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .update({ outcome: "recently_called_elsewhere" }, { count: "exact" })
-      .eq("campaign_id", id)
-      .in("outcome", ["pending", "pending_retry"])
-      .in("phone_e164", Array.from(recentSet));
-    if (updateErr) {
-      console.error(`[campaigns-v2/resume] recently_called soft-mark failed:`, updateErr);
+    const { count, errors } = await updateRowsIn(
+      supabaseAdmin, "campaign_numbers_v2", { outcome: "recently_called_elsewhere" },
+      "phone_e164", Array.from(recentSet),
+      (q) => q.eq("campaign_id", id).in("outcome", ["pending", "pending_retry"]),
+    );
+    softMarkedRecentlyCalled = count;
+    if (errors.length > 0) {
+      console.error(`[campaigns-v2/resume] recently_called soft-mark failed (${errors.length} chunk(s)):`, errors);
       return NextResponse.json(
-        { error: "Failed to soft-mark recently-called phones", resumed: false },
+        { error: "Failed to soft-mark recently-called phones", resumed: false, softMarkedRecentlyCalled },
         { status: 500 },
       );
     }
-    softMarkedRecentlyCalled = count ?? 0;
   }
 
   if (outOfSegmentSet.size > 0) {
-    const { error: updateErr, count } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .update({ outcome: "removed_from_segment" }, { count: "exact" })
-      .eq("campaign_id", id)
-      .in("outcome", ["pending", "pending_retry"])
-      .in("phone_e164", Array.from(outOfSegmentSet));
-    if (updateErr) {
-      console.error(`[campaigns-v2/resume] out_of_segment soft-mark failed:`, updateErr);
+    const { count, errors } = await updateRowsIn(
+      supabaseAdmin, "campaign_numbers_v2", { outcome: "removed_from_segment" },
+      "phone_e164", Array.from(outOfSegmentSet),
+      (q) => q.eq("campaign_id", id).in("outcome", ["pending", "pending_retry"]),
+    );
+    softMarkedOutOfSegment = count;
+    if (errors.length > 0) {
+      console.error(`[campaigns-v2/resume] out_of_segment soft-mark failed (${errors.length} chunk(s)):`, errors);
       // recently_called soft-mark already landed (if applicable). Partial
       // state — return 500 with what we did. Operator re-runs resume; the
-      // recently_called UPDATE is idempotent (those rows are no longer
-      // 'pending', won't match the WHERE clause).
+      // soft-marks are idempotent (marked rows are no longer 'pending', so
+      // they won't match the WHERE clause again).
       return NextResponse.json(
         {
           error: "Failed to soft-mark out-of-segment phones",
           resumed: false,
           partial: true,
           softMarkedRecentlyCalled,
+          softMarkedOutOfSegment,
         },
         { status: 500 },
       );
     }
-    softMarkedOutOfSegment = count ?? 0;
   }
 
   // ── 5. Restart dialing via executeRebindCore (unified path) ──

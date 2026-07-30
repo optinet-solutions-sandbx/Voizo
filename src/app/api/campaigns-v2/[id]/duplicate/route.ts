@@ -5,6 +5,7 @@ import { parsePhoneList, nameByE164 } from "@/lib/campaignV2Shared";
 import { rejectIfCrossOrigin } from "@/lib/csrf";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
 import { MAX_CANDIDATES } from "@/lib/audienceLimits";
+import { fetchAllRows, fetchRowsIn } from "@/lib/supabaseFetchAll";
 
 /**
  * GET /api/campaigns-v2/[id]/duplicate
@@ -122,16 +123,23 @@ export async function GET(
     candidateNames = nameByE164(segmentResult.entries);
     candidateSource = "segment_refresh";
   } else {
-    const { data: sourceNumbers, error: numbersErr } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("phone_e164, display_name")
-      .eq("campaign_id", id)
-      .in("outcome", ["pending", "pending_retry"]);
-    if (numbersErr) {
+    // Paged (VOZ-266): the bare select was clamped at 1000 rows, silently
+    // shrinking a large source's pending list before the MAX_CANDIDATES check
+    // ever saw it. failFast: a partial candidate set = a partial duplicate.
+    let sourceNumbers: Array<Record<string, unknown>>;
+    try {
+      sourceNumbers = await fetchAllRows(
+        supabaseAdmin, "campaign_numbers_v2", "phone_e164, display_name", "id",
+        { column: "campaign_id", value: id },
+        undefined, undefined,
+        { failFast: true, inFilter: { column: "outcome", values: ["pending", "pending_retry"] } },
+      );
+    } catch (err) {
+      console.error(`[campaigns-v2/duplicate] source numbers read failed for ${id}:`, err);
       return NextResponse.json({ error: "Failed to read source numbers" }, { status: 500 });
     }
-    candidatePhones = (sourceNumbers ?? []).map((r) => r.phone_e164 as string);
-    for (const r of sourceNumbers ?? []) {
+    candidatePhones = sourceNumbers.map((r) => r.phone_e164 as string);
+    for (const r of sourceNumbers) {
       const name = r.display_name as string | null;
       if (name && !candidateNames.has(r.phone_e164 as string)) candidateNames.set(r.phone_e164 as string, name);
     }
@@ -160,37 +168,38 @@ export async function GET(
     Date.now() - RECENT_CALL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const [overlapRes, suppressedRes, dncRes, recentRes] = await Promise.all([
-    supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("phone_e164")
-      .eq("campaign_id", id)
-      .in("outcome", ["pending", "pending_retry"])
-      .in("phone_e164", candidatePhones),
-    supabaseAdmin
-      .from("suppression_list")
-      .select("phone_e164")
-      .in("phone_e164", candidatePhones),
-    supabaseAdmin
-      .from("do_not_call")
-      .select("phone_number")
-      .eq("archived", false)
-      .in("phone_number", candidatePhones),
-    supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("phone_e164")
-      .neq("campaign_id", id)
-      .in("phone_e164", candidatePhones)
-      .in("outcome", CONTACT_OUTCOMES)
-      .gt("last_attempted_at", recentCutoffIso),
-  ]);
-
-  const overlapSet = new Set((overlapRes.data ?? []).map((r) => r.phone_e164 as string));
-  const suppressedSet = new Set<string>([
-    ...((suppressedRes.data ?? []).map((r) => r.phone_e164 as string)),
-    ...((dncRes.data ?? []).map((r) => r.phone_number as string)),
-  ]);
-  const recentSet = new Set((recentRes.data ?? []).map((r) => r.phone_e164 as string));
+  // Chunked (VOZ-266) with loud failure. The Promise.all this replaces never
+  // checked .error — and an unchunked .in() with >=1000 candidates throws
+  // inside our HTTP client, so on large segments every bucket came back
+  // silently EMPTY. Worst case was overlap: an empty overlap bucket means the
+  // wizard prefill would happily re-dial the source's entire pending list —
+  // and unlike DNC/suppression, nothing re-checks overlap at dial time.
+  let overlapSet: Set<string>;
+  let suppressedSet: Set<string>;
+  let recentSet: Set<string>;
+  try {
+    const [overlapRows, suppressedRows, dncRows, recentRows] = await Promise.all([
+      fetchRowsIn(supabaseAdmin, "campaign_numbers_v2", "phone_e164", "phone_e164", candidatePhones, (q) =>
+        q.eq("campaign_id", id).in("outcome", ["pending", "pending_retry"]),
+      ),
+      fetchRowsIn(supabaseAdmin, "suppression_list", "phone_e164", "phone_e164", candidatePhones),
+      fetchRowsIn(supabaseAdmin, "do_not_call", "phone_number", "phone_number", candidatePhones, (q) =>
+        q.eq("archived", false),
+      ),
+      fetchRowsIn(supabaseAdmin, "campaign_numbers_v2", "phone_e164", "phone_e164", candidatePhones, (q) =>
+        q.neq("campaign_id", id).in("outcome", CONTACT_OUTCOMES).gt("last_attempted_at", recentCutoffIso),
+      ),
+    ]);
+    overlapSet = new Set(overlapRows.map((r) => r.phone_e164 as string));
+    suppressedSet = new Set<string>([
+      ...suppressedRows.map((r) => r.phone_e164 as string),
+      ...dncRows.map((r) => r.phone_number as string),
+    ]);
+    recentSet = new Set(recentRows.map((r) => r.phone_e164 as string));
+  } catch (err) {
+    console.error(`[campaigns-v2/duplicate] diff queries failed for ${id}:`, err);
+    return NextResponse.json({ error: "Failed to compute duplicate safety buckets" }, { status: 500 });
+  }
 
   // ── 4. Apply skip strategy based on query params ──
   // Per plan: modal + wizard each call this endpoint with `?skip=` set to

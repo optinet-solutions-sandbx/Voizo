@@ -3,6 +3,8 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
 import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { CONTACT_OUTCOMES } from "@/lib/contactOutcomes";
+import { fetchAllRows, fetchRowsIn } from "@/lib/supabaseFetchAll";
+import { MAX_CANDIDATES } from "@/lib/audienceLimits";
 
 // Up to: paginated customer.io segment fetch (for the out-of-segment bucket
 // when segment_id is non-null). 60s budget mirrors duplicate/refresh-segment.
@@ -86,18 +88,26 @@ export async function GET(
     );
   }
 
-  // ── 2. Read source's pending phones ──
-  const { data: pendingRows, error: pendingErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select("phone_e164")
-    .eq("campaign_id", id)
-    .in("outcome", ["pending", "pending_retry"]);
-
-  if (pendingErr) {
+  // ── 2. Read source's pending phones (paged — VOZ-266) ──
+  // The bare select this replaces was clamped by PostgREST max-rows at 1000
+  // rows, which BLINDED the size guard below (the read could never return
+  // more than 1000, so the 413 was dead code) and fed a 1,000-phone .in()
+  // to the bucket queries — which throws UND_ERR_HEADERS_OVERFLOW inside our
+  // HTTP client (measured 2026-07-30), leaving every safety bucket silently
+  // empty on large campaigns. failFast: a partial phone list = wrong diff.
+  let pendingPhones: string[];
+  try {
+    const pendingRows = await fetchAllRows(
+      supabaseAdmin, "campaign_numbers_v2", "phone_e164", "id",
+      { column: "campaign_id", value: id },
+      undefined, undefined,
+      { failFast: true, inFilter: { column: "outcome", values: ["pending", "pending_retry"] } },
+    );
+    pendingPhones = pendingRows.map((r) => r.phone_e164 as string);
+  } catch (err) {
+    console.error(`[campaigns-v2/resume-diff] pending read failed for ${id}:`, err);
     return NextResponse.json({ error: "Failed to read pending numbers" }, { status: 500 });
   }
-
-  const pendingPhones = (pendingRows ?? []).map((r) => r.phone_e164 as string);
 
   // Empty pending → trivially-zero diff (still return the shape so the UI can
   // disable the resume button rather than show a half-loaded modal).
@@ -122,47 +132,50 @@ export async function GET(
     });
   }
 
-  // PostgREST .in() practical limit ~1000 items. PoC scale is well under.
-  if (pendingPhones.length > 1000) {
+  // The paged read makes this ceiling REAL again (with the clamp it could
+  // never trip). Chunked buckets handle anything under it; the cap is a
+  // sanity bound shared with duplicate, not a URL limit anymore.
+  if (pendingPhones.length > MAX_CANDIDATES) {
     return NextResponse.json(
       {
         error:
           `Pending set is ${pendingPhones.length} phones; current diff implementation ` +
-          `caps at 1000. Reach out to engineering to lift the cap.`,
+          `caps at ${MAX_CANDIDATES}. Reach out to engineering to lift the cap.`,
       },
       { status: 413 },
     );
   }
 
-  // ── 3. Compute the suppressed + recentlyCalled buckets (parallel queries) ──
+  // ── 3. Compute the suppressed + recentlyCalled buckets (chunked — VOZ-266) ──
+  // fetchRowsIn THROWS on any chunk failure. The Promise.all this replaces
+  // never checked .error, so a failed .in() (guaranteed at >=1000 phones)
+  // reported "0 suppressed, 0 DNC, 0 recently-called" with full confidence.
+  // An honest 500 beats a confident lie on a safety surface.
   const recentCutoffIso = new Date(
     Date.now() - RECENT_CALL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const [suppressedRes, dncRes, recentRes] = await Promise.all([
-    supabaseAdmin
-      .from("suppression_list")
-      .select("phone_e164")
-      .in("phone_e164", pendingPhones),
-    supabaseAdmin
-      .from("do_not_call")
-      .select("phone_number")
-      .eq("archived", false)
-      .in("phone_number", pendingPhones),
-    supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("phone_e164")
-      .neq("campaign_id", id)
-      .in("phone_e164", pendingPhones)
-      .in("outcome", CONTACT_OUTCOMES)
-      .gt("last_attempted_at", recentCutoffIso),
-  ]);
-
-  const suppressedSet = new Set<string>([
-    ...((suppressedRes.data ?? []).map((r) => r.phone_e164 as string)),
-    ...((dncRes.data ?? []).map((r) => r.phone_number as string)),
-  ]);
-  const recentSet = new Set((recentRes.data ?? []).map((r) => r.phone_e164 as string));
+  let suppressedSet: Set<string>;
+  let recentSet: Set<string>;
+  try {
+    const [suppressedRows, dncRows, recentRows] = await Promise.all([
+      fetchRowsIn(supabaseAdmin, "suppression_list", "phone_e164", "phone_e164", pendingPhones),
+      fetchRowsIn(supabaseAdmin, "do_not_call", "phone_number", "phone_number", pendingPhones, (q) =>
+        q.eq("archived", false),
+      ),
+      fetchRowsIn(supabaseAdmin, "campaign_numbers_v2", "phone_e164", "phone_e164", pendingPhones, (q) =>
+        q.neq("campaign_id", id).in("outcome", CONTACT_OUTCOMES).gt("last_attempted_at", recentCutoffIso),
+      ),
+    ]);
+    suppressedSet = new Set<string>([
+      ...dncRows.map((r) => r.phone_number as string),
+      ...suppressedRows.map((r) => r.phone_e164 as string),
+    ]);
+    recentSet = new Set(recentRows.map((r) => r.phone_e164 as string));
+  } catch (err) {
+    console.error(`[campaigns-v2/resume-diff] bucket queries failed for ${id}:`, err);
+    return NextResponse.json({ error: "Failed to compute safety buckets" }, { status: 500 });
+  }
 
   // ── 4. Compute the outOfSegment bucket (only if segment_id non-null) ──
   const outOfSegmentSet = new Set<string>();

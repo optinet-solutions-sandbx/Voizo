@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchAllRows, sortRowsByCreatedAt } from "./supabaseFetchAll";
+import { fetchAllRows, fetchRowsIn, updateRowsIn, sortRowsByCreatedAt } from "./supabaseFetchAll";
 
 // fetchAllRows paginates past PostgREST's default 1000-row cap by issuing
 // successive .range() requests ordered by a stable key. These tests pin that
@@ -8,10 +8,11 @@ import { fetchAllRows, sortRowsByCreatedAt } from "./supabaseFetchAll";
 type Row = Record<string, unknown>;
 
 function makeClient(pageResults: Array<{ data: Row[] | null; error: unknown }>) {
-  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
-  let current: { table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
+  const log: Array<{ table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; inArg?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] }> = [];
+  let current: { table?: string; columns?: string; eq?: [string, unknown]; eq2?: [string, unknown]; inArg?: [string, unknown]; gte?: [string, unknown]; lt?: [string, unknown]; order?: [string, unknown]; range?: [number, number] } = {};
   const builder = {
     select(columns: string) { current.columns = columns; return builder; },
+    in(col: string, vals: unknown) { current.inArg = [col, vals]; return builder; },
     // A second .eq() call lands in eq2 (multi-filter support) — first call keeps
     // the `eq` slot so the original assertions stay intact.
     eq(col: string, val: unknown) {
@@ -216,5 +217,126 @@ describe("sortRowsByCreatedAt", () => {
     expect(asc.map((x) => x.id)).toEqual(["a", "x", "g"]);
     expect(desc.map((x) => x.id)).toEqual(["a", "x", "g"]);
     expect(input.map((x) => x.id)).toEqual(["x", "a", "g"]); // untouched
+  });
+});
+
+// ── .in() chunking (VOZ-266): the URL is the limit, not the row count ───────
+//
+// Measured 2026-07-30 against prod: a 1,000-phone .in() filter THROWS
+// UND_ERR_HEADERS_OVERFLOW inside our own HTTP client (15.7KB of URL); 500
+// passes, 2,100 draws a 400 from the edge. Chunk size 200 is the proven-margin
+// precedent (theme drill-down). These tests pin the chunkers against a mock
+// that records every request.
+
+function makeChunkClient(opts?: { failChunk?: number; rowsFor?: (vals: readonly string[]) => Row[] }) {
+  const reads: Array<{ table: string; columns?: string; inArgs: Array<[string, readonly string[]]>; filters: string[] }> = [];
+  const updates: Array<{ table: string; patch: Row; inArgs: Array<[string, readonly string[]]>; filters: string[] }> = [];
+  let readCount = 0;
+  function builder(table: string) {
+    const rec = { table, columns: undefined as string | undefined, patch: undefined as Row | undefined, inArgs: [] as Array<[string, readonly string[]]>, filters: [] as string[] };
+    const b: Record<string, unknown> = {
+      select(columns: string) { rec.columns = columns; return b; },
+      update(patch: Row) { rec.patch = patch; return b; },
+      eq(c: string, v: unknown) { rec.filters.push(`eq:${c}=${String(v)}`); return b; },
+      neq(c: string, v: unknown) { rec.filters.push(`neq:${c}=${String(v)}`); return b; },
+      gt(c: string, v: unknown) { rec.filters.push(`gt:${c}=${String(v)}`); return b; },
+      in(c: string, vals: readonly string[]) { rec.inArgs.push([c, vals]); return b; },
+      then(onF: (v: unknown) => unknown, onR: (e: unknown) => unknown) {
+        if (rec.patch) {
+          updates.push({ table: rec.table, patch: rec.patch, inArgs: rec.inArgs, filters: rec.filters });
+          const idx = updates.length - 1;
+          if (opts?.failChunk === idx) return Promise.resolve({ error: { message: "update boom" }, count: null }).then(onF, onR);
+          const last = rec.inArgs[rec.inArgs.length - 1];
+          return Promise.resolve({ error: null, count: last ? last[1].length : 0 }).then(onF, onR);
+        }
+        reads.push({ table: rec.table, columns: rec.columns, inArgs: rec.inArgs, filters: rec.filters });
+        const idx = readCount++;
+        if (opts?.failChunk === idx) return Promise.resolve({ data: null, error: { message: "read boom" } }).then(onF, onR);
+        const last = rec.inArgs[rec.inArgs.length - 1];
+        const vals = last ? last[1] : [];
+        const data = opts?.rowsFor ? opts.rowsFor(vals) : vals.map((v) => ({ phone_e164: v }));
+        return Promise.resolve({ data, error: null }).then(onF, onR);
+      },
+    };
+    return b;
+  }
+  return { client: { from: builder } as never, reads, updates };
+}
+
+const vals = (n: number): string[] => Array.from({ length: n }, (_, i) => `+1999${String(i).padStart(6, "0")}`);
+
+describe("fetchRowsIn", () => {
+  it("chunks 450 values into 200/200/50 requests, re-applying extra filters on each, and concatenates", async () => {
+    const { client, reads } = makeChunkClient();
+    const out = await fetchRowsIn(client, "campaign_numbers_v2", "phone_e164", "phone_e164", vals(450), (q) =>
+      q.eq("campaign_id", "camp-1").in("outcome", ["pending", "pending_retry"]),
+    );
+    expect(out).toHaveLength(450);
+    expect(reads).toHaveLength(3);
+    expect(reads.map((r) => r.inArgs.find(([c]) => c === "phone_e164")![1].length)).toEqual([200, 200, 50]);
+    for (const r of reads) {
+      expect(r.filters).toContain("eq:campaign_id=camp-1");
+      expect(r.inArgs.some(([c, v]) => c === "outcome" && v.length === 2)).toBe(true);
+    }
+  });
+
+  it("THROWS on any chunk error — a silently-empty safety bucket is the bug this kills", async () => {
+    const { client } = makeChunkClient({ failChunk: 1 });
+    await expect(fetchRowsIn(client, "suppression_list", "phone_e164", "phone_e164", vals(450))).rejects.toThrow(
+      /suppression_list/,
+    );
+  });
+
+  it("empty values → no requests, empty result", async () => {
+    const { client, reads } = makeChunkClient();
+    expect(await fetchRowsIn(client, "do_not_call", "phone_number", "phone_number", [])).toEqual([]);
+    expect(reads).toHaveLength(0);
+  });
+});
+
+describe("updateRowsIn", () => {
+  it("chunks the update, re-applies patch + filters per chunk, and sums counts", async () => {
+    const { client, updates } = makeChunkClient();
+    const res = await updateRowsIn(
+      client,
+      "campaign_numbers_v2",
+      { outcome: "removed_from_segment" },
+      "phone_e164",
+      vals(450),
+      (q) => q.eq("campaign_id", "camp-1").in("outcome", ["pending", "pending_retry"]),
+    );
+    expect(res.count).toBe(450);
+    expect(res.errors).toEqual([]);
+    expect(updates).toHaveLength(3);
+    for (const u of updates) {
+      expect(u.patch).toEqual({ outcome: "removed_from_segment" });
+      expect(u.filters).toContain("eq:campaign_id=camp-1");
+    }
+  });
+
+  it("continues past a failed chunk, reporting it — callers own the partial-state response", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client, updates } = makeChunkClient({ failChunk: 1 });
+    const res = await updateRowsIn(client, "campaign_numbers_v2", { outcome: "x" }, "phone_e164", vals(450));
+    expect(updates).toHaveLength(3); // chunk 2 failed, chunk 3 still attempted
+    expect(res.count).toBe(250); // 200 + 50, the failed 200 not counted
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0].message).toMatch(/update boom/);
+    spy.mockRestore();
+  });
+});
+
+describe("fetchAllRows opts.inFilter (the outcome IN (pending,pending_retry) family)", () => {
+  it("applies the in-filter to every page", async () => {
+    const { client, log } = makeClient([
+      { data: rows(1000), error: null },
+      { data: rows(40), error: null },
+    ]);
+    const out = await fetchAllRows(client, "campaign_numbers_v2", "phone_e164", "id", { column: "campaign_id", value: "c1" }, undefined, undefined, {
+      inFilter: { column: "outcome", values: ["pending", "pending_retry"] },
+    });
+    expect(out).toHaveLength(1040);
+    expect(log).toHaveLength(2);
+    for (const entry of log) expect(entry.inArg).toEqual(["outcome", ["pending", "pending_retry"]]);
   });
 });
