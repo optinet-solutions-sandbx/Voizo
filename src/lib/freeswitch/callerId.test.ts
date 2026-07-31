@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFreeswitchCallerId } from "./callerId";
+import { resolveFreeswitchCallerId, callerIdForCountry, buildCallerIdMap } from "./callerId";
 
 // Per-country outbound caller ID (deprecates the shared UK ANI, 2026-07-31).
 // Destination country (detectCountry prefix match) picks the owned local DID:
@@ -69,5 +69,49 @@ describe("resolveFreeswitchCallerId (per-country caller ID)", () => {
 
   it("nothing configured at all throws loudly, naming FREESWITCH_CALLER_ID (dialer parity)", () => {
     expect(() => resolveFreeswitchCallerId("+61412345678")).toThrow(/FREESWITCH_CALLER_ID/);
+  });
+});
+
+// The country core that resolveFreeswitchCallerId delegates to, and that the
+// wizard identity preview reuses so it can never disagree with the dialer.
+describe("callerIdForCountry (country core)", () => {
+  const KEYS = ["FREESWITCH_CALLER_ID", "FREESWITCH_CALLER_ID_CA", "FREESWITCH_CALLER_ID_AU", "FREESWITCH_CALLER_ID_NZ"] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => { for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+
+  it("NA→CA, AU→AU; unmapped country and null fall back to the default", () => {
+    process.env.FREESWITCH_CALLER_ID = "+15550000000";
+    process.env.FREESWITCH_CALLER_ID_CA = "+16472436283";
+    process.env.FREESWITCH_CALLER_ID_AU = "+61272680150";
+    expect(callerIdForCountry("NA")).toEqual({ callerId: "+16472436283", error: null });
+    expect(callerIdForCountry("AU")).toEqual({ callerId: "+61272680150", error: null });
+    expect(callerIdForCountry("ES")).toEqual({ callerId: "+15550000000", error: null });
+    expect(callerIdForCountry(null)).toEqual({ callerId: "+15550000000", error: null });
+  });
+
+  it("nothing configured returns an error and never throws (unlike the dialer wrapper)", () => {
+    const r = callerIdForCountry("AU");
+    expect(r.callerId).toBeNull();
+    expect(r.error).toMatch(/FREESWITCH_CALLER_ID/);
+  });
+});
+
+describe("buildCallerIdMap (wizard identity preview)", () => {
+  const KEYS = ["FREESWITCH_CALLER_ID", "FREESWITCH_CALLER_ID_CA", "FREESWITCH_CALLER_ID_AU", "FREESWITCH_CALLER_ID_NZ"] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => { for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+
+  it("byCountry holds dedicated local numbers only (null when unprovisioned) plus the fallback", () => {
+    process.env.FREESWITCH_CALLER_ID = "+16472436283";
+    process.env.FREESWITCH_CALLER_ID_CA = "+16472436283";
+    process.env.FREESWITCH_CALLER_ID_AU = "+61272680150";
+    // NZ number not provisioned yet
+    const m = buildCallerIdMap();
+    expect(m.byCountry.NA).toBe("+16472436283");
+    expect(m.byCountry.AU).toBe("+61272680150");
+    expect(m.byCountry.NZ).toBeNull();
+    expect(m.fallback).toBe("+16472436283");
   });
 });

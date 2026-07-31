@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, type Dispatch } from "react";
-import { Clock, Globe2, Info, Users } from "lucide-react";
+import { Clock, Globe2, Info, Phone, Users } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
 import {
@@ -17,6 +17,7 @@ import {
   TIMEZONE_OPTIONS,
   type WizardAction,
   type WizardState,
+  type DialIdentities,
 } from "../wizardState";
 import StyledSelect from "@/components/StyledSelect";
 
@@ -32,9 +33,11 @@ interface Props {
   /** Set by WizardPage when source=campaign prefill ran. Drives the
    *  "Duplicated from" banner's skip footnote. Null on non-duplicate flows. */
   duplicateSkipped?: DuplicateSkipped | null;
+  /** Resolved dial identities for the caller-ID preview (best-effort; may be null). */
+  dialIdentities?: DialIdentities | null;
 }
 
-export default function StepAudience({ state, dispatch, duplicateSkipped }: Props) {
+export default function StepAudience({ state, dispatch, duplicateSkipped, dialIdentities }: Props) {
   const hours = getCallingHours(state.timezone);
   const tzLabel =
     TIMEZONE_OPTIONS.find((o) => o.value === state.timezone)?.label ?? state.timezone;
@@ -56,6 +59,14 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
   const recommendedTz = allowedTimezonesForCountry(detection.country);
   const tzMismatch =
     recommendedTz != null && !recommendedTz.includes(state.timezone);
+
+  // Caller ID this audience's country will see — the dedicated local DID if we
+  // have one, else the shared fallback. Resolved server-side (dialIdentities) so
+  // it matches what the dialer actually presents.
+  const presentedCid = detection.country
+    ? dialIdentities?.callers.byCountry[detection.country] ?? dialIdentities?.callers.fallback ?? null
+    : null;
+  const cidIsLocal = !!(detection.country && dialIdentities?.callers.byCountry[detection.country]);
 
   return (
     <div className="flex-1 flex flex-col">
@@ -340,6 +351,22 @@ export default function StepAudience({ state, dispatch, duplicateSkipped }: Prop
               <span className="text-[var(--text-3)]">{hours.note}</span>
             </span>
           </div>
+
+          {/* Caller-ID preview — who players see when we call this audience */}
+          {detection.country && presentedCid && (
+            <div className="px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[12px] text-[var(--text-2)] flex items-start gap-2">
+              <Phone size={13} className="text-blue-400 shrink-0 mt-0.5" />
+              <span>
+                Players see caller ID{" "}
+                <span className="text-[var(--text-1)] font-semibold font-mono">{presentedCid}</span>
+                {cidIsLocal ? (
+                  <span className="text-emerald-400"> · local {countryLabel(detection.country)} number</span>
+                ) : (
+                  <span className="text-amber-300"> · shared number — no local {countryLabel(detection.country)} number yet</span>
+                )}
+              </span>
+            </div>
+          )}
 
           <StyledSelect
             value={state.timezone}

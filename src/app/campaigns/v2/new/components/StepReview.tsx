@@ -6,18 +6,21 @@ import {
 } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { countryLabel, detectAudienceCountry } from "@/lib/audienceCountry";
 import { DEFAULT_WS } from "@/components/SegmentImporter";
 
 import {
   DAYS, getCallingHours, SHORTENED_URL_LENGTH, smsSegmentCount, TIMEZONE_OPTIONS,
   validateBeforeSubmit,
-  type Step, type WizardAction, type WizardState,
+  type Step, type WizardAction, type WizardState, type DialIdentities,
 } from "../wizardState";
 import { VOICE_OPTIONS } from "@/lib/voiceOptions";
 
 interface Props {
   state: WizardState;
   dispatch: Dispatch<WizardAction>;
+  /** Resolved dial identities for the caller-ID + SMS-originator review rows (best-effort; may be null). */
+  dialIdentities?: DialIdentities | null;
 }
 
 function formatLocalTime(date: Date, timeZone: string): string {
@@ -32,13 +35,23 @@ function formatLocalTime(date: Date, timeZone: string): string {
   }
 }
 
-export default function StepReview({ state, dispatch }: Props) {
+export default function StepReview({ state, dispatch, dialIdentities }: Props) {
   const tzLabel =
     TIMEZONE_OPTIONS.find((o) => o.value === state.timezone)?.label ?? state.timezone;
   const tzHours = getCallingHours(state.timezone);
   const parsedNumbers = useMemo(() => parsePhoneList(state.numbersText), [state.numbersText]);
 
   const isRecurring = state.campaignType === "recurring";
+
+  // Dial identities for the review (resolved server-side, matches what goes out).
+  const detection = useMemo(() => detectAudienceCountry(parsedNumbers), [parsedNumbers]);
+  const presentedCid = detection.country
+    ? dialIdentities?.callers.byCountry[detection.country] ?? dialIdentities?.callers.fallback ?? null
+    : dialIdentities?.callers.fallback ?? null;
+  const cidIsLocal = !!(detection.country && dialIdentities?.callers.byCountry[detection.country]);
+  const smsBrand = state.cioWorkspace ?? DEFAULT_WS;
+  const smsOriginator = dialIdentities?.senders[smsBrand] ?? null;
+  const smsBrandKnown = dialIdentities != null && smsBrand in dialIdentities.senders;
 
   const enabledDays = state.scheduleRows.filter((r) => r.enabled);
   const recurringDays = state.recurrencePattern.days_of_week;
@@ -109,6 +122,25 @@ export default function StepReview({ state, dispatch }: Props) {
                 {tzLabel}
                 <span className="text-[var(--text-3)] ml-1.5 font-mono">· {tzHours.start}–{tzHours.end}</span>
               </>
+            }
+          />
+          <ReviewRow
+            label="Caller ID"
+            value={
+              presentedCid ? (
+                <>
+                  <span className="font-mono">{presentedCid}</span>
+                  {detection.country && (
+                    cidIsLocal ? (
+                      <span className="text-[var(--text-3)] ml-1.5">· local {countryLabel(detection.country)}</span>
+                    ) : (
+                      <span className="text-amber-300 ml-1.5">· shared, no local {countryLabel(detection.country)} number</span>
+                    )
+                  )}
+                </>
+              ) : (
+                <em className="text-[var(--text-3)]">—</em>
+              )
             }
           />
         </ReviewCard>
@@ -308,6 +340,23 @@ export default function StepReview({ state, dispatch }: Props) {
                       ~{estimatedSmsLen} chars · {smsSegs} SMS
                     </span>
                   </>
+                }
+              />
+              <ReviewRow
+                label="Sender"
+                value={
+                  smsBrandKnown ? (
+                    smsOriginator ? (
+                      <>
+                        {smsOriginator}
+                        <span className="text-[var(--text-3)] ml-1.5">· brand {smsBrand}</span>
+                      </>
+                    ) : (
+                      <span className="text-amber-300">no sender configured for {smsBrand}</span>
+                    )
+                  ) : (
+                    <em className="text-[var(--text-3)]">{smsBrand}</em>
+                  )
                 }
               />
               <ReviewRow

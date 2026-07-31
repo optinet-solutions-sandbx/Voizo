@@ -3,18 +3,21 @@
 import { useMemo, type Dispatch } from "react";
 import { AlertTriangle, MessageSquareText } from "lucide-react";
 import Toggle from "@/components/ui/Toggle";
+import { DEFAULT_WS } from "@/components/SegmentImporter";
 
 import {
   SHORTENED_URL_LENGTH, smsSegmentCount,
-  type WizardAction, type WizardState,
+  type WizardAction, type WizardState, type DialIdentities,
 } from "../wizardState";
 
 interface Props {
   state: WizardState;
   dispatch: Dispatch<WizardAction>;
+  /** Resolved dial identities for the SMS originator preview (best-effort; may be null). */
+  dialIdentities?: DialIdentities | null;
 }
 
-export default function StepFollowup({ state, dispatch }: Props) {
+export default function StepFollowup({ state, dispatch, dialIdentities }: Props) {
   // Derived values — ported verbatim from page-classic.tsx:241-257.
   const estimatedDeliveredLength = useMemo(() => {
     const msgLen = state.smsMessage.trim().length;
@@ -40,6 +43,13 @@ export default function StepFollowup({ state, dispatch }: Props) {
   const hasUrlInMessage = /https?:\/\//i.test(state.smsMessage);
   const isValidSmsLink = state.smsLink.trim() === "" || state.smsLink.trim().startsWith("https://");
   const isSmsBodyEmpty = state.smsEnabled && state.smsMessage.trim().length === 0;
+
+  // SMS originator (sender ID) this campaign's brand will send under. Resolved
+  // server-side so it matches what actually goes out; null = brand has no
+  // Mobivate sender configured (surface it, don't imply a send).
+  const smsBrand = state.cioWorkspace ?? DEFAULT_WS;
+  const smsOriginator = dialIdentities?.senders[smsBrand] ?? null;
+  const smsBrandKnown = dialIdentities != null && smsBrand in dialIdentities.senders;
 
   function setSms<K extends keyof Pick<WizardState, "smsEnabled" | "smsConsentMode" | "smsMessage" | "smsLink" | "smsOptout" | "smsLinkEditing" | "smsOptoutEditing" | "smsLastResortEnabled" | "smsLastResortMessage">>(
     key: K,
@@ -88,6 +98,24 @@ export default function StepFollowup({ state, dispatch }: Props) {
             onChange={(v) => setSms("smsEnabled", v)}
           />
         </div>
+
+        {/* SMS originator preview — who the text comes from (per brand) */}
+        {state.smsEnabled && smsBrandKnown && (
+          <div className="px-4 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-[12px] text-[var(--text-2)] flex items-start gap-2">
+            <MessageSquareText size={13} className="text-blue-400 shrink-0 mt-0.5" />
+            {smsOriginator ? (
+              <span>
+                Texts send as{" "}
+                <span className="text-[var(--text-1)] font-semibold">{smsOriginator}</span>
+                <span className="text-[var(--text-3)]"> · brand {smsBrand}</span>
+              </span>
+            ) : (
+              <span className="text-amber-300">
+                No SMS sender configured for brand <span className="font-semibold">{smsBrand}</span> — texts for this brand will fail until it&apos;s registered in Mobivate.
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Send-timing mode (2026-06-11): verbal_yes = on-call yes required;
             registered_optin = client-attested signup opt-in (Val), including the

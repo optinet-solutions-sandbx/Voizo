@@ -107,6 +107,19 @@ export const TIMEZONE_OPTIONS: TimezoneOption[] = [
 // remains the single source of truth for downstream consumers.
 export type AudienceSource = "cio" | "voizo" | "manual";
 
+/**
+ * Fetched (not form state): the resolved dial identities the wizard previews so
+ * operators see who a campaign texts/calls as before launch. Sourced from the
+ * real resolvers via GET /api/campaigns-v2/dial-identities, so the preview can
+ * never disagree with what the dialer/sender actually present.
+ */
+export interface DialIdentities {
+  /** brand (cio_workspace label) → SMS originator; null = no Mobivate sender configured for that brand. */
+  senders: Record<string, string | null>;
+  /** country → dedicated local caller ID (null = none yet, falls back); fallback = the default FREESWITCH_CALLER_ID. */
+  callers: { byCountry: Record<string, string | null>; fallback: string | null };
+}
+
 export interface WizardState {
   step: Step;
 

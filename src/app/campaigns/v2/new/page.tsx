@@ -28,7 +28,7 @@ import { parseJsonBody } from "@/lib/jsonBody";
 import {
   buildCloneRequest, buildCreateInput, createInitialState, decomposeSmsTemplate,
   deriveScheduleRows, validateBeforeSubmit, wizardReducer,
-  type CloneResult, type Step,
+  type CloneResult, type Step, type DialIdentities,
 } from "./wizardState";
 import Stepper from "./components/Stepper";
 import FooterNav from "./components/FooterNav";
@@ -381,6 +381,23 @@ function WizardPage({
     })();
   }, []);
 
+  // Dial identities (per-brand SMS originator + per-country caller ID) for the
+  // wizard preview. Best-effort: the wizard works without it, so a failed fetch
+  // is silently ignored (the preview lines just don't render). Same once-on-mount
+  // pattern as assistants.
+  const [dialIdentities, setDialIdentities] = useState<DialIdentities | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/campaigns-v2/dial-identities");
+        if (!res.ok) return;
+        setDialIdentities((await res.json()) as DialIdentities);
+      } catch {
+        /* preview is best-effort — never block the wizard on it */
+      }
+    })();
+  }, []);
+
   // Scripts list (VOZ-159) — same once-on-mount pattern as assistants, for the
   // Step-2 Script-mode dropdown.
   const [scripts, setScripts] = useState<ScriptOption[] | null>(null);
@@ -556,7 +573,7 @@ function WizardPage({
             </div>
           )}
           {state.step === 1 && (
-            <StepAudience state={state} dispatch={dispatch} duplicateSkipped={duplicateSkipped} />
+            <StepAudience state={state} dispatch={dispatch} duplicateSkipped={duplicateSkipped} dialIdentities={dialIdentities} />
           )}
           {state.step === 2 && (
             <StepAgent
@@ -585,8 +602,8 @@ function WizardPage({
               </p>
             </div>
           )}
-          {state.step === 4 && <StepFollowup state={state} dispatch={dispatch} />}
-          {state.step === 5 && <StepReview state={state} dispatch={dispatch} />}
+          {state.step === 4 && <StepFollowup state={state} dispatch={dispatch} dialIdentities={dialIdentities} />}
+          {state.step === 5 && <StepReview state={state} dispatch={dispatch} dialIdentities={dialIdentities} />}
           </div>
 
           <FooterNav
