@@ -71,13 +71,23 @@ If `Status` shows `DOWN` or `FAIL_WAIT`:
 
 ## 4. Fire a Smoke-Test Call
 
-This is the standard end-to-end test: FreeSWITCH → SquareTalk → PSTN → Vapi AI bridge.
+**⚠️ 2026-07-31 updates:**
+- The old `voizo-poc` Vapi SIP identifier is **dead** (verified: `CALL_REJECTED` in 440ms). Do **not** use the old bridge command. Vapi traffic now flows through campaign-leased pool slots (`voizo-sip-pool-slot-NN`) — never bridge a manual test into one (you'd inject the callee into a live campaign's assistant).
+- The UK caller ID `+442036953434` is **deprecated** — it belongs to SquareTalk, not Voizo. Use the owned per-country DIDs below.
 
-**Replace `<E164_DESTINATION>` with the target phone number** (e.g., `+35054020611` for Maria's Gibraltar number).
+**Line test (PSTN leg + ANI + two-way audio) — the standard smoke test.** The callee hears their own voice echoed back (they must speak); their phone display verifies the presented caller ID. The command blocks until answer (up to 45s), then prints `+OK <uuid>`:
 
 ```bash
-sudo fs_cli -x "originate {origination_caller_id_number=+442036953434,ignore_early_media=true}sofia/gateway/squaretalk/<E164_DESTINATION> &bridge([sip_auth_username=voizo-poc,sip_auth_password=test123]sofia/external/sip:voizo-poc@sip.vapi.ai)"
+# AU caller ID (+61272680150, Sydney) — for AU destinations
+sudo fs_cli -x "originate {origination_caller_id_number=+61272680150,ignore_early_media=true,origination_timeout=45}sofia/gateway/squaretalk/<E164_DESTINATION> &echo"
+
+# CA caller ID (+16472436283, Toronto) — for +1 destinations
+sudo fs_cli -x "originate {origination_caller_id_number=+16472436283,ignore_early_media=true,origination_timeout=45}sofia/gateway/squaretalk/<E164_DESTINATION> &echo"
 ```
+
+Pass criteria: ① rings ② callee's phone displays the caller ID you set ③ echo audible when they speak ④ `NORMAL_CLEARING` hangup in the log. (Both DIDs verified end-to-end 2026-07-31: answered, correct display incl. "Sydney" label, clean hangup.)
+
+For a full end-to-end test **with the Vapi AI leg**, use a real test campaign from the dashboard instead — campaign traffic exercises the pool-slot bridge path daily.
 
 > **Always include `ignore_early_media=true`.** Without it, FreeSWITCH bridges on the `183 Session Progress` ringing tone, Vapi starts speaking to silence, and hangs up within ~3 seconds. The call will look like a carrier 480 but it's actually a bridge-timing bug.
 
@@ -309,7 +319,9 @@ sudo grep -E "rollover|maximum-rotate" /etc/freeswitch/autoload_configs/logfile.
 | SSH key path | `~/Desktop/voizo/voizo-aws/voizo-poc-key.pem` |
 | SSH user | `admin` |
 | SquareTalk gateway host | `lb-sbc.squaretalk.com:5060` |
-| Caller ID (SquareTalk test CID) | `+442036953434` |
+| Caller ID — CA (owned, Toronto) | `+16472436283` |
+| Caller ID — AU (owned, Sydney) | `+61272680150` |
+| ~~Caller ID (UK)~~ | ~~`+442036953434`~~ **DEPRECATED 2026-07-31 — SquareTalk's number, not ours. Do not present.** |
 | Vapi SIP endpoint | `sip:voizo-poc@sip.vapi.ai` |
 | Vapi SIP username | `voizo-poc` |
 | Vapi SIP password | `test123` |

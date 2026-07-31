@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "./supabaseServer";
 import { originateCall } from "./freeswitch/originate";
+import { resolveFreeswitchCallerId } from "./freeswitch/callerId";
 
 /**
  * Check if the current time falls within the campaign's call windows.
@@ -196,10 +197,9 @@ export async function fireCall(
   if (callErr || !callRow) throw new Error("Failed to create call record");
 
   try {
-    const callerId = process.env.FREESWITCH_CALLER_ID;
-    if (!callerId) {
-      throw new Error("FREESWITCH_CALLER_ID not set. Required for outbound dialing.");
-    }
+    // Per-country owned DID (CA/AU/NZ) with FREESWITCH_CALLER_ID as fallback;
+    // throws when nothing is configured (same loud failure as before).
+    const callerId = resolveFreeswitchCallerId(campaignNumber.phone_e164);
     const result = await originateCall({
       to: campaignNumber.phone_e164,
       callerId,
