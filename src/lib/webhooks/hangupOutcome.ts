@@ -87,6 +87,28 @@ export function resolveAttemptCount(args: { current: number | null; wasGhost: bo
   return args.wasGhost ? current : current + 1;
 }
 
+/**
+ * When a call COMPLETES, the player was reached — so the number must not be left
+ * queued for a retry that a prior FALSE 'failed' put it in (VOZ-269).
+ *
+ * The ESL-timeout ghost path: the shim reports failure, FreeSWITCH placed the call
+ * anyway, and fireCall's catch marks the row 'failed' AND moves the number to
+ * 'pending_retry' (or 'unreached' at max) BEFORE the hangup webhook arrives. VOZ-248
+ * then recovers the CALL row to completed — but left that stale number state, so the
+ * queued retry still fired ~1h later: 35 of 55 confirmed false-negatives were
+ * re-dialled. This override is the missing half of VOZ-248.
+ *
+ * Returns the outcome a completed call must FORCE the number back to when it is
+ * stuck in such a stale state ('in_progress', so Vapi's end-of-call sets the real
+ * final outcome exactly as it does for a normal completed call), else null — leave
+ * it alone. A normal completed call's number is already 'in_progress' (→ null, no
+ * write), and a Vapi-set outcome (sent_sms / not_interested / declined_offer) is
+ * never touched (→ null), so a real conversion result can never be lost here.
+ */
+export function completedNumberOutcomeOverride(currentOutcome: string | null): "in_progress" | null {
+  return currentOutcome === "pending_retry" || currentOutcome === "unreached" ? "in_progress" : null;
+}
+
 export function mapHangup(hangupCause: string | null, s: HangupSignals): HangupOutcome {
   const cause = (hangupCause || "").toUpperCase();
   const answered = resolveAnswered(s);

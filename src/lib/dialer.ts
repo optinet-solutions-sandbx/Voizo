@@ -225,49 +225,73 @@ export async function fireCall(
     //     terminal → cron keeps re-firing every retry_interval_minutes).
     //   - Use campaign.retry_interval_minutes (default 90) for the cooldown
     //     instead of a hardcoded 5-min value that would burn cycles fast.
-    const { data: numRow } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("attempt_count")
-      .eq("id", campaignNumber.id)
-      .single();
-    const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
-
-    const { data: cfg } = await supabaseAdmin
-      .from("campaigns_v2")
-      .select("retry_interval_minutes, max_attempts")
-      .eq("id", campaignId)
-      .single();
-    const retryMinutes = cfg?.retry_interval_minutes ?? 90;
-    const maxAttempts = cfg?.max_attempts ?? 3;
-
-    await supabaseAdmin
+    //
+    // VOZ-269: an ESL-timeout makes originate THROW while FreeSWITCH still placed
+    // the call — so this catch must not blindly overwrite a row the hangup webhook
+    // may have ALREADY terminalized. Claim 'failed' ONLY while the row is still
+    // non-terminal (mirrors voice-status's atomic idempotency claim). If the webhook
+    // won the race (the call really connected), the claim matches 0 rows: leave the
+    // row and the number exactly as the webhook resolved them, and do NOT burn an
+    // attempt or queue a retry — that is the double-dial we are killing (35/55).
+    // hangup_cause is deliberately left NULL so the webhook's ghost-recovery
+    // (VOZ-248) can still self-identify this row if it arrives afterwards.
+    const { data: claimedFail } = await supabaseAdmin
       .from("calls_v2")
       .update({ status: "failed", ended_at: new Date().toISOString() })
-      .eq("id", callRow.id);
+      .eq("id", callRow.id)
+      .in("status", ["initiated", "ringing", "in_progress", "answered"])
+      .select("id");
 
-    if (newAttemptCount >= maxAttempts) {
-      // Exhausted via provider failures → terminal `unreached`. Mirrors the
-      // voice-status webhook's terminal-outcome logic so retry-loop behavior
-      // is identical regardless of whether voice-status fires or not.
-      await supabaseAdmin
+    if (claimedFail && claimedFail.length > 0) {
+      const { data: numRow } = await supabaseAdmin
         .from("campaign_numbers_v2")
-        .update({
-          attempt_count: newAttemptCount,
-          last_attempted_at: new Date().toISOString(),
-          outcome: "unreached",
-        })
-        .eq("id", campaignNumber.id);
+        .select("attempt_count")
+        .eq("id", campaignNumber.id)
+        .single();
+      const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
+
+      const { data: cfg } = await supabaseAdmin
+        .from("campaigns_v2")
+        .select("retry_interval_minutes, max_attempts")
+        .eq("id", campaignId)
+        .single();
+      const retryMinutes = cfg?.retry_interval_minutes ?? 90;
+      const maxAttempts = cfg?.max_attempts ?? 3;
+
+      if (newAttemptCount >= maxAttempts) {
+        // Exhausted via provider failures → terminal `unreached`. Mirrors the
+        // voice-status webhook's terminal-outcome logic so retry-loop behavior
+        // is identical regardless of whether voice-status fires or not.
+        await supabaseAdmin
+          .from("campaign_numbers_v2")
+          .update({
+            attempt_count: newAttemptCount,
+            last_attempted_at: new Date().toISOString(),
+            outcome: "unreached",
+          })
+          .eq("id", campaignNumber.id);
+      } else {
+        const retryAt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
+        await supabaseAdmin
+          .from("campaign_numbers_v2")
+          .update({
+            attempt_count: newAttemptCount,
+            last_attempted_at: new Date().toISOString(),
+            next_attempt_at: retryAt,
+            outcome: "pending_retry",
+          })
+          .eq("id", campaignNumber.id);
+      }
     } else {
-      const retryAt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
-      await supabaseAdmin
-        .from("campaign_numbers_v2")
-        .update({
-          attempt_count: newAttemptCount,
-          last_attempted_at: new Date().toISOString(),
-          next_attempt_at: retryAt,
-          outcome: "pending_retry",
-        })
-        .eq("id", campaignNumber.id);
+      // The hangup webhook already terminalized this row: the originate "failure"
+      // was an ESL-reply timeout on a call that actually connected. The webhook
+      // owns the outcome; touching attempt_count or next_attempt_at here would
+      // re-queue an already-reached player (VOZ-269).
+      console.warn(
+        `[dialer.fireCall] originate reported failure for call ${callRow.id} but the ` +
+        `row was already terminal — the call was placed (VOZ-269 ghost). Leaving the ` +
+        `webhook-set outcome; not burning an attempt or scheduling a retry.`,
+      );
     }
     throw err;
   }

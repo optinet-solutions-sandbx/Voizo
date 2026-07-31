@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mapHangup, resolveAnswered, resolveAttemptCount, type HangupSignals } from "./hangupOutcome";
+import {
+  completedNumberOutcomeOverride,
+  mapHangup,
+  resolveAnswered,
+  resolveAttemptCount,
+  type HangupSignals,
+} from "./hangupOutcome";
 
 // Legacy payload = what a not-yet-redeployed shim sends: total duration only.
 const legacy = (totalSeconds: number): HangupSignals => ({
@@ -120,6 +126,39 @@ describe("resolveAttemptCount — ghost calls must not burn two attempts (VOZ-24
 
   it("null current is treated as 0 in both modes", () => {
     expect(resolveAttemptCount({ current: null, wasGhost: true })).toBe(0);
+  });
+});
+
+describe("completedNumberOutcomeOverride — a completed call must not leave a stale retry (VOZ-269)", () => {
+  it("a ghost recovered to completed clears the stale pending_retry the catch set", () => {
+    // ESL-timeout: fireCall's catch marked the row failed AND queued the number
+    // for retry, THEN the hangup webhook recovered the call to completed. Without
+    // this override the number stays pending_retry and re-dials ~1h later
+    // (35 of 55 confirmed double-dials).
+    expect(completedNumberOutcomeOverride("pending_retry")).toBe("in_progress");
+  });
+
+  it("a ghost that had hit max (outcome unreached) is corrected too — the player WAS reached", () => {
+    expect(completedNumberOutcomeOverride("unreached")).toBe("in_progress");
+  });
+
+  it("a NORMAL completed call (number already in_progress) is left untouched", () => {
+    // The non-ghost path: the number is 'in_progress' and Vapi's end-of-call
+    // sets the real final outcome. Overriding here would be a pointless write.
+    expect(completedNumberOutcomeOverride("in_progress")).toBeNull();
+  });
+
+  it("never overrides a Vapi-set outcome — those win regardless", () => {
+    // The caller already guards these, but the pure rule must not lose a real
+    // conversion result if it were ever reached with one.
+    expect(completedNumberOutcomeOverride("sent_sms")).toBeNull();
+    expect(completedNumberOutcomeOverride("not_interested")).toBeNull();
+    expect(completedNumberOutcomeOverride("declined_offer")).toBeNull();
+  });
+
+  it("null / unknown outcome is left as-is", () => {
+    expect(completedNumberOutcomeOverride(null)).toBeNull();
+    expect(completedNumberOutcomeOverride("suppressed")).toBeNull();
   });
 });
 

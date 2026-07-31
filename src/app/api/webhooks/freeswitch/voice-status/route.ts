@@ -20,7 +20,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
-import { mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
+import { completedNumberOutcomeOverride, mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -212,13 +212,28 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", numberId);
   } else if (terminalOutcome === "completed") {
-    // Vapi's end-of-call webhook will set the final outcome
+    // Vapi's end-of-call webhook will set the final outcome.
+    //
+    // VOZ-269: a GHOST recovered to completed still carries the stale
+    // pending_retry / unreached that fireCall's catch wrote before this webhook
+    // ran (the ESL-timeout marked the row failed AND queued the number, then the
+    // ghost claim above corrected only the CALL row). Clear it so the reached
+    // player is not re-dialled — 35 of 55 confirmed false-negatives WERE. Scoped
+    // to pending_retry / unreached, which a completed call can only be in via that
+    // ghost path (fireCall sets the number 'in_progress' before dialing), so this
+    // never touches a Vapi-set outcome and is a no-op for a normal completed call.
+    const staleOverride = completedNumberOutcomeOverride(numRow?.outcome ?? null);
+    const completedNumUpdate: Record<string, unknown> = {
+      attempt_count: newAttemptCount,
+      last_attempted_at: new Date().toISOString(),
+    };
+    if (staleOverride) {
+      completedNumUpdate.outcome = staleOverride;
+      completedNumUpdate.next_attempt_at = null;
+    }
     await supabaseAdmin
       .from("campaign_numbers_v2")
-      .update({
-        attempt_count: newAttemptCount,
-        last_attempted_at: new Date().toISOString(),
-      })
+      .update(completedNumUpdate)
       .eq("id", numberId);
   } else if (newAttemptCount >= (campaign?.max_attempts ?? 3)) {
     await supabaseAdmin
