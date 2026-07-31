@@ -21,7 +21,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decideLastResortSend, resolveSmsConsentMode, type SmsConsentMode } from "../smsDispatchDecision";
-import { getMobivateConfigError, sendSMS } from "../mobivate";
+import { getMobivateConfigError, resolveSmsSenderId, sendSMS } from "../mobivate";
 
 /** Cost + budget bound: sends are not latency-critical (the player already
  *  missed every call today); the remainder goes next tick (60s later). */
@@ -209,17 +209,34 @@ export async function runLastResortSweep(
         continue;
       }
 
-      const result = await sendSMS({ to: phone, body: template, reference: smsRow.id });
+      // Per-brand originator: resolve from the campaign's cio_workspace. Fail
+      // closed — an unconfigured brand records the row 'failed' rather than
+      // sending under Lucky7even (parity with processEndOfCall).
+      const { senderId, error: senderErr } = resolveSmsSenderId((c.cio_workspace as string | null) ?? null);
+      if (senderErr || !senderId) {
+        console.error(
+          `[lastResort] ${campaignName}: no sender ID for brand '${(c.cio_workspace as string) ?? "(default)"}' — NOT sending. ${senderErr}`,
+        );
+        await supabase
+          .from("sms_messages_v2")
+          .update({ status: "failed", error_message: senderErr ?? "sender ID unresolved" })
+          .eq("id", smsRow.id);
+        sent++; // claim placed — count against the cap (parity with the not-configured branch)
+        continue;
+      }
+
+      const result = await sendSMS({ to: phone, body: template, reference: smsRow.id, originator: senderId });
       await supabase
         .from("sms_messages_v2")
         .update({
           status: result.success ? "sent" : "failed",
           provider_message_id: result.providerMessageId,
           error_message: result.error,
+          sender_id: senderId,
         })
         .eq("id", smsRow.id);
       console.log(
-        `[lastResort] ${campaignName}: last-resort SMS ${result.success ? "sent" : "failed"} → ${phone.slice(0, -4)}**** (reason=exhausted_${maxAttempts}_tries)`,
+        `[lastResort] ${campaignName}: last-resort SMS ${result.success ? "sent" : "failed"} → ${phone.slice(0, -4)}**** (brand=${(c.cio_workspace as string) ?? "default"}, sender=${senderId}, reason=exhausted_${maxAttempts}_tries)`,
       );
       sent++;
     }

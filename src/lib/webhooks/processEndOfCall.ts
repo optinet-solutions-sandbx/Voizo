@@ -384,6 +384,9 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
      *  text goes out after the final failed try via the scheduler sweep).
      *  Optional — the legacy fallback select below omits it (pre-migration). */
     sms_last_resort_template?: string | null;
+    /** Brand routing anchor (VOZ-198). The `*` select provides it; the legacy
+     *  fallback select omits it → undefined → default brand (Lucky7even). */
+    cio_workspace?: string | null;
   };
   let campaign: SmsCampaignConfig | null = null;
   {
@@ -623,28 +626,45 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
                   smsInsertErr,
                 );
               } else {
-                const { sendSMS, getMobivateConfigError } = await import("@/lib/mobivate");
+                const { sendSMS, getMobivateConfigError, resolveSmsSenderId } = await import("@/lib/mobivate");
 
                 if (!getMobivateConfigError()) {
-                  const result = await sendSMS({
-                    to: numRow.phone_e164,
-                    body: smsTemplate,
-                    reference: smsRow.id,
-                  });
+                  // Per-brand originator (per-brand SMS): resolve from the campaign's
+                  // cio_workspace. Fail closed — an unconfigured brand records the row
+                  // 'failed' instead of sending a brand's offer under Lucky7even's name.
+                  const { senderId, error: senderErr } = resolveSmsSenderId(campaign?.cio_workspace);
+                  if (senderErr || !senderId) {
+                    console.error(
+                      `[sms-gate] no sender ID for brand '${campaign?.cio_workspace ?? "(default)"}' — NOT sending. ` +
+                      `${senderErr}. vapiCallId=${vapiCallId}`,
+                    );
+                    await supabaseAdmin
+                      .from("sms_messages_v2")
+                      .update({ status: "failed", error_message: senderErr ?? "sender ID unresolved" })
+                      .eq("id", smsRow.id);
+                  } else {
+                    const result = await sendSMS({
+                      to: numRow.phone_e164,
+                      body: smsTemplate,
+                      reference: smsRow.id,
+                      originator: senderId,
+                    });
 
-                  await supabaseAdmin
-                    .from("sms_messages_v2")
-                    .update({
-                      status: result.success ? "sent" : "failed",
-                      provider_message_id: result.providerMessageId,
-                      error_message: result.error,
-                    })
-                    .eq("id", smsRow.id);
+                    await supabaseAdmin
+                      .from("sms_messages_v2")
+                      .update({
+                        status: result.success ? "sent" : "failed",
+                        provider_message_id: result.providerMessageId,
+                        error_message: result.error,
+                        sender_id: senderId,
+                      })
+                      .eq("id", smsRow.id);
 
-                  console.log(
-                    `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
-                    `(reason=${decision.reason}, provider_id=${result.providerMessageId})`,
-                  );
+                    console.log(
+                      `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
+                      `(brand=${campaign?.cio_workspace ?? "default"}, sender=${senderId}, reason=${decision.reason}, provider_id=${result.providerMessageId})`,
+                    );
+                  }
                 } else {
                   console.warn(
                     `SMS queued for ${numRow.phone_e164.slice(0, -4)}**** (reason=${decision.reason}) but ` +

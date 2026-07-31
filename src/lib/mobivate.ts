@@ -17,6 +17,8 @@
  * Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md (SMS dispatch section)
  */
 
+import { CIO_DEFAULT_WORKSPACE } from "./customerio";
+
 // ── Env var validation (manifesto §2: "Throw loud if a required var is missing") ──
 // Unlike FreeSWITCH, Mobivate vars are optional at startup — the system
 // runs without SMS capability until the API key is provided. We validate at
@@ -38,6 +40,50 @@ export function getMobivateConfigError(): string | null {
   return null;
 }
 
+/**
+ * Per-brand SMS originator (sender ID). The brand is the campaigns_v2.cio_workspace
+ * label (VOZ-198); this mirrors resolveAppApiKey so a reviewer reads it the same way:
+ *
+ *   - Reads env at CALL time (tests steer it; the dashboard boots unconfigured).
+ *   - Map env MOBIVATE_SENDER_IDS = {"lucky7even":"Lucky7even","fortuneplay":"FortunePlay"}
+ *     — the same {brand label → value} shape as CUSTOMERIO_APP_API_KEYS, labels MUST
+ *     match that map + campaigns_v2.cio_workspace.
+ *   - The legacy single MOBIVATE_SENDER_ID is the fallback for the DEFAULT brand ONLY.
+ *   - A non-default brand NEVER borrows the default sender: that would send brand A's
+ *     offer under brand B's name (the exact wrong-brand/consent bug this fixes). Fail
+ *     closed instead.
+ */
+function parseSenderIdMap(): Record<string, unknown> {
+  const rawMap = process.env.MOBIVATE_SENDER_IDS;
+  if (!rawMap) return {};
+  try {
+    const parsed: unknown = JSON.parse(rawMap);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through — malformed map: default brand still uses the legacy key, others fail closed
+  }
+  return {};
+}
+
+export function resolveSmsSenderId(
+  workspace?: string | null,
+): { senderId: string; error: null } | { senderId: null; error: string } {
+  const ws = (workspace ?? "").trim() || CIO_DEFAULT_WORKSPACE;
+  const map = parseSenderIdMap();
+  const entry = map[ws];
+  if (typeof entry === "string" && entry.trim().length > 0) {
+    return { senderId: entry, error: null };
+  }
+  if (ws === CIO_DEFAULT_WORKSPACE) {
+    const legacy = process.env.MOBIVATE_SENDER_ID;
+    if (legacy) return { senderId: legacy, error: null };
+    return { senderId: null, error: "MOBIVATE_SENDER_ID is not set" };
+  }
+  return { senderId: null, error: `MOBIVATE_SENDER_IDS has no sender for workspace '${ws}'` };
+}
+
 export interface SendSMSArgs {
   /** Recipient phone number in international format (E.164 without the +, e.g. "61412345678") */
   to: string;
@@ -45,6 +91,10 @@ export interface SendSMSArgs {
   body: string;
   /** Our reference ID for delivery receipt correlation (typically the sms_messages_v2.id) */
   reference?: string;
+  /** Per-brand sender ID (originator). Resolve via resolveSmsSenderId(cio_workspace)
+   *  at the call site and pass it here. Omitted → the legacy default MOBIVATE_SENDER_ID
+   *  (backward-compatible with pre-per-brand callers). */
+  originator?: string;
 }
 
 export interface SendSMSResult {
@@ -81,7 +131,9 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
 
   const requestBody = {
     body: args.body,
-    originator: MOBIVATE_SENDER_ID,
+    // Per-brand originator resolved at the call site (VOZ per-brand SMS); the
+    // module-load default keeps pre-per-brand callers behaving exactly as before.
+    originator: args.originator ?? MOBIVATE_SENDER_ID,
     recipient,
     shortenUrls: true,
     excludeOptouts: true,
