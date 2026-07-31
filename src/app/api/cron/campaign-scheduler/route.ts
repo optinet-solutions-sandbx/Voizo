@@ -6,6 +6,7 @@ import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
+import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
@@ -389,18 +390,25 @@ export async function GET(request: NextRequest) {
 
   const resumeResults: Array<{ id: string; name: string; result: string }> = [];
 
+  // Per-campaign dial concurrency (K). Default 1 → the gate + fire loop below
+  // behave EXACTLY as the old "one call at a time" code. Raising it lets a campaign
+  // keep K calls in flight, K-fold-ing its dials/hour ceiling. Read once per tick.
+  const perCampaignK = resolvePerCampaignConcurrency(process.env.PER_CAMPAIGN_CONCURRENCY);
+
   for (const campaign of idleRunning ?? []) {
     const campaignId = campaign.id as string;
     const campaignName = campaign.name as string;
 
-    // Skip if a call is in flight — chain-next will handle when it ends
+    // Skip if the campaign is already at its concurrency target — chain-next holds
+    // the lanes and re-fires as each call ends. At the default K=1 this is exactly
+    // the old "skip if any call is in flight" behaviour.
     const { count: inFlight } = await supabaseAdmin
       .from("calls_v2")
       .select("id", { count: "exact", head: true })
       .eq("campaign_id", campaignId)
       .in("status", ["initiated", "ringing", "in_progress", "answered"]);
 
-    if (inFlight && inFlight > 0) continue;
+    if ((inFlight ?? 0) >= perCampaignK) continue;
 
     // Call window check (Manifesto §6: every dial). Outside-window → flip to
     // `paused` for parity with the chain-next webhook (voice-status/route.ts).
@@ -542,21 +550,53 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
-    try {
-      const host = request.headers.get("host") || "voizo-eight.vercel.app";
-      const proto = request.headers.get("x-forwarded-proto") || "https";
-      const baseUrl = `${proto}://${host}`;
-      await fireCall(
-        campaignId,
-        next,
-        campaign.vapi_assistant_id as string,
-        baseUrl,
-        (campaign.vapi_sip_uri as string) ?? undefined,
-      );
-      console.log(`[scheduler.resume] ${campaignName}: fired retry → ${next.phone_e164.slice(0, -4)}****`);
-      resumeResults.push({ id: campaignId, name: campaignName, result: "resumed" });
-    } catch (err) {
-      console.error(`[scheduler.resume] ${campaignName}: fire failed:`, err);
+    const host = request.headers.get("host") || "voizo-eight.vercel.app";
+    const proto = request.headers.get("x-forwarded-proto") || "https";
+    const baseUrl = `${proto}://${host}`;
+
+    // Fire up to the concurrency target (K). `next` (found above) is the first
+    // dial; each fireCall claims its number (outcome=in_progress) BEFORE dialing,
+    // so a re-run of findNextNumber returns a DISTINCT number — no double-claim
+    // within the tick. At the default K=1 this loop runs exactly once = the old
+    // single fire, so shipping this is a no-op until PER_CAMPAIGN_CONCURRENCY rises.
+    const toFire = dialsToFire(inFlight ?? 0, perCampaignK);
+    let firedCount = 0;
+    let fireFailed = false;
+    for (let i = 0; i < toFire; i++) {
+      // Same wall-clock budget as the outer guard: never START another fire once
+      // too little of the maxDuration tick remains, so a K>1 tick can't 504. The
+      // first fire always proceeds (the outer guard already reserved budget for it).
+      if (
+        i > 0 &&
+        Date.now() - tickStartedAt > maxDuration * 1000 - RESUME_FIRE_BUDGET_MS - RESUME_SAFETY_MS
+      ) {
+        break;
+      }
+      const numberToFire = i === 0 ? next : await findNextNumber(campaignId);
+      if (!numberToFire) break; // ran out of eligible numbers this tick
+      try {
+        await fireCall(
+          campaignId,
+          numberToFire,
+          campaign.vapi_assistant_id as string,
+          baseUrl,
+          (campaign.vapi_sip_uri as string) ?? undefined,
+        );
+        firedCount++;
+        console.log(`[scheduler.resume] ${campaignName}: fired → ${numberToFire.phone_e164.slice(0, -4)}****`);
+      } catch (err) {
+        console.error(`[scheduler.resume] ${campaignName}: fire failed:`, err);
+        fireFailed = true;
+        break; // stop topping up this campaign on a fire failure
+      }
+    }
+    if (firedCount > 0) {
+      resumeResults.push({
+        id: campaignId,
+        name: campaignName,
+        result: firedCount > 1 ? `resumed_x${firedCount}` : "resumed",
+      });
+    } else if (fireFailed) {
       resumeResults.push({ id: campaignId, name: campaignName, result: "fire_failed" });
     }
   }
