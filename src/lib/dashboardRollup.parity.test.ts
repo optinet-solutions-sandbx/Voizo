@@ -28,14 +28,24 @@ import {
 } from "./dashboardAnalytics";
 import { substantiveUserTurnCount } from "./transcriptClassify";
 
+// LIVE-PROD gate: pages the full calls_v2/sms_messages_v2 lifetime against the
+// one prod DB and needs .env.local — deliberately NOT part of `npm test`. Run:
+//   RUN_PARITY=1 npx vitest run src/lib/dashboardRollup.parity.test.ts
+const RUN_PARITY = process.env.RUN_PARITY === "1";
+
 const env: Record<string, string> = {};
-for (const l of fs.readFileSync(".env.local", "utf8").split(/\r?\n/)) {
-  const i = l.indexOf("=");
-  if (i > 0 && !l.startsWith("#")) env[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+if (RUN_PARITY) {
+  for (const l of fs.readFileSync(".env.local", "utf8").split(/\r?\n/)) {
+    const i = l.indexOf("=");
+    if (i > 0 && !l.startsWith("#")) env[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  }
 }
-const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+// Only constructed when the gate is on — skipped tests never touch it.
+const svc = RUN_PARITY
+  ? createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : (null as unknown as ReturnType<typeof createClient>);
 
 /** Keyset-paginated full fetch (PostgREST clamps at 1000). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder passthrough; test harness only
@@ -55,7 +65,7 @@ async function pageAll<T>(table: string, select: string, filter?: (q: any) => an
   }
 }
 
-describe("dashboard rollup parity — campaigns table (VOZ-283)", () => {
+describe.skipIf(!RUN_PARITY)("dashboard rollup parity — campaigns table (VOZ-283)", () => {
   it(
     "computeCampaignTableFromRollup === computeCampaignTable on live prod data",
     { timeout: 300_000 },
