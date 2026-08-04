@@ -17,6 +17,9 @@ import { setDuplicatePrefillCache } from "@/lib/duplicatePrefillCache";
 import { useCampaignExport, type ExportType } from "@/lib/useCampaignExport";
 import { useMagnetic } from "@/components/useMagnetic";
 import { isSmsSent } from "@/lib/dashboardAnalytics";
+import EstimateCard from "@/components/EstimateCard";
+import { detectAudienceCountry } from "@/lib/audienceCountry";
+import type { EstimateInput } from "@/lib/campaignEstimate";
 
 type Row = Record<string, unknown>;
 
@@ -521,6 +524,39 @@ export default function CampaignV2DetailPage() {
     }
     return counts;
   }, [numbers]);
+
+  // Remaining-work estimate (spec 2026-08-04 §3): histogram of tries left over
+  // players still in play. numbers is clamp-safe (detail bundle uses fetchAllRows).
+  const remainingEstimate = useMemo(() => {
+    if (!campaign || campaign.status !== "running") return null;
+    const maxAttempts = (campaign.max_attempts as number) ?? 3;
+    const hist: Record<number, number> = {};
+    for (const n of numbers) {
+      const o = (n.outcome as string) || "pending";
+      if (o !== "pending" && o !== "pending_retry") continue;
+      const left = Math.max(0, maxAttempts - ((n.attempt_count as number) ?? 0));
+      if (left === 0) continue;
+      hist[left] = (hist[left] ?? 0) + 1;
+    }
+    if (Object.keys(hist).length === 0) return null;
+    const windows = (campaign.call_windows as Array<{ start: string; end: string }> | null) ?? [];
+    const hours = windows.map((w) => {
+      const [sh, sm] = w.start.split(":").map(Number);
+      const [eh, em] = w.end.split(":").map(Number);
+      return Math.max(0, eh + em / 60 - (sh + sm / 60));
+    });
+    const input: EstimateInput = {
+      remainingTries: hist,
+      retryGapMinutes: (campaign.retry_interval_minutes as number) ?? 90,
+      windowHoursPerDay: hours.length ? hours.reduce((s, h) => s + h, 0) / hours.length : 0,
+      enabledDaysPerWeek: windows.length || 7,
+      realtime: Boolean(campaign.realtime),
+      dailyCap: (campaign.daily_cap as number) ?? null,
+    };
+    const country = detectAudienceCountry(numbers.map((n) => n.phone_e164 as string)).country ?? null;
+    const lineage = (campaign.parent_campaign_id as string) ?? (campaign.id as string);
+    return { input, country, lineage };
+  }, [campaign, numbers]);
 
   // Contacts we actually sent a text to, counted from the SMS log (sms_messages_v2) rather than the
   // outcome bucket. The outcome chips alone undercount texts: a registered_optin voicemail follow-up
@@ -2097,6 +2133,18 @@ export default function CampaignV2DetailPage() {
                   </span>
                 )}
               </div>
+              {remainingEstimate && (
+                <div className="px-5 py-3 border-b border-[var(--border)]">
+                  <div className="max-w-sm">
+                    <EstimateCard
+                      input={remainingEstimate.input}
+                      country={remainingEstimate.country}
+                      lineageParentId={remainingEstimate.lineage}
+                      title="Remaining estimate"
+                    />
+                  </div>
+                </div>
+              )}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
