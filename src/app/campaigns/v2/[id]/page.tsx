@@ -527,8 +527,10 @@ export default function CampaignV2DetailPage() {
 
   // Remaining-work estimate (spec 2026-08-04 §3): histogram of tries left over
   // players still in play. numbers is clamp-safe (detail bundle uses fetchAllRows).
+  // Paused included (Jas, 2026-08-04): "what would finishing this cost if resumed"
+  // is exactly the re-queue/resume decision (VOZ-280) the card should inform.
   const remainingEstimate = useMemo(() => {
-    if (!campaign || campaign.status !== "running") return null;
+    if (!campaign || (campaign.status !== "running" && campaign.status !== "paused")) return null;
     const maxAttempts = (campaign.max_attempts as number) ?? 3;
     const hist: Record<number, number> = {};
     for (const n of numbers) {
