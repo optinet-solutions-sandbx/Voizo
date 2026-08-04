@@ -4,8 +4,11 @@ import { useMemo } from "react";
 import { Lightbulb, Repeat, Play, Users, Zap } from "lucide-react";
 
 import { parsePhoneList } from "@/lib/campaignV2Shared";
-import { TIMEZONE_OPTIONS, type WizardState } from "../wizardState";
+import { parseGoalTarget, TIMEZONE_OPTIONS, type WizardState } from "../wizardState";
 import { useMagnetic } from "@/components/useMagnetic";
+import EstimateCard from "@/components/EstimateCard";
+import { detectAudienceCountry } from "@/lib/audienceCountry";
+import type { EstimateInput } from "@/lib/campaignEstimate";
 
 interface Props {
   state: WizardState;
@@ -66,10 +69,31 @@ function tipsFor(state: WizardState): string[] {
 }
 
 export default function PreviewRail({ state }: Props) {
-  const parsedCount = useMemo(
-    () => parsePhoneList(state.numbersText).length,
-    [state.numbersText],
-  );
+  const phones = useMemo(() => parsePhoneList(state.numbersText), [state.numbersText]);
+  const parsedCount = phones.length;
+
+  // Cost/duration estimate inputs (spec 2026-08-04 §3). Real-time campaigns
+  // admit players continuously, so the estimate reframes per-day at the cap.
+  const estCountry = useMemo(() => detectAudienceCountry(phones).country ?? null, [phones]);
+  const isRealtimeEst = state.campaignType === "recurring" && state.realtime;
+  const estInput = useMemo<EstimateInput>(() => {
+    const enabled = state.scheduleRows.filter((r) => r.enabled);
+    const hours = enabled.map((r) => {
+      const [sh, sm] = r.start.split(":").map(Number);
+      const [eh, em] = r.end.split(":").map(Number);
+      return Math.max(0, eh + em / 60 - (sh + sm / 60));
+    });
+    const dailyCap = isRealtimeEst ? parseGoalTarget(state.dailyCapText) : null;
+    const players = isRealtimeEst ? (dailyCap ?? 0) : phones.length;
+    return {
+      remainingTries: { [state.maxTries]: players },
+      retryGapMinutes: state.retryGapMinutes,
+      windowHoursPerDay: hours.length ? hours.reduce((s, h) => s + h, 0) / hours.length : 0,
+      enabledDaysPerWeek: enabled.length,
+      realtime: isRealtimeEst,
+      dailyCap,
+    };
+  }, [phones.length, state.scheduleRows, isRealtimeEst, state.dailyCapText, state.maxTries, state.retryGapMinutes]);
 
   const tzLabel =
     TIMEZONE_OPTIONS.find((o) => o.value === state.timezone)?.label ?? state.timezone;
@@ -135,6 +159,13 @@ export default function PreviewRail({ state }: Props) {
             : "Fill in the remaining steps to refine the preview."}
         </div>
       </div>
+
+      <EstimateCard
+        input={estInput}
+        country={estCountry}
+        title={isRealtimeEst ? "Estimate (per day)" : "Estimate"}
+        perDayLabel={isRealtimeEst}
+      />
 
       <div ref={card2Ref} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">
         <div className="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">
