@@ -8,6 +8,7 @@ import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
 import { isRejectStreak, REJECT_BREAKER_STREAK, REJECT_BREAKER_WINDOW_MINUTES } from "@/lib/scheduler/rejectBreaker";
+import { runAnomalySweep } from "@/lib/alerts/anomalySweep";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
@@ -68,6 +69,12 @@ export async function GET(request: NextRequest) {
   ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // ── VOZ-279 anomaly sweep (AI pipeline burst / connect collapse) ──
+  // Deliberately FIRST after auth: the queue-gate and pool-error paths below
+  // return early, and those deferrals are most common at high volume — exactly
+  // when detection matters. Never throws; Slack-deduped to 1/hour per detector.
+  await runAnomalySweep(supabaseAdmin);
 
   // ── Stale in_progress sweeper ──
   // Numbers stuck at outcome='in_progress' fall into 2 categories:
