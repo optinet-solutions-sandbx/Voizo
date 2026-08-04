@@ -843,6 +843,160 @@ export function computeCampaignTable(
     });
 }
 
+// ── SQL-rollup path (VOZ-283) ─────────────────────────────────────────────────
+// Row shapes returned by the dashboard_call_rollup / dashboard_sms_rollup RPCs
+// (.agent/tasks/2026-08-03_SQL_dashboard_rollup.sql). One row per
+// (campaign_id, day_utc); the assembler sums per campaign.
+
+export interface CallRollupRow {
+  campaign_id: string;
+  day_utc: string;
+  attempts: number;
+  terminal: number;
+  connected: number;
+  voicemail: number;
+  reach: number;
+  positive: number;
+  declined: number;
+  early_hangup_lean: number;
+  neutral_lean: number;
+  /** goal_reached IS TRUE with NO connected gate — mirrors accumulate()'s
+   *  unconditional count (a goal on a failed-status call still counts). The
+   *  connected-gated `positive` above feeds the perf reached-split instead. */
+  successful: number;
+  last_call_at: string | null;
+}
+
+export interface SmsRollupRow {
+  campaign_id: string;
+  day_utc: string;
+  sent: number;
+  reached: number;
+  voicemail: number;
+  unreachable: number;
+  positive: number;
+  neutral: number;
+  declined: number;
+}
+
+/**
+ * Rollup-sourced twin of computeCampaignTable: SAME CampaignTableRow output,
+ * numbers sourced from the SQL rollups instead of raw calls_v2/sms rows.
+ * Row assembly (display status, labels, country parsing) is mirrored verbatim;
+ * the perf block reuses assembleWindowPerf — the exact code body the raw path
+ * uses — so the 3-card math cannot drift. Byte-parity is enforced by
+ * dashboardRollup.parity.test.ts before any route cutover.
+ */
+export function computeCampaignTableFromRollup(
+  callRollup: CallRollupRow[],
+  smsRollup: SmsRollupRow[],
+  campaigns: DashCampaignRow[],
+  nowMs: number,
+  idleDays = FINISHED_IDLE_DAYS,
+  playersByCampaign: Map<string, number> = new Map(),
+): CampaignTableRow[] {
+  // Per-campaign sums over the day-grain rollup rows.
+  interface CallAgg {
+    attempts: number; terminal: number; connected: number; voicemail: number; reach: number;
+    positive: number; declined: number; earlyHangup: number; neutral: number; successful: number;
+    lastCallMs: number | null;
+  }
+  const callAgg = new Map<string, CallAgg>();
+  for (const r of callRollup) {
+    let a = callAgg.get(r.campaign_id);
+    if (!a) {
+      a = { attempts: 0, terminal: 0, connected: 0, voicemail: 0, reach: 0, positive: 0, declined: 0, earlyHangup: 0, neutral: 0, successful: 0, lastCallMs: null };
+      callAgg.set(r.campaign_id, a);
+    }
+    a.attempts += r.attempts;
+    a.terminal += r.terminal;
+    a.connected += r.connected;
+    a.voicemail += r.voicemail;
+    a.reach += r.reach;
+    a.positive += r.positive;
+    a.declined += r.declined;
+    a.earlyHangup += r.early_hangup_lean;
+    a.neutral += r.neutral_lean;
+    a.successful += r.successful;
+    const t = r.last_call_at ? Date.parse(r.last_call_at) : NaN;
+    if (Number.isFinite(t) && (a.lastCallMs === null || t > a.lastCallMs)) a.lastCallMs = t;
+  }
+  const smsAgg = new Map<string, SmsBreakdown>();
+  for (const r of smsRollup) {
+    let s = smsAgg.get(r.campaign_id);
+    if (!s) {
+      s = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+      smsAgg.set(r.campaign_id, s);
+    }
+    s.total += r.sent;
+    s.reached += r.reached;
+    s.voicemail += r.voicemail;
+    s.unreachable += r.unreachable;
+    s.positive += r.positive;
+    s.neutral += r.neutral;
+    s.declined += r.declined;
+  }
+
+  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  return campaigns
+    .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
+    .map((c) => {
+      const a = callAgg.get(c.id);
+      const connected = a?.connected ?? 0;
+      const terminal = a?.terminal ?? 0;
+      // Row `successful` = ungated goal count (mirrors accumulate()); the perf
+      // reached-split uses the connected-gated `positive` bucket — they differ
+      // on the rare goal-on-non-connected rows (5 in prod as of 08-04).
+      const successful = a?.successful ?? 0;
+      const lastCallMs = a?.lastCallMs ?? null;
+      const cb: CallBreakdown = {
+        total: a?.attempts ?? 0,
+        terminal,
+        connected,
+        inFlight: (a?.attempts ?? 0) - terminal,
+        reach: a?.reach ?? 0,
+        voicemail: a?.voicemail ?? 0,
+        unreachable: terminal - connected,
+        positive: a?.positive ?? 0,
+        neutral: a?.neutral ?? 0,
+        declined: a?.declined ?? 0,
+        earlyHangup: a?.earlyHangup ?? 0,
+      };
+      const sb = smsAgg.get(c.id) ?? emptySms;
+      return {
+        id: c.id,
+        name: c.name,
+        country: parseCountryToken(c.name),
+        cioWorkspace: c.cio_workspace ?? null,
+        displayStatus: deriveDisplayStatus({
+          rawStatus: c.status ?? null,
+          endAtMs: c.end_at ? Date.parse(c.end_at) : null,
+          lastCallMs,
+          nowMs,
+          idleDays,
+          isRecurringParent: c.campaign_type === "recurring",
+        }),
+        scheduleType: c.campaign_type === "recurring" ? ("recurring" as const) : ("fixed" as const),
+        voiceId: c.voice_id ?? null,
+        agentLabel: c.vapi_assistant_name ?? null,
+        baseAssistantId: c.base_assistant_id ?? null,
+        calls: a?.attempts ?? 0,
+        connected,
+        terminal,
+        successful,
+        connectRate: safeDiv(connected, terminal),
+        successRate: safeDiv(successful, connected),
+        players: playersByCampaign.get(c.id) ?? 0,
+        reach: a?.reach ?? 0,
+        smsSent: sb.total,
+        startAt: (c.start_at ?? c.created_at) ?? null,
+        endAt: c.end_at ?? null,
+        lastCallAt: lastCallMs ? new Date(lastCallMs).toISOString() : null,
+        perf: assembleWindowPerf(cb, sb),
+      };
+    });
+}
+
 // ── Call records (per campaign_number, for the expandable row) ───────────────
 export interface DashNumberRow {
   id: string;
@@ -1325,7 +1479,13 @@ export function computeWindowPerf(
 ): TodayPerfDay {
   const cb = callWindowBreakdown(calls, declinedIds, startMs, endMs, opts);
   const sb = smsWindowBreakdown(sms, calls, declinedIds, startMs, endMs, opts);
+  return assembleWindowPerf(cb, sb);
+}
 
+/** The no-delta 3-card assembly, shared VERBATIM by the raw-rows path
+ *  (computeWindowPerf) and the SQL-rollup path (computeCampaignTableFromRollup)
+ *  — one code body, so the two paths cannot drift (VOZ-283 parity). */
+function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
   const callAttempts = mkMetricNoDelta(cb.total, [
     mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
     mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),

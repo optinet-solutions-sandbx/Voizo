@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
-import { computeCampaignTable, FINISHED_IDLE_DAYS, type DashCallRow, type DashCampaignRow, type DashSmsRow } from "@/lib/dashboardAnalytics";
+import {
+  computeCampaignTableFromRollup,
+  FINISHED_IDLE_DAYS,
+  type CallRollupRow,
+  type DashCampaignRow,
+  type SmsRollupRow,
+} from "@/lib/dashboardAnalytics";
 
 /**
  * GET /api/dashboard/campaigns?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -11,6 +17,15 @@ import { computeCampaignTable, FINISHED_IDLE_DAYS, type DashCallRow, type DashCa
  * campaigns, including zero-call ones, each with a derived DISPLAY status
  * (running / paused / finished — paused-but-idle, past end_at, or never-run all read as
  * "Finished"; presentation-only, idle window = FINISHED_IDLE_DAYS). Read-only; lenient origin.
+ *
+ * VOZ-283 (2026-08-04): numbers now come from the dashboard_call_rollup /
+ * dashboard_sms_rollup Postgres functions instead of paging every calls_v2 /
+ * sms_messages_v2 row through JS (the incident's 31k-row days made that fetch
+ * ~47k rows / ~16MB per load). Byte-parity with the old path is proven by
+ * src/lib/dashboardRollup.parity.test.ts (run against live prod data) — the
+ * response JSON shape is unchanged. The roster fetch stays (players = lifetime
+ * campaign_numbers count) but slims to two columns; declined outcomes are now
+ * classified inside the SQL, so `outcome` is no longer fetched.
  */
 const MS_PER_DAY = 86_400_000;
 
@@ -39,38 +54,46 @@ export async function GET(request: NextRequest) {
   const toMs = parseDay(searchParams.get("to"), now, true);
   const fromMs = parseDay(searchParams.get("from"), now - 30 * MS_PER_DAY, false);
 
-  const [calls, campaignsRes, numbers, sms] = await Promise.all([
-    // Attempts/Reached are campaign-LIFETIME totals (NOT windowed) so the row metrics match the
-    // expanded breakdown. fetchAllRows pages past PostgREST's 1000-row cap (lifetime calls exceed
-    // it). The from/to params are NOT applied here — they only echo in the response + the date
-    // picker filters WHICH campaigns are listed (client-side, by activity), not the per-row numbers.
-    // `id` is required: smsWindowBreakdown joins sms.call_id → call.id for the per-row
-    // SMS reached/voicemail/unreachable split — without it every SMS is "unmatched".
-    fetchAllRows(supabaseAdmin, "calls_v2", "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds", "id"),
+  // Rollups are campaign-LIFETIME ([epoch, now]) — matching the old route, where
+  // Attempts/Reached were lifetime totals and from/to only echo in the response
+  // (the date picker filters WHICH campaigns list client-side, not the numbers).
+  const [callRollupRes, smsRollupRes, campaignsRes, numbers] = await Promise.all([
+    supabaseAdmin.rpc("dashboard_call_rollup", {
+      p_start: new Date(0).toISOString(),
+      p_end: new Date(now).toISOString(),
+    }),
+    supabaseAdmin.rpc("dashboard_sms_rollup", {
+      p_start: new Date(0).toISOString(),
+      p_end: new Date(now).toISOString(),
+    }),
     supabaseAdmin
       .from("campaigns_v2")
       // cio_workspace: the per-row brand chip (VOZ-216).
       .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at"),
-    // Players (full roster) + SMS sent are also campaign-LIFETIME totals: the roster has no "last
-    // 30 days", and texts-sent reads as a campaign total. fetchAllRows pages past the 1000-row cap.
-    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "campaign_id, id, outcome", "id"),
-    // `created_at` is required: smsWindowBreakdown window-checks it — absent, every SMS
-    // row is dropped and the row's SMS breakdown column reads 0 (bug found 2026-07-02).
-    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, created_at, status, call_id, campaign_number_id", "id"),
+    // Players (full roster count) is campaign-LIFETIME; two columns only.
+    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id", "id"),
   ]);
 
-  if (campaignsRes.error) {
-    console.error("[dashboard/campaigns] query failed:", campaignsRes.error);
+  if (callRollupRes.error || smsRollupRes.error || campaignsRes.error) {
+    console.error(
+      "[dashboard/campaigns] query failed:",
+      callRollupRes.error ?? smsRollupRes.error ?? campaignsRes.error,
+    );
     return NextResponse.json({ error: "Failed to read campaigns" }, { status: 500 });
   }
 
-  const rows = computeCampaignTable(
-    calls as unknown as DashCallRow[],
+  const playersByCampaign = new Map<string, number>();
+  for (const n of numbers as Array<{ campaign_id: string }>) {
+    playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
+  }
+
+  const rows = computeCampaignTableFromRollup(
+    (callRollupRes.data ?? []) as CallRollupRow[],
+    (smsRollupRes.data ?? []) as SmsRollupRow[],
     (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
     now,
     FINISHED_IDLE_DAYS,
-    numbers as unknown as Array<{ campaign_id: string; id: string; outcome: string | null }>,
-    sms as unknown as DashSmsRow[],
+    playersByCampaign,
   );
 
   return NextResponse.json({
