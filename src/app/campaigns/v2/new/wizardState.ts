@@ -203,6 +203,13 @@ export interface WizardState {
    * campaign-shaping numerics.
    */
   goalTargetText: string;
+  /**
+   * Optional "Budget (USD)" hard cap (budget guardrail 2026-08-04): the
+   * scheduler auto-pauses the campaign when measured+computed spend reaches
+   * it. Same string convention as goalTargetText ("" = no cap); parsed to a
+   * positive number (decimals allowed) or null by parseBudgetUsd.
+   */
+  budgetUsdText: string;
 
   // Step 3 — Schedule (Repeat branch)
   recurrencePattern: RecurrencePattern;
@@ -289,6 +296,7 @@ export type SchedulePayload = Partial<
     | "delayMinutes"
     | "scheduledDate"
     | "goalTargetText"
+    | "budgetUsdText"
   >
 >;
 
@@ -450,6 +458,7 @@ export function createInitialState(): WizardState {
     delayMinutes: 60,
     scheduledDate: "",
     goalTargetText: "",
+    budgetUsdText: "",
 
     recurrencePattern: defaultRecurrencePattern(new Date(), detectedTz),
     recurrenceErrors: [],
@@ -631,6 +640,20 @@ export function parseGoalTarget(text: string): number | null {
   return n;
 }
 
+/**
+ * Parse the optional "Budget (USD)" input. Empty/whitespace or any
+ * non-positive / non-finite value collapses to null ("no cap"). Decimals are
+ * allowed (budgets are dollars, not counts). Mirrors the DB CHECK
+ * (budget_usd IS NULL OR budget_usd > 0).
+ */
+export function parseBudgetUsd(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 /** Mirrors classic page-classic.tsx:241-244. */
 function composedSmsTemplate(state: WizardState): string {
   const parts = [state.smsMessage.trim(), state.smsLink.trim(), state.smsOptout.trim()].filter(
@@ -742,6 +765,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       recurrencePattern: state.recurrencePattern,
       isTest: state.isTest,
       goalTarget: parseGoalTarget(state.goalTargetText),
+      budgetUsd: parseBudgetUsd(state.budgetUsdText),
       retryIntervalMinutes: state.retryGapMinutes,
       maxAttempts: state.maxTries,
       realtime: state.realtime,
@@ -799,6 +823,7 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     ...(Object.keys(state.cioNames).length > 0 ? { namesByPhone: state.cioNames } : {}),
     isTest: state.isTest,
     goalTarget: parseGoalTarget(state.goalTargetText),
+    budgetUsd: parseBudgetUsd(state.budgetUsdText),
     retryIntervalMinutes: state.retryGapMinutes,
     maxAttempts: state.maxTries,
     smsLastResortTemplate: composedLastResortTemplate(state),
@@ -824,6 +849,12 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   // goal_target > 0). Applies to both Fixed and Recurring.
   if (state.goalTargetText.trim() && parseGoalTarget(state.goalTargetText) === null) {
     return "Campaign goal must be a whole number greater than 0 (or leave it blank).";
+  }
+
+  // Optional budget cap. Empty is always valid; a non-empty value that isn't
+  // a positive number is rejected (mirrors the DB CHECK budget_usd > 0).
+  if (state.budgetUsdText.trim() && parseBudgetUsd(state.budgetUsdText) === null) {
+    return "Budget must be a dollar amount greater than 0 (or leave it blank).";
   }
 
   // Last-resort text (§8): shared check — the recurring branch below returns

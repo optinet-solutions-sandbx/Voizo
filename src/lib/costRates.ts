@@ -19,6 +19,23 @@ export interface PriceRates {
   basis: string;
 }
 
+export interface OpenAiTokenRates {
+  /** $ per million uncached input tokens. */
+  inputPerMTok: number;
+  /** $ per million cached input tokens. */
+  cachedInputPerMTok: number;
+  /** $ per million output tokens. */
+  outputPerMTok: number;
+}
+
+/**
+ * gpt-5.2 token pricing — null until Jas/Chris confirm the actual rates from
+ * OpenAI billing. While null, per-call OpenAI cost (callCost.ts) falls back to
+ * duration × openaiPerTalkMin (the measured 2026-08-01 blended rate). Filling
+ * this switches ingestion to token-precise costs; no code change needed.
+ */
+export const OPENAI_TOKEN_RATES: OpenAiTokenRates | null = null;
+
 export const PRICE_RATES: PriceRates = {
   // TO-VERIFY: Vapi public list price ($0.05/min platform) — NOT confirmed
   // against our invoice. Flip verified.vapi=true when Jas/Chris confirm.

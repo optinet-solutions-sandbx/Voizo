@@ -112,6 +112,16 @@ export async function createCampaignV2(input: CampaignV2CreateInput) {
       ...(typeof input.voicemailAutohangup === "boolean"
         ? { voicemail_autohangup: input.voicemailAutohangup }
         : {}),
+      // Budget guardrail (2026-08-04): conditional key, same deploy-safety
+      // pattern as voicemail_autohangup above — creates keep working if this
+      // code ships before 2026-08-04_cost_tracking.sql is applied. Normalized
+      // at the write edge (positive finite number or absent) so a malformed
+      // payload can't reach the DB CHECK (budget_usd IS NULL OR budget_usd > 0).
+      ...(typeof input.budgetUsd === "number" &&
+      Number.isFinite(input.budgetUsd) &&
+      input.budgetUsd > 0
+        ? { budget_usd: input.budgetUsd }
+        : {}),
       // Script mode (VOZ-160): conditional keys — only script campaigns send
       // them, so agent-mode creates work whether or not
       // supabase-migration-campaign-agent-mode.sql is applied (absent key → DB

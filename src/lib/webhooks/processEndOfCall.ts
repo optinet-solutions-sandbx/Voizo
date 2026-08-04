@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
 import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { resolveCallCosts, type VapiCostPayload } from "@/lib/callCost";
 
 export async function processEndOfCall(message: Record<string, unknown>): Promise<NextResponse> {
   const vapiCall = message.call as Record<string, unknown> | undefined;
@@ -367,6 +368,27 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
       // `message.endedReason` first; keep `vapiCall.endedReason` as a fallback for the alt shape.
       ended_reason: (message.endedReason ?? vapiCall?.endedReason ?? null) as string | null,
       voicemail: voicemailDetected,
+      // Budget guardrail (2026-08-04): per-call cost ingestion. Same message-
+      // level-first read as endedReason/artifact above (report fields live as
+      // siblings of message.call). Missing cost stays NULL — the recording-
+      // backfill cron sweeps NULL vapi_cost_usd via the Vapi API. OpenAI side
+      // is computed (tokens when rates configured, else measured $/talk-min);
+      // duration may not be written yet (FS hangup webhook races this one), so
+      // fall back to Vapi's own durationSeconds for the estimate basis.
+      ...(() => {
+        const costPayload: VapiCostPayload = {
+          cost: (message.cost ?? vapiCall?.cost) as number | null | undefined,
+          costBreakdown: (message.costBreakdown ?? vapiCall?.costBreakdown) as VapiCostPayload["costBreakdown"],
+        };
+        const dur =
+          typeof callRow.duration_seconds === "number"
+            ? callRow.duration_seconds
+            : typeof message.durationSeconds === "number"
+              ? (message.durationSeconds as number)
+              : null;
+        const costs = resolveCallCosts(costPayload, dur);
+        return { vapi_cost_usd: costs.vapiCostUsd, openai_cost_usd: costs.openaiCostUsd };
+      })(),
     })
     .eq("id", callRow.id);
 

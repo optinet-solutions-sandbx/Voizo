@@ -2,7 +2,7 @@
 
 import { useMemo, type Dispatch } from "react";
 import {
-  CalendarDays, Globe2, Info, Play, Repeat, Target, Timer, Zap,
+  CalendarDays, Globe2, Info, Play, Repeat, Target, Timer, Wallet, Zap,
 } from "lucide-react";
 
 import { RecurrenceEditor } from "@/components/RecurrenceEditor";
@@ -95,6 +95,9 @@ export default function StepSchedule({ state, dispatch }: Props) {
   function setGoalTargetText(value: string) {
     dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { goalTargetText: value } });
   }
+  function setBudgetUsdText(value: string) {
+    dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { budgetUsdText: value } });
+  }
 
   const enabledRows = useMemo(
     () => state.scheduleRows.filter((r) => r.enabled),
@@ -168,6 +171,31 @@ export default function StepSchedule({ state, dispatch }: Props) {
           />
           <p className="text-[11px] text-[var(--text-3)] leading-snug">
             Optional. Shown as X / Y in the performance report.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5 mt-4">
+          <label
+            htmlFor="campaign-budget-usd"
+            className="text-[13px] font-semibold inline-flex items-center gap-1.5"
+          >
+            <Wallet size={13} className="text-[var(--text-3)]" />
+            Budget (USD)
+          </label>
+          <input
+            id="campaign-budget-usd"
+            type="number"
+            inputMode="decimal"
+            min={0.01}
+            step={0.01}
+            value={state.budgetUsdText}
+            onChange={(e) => setBudgetUsdText(e.target.value)}
+            placeholder="e.g. 50"
+            className="w-full sm:max-w-[12rem] px-3.5 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+          />
+          <p className="text-[11px] text-[var(--text-3)] leading-snug">
+            Optional hard cap. The campaign auto-pauses when AI spend (Vapi + OpenAI) reaches
+            this amount — the Estimate card on the right predicts what it will need.
           </p>
         </div>
 

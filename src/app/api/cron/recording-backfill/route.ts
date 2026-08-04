@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { CRON_NAMES, recordHeartbeat } from "@/lib/alerts/slack";
+import { resolveCallCosts, type VapiCostPayload } from "@/lib/callCost";
 import crypto from "crypto";
 
 // One backfill tick: SELECT up to 100 candidate rows, fetch each from Vapi
@@ -92,10 +93,14 @@ export async function GET(request: NextRequest) {
   const minTs = new Date(now - MAX_AGE_MS).toISOString(); // oldest we'll touch
   const maxTs = new Date(now - MIN_AGE_MS).toISOString(); // newest we'll touch
 
+  // Budget guardrail (2026-08-04): the sweep now ALSO fills missing per-call
+  // costs from the same Vapi call object (zero extra fetches). Candidates =
+  // recording OR cost still NULL. Rows older than MAX_AGE keep NULL costs —
+  // budget enforcement targets campaigns created after this shipped.
   const { data: rows, error: queryErr } = await supabaseAdmin
     .from("calls_v2")
-    .select("id, vapi_call_id")
-    .is("recording_url", null)
+    .select("id, vapi_call_id, recording_url, vapi_cost_usd, duration_seconds")
+    .or("recording_url.is.null,vapi_cost_usd.is.null")
     .not("vapi_call_id", "is", null)
     .gte("created_at", minTs)
     .lte("created_at", maxTs)
@@ -117,7 +122,7 @@ export async function GET(request: NextRequest) {
   // Chunk into CONCURRENCY-sized batches; await each batch before the next.
   // Simpler than a worker-pool loop and adequate for ROW_CAP=100.
   type RowResult =
-    | { id: string; status: "updated"; url: string }
+    | { id: string; status: "updated"; urlUpdated: boolean; costUpdated: boolean }
     | { id: string; status: "no_url_yet" }
     | { id: string; status: "error"; reason: string };
 
@@ -127,7 +132,14 @@ export async function GET(request: NextRequest) {
     const chunk = rows.slice(i, i + FETCH_CONCURRENCY);
     const chunkResults = await Promise.all(
       chunk.map((row): Promise<RowResult> =>
-        processRow(row.id as string, row.vapi_call_id as string, vapiKey),
+        processRow(
+          row.id as string,
+          row.vapi_call_id as string,
+          vapiKey,
+          row.recording_url === null,
+          row.vapi_cost_usd === null,
+          (row.duration_seconds as number | null) ?? null,
+        ),
       ),
     );
     results.push(...chunkResults);
@@ -135,15 +147,15 @@ export async function GET(request: NextRequest) {
 
   const counts = {
     scanned: rows.length,
-    fetched: results.filter((r) => r.status === "updated").length,
-    updated: results.filter((r) => r.status === "updated").length,
+    updated: results.filter((r) => r.status === "updated" && r.urlUpdated).length,
+    cost_updated: results.filter((r) => r.status === "updated" && r.costUpdated).length,
     errors: results.filter((r) => r.status === "error").length,
     no_url_yet: results.filter((r) => r.status === "no_url_yet").length,
   };
 
   console.log(
     `[recording-backfill] scanned=${counts.scanned} updated=${counts.updated} ` +
-    `errors=${counts.errors} no_url_yet=${counts.no_url_yet}`,
+    `cost_updated=${counts.cost_updated} errors=${counts.errors} no_url_yet=${counts.no_url_yet}`,
   );
 
   await recordHeartbeat(supabaseAdmin, CRON_NAMES.recordingBackfill);
@@ -161,8 +173,11 @@ async function processRow(
   id: string,
   vapiCallId: string,
   vapiKey: string,
+  needsUrl: boolean,
+  needsCost: boolean,
+  durationSeconds: number | null,
 ): Promise<
-  | { id: string; status: "updated"; url: string }
+  | { id: string; status: "updated"; urlUpdated: boolean; costUpdated: boolean }
   | { id: string; status: "no_url_yet" }
   | { id: string; status: "error"; reason: string }
 > {
@@ -191,28 +206,62 @@ async function processRow(
     return { id, status: "error", reason: `json_parse: ${reason}` };
   }
 
-  const artifact = callObj.artifact as Record<string, unknown> | undefined;
-  const mono = (artifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
-  const url: string | null =
-    (typeof mono?.combinedUrl === "string" ? mono.combinedUrl : null) ??
-    (typeof artifact?.recordingUrl === "string" ? (artifact.recordingUrl as string) : null);
+  let urlUpdated = false;
+  let costUpdated = false;
 
-  if (!url) {
-    return { id, status: "no_url_yet" };
+  // ── Cost fill (budget guardrail 2026-08-04) ──
+  // On the API call object, cost/costBreakdown live at the top level (unlike
+  // the webhook's message-level shape). Race-safe: only write if still NULL.
+  if (needsCost) {
+    const costs = resolveCallCosts(
+      {
+        cost: callObj.cost as number | null | undefined,
+        costBreakdown: callObj.costBreakdown as VapiCostPayload["costBreakdown"],
+      },
+      durationSeconds,
+    );
+    if (costs.vapiCostUsd !== null) {
+      const { error: costErr } = await supabaseAdmin
+        .from("calls_v2")
+        .update({ vapi_cost_usd: costs.vapiCostUsd, openai_cost_usd: costs.openaiCostUsd })
+        .eq("id", id)
+        .is("vapi_cost_usd", null);
+      if (costErr) {
+        console.warn(`[recording-backfill] cost update failed for ${id}: ${costErr.message}`);
+      } else {
+        costUpdated = true;
+      }
+    }
   }
 
-  // Race-safe UPDATE: only write if still NULL. If the webhook (or a
-  // concurrent cron tick) already populated it, leave the existing value.
-  const { error: updateErr } = await supabaseAdmin
-    .from("calls_v2")
-    .update({ recording_url: url })
-    .eq("id", id)
-    .is("recording_url", null);
+  // ── Recording URL fill (original purpose) ──
+  if (needsUrl) {
+    const artifact = callObj.artifact as Record<string, unknown> | undefined;
+    const mono = (artifact?.recording as Record<string, unknown> | undefined)?.mono as Record<string, unknown> | undefined;
+    const url: string | null =
+      (typeof mono?.combinedUrl === "string" ? mono.combinedUrl : null) ??
+      (typeof artifact?.recordingUrl === "string" ? (artifact.recordingUrl as string) : null);
 
-  if (updateErr) {
-    console.warn(`[recording-backfill] update failed for ${id}: ${updateErr.message}`);
-    return { id, status: "error", reason: `update: ${updateErr.message}` };
+    if (!url) {
+      // Recording still uploading; cost may already have landed above. Report
+      // no_url_yet only when nothing else was written this pass.
+      return costUpdated ? { id, status: "updated", urlUpdated, costUpdated } : { id, status: "no_url_yet" };
+    }
+
+    // Race-safe UPDATE: only write if still NULL. If the webhook (or a
+    // concurrent cron tick) already populated it, leave the existing value.
+    const { error: updateErr } = await supabaseAdmin
+      .from("calls_v2")
+      .update({ recording_url: url })
+      .eq("id", id)
+      .is("recording_url", null);
+
+    if (updateErr) {
+      console.warn(`[recording-backfill] update failed for ${id}: ${updateErr.message}`);
+      return { id, status: "error", reason: `update: ${updateErr.message}` };
+    }
+    urlUpdated = true;
   }
 
-  return { id, status: "updated", url };
+  return { id, status: "updated", urlUpdated, costUpdated };
 }

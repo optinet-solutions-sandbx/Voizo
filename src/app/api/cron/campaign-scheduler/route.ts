@@ -461,6 +461,42 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
+    // ── Budget breaker (budget guardrail 2026-08-04) ──
+    // Only campaigns with an operator-set budget_usd pay this check (one RPC).
+    // Spend = SUM(vapi_cost_usd + openai_cost_usd) via campaign_spend_usd —
+    // SQL aggregate, never select+reduce (1000-row clamp). Same atomic-pause +
+    // single-alert shape as the reject breaker above. Fail-open on RPC error:
+    // a broken spend query must not silently halt dialing — it logs loudly and
+    // lets the dial proceed (max_attempts still bounds the damage).
+    const budgetUsd = campaign.budget_usd as number | null;
+    if (budgetUsd !== null && budgetUsd > 0) {
+      const { data: spend, error: spendErr } = await supabaseAdmin.rpc("campaign_spend_usd", {
+        p_campaign_id: campaignId,
+      });
+      if (spendErr) {
+        console.error(`[scheduler.budget] ${campaignName}: spend RPC failed (dialing continues):`, spendErr.message);
+      } else if (typeof spend === "number" && spend >= budgetUsd) {
+        const { data: budgetPaused } = await supabaseAdmin
+          .from("campaigns_v2")
+          .update({ status: "paused" })
+          .eq("id", campaignId)
+          .eq("status", "running")
+          .select("id");
+        if (budgetPaused && budgetPaused.length > 0) {
+          console.error(
+            `[scheduler.budget] ${campaignName}: spend $${spend.toFixed(2)} reached budget $${budgetUsd.toFixed(2)} — auto-paused.`,
+          );
+          await postSlackAlert("ALERT", "Budget reached: campaign auto-paused", [
+            `Campaign: ${campaignName} (${campaignId})`,
+            `Spend so far: $${spend.toFixed(2)} of $${budgetUsd.toFixed(2)} budget (Vapi measured + OpenAI computed).`,
+            "Un-pause to continue dialing, or raise the budget in campaign settings.",
+          ]);
+        }
+        resumeResults.push({ id: campaignId, name: campaignName, result: "budget_paused" });
+        continue;
+      }
+    }
+
     // Call window check (Manifesto §6: every dial). Outside-window → flip to
     // `paused` for parity with the chain-next webhook (voice-status/route.ts).
     // Without this, the campaign would silently sit in `running` for hours
