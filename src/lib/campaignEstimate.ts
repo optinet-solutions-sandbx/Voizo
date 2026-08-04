@@ -80,3 +80,79 @@ export function expectedAttempts(triesLeft: number, p: number): number {
   if (triesLeft === 1) return 1;
   return (1 - Math.pow(1 - p, triesLeft)) / p;
 }
+
+function scaleLine(line: EstimateLine, factor: number, formula: string): EstimateLine {
+  return { value: line.value * factor, min: line.min * factor, max: line.max * factor, formula };
+}
+
+export function estimateCampaign(
+  input: EstimateInput,
+  behavior: BehaviorRates,
+  prices: PriceRates,
+): CampaignEstimate {
+  const warnings: string[] = [];
+
+  const buckets = Object.entries(input.remainingTries)
+    .map(([k, n]) => ({ k: Number(k), n }))
+    .filter((b) => Number.isFinite(b.k) && b.k > 0 && Number.isFinite(b.n) && b.n > 0);
+  const totalPlayers = buckets.reduce((s, b) => s + b.n, 0);
+
+  const expectedDials: EstimateLine = {
+    value: buckets.reduce((s, b) => s + b.n * expectedAttempts(b.k, behavior.p), 0),
+    min: totalPlayers, // exact best case: every player resolves on try 1
+    max: buckets.reduce((s, b) => s + b.n * b.k, 0), // exact worst case: all tries burned
+    formula: `Σ players × (1−(1−p)^triesLeft)/p with p=${behavior.p.toFixed(3)} (assumes constant per-attempt resolution)`,
+  };
+
+  const perDialTalkMin = (behavior.rConnect * behavior.tTalkSec) / 60;
+  const talkMinutes = scaleLine(
+    expectedDials, perDialTalkMin,
+    `dials × ${behavior.rConnect.toFixed(3)} connect-rate × ${behavior.tTalkSec.toFixed(1)}s avg talk ÷ 60`,
+  );
+  const costVapi = scaleLine(talkMinutes, prices.vapiPerTalkMin, `talk-min × $${prices.vapiPerTalkMin}/min (Vapi)`);
+  const costOpenai = scaleLine(talkMinutes, prices.openaiPerTalkMin, `talk-min × $${prices.openaiPerTalkMin}/min (OpenAI, blended incl. voicemail)`);
+  const costTotal: EstimateLine = {
+    value: costVapi.value + costOpenai.value,
+    min: costVapi.min + costOpenai.min,
+    max: costVapi.max + costOpenai.max,
+    formula: "Vapi + OpenAI",
+  };
+
+  let durationDays: EstimateLine | null = null;
+  if (input.realtime) {
+    // Real-time campaigns admit players continuously: the card frames the whole
+    // estimate PER DAY at the daily cap instead of a total duration (spec §4).
+    const capacityMid = behavior.dialsPerHourP50 * input.windowHoursPerDay;
+    if (input.dailyCap !== null && capacityMid > 0 && input.dailyCap > capacityMid) {
+      warnings.push(
+        `Daily cap (${input.dailyCap}) exceeds typical daily dial capacity (~${Math.round(capacityMid)} dials/day) — the cap may not be reached.`,
+      );
+    }
+  } else if (totalPlayers > 0) {
+    const capacityMid = behavior.dialsPerHourP50 * input.windowHoursPerDay;
+    const capacityBest = behavior.dialsPerHourP75 * input.windowHoursPerDay;
+    const capacityWorst = behavior.dialsPerHourP25 * input.windowHoursPerDay;
+    if (capacityMid > 0 && input.enabledDaysPerWeek > 0) {
+      const calendarFactor = 7 / input.enabledDaysPerWeek;
+      let worst = capacityWorst > 0 ? (expectedDials.max / capacityWorst) * calendarFactor : Infinity;
+      // Retry-gap floor: a gap spanning the whole daily window means one attempt
+      // per player per day — the campaign cannot finish faster than maxTries cycles.
+      const maxTries = Math.max(...buckets.map((b) => b.k));
+      if (input.retryGapMinutes >= input.windowHoursPerDay * 60) {
+        worst = Math.max(worst, maxTries * calendarFactor);
+      }
+      durationDays = {
+        value: (expectedDials.value / capacityMid) * calendarFactor,
+        min: capacityBest > 0 ? (expectedDials.min / capacityBest) * calendarFactor : 0,
+        max: worst,
+        formula:
+          `dials ÷ (${behavior.dialsPerHourP50.toFixed(0)} dials/hr × ${input.windowHoursPerDay.toFixed(1)}h window) ` +
+          `× 7/${input.enabledDaysPerWeek} enabled days — assumes typical concurrent load`,
+      };
+    } else {
+      warnings.push("No call windows enabled — duration cannot be estimated.");
+    }
+  }
+
+  return { totalPlayers, expectedDials, talkMinutes, costVapi, costOpenai, costTotal, durationDays, warnings };
+}
