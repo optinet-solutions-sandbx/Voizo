@@ -84,7 +84,10 @@ export default function PreviewRail({ state }: Props) {
       return Math.max(0, eh + em / 60 - (sh + sm / 60));
     });
     const dailyCap = isRealtimeEst ? parseGoalTarget(state.dailyCapText) : null;
-    const players = isRealtimeEst ? (dailyCap ?? 0) : phones.length;
+    // Real-time: when a segment is imported we KNOW today's audience → estimate
+    // the TOTAL (duration = admission pacing at the cap). Only without any
+    // audience does the card fall back to per-day-at-cap framing.
+    const players = isRealtimeEst && phones.length === 0 ? (dailyCap ?? 0) : phones.length;
     return {
       remainingTries: { [state.maxTries]: players },
       retryGapMinutes: state.retryGapMinutes,
@@ -163,8 +166,8 @@ export default function PreviewRail({ state }: Props) {
       <EstimateCard
         input={estInput}
         country={estCountry}
-        title={isRealtimeEst ? "Estimate (per day)" : "Estimate"}
-        perDayLabel={isRealtimeEst}
+        title={isRealtimeEst && parsedCount === 0 ? "Estimate (per day)" : "Estimate"}
+        perDayLabel={isRealtimeEst && parsedCount === 0}
       />
 
       <div ref={card2Ref} className="glow-card bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-[18px]">

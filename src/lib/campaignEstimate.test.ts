@@ -106,13 +106,36 @@ describe("estimateCampaign — duration", () => {
     expect(e.durationDays).toBeNull();
     expect(e.warnings.some((w) => w.includes("window"))).toBe(true);
   });
-  it("realtime: duration null; over-capacity daily cap warns", () => {
+  it("realtime with known audience: duration = ceil(players/dailyCap) exact; over-capacity cap warns", () => {
     const e = estimateCampaign(
       fixedInput({ realtime: true, dailyCap: 1000, remainingTries: { 3: 1000 } }),
       behavior, prices,
     );
-    expect(e.durationDays).toBeNull();
+    expect(e.durationDays).not.toBeNull();
+    expect(e.durationDays!.value).toBe(1); // ceil(1000/1000)
+    expect(e.durationDays!.min).toBe(1);
+    expect(e.durationDays!.max).toBe(1);
     expect(e.warnings.some((w) => w.includes("cap"))).toBe(true); // 1000 > 60×10
+  });
+  it("realtime 2043 players at cap 500 → 5 admission days (the CIO-segment case)", () => {
+    const e = estimateCampaign(
+      fixedInput({ realtime: true, dailyCap: 500, remainingTries: { 3: 2043 }, windowHoursPerDay: 10 }),
+      behavior, prices,
+    );
+    expect(e.durationDays!.value).toBe(5); // ceil(2043/500)
+    expect(e.warnings.some((w) => w.includes("cap"))).toBe(false); // 500 < 60×10
+  });
+  it("realtime without a cap or without players: duration null", () => {
+    const noCap = estimateCampaign(
+      fixedInput({ realtime: true, dailyCap: null, remainingTries: { 3: 2043 } }),
+      behavior, prices,
+    );
+    expect(noCap.durationDays).toBeNull();
+    const noPlayers = estimateCampaign(
+      fixedInput({ realtime: true, dailyCap: 500, remainingTries: {} }),
+      behavior, prices,
+    );
+    expect(noPlayers.durationDays).toBeNull();
   });
 });
 

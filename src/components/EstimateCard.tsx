@@ -32,7 +32,7 @@ function money(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 function range(min: number, max: number, fmt: (n: number) => string): string {
-  return `${fmt(min)} – ${fmt(max)}`;
+  return fmt(min) === fmt(max) ? fmt(min) : `${fmt(min)} – ${fmt(max)}`;
 }
 
 export default function EstimateCard({
@@ -119,7 +119,11 @@ export default function EstimateCard({
             <Row
               label="Duration"
               value={`${range(est.durationDays.min, est.durationDays.max, (n) => n.toFixed(1))} days`}
-              sub="assumes typical concurrent load"
+              sub={
+                input.realtime && est.durationDays.value > 0
+                  ? `≈ ${money(est.costTotal.value / est.durationDays.value)}/day at ${input.dailyCap}/day cap`
+                  : "assumes typical concurrent load"
+              }
             />
           )}
         </div>

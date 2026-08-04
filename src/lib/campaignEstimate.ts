@@ -120,8 +120,22 @@ export function estimateCampaign(
 
   let durationDays: EstimateLine | null = null;
   if (input.realtime) {
-    // Real-time campaigns admit players continuously: the card frames the whole
-    // estimate PER DAY at the daily cap instead of a total duration (spec §4).
+    // Real-time: admission is paced by the daily cap, so with a KNOWN audience
+    // (imported segment snapshot) duration is exact pacing math — ceil(P/cap).
+    // Continuous inflow can extend it; the formula discloses that. Without a
+    // cap or without players the duration is unknowable → null (card falls
+    // back to per-day framing when the caller passes cap-as-players).
+    if (totalPlayers > 0 && input.dailyCap !== null && input.dailyCap > 0) {
+      const days = Math.ceil(totalPlayers / input.dailyCap);
+      durationDays = {
+        value: days,
+        min: days,
+        max: days,
+        formula:
+          `ceil(${totalPlayers.toLocaleString()} players ÷ ${input.dailyCap}/day admission cap) — ` +
+          `exact pacing for today's audience; new sign-ups extend it, last-day retries may spill`,
+      };
+    }
     const capacityMid = behavior.dialsPerHourP50 * input.windowHoursPerDay;
     if (input.dailyCap !== null && capacityMid > 0 && input.dailyCap > capacityMid) {
       warnings.push(
