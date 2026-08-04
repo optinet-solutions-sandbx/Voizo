@@ -2135,18 +2135,6 @@ export default function CampaignV2DetailPage() {
                   </span>
                 )}
               </div>
-              {remainingEstimate && (
-                <div className="px-5 py-3 border-b border-[var(--border)]">
-                  <div className="max-w-sm">
-                    <EstimateCard
-                      input={remainingEstimate.input}
-                      country={remainingEstimate.country}
-                      lineageParentId={remainingEstimate.lineage}
-                      title="Remaining estimate"
-                    />
-                  </div>
-                </div>
-              )}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-xs uppercase tracking-wide">
@@ -2228,6 +2216,16 @@ export default function CampaignV2DetailPage() {
 
         {tab === "settings" && (
           <div className="p-5 sm:p-6 grid gap-5">
+            {remainingEstimate && (
+              <div className="max-w-sm">
+                <EstimateCard
+                  input={remainingEstimate.input}
+                  country={remainingEstimate.country}
+                  lineageParentId={remainingEstimate.lineage}
+                  title="Remaining estimate"
+                />
+              </div>
+            )}
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-3)] mb-2">Vapi Assistant</h3>
               <p className="text-sm text-[var(--text-1)] font-medium">{(campaign.vapi_assistant_name as string) || "—"}</p>
