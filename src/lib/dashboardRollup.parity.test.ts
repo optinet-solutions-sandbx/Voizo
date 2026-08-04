@@ -13,15 +13,20 @@ import { describe, expect, it } from "vitest";
 import * as fs from "fs";
 import { createClient } from "@supabase/supabase-js";
 import {
+  buildCandidateDelta,
   computeCampaignTable,
   computeCampaignTableFromRollup,
+  computeToday,
+  computeTodayFromRollup,
   FINISHED_IDLE_DAYS,
   type CallRollupRow,
   type DashCallRow,
   type DashCampaignRow,
+  type DashNumberRow,
   type DashSmsRow,
   type SmsRollupRow,
 } from "./dashboardAnalytics";
+import { substantiveUserTurnCount } from "./transcriptClassify";
 
 const env: Record<string, string> = {};
 for (const l of fs.readFileSync(".env.local", "utf8").split(/\r?\n/)) {
@@ -140,6 +145,119 @@ describe("dashboard rollup parity — campaigns table (VOZ-283)", () => {
       if (mismatches.length > 0) {
         // Print every mismatch — the whole point of this gate.
         console.error(`PARITY MISMATCHES (${mismatches.length}):\n` + mismatches.slice(0, 20).join("\n"));
+      }
+      expect(mismatches).toEqual([]);
+    },
+  );
+
+  it(
+    "computeTodayFromRollup === computeToday on live prod data",
+    { timeout: 300_000 },
+    async () => {
+      const MS_PER_DAY = 86_400_000;
+      const asOf = new Date().toISOString();
+      const nowMs = Date.parse(asOf);
+      const cutoff = new Date(nowMs - 10 * MS_PER_DAY).toISOString();
+      const todayStartMs = Date.UTC(
+        new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate(),
+      );
+
+      // ── OLD path: raw rows exactly as today/route.ts fetches them ──
+      const [calls, campaignsRes, allNumbers, sms] = await Promise.all([
+        pageAll<DashCallRow>(
+          "calls_v2",
+          "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds, transcript",
+          (q) => q.gte("created_at", cutoff).lt("created_at", asOf),
+        ),
+        svc
+          .from("campaigns_v2")
+          .select(
+            "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
+          ),
+        pageAll<{ campaign_id: string; id: string; phone_e164: string | null; outcome: string | null }>(
+          "campaign_numbers_v2",
+          "campaign_id, id, phone_e164, outcome",
+        ),
+        pageAll<DashSmsRow & { id: string }>(
+          "sms_messages_v2",
+          "id, campaign_id, created_at, status, call_id, campaign_number_id",
+          (q) => q.gte("created_at", cutoff).lt("created_at", asOf),
+        ),
+      ]);
+      if (campaignsRes.error) throw new Error(campaignsRes.error.message);
+      const campaigns = (campaignsRes.data ?? []) as unknown as DashCampaignRow[];
+
+      // Old route scopes `numbers` to contacts referenced by the windowed calls.
+      const refIds = new Set(calls.map((c) => c.campaign_number_id).filter(Boolean));
+      const numbers = allNumbers.filter((n) => refIds.has(n.id)) as unknown as DashNumberRow[];
+      const rosterByCampaign = new Map<string, number>();
+      const runningIds = new Set(
+        campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true && c.status === "running").map((c) => c.id),
+      );
+      for (const n of allNumbers) {
+        if (runningIds.has(n.campaign_id)) {
+          rosterByCampaign.set(n.campaign_id, (rosterByCampaign.get(n.campaign_id) ?? 0) + 1);
+        }
+      }
+
+      const snapOld = computeToday(calls, campaigns, sms as unknown as DashSmsRow[], nowMs, numbers, rosterByCampaign);
+
+      // ── NEW path: rollups + candidate delta ──
+      const [callRollupRes, smsRollupRes] = await Promise.all([
+        svc.rpc("dashboard_call_rollup", { p_start: cutoff, p_end: asOf }),
+        svc.rpc("dashboard_sms_rollup", { p_start: cutoff, p_end: asOf }),
+      ]);
+      if (callRollupRes.error) throw new Error(`call rollup: ${callRollupRes.error.message}`);
+      if (smsRollupRes.error) throw new Error(`sms rollup: ${smsRollupRes.error.message}`);
+
+      // Candidate predicate — MUST stay in lockstep with today/route.ts's SQL.
+      const campIndex = new Map(campaigns.map((c) => [c.id, c]));
+      const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id));
+      const candidates = calls.filter((c) => {
+        const camp = campIndex.get(c.campaign_id);
+        if (!camp || camp.source === "ghost_portal" || camp.is_test === true) return false;
+        // CONNECTED_STATUSES (locked): completed | answered.
+        if (c.status !== "completed" && c.status !== "answered") return false;
+        if (c.voicemail === true) return false;
+        if (c.goal_reached === true) return false;
+        if (c.ended_reason !== "customer-ended-call") return false;
+        if (typeof c.duration_seconds === "number" && c.duration_seconds < 15) return false;
+        if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) return false;
+        return true;
+      });
+      const candidateIds = new Set(candidates.map((c) => c.id));
+      const smsAttachments = (sms as unknown as DashSmsRow[]).filter(
+        (m) => (m.status === "sent" || m.status === "delivered") && m.call_id && candidateIds.has(m.call_id),
+      );
+      const delta = buildCandidateDelta(candidates, smsAttachments, todayStartMs, substantiveUserTurnCount);
+
+      const snapNew = computeTodayFromRollup(
+        callRollupRes.data as CallRollupRow[],
+        smsRollupRes.data as SmsRollupRow[],
+        campaigns,
+        nowMs,
+        delta,
+        rosterByCampaign,
+      );
+
+      const mismatches: string[] = [];
+      const cmp = (label: string, a: unknown, b: unknown) => {
+        if (JSON.stringify(a) !== JSON.stringify(b)) {
+          mismatches.push(`${label}:\n  old=${JSON.stringify(a)}\n  new=${JSON.stringify(b)}`);
+        }
+      };
+      cmp("dayUtc", snapOld.dayUtc, snapNew.dayUtc);
+      cmp("ops", snapOld.ops, snapNew.ops);
+      cmp("today", snapOld.today, snapNew.today);
+      cmp("yesterday", snapOld.yesterday, snapNew.yesterday);
+      cmp("runningCampaigns.length", snapOld.runningCampaigns.length, snapNew.runningCampaigns.length);
+      for (let i = 0; i < snapOld.runningCampaigns.length; i++) {
+        const o = snapOld.runningCampaigns[i];
+        const n = snapNew.runningCampaigns[i];
+        cmp(`runningCampaigns[${o?.name}]`, o, n);
+      }
+      if (mismatches.length > 0) {
+        console.error(`TODAY PARITY MISMATCHES (${mismatches.length}):\n` + mismatches.slice(0, 10).join("\n"));
       }
       expect(mismatches).toEqual([]);
     },

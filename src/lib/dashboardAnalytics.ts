@@ -864,6 +864,9 @@ export interface CallRollupRow {
    *  unconditional count (a goal on a failed-status call still counts). The
    *  connected-gated `positive` above feeds the perf reached-split instead. */
   successful: number;
+  /** Connected calls with a NON-NULL voicemail flag — the voicemailRate
+   *  denominator (accumulate(): NULL = not evaluated, excluded). */
+  voicemail_evaluated: number;
   last_call_at: string | null;
 }
 
@@ -1408,7 +1411,20 @@ export function computeTodayPerf(
   const sbP = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - MS_PER_DAY, dayStartMs);
   const cb7 = callWindowBreakdown(liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
   const sb7 = smsWindowBreakdown(liveSms, liveCalls, declinedIds, dayStartMs - 7 * MS_PER_DAY, dayStartMs);
+  return assembleTodayPerf(cb, sb, cbP, sbP, cb7, sb7);
+}
 
+/** The delta-ful 3-card assembly, shared VERBATIM by the raw-rows path
+ *  (computeTodayPerf) and the SQL-rollup path (computeTodayFromRollup) —
+ *  one code body, so the two paths cannot drift (VOZ-283 parity). */
+function assembleTodayPerf(
+  cb: CallBreakdown,
+  sb: SmsBreakdown,
+  cbP: CallBreakdown,
+  sbP: SmsBreakdown,
+  cb7: CallBreakdown,
+  sb7: SmsBreakdown,
+): TodayPerfDay {
   const callAttempts = mkMetric(cb.total, cbP.total, cb7.total, [
     mkRow("reached", "Reached", cb.reach, cb.total, cbP.reach, cbP.total, cb7.reach, cb7.total),
     mkRow("voicemail", "Voicemail", cb.voicemail, cb.total, cbP.voicemail, cbP.total, cb7.voicemail, cb7.total),
@@ -1661,6 +1677,289 @@ export function computeToday(
     dayUtc: utcDayString(todayStartMs),
     today: computeTodayPerf(liveCalls, liveSms, declinedIds, todayStartMs),
     yesterday: computeTodayPerf(liveCalls, liveSms, declinedIds, yesterdayStartMs),
+    runningCampaigns,
+    ops: {
+      callsToday,
+      callsYesterday,
+      deltaVsYesterday: safeDiv(callsToday - callsYesterday, callsYesterday),
+      sevenDayAvg,
+      deltaVsSevenDayAvg: safeDiv(callsToday - sevenDayAvg, sevenDayAvg),
+      connectRateToday: todayRate.connectRate,
+      connectedToday: todayRate.connected,
+      terminalToday: todayRate.terminal,
+      reachToday: todayRate.reach,
+      voicemailConnectedToday: todayRate.voicemailConnected,
+      voicemailEvaluatedToday: todayRate.voicemailEvaluated,
+      voicemailRateToday: todayRate.voicemailRate,
+      messagesSentToday,
+      messagesShareOfCalls: safeDiv(messagesSentToday, callsToday),
+      messagesShareOfConnected: safeDiv(messagesSentToday, todayRate.connected),
+      activeAgents: runningVoiceIds.size,
+      totalAgents: allVoiceIds.size,
+      idleAgents: Math.max(0, allVoiceIds.size - runningVoiceIds.size),
+      runningCampaignCount: runningCampaigns.length,
+    },
+  };
+}
+
+// ── /today from the SQL rollups (VOZ-283 Task 3) ─────────────────────────────
+// The rollups are lean (transcript-less); the ONE transcript-dependent bucket
+// is isEarlyHangup's "customer-ended-call with ≤1 substantive turn" branch,
+// which the lean rule files under neutral. The route fetches ONLY those
+// candidate calls (+ their attached SMS) and passes per-day/per-campaign
+// counts here; each breakdown then shifts neutral → earlyHangup by the
+// window's candidate count. Byte-parity with computeToday is enforced by
+// dashboardRollup.parity.test.ts.
+
+export interface TodayCandidateDelta {
+  /** UTC day → count of connected customer-ended-call ≤1-turn candidates (lean-neutral → early). */
+  callByDay: Map<string, number>;
+  /** UTC day (of the SMS created_at) → sent|delivered SMS attached to candidate calls. */
+  smsByDay: Map<string, number>;
+  /** Per campaign, TODAY only — feeds the running-campaign perf cards. */
+  todayByCampaign: Map<string, { call: number; sms: number }>;
+}
+
+export function emptyCandidateDelta(): TodayCandidateDelta {
+  return { callByDay: new Map(), smsByDay: new Map(), todayByCampaign: new Map() };
+}
+
+/** A candidate row: connected, non-voicemail, non-goal, contact NOT declined,
+ *  ended_reason='customer-ended-call', duration NULL or ≥ EARLY_HANGUP_SEC —
+ *  i.e. lean-neutral, transcript-decides. Callers pre-apply that predicate
+ *  (SQL in the route; JS in the parity test) — keep the two in lockstep. */
+export interface CandidateCallRow {
+  id?: string | null;
+  campaign_id: string;
+  created_at?: string | null;
+  transcript?: unknown;
+}
+
+/**
+ * Turn candidate calls (+ their attached sent|delivered SMS) into the delta
+ * maps computeTodayFromRollup consumes. Only candidates whose transcript shows
+ * ≤1 substantive customer turn qualify (isEarlyHangup's transcript branch —
+ * the ONE bucket the lean SQL rollup cannot classify).
+ */
+export function buildCandidateDelta(
+  candidates: CandidateCallRow[],
+  smsAttachments: Array<{ call_id?: string | null; created_at?: string | null }>,
+  todayStartMs: number,
+  turnCounter: (transcript: string) => number,
+): TodayCandidateDelta {
+  const delta = emptyCandidateDelta();
+  const qualifying = new Map<string, CandidateCallRow>();
+  for (const c of candidates) {
+    if (turnCounter(transcriptText(c.transcript as DashCallRow["transcript"])) > 1) continue;
+    if (c.id) qualifying.set(c.id, c); // no id → still day-counted; just can't match an SMS
+    const t = c.created_at ? Date.parse(c.created_at) : NaN;
+    if (!Number.isFinite(t)) continue;
+    const day = utcDayString(t);
+    delta.callByDay.set(day, (delta.callByDay.get(day) ?? 0) + 1);
+    if (t >= todayStartMs) {
+      const g = delta.todayByCampaign.get(c.campaign_id) ?? { call: 0, sms: 0 };
+      g.call += 1;
+      delta.todayByCampaign.set(c.campaign_id, g);
+    }
+  }
+  for (const m of smsAttachments) {
+    const call = m.call_id ? qualifying.get(m.call_id) : undefined;
+    if (!call) continue;
+    const t = m.created_at ? Date.parse(m.created_at) : NaN;
+    if (!Number.isFinite(t)) continue;
+    const day = utcDayString(t);
+    delta.smsByDay.set(day, (delta.smsByDay.get(day) ?? 0) + 1);
+    if (t >= todayStartMs) {
+      const g = delta.todayByCampaign.get(call.campaign_id) ?? { call: 0, sms: 0 };
+      g.sms += 1;
+      delta.todayByCampaign.set(call.campaign_id, g);
+    }
+  }
+  return delta;
+}
+
+function dayUtcToMs(dayUtc: string): number {
+  return Date.parse(`${dayUtc}T00:00:00Z`);
+}
+
+function sumDeltaInWindow(byDay: Map<string, number>, startMs: number, endMs: number): number {
+  let k = 0;
+  for (const [day, n] of byDay) {
+    const t = dayUtcToMs(day);
+    if (Number.isFinite(t) && t >= startMs && t < endMs) k += n;
+  }
+  return k;
+}
+
+function callBreakdownFromRollup(
+  rows: CallRollupRow[],
+  startMs: number,
+  endMs: number,
+  candidateDelta: number,
+): CallBreakdown {
+  const b: CallBreakdown = {
+    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
+    positive: 0, neutral: 0, declined: 0, earlyHangup: 0,
+  };
+  for (const r of rows) {
+    const t = dayUtcToMs(r.day_utc);
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += r.attempts;
+    b.terminal += r.terminal;
+    b.connected += r.connected;
+    b.voicemail += r.voicemail;
+    b.reach += r.reach;
+    b.positive += r.positive;
+    b.declined += r.declined;
+    b.earlyHangup += r.early_hangup_lean;
+    b.neutral += r.neutral_lean;
+  }
+  b.unreachable = b.terminal - b.connected;
+  b.inFlight = b.total - b.terminal;
+  // Transcript delta: lean-neutral candidates are early hang-ups on the
+  // transcript path (isEarlyHangup's customer-ended ≤1-turn branch).
+  b.neutral -= candidateDelta;
+  b.earlyHangup += candidateDelta;
+  return b;
+}
+
+function smsBreakdownFromRollup(
+  rows: SmsRollupRow[],
+  startMs: number,
+  endMs: number,
+  candidateDelta: number,
+): SmsBreakdown {
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  for (const r of rows) {
+    const t = dayUtcToMs(r.day_utc);
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    b.total += r.sent;
+    b.reached += r.reached;
+    b.voicemail += r.voicemail;
+    b.unreachable += r.unreachable;
+    b.positive += r.positive;
+    b.neutral += r.neutral;
+    b.declined += r.declined;
+  }
+  // Transcript delta: the attached call flips neutral → early_hangup, which has
+  // no named SMS sub-row but still counts in `reached` — so only neutral moves.
+  b.neutral -= candidateDelta;
+  return b;
+}
+
+/** RateRow from rollup rows in [startMs, endMs) — mirrors accumulate()+finalizeRate(). */
+function rateRowFromRollup(rows: CallRollupRow[], startMs: number, endMs: number): RateRow {
+  const row = emptyRate();
+  for (const r of rows) {
+    const t = dayUtcToMs(r.day_utc);
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    row.calls += r.attempts;
+    row.connected += r.connected;
+    row.terminal += r.terminal;
+    row.successful += r.successful;
+    row.voicemailConnected += r.voicemail;
+    row.voicemailEvaluated += r.voicemail_evaluated;
+  }
+  return finalizeRate(row);
+}
+
+/**
+ * Rollup-sourced twin of computeToday: SAME TodaySnapshot output. The rollups
+ * must span [now − 10d, now] (today + yesterday + each day's prior-7d window);
+ * `delta` carries the transcript-dependent candidate counts (see
+ * TodayCandidateDelta). Card assembly reuses assembleTodayPerf /
+ * assembleWindowPerf — the exact code bodies the raw path uses.
+ */
+export function computeTodayFromRollup(
+  callRollup: CallRollupRow[],
+  smsRollup: SmsRollupRow[],
+  campaigns: DashCampaignRow[],
+  now: number,
+  delta: TodayCandidateDelta = emptyCandidateDelta(),
+  rosterByCampaign: Map<string, number> = new Map(),
+): TodaySnapshot {
+  const liveCampaigns = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
+
+  const todayStartMs = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const yesterdayStartMs = todayStartMs - MS_PER_DAY;
+  const sevenDayStartMs = todayStartMs - 7 * MS_PER_DAY;
+  const farFutureMs = todayStartMs + MS_PER_DAY;
+
+  // ops counters (todayRate mirrors the accumulate() pass over today's calls).
+  const todayRate = rateRowFromRollup(callRollup, todayStartMs, farFutureMs);
+  let callsToday = 0;
+  let callsYesterday = 0;
+  let callsPrior7d = 0;
+  for (const r of callRollup) {
+    const t = dayUtcToMs(r.day_utc);
+    if (!Number.isFinite(t)) continue;
+    if (t >= todayStartMs) callsToday += r.attempts;
+    else if (t >= yesterdayStartMs) callsYesterday += r.attempts;
+    if (t >= sevenDayStartMs && t < todayStartMs) callsPrior7d += r.attempts;
+  }
+  let messagesSentToday = 0;
+  for (const r of smsRollup) {
+    const t = dayUtcToMs(r.day_utc);
+    if (Number.isFinite(t) && t >= todayStartMs) messagesSentToday += r.sent;
+  }
+
+  // Day blocks (delta-ful) — windows mirror computeTodayPerf exactly.
+  const perfDay = (dayStartMs: number): TodayPerfDay => {
+    const dEnd = dayStartMs + MS_PER_DAY;
+    const cb = callBreakdownFromRollup(callRollup, dayStartMs, dEnd, sumDeltaInWindow(delta.callByDay, dayStartMs, dEnd));
+    const sb = smsBreakdownFromRollup(smsRollup, dayStartMs, dEnd, sumDeltaInWindow(delta.smsByDay, dayStartMs, dEnd));
+    const cbP = callBreakdownFromRollup(callRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.callByDay, dayStartMs - MS_PER_DAY, dayStartMs));
+    const sbP = smsBreakdownFromRollup(smsRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.smsByDay, dayStartMs - MS_PER_DAY, dayStartMs));
+    const cb7 = callBreakdownFromRollup(callRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.callByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
+    const sb7 = smsBreakdownFromRollup(smsRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.smsByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
+    return assembleTodayPerf(cb, sb, cbP, sbP, cb7, sb7);
+  };
+
+  // Per-campaign rollup rows, grouped once.
+  const callByCampaign = new Map<string, CallRollupRow[]>();
+  for (const r of callRollup) {
+    const g = callByCampaign.get(r.campaign_id);
+    if (g) g.push(r); else callByCampaign.set(r.campaign_id, [r]);
+  }
+  const smsByCampaign = new Map<string, SmsRollupRow[]>();
+  for (const r of smsRollup) {
+    const g = smsByCampaign.get(r.campaign_id);
+    if (g) g.push(r); else smsByCampaign.set(r.campaign_id, [r]);
+  }
+
+  const runningCampaigns: RunningCampaignCard[] = liveCampaigns
+    .filter((c) => c.status === "running")
+    .map((c) => {
+      const campDelta = delta.todayByCampaign.get(c.id) ?? { call: 0, sms: 0 };
+      const cRoll = callByCampaign.get(c.id) ?? [];
+      const cb = callBreakdownFromRollup(cRoll, todayStartMs, farFutureMs, campDelta.call);
+      const sb = smsBreakdownFromRollup(smsByCampaign.get(c.id) ?? [], todayStartMs, farFutureMs, campDelta.sms);
+      return {
+        id: c.id,
+        name: c.name,
+        country: parseCountryToken(c.name),
+        cioWorkspace: c.cio_workspace ?? null,
+        voiceId: c.voice_id ?? null,
+        agentLabel: c.vapi_assistant_name ?? null,
+        baseAssistantId: c.base_assistant_id ?? null,
+        scheduleType: c.campaign_type === "recurring" ? ("recurring" as const) : ("fixed" as const),
+        today: rateRowFromRollup(cRoll, todayStartMs, farFutureMs),
+        startAt: c.start_at ?? c.created_at ?? null,
+        players: rosterByCampaign.get(c.id) ?? 0,
+        perf: assembleWindowPerf(cb, sb),
+      };
+    });
+
+  const runningVoiceIds = new Set(
+    liveCampaigns.filter((c) => c.status === "running" && c.voice_id).map((c) => c.voice_id as string),
+  );
+  const allVoiceIds = new Set(liveCampaigns.filter((c) => c.voice_id).map((c) => c.voice_id as string));
+  const sevenDayAvg = callsPrior7d / 7;
+
+  return {
+    dayUtc: utcDayString(todayStartMs),
+    today: perfDay(todayStartMs),
+    yesterday: perfDay(yesterdayStartMs),
     runningCampaigns,
     ops: {
       callsToday,
