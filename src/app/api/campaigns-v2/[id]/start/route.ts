@@ -186,6 +186,15 @@ export async function POST(
 
   try {
     const callRow = await fireCall(id, nextNumber, campaign.vapi_assistant_id, baseUrl, campaign.vapi_sip_uri ?? undefined);
+    if (callRow === null) {
+      // VOZ-278: a concurrent dialer (cron tick / chain-next) claimed this
+      // number between our findNextNumber and the fire. The campaign is
+      // running and dialing — just not via this request.
+      return NextResponse.json({
+        message: "Campaign started. A concurrent dialer already picked up the first number.",
+        phone: nextNumber.phone_e164,
+      });
+    }
     return NextResponse.json({
       message: "Campaign started. First call fired.",
       callId: callRow.id,

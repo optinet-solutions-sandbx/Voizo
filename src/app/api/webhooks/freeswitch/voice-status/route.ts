@@ -386,7 +386,15 @@ export async function POST(request: NextRequest) {
   const baseUrl = `${proto}://${host}`;
 
   try {
-    await fireCall(campaignId, nextNumber, campaign.vapi_assistant_id as string, baseUrl, (campaign.vapi_sip_uri as string) ?? undefined);
+    const fired = await fireCall(campaignId, nextNumber, campaign.vapi_assistant_id as string, baseUrl, (campaign.vapi_sip_uri as string) ?? undefined);
+    if (fired === null) {
+      // VOZ-278: a concurrent dialer (overlapping chain-next / cron tick) won
+      // the claim — the number is being dialed by them, not us. Chain-next was
+      // the stampede's amplifier at sub-second reject cycles; backing off here
+      // is exactly the fix. The winner's own hangup will chain the campaign.
+      console.log("[freeswitch.voice-status] chain-next claim lost to concurrent dialer — backing off");
+      return NextResponse.json({ received: true, next: "chain skipped (claim lost)" });
+    }
     return NextResponse.json({ received: true, next: nextNumber.phone_e164 });
   } catch (err) {
     console.error("[freeswitch.voice-status] chain-next failed:", err);

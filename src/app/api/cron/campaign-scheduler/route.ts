@@ -7,6 +7,7 @@ import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
+import { isRejectStreak, REJECT_BREAKER_STREAK, REJECT_BREAKER_WINDOW_MINUTES } from "@/lib/scheduler/rejectBreaker";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
@@ -410,6 +411,49 @@ export async function GET(request: NextRequest) {
 
     if ((inFlight ?? 0) >= perCampaignK) continue;
 
+    // ── VOZ-278 circuit breaker: consecutive-CALL_REJECTED → pause + alert ──
+    // A campaign whose recent calls are ALL rejects is dialing a dead/blocked
+    // caller ID; every further dial burns ANI reputation for zero value
+    // (08-02/03: 31k rejects). Checked once per running campaign per tick,
+    // BEFORE any dial budget is spent. Time-boxed to the last 30 minutes so a
+    // fixed-and-resumed campaign isn't re-tripped by pre-fix history (a still-
+    // blocked CID re-accumulates the streak within minutes — correctly).
+    // The pause is the same atomic filtered-UPDATE pattern as the rotation
+    // stamp below: only the winning tick alerts, so no dedup table is needed
+    // (paused campaigns leave the `idleRunning` set entirely).
+    const breakerSince = new Date(Date.now() - REJECT_BREAKER_WINDOW_MINUTES * 60 * 1000).toISOString();
+    const { data: recentCauses } = await supabaseAdmin
+      .from("calls_v2")
+      .select("hangup_cause")
+      .eq("campaign_id", campaignId)
+      .gte("created_at", breakerSince)
+      .not("hangup_cause", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(REJECT_BREAKER_STREAK);
+
+    if (isRejectStreak((recentCauses ?? []).map((r) => r.hangup_cause as string | null))) {
+      const { data: breakerPaused } = await supabaseAdmin
+        .from("campaigns_v2")
+        .update({ status: "paused" })
+        .eq("id", campaignId)
+        .eq("status", "running")
+        .select("id");
+      if (breakerPaused && breakerPaused.length > 0) {
+        console.error(
+          `[scheduler.breaker] ${campaignName}: ${REJECT_BREAKER_STREAK} consecutive CALL_REJECTED ` +
+            `within ${REJECT_BREAKER_WINDOW_MINUTES}min — auto-paused (VOZ-278). Caller ID likely blocked.`,
+        );
+        await postSlackAlert("ALERT", "Circuit breaker: caller ID appears blocked", [
+          `Campaign: ${campaignName} (${campaignId})`,
+          `${REJECT_BREAKER_STREAK} consecutive CALL_REJECTED in the last ${REJECT_BREAKER_WINDOW_MINUTES} minutes`,
+          "Auto-paused to stop ANI reputation burn and player-attempt waste.",
+          "Verify the caller ID with the carrier/SquareTalk before un-pausing.",
+        ]);
+      }
+      resumeResults.push({ id: campaignId, name: campaignName, result: "breaker_paused" });
+      continue;
+    }
+
     // Call window check (Manifesto §6: every dial). Outside-window → flip to
     // `paused` for parity with the chain-next webhook (voice-status/route.ts).
     // Without this, the campaign would silently sit in `running` for hours
@@ -575,13 +619,20 @@ export async function GET(request: NextRequest) {
       const numberToFire = i === 0 ? next : await findNextNumber(campaignId);
       if (!numberToFire) break; // ran out of eligible numbers this tick
       try {
-        await fireCall(
+        const fired = await fireCall(
           campaignId,
           numberToFire,
           campaign.vapi_assistant_id as string,
           baseUrl,
           (campaign.vapi_sip_uri as string) ?? undefined,
         );
+        if (fired === null) {
+          // VOZ-278: a concurrent dialer (chain-next / overlapping tick) won the
+          // claim on this number — it IS being dialed, just not by us. Don't
+          // count it as our fire; try the next eligible number.
+          console.log(`[scheduler.resume] ${campaignName}: claim lost to concurrent dialer — trying next number`);
+          continue;
+        }
         firedCount++;
         console.log(`[scheduler.resume] ${campaignName}: fired → ${numberToFire.phone_e164.slice(0, -4)}****`);
       } catch (err) {
@@ -808,7 +859,7 @@ export async function GET(request: NextRequest) {
       const proto = request.headers.get("x-forwarded-proto") || "https";
       const baseUrl = `${proto}://${host}`;
 
-      await fireCall(
+      const fired = await fireCall(
         campaignId,
         nextNumber,
         campaign.vapi_assistant_id as string,
@@ -816,8 +867,15 @@ export async function GET(request: NextRequest) {
         (campaign.vapi_sip_uri as string) ?? undefined,
       );
 
-      console.log(`[campaign-scheduler] ${campaignName}: auto-started → dialing ${nextNumber.phone_e164.slice(0, -4)}****`);
-      results.push({ id: campaignId, name: campaignName, result: "started" });
+      if (fired === null) {
+        // VOZ-278: a concurrent dialer already claimed this number. The
+        // campaign is live either way; next tick advances it normally.
+        console.log(`[campaign-scheduler] ${campaignName}: auto-start claim lost to concurrent dialer`);
+        results.push({ id: campaignId, name: campaignName, result: "started_claim_lost" });
+      } else {
+        console.log(`[campaign-scheduler] ${campaignName}: auto-started → dialing ${nextNumber.phone_e164.slice(0, -4)}****`);
+        results.push({ id: campaignId, name: campaignName, result: "started" });
+      }
     } catch (err) {
       console.error(`[campaign-scheduler] ${campaignName}: fireCall failed:`, err);
       // Match start route + chain-next pattern: don't pause on transient failure.

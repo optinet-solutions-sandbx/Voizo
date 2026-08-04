@@ -165,7 +165,9 @@ export async function findNextNumber(campaignId: string) {
 
 /**
  * Fire an outbound call for the given campaign number via FreeSWITCH +
- * SquareTalk. Returns the created calls_v2 row.
+ * SquareTalk. Returns the created calls_v2 row, or NULL when another
+ * concurrent invocation already claimed this number (caller must treat
+ * null as "not fired — skip, no retry bookkeeping").
  *
  * Manifesto §6: state written to DB before calling provider.
  */
@@ -176,11 +178,28 @@ export async function fireCall(
   baseUrl: string,
   vapiSipUri?: string,
 ) {
-  // Mark number as in_progress
-  await supabaseAdmin
+  // Atomic in_progress claim (VOZ-278). This was a blind UPDATE with no
+  // outcome guard and no row-count check, so N concurrent callers (cron tick,
+  // chain-next, start route) could each "claim" the same pending number and
+  // ALL dial it — at sub-second reject cycles that stampeded to 12 dials on
+  // one number in 786ms (08-03, 31k calls). The filtered UPDATE + RETURNING
+  // makes exactly ONE caller win; losers get 0 rows and back off. Mirrors the
+  // voice-status webhook's idempotency claim (route.ts ~L118) and the ESL
+  // ghost claim in this file's catch below.
+  const { data: claimedNumber } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .update({ outcome: "in_progress" })
-    .eq("id", campaignNumber.id);
+    .eq("id", campaignNumber.id)
+    .in("outcome", ["pending", "pending_retry"])
+    .select("id");
+
+  if (!claimedNumber || claimedNumber.length === 0) {
+    console.warn(
+      `[dialer.fireCall] number ${campaignNumber.id} already claimed by a concurrent ` +
+        `dialer (campaign ${campaignId}) — skipping dial (VOZ-278 stampede guard).`,
+    );
+    return null;
+  }
 
   // Create calls_v2 row BEFORE contacting the provider (state-before-action)
   const { data: callRow, error: callErr } = await supabaseAdmin
