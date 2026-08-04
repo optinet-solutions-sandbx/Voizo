@@ -845,8 +845,8 @@ export function computeCampaignTable(
 
 // ── SQL-rollup path (VOZ-283) ─────────────────────────────────────────────────
 // Row shapes returned by the dashboard_call_rollup / dashboard_sms_rollup RPCs
-// (.agent/tasks/2026-08-03_SQL_dashboard_rollup.sql). One row per
-// (campaign_id, day_utc); the assembler sums per campaign.
+// (2026-08-04_dashboard_rollup_rpc.sql, repo root — the tracked, as-applied
+// DDL). One row per (campaign_id, day_utc); the assembler sums per campaign.
 
 export interface CallRollupRow {
   campaign_id: string;
