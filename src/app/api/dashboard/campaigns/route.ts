@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
   // Rollups are campaign-LIFETIME ([epoch, now]) — matching the old route, where
   // Attempts/Reached were lifetime totals and from/to only echo in the response
   // (the date picker filters WHICH campaigns list client-side, not the numbers).
-  const [callRollupRes, smsRollupRes, campaignsRes, numbers] = await Promise.all([
+  const [callRollupRes, smsRollupRes, campaigns, numbers] = await Promise.all([
     supabaseAdmin.rpc("dashboard_call_rollup", {
       p_start: new Date(0).toISOString(),
       p_end: new Date(now).toISOString(),
@@ -66,18 +66,24 @@ export async function GET(request: NextRequest) {
       p_start: new Date(0).toISOString(),
       p_end: new Date(now).toISOString(),
     }),
-    supabaseAdmin
-      .from("campaigns_v2")
+    // fetchAllRows pages past PostgREST's 1000-row cap — campaigns_v2 grows
+    // daily (recurring day-children); a bare .select() clamps at 1000 with no
+    // stable order, so table rows would vanish arbitrarily past the cap.
+    fetchAllRows(
+      supabaseAdmin,
+      "campaigns_v2",
       // cio_workspace: the per-row brand chip (VOZ-216).
-      .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at"),
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
+      "id",
+    ),
     // Players (full roster count) is campaign-LIFETIME; two columns only.
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id", "id"),
   ]);
 
-  if (callRollupRes.error || smsRollupRes.error || campaignsRes.error) {
+  if (callRollupRes.error || smsRollupRes.error) {
     console.error(
       "[dashboard/campaigns] query failed:",
-      callRollupRes.error ?? smsRollupRes.error ?? campaignsRes.error,
+      callRollupRes.error ?? smsRollupRes.error,
     );
     return NextResponse.json({ error: "Failed to read campaigns" }, { status: 500 });
   }
@@ -90,7 +96,7 @@ export async function GET(request: NextRequest) {
   const rows = computeCampaignTableFromRollup(
     (callRollupRes.data ?? []) as CallRollupRow[],
     (smsRollupRes.data ?? []) as SmsRollupRow[],
-    (campaignsRes.data ?? []) as unknown as DashCampaignRow[],
+    campaigns as unknown as DashCampaignRow[],
     now,
     FINISHED_IDLE_DAYS,
     playersByCampaign,

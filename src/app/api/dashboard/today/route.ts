@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import {
   buildCandidateDelta,
   computeTodayFromRollup,
@@ -53,23 +54,30 @@ export async function GET(request: NextRequest) {
     new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate(),
   );
 
-  const [callRollupRes, smsRollupRes, campaignsRes] = await Promise.all([
+  const [callRollupRes, smsRollupRes, campaignRowsRaw] = await Promise.all([
     supabaseAdmin.rpc("dashboard_call_rollup", { p_start: cutoff, p_end: nowIso }),
     supabaseAdmin.rpc("dashboard_sms_rollup", { p_start: cutoff, p_end: nowIso }),
-    supabaseAdmin
-      .from("campaigns_v2")
+    // fetchAllRows pages past PostgREST's 1000-row cap. campaigns_v2 grows daily
+    // (recurring day-children); a bare .select() clamps at 1000 with NO stable
+    // order, so the kept rows would be arbitrary — running cards could vanish
+    // and candidate calls of unlisted campaigns would be silently dropped.
+    fetchAllRows(
+      supabaseAdmin,
+      "campaigns_v2",
       // cio_workspace: the brand chip + panel brand-scope line (VOZ-216).
-      .select("id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at"),
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
+      "id",
+    ),
   ]);
 
-  if (callRollupRes.error || smsRollupRes.error || campaignsRes.error) {
+  if (callRollupRes.error || smsRollupRes.error) {
     console.error(
       "[dashboard/today] query failed:",
-      callRollupRes.error ?? smsRollupRes.error ?? campaignsRes.error,
+      callRollupRes.error ?? smsRollupRes.error,
     );
     return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });
   }
-  const campaignRows = (campaignsRes.data ?? []) as unknown as DashCampaignRow[];
+  const campaignRows = campaignRowsRaw as unknown as DashCampaignRow[];
 
   // ── Transcript-candidate fetch (the ONE bucket SQL can't classify) ──
   // Keyset-paged: candidates are typically dozens-to-hundreds over 10 days, but
@@ -84,6 +92,9 @@ export async function GET(request: NextRequest) {
         .from("calls_v2")
         .select("id, campaign_id, campaign_number_id, created_at, transcript")
         .gte("created_at", cutoff)
+        // Upper bound = the rollup RPCs' p_end: a call landing between the RPC
+        // and this fetch would otherwise shift a neutral the rollup never counted.
+        .lt("created_at", nowIso)
         .in("status", ["completed", "answered"])
         .not("voicemail", "is", true)
         .not("goal_reached", "is", true)
@@ -139,7 +150,9 @@ export async function GET(request: NextRequest) {
       .select("call_id, created_at, status")
       .in("call_id", candidateIds.slice(i, i + IN_CHUNK))
       .in("status", ["sent", "delivered"])
-      .gte("created_at", cutoff);
+      .gte("created_at", cutoff)
+      // Same upper bound as the sms rollup's p_end (see the candidate fetch note).
+      .lt("created_at", nowIso);
     if (error) {
       console.error("[dashboard/today] candidate sms query failed:", error);
       return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });
