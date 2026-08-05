@@ -70,21 +70,53 @@ export function resolveAnswered(s: HangupSignals): boolean | null {
 }
 
 /**
- * How many attempts the player has used once THIS hangup is accounted for
- * (VOZ-248).
+ * Attempt-budget classification (2026-08-05).
  *
- * Normally voice-status owns the increment: it is the first thing to learn the
- * call ended. But a GHOST call was already counted by fireCall's catch, which
- * marked the row 'failed' when the shim timed out — so counting again would burn
- * two of the player's three attempts for a single dial and retire them a call
- * early, silently.
+ * A player's max_attempts budget must measure chances THE PLAYER had, not
+ * dials we fired. Before this, every terminal call burned an attempt — so the
+ * 08-02/05 trunk failures (rejects, out-of-funds intercepts) consumed attempt
+ * budgets of players whose phone never rang once: 3,823 players measured
+ * retired as 'unreached' with ZERO delivered rings.
  *
- * Extracted and tested rather than inlined because the failure is invisible: the
- * player just stops being called sooner than the operator's max_attempts says.
+ *   delivered          — the handset heard about the call (answered, busy, or
+ *                        rang out). Burns an attempt. Voicemail is 'completed'
+ *                        status, so it lands here — correctly.
+ *   transient_failure  — died before ringing anyone (trunk reject, bridge
+ *                        failure, our own cancel). FREE retry; the reject
+ *                        breaker + the dial ceiling bound the loop.
+ *   permanent_failure  — the number itself is dead/invalid. Terminal now:
+ *                        retrying an unallocated number forever is the zombie
+ *                        leak the no-burn rule would otherwise create.
  */
-export function resolveAttemptCount(args: { current: number | null; wasGhost: boolean }): number {
+export type AttemptClass = "delivered" | "transient_failure" | "permanent_failure";
+
+const PERMANENT_CAUSES = new Set([
+  "UNALLOCATED_NUMBER",
+  "NO_ROUTE_DESTINATION",
+  "INVALID_NUMBER_FORMAT",
+]);
+
+export function classifyAttempt(hangupCause: string | null, status: CallStatus): AttemptClass {
+  const cause = (hangupCause || "").toUpperCase();
+  if (PERMANENT_CAUSES.has(cause)) return "permanent_failure";
+  if (status === "completed" || status === "busy" || status === "no_answer") return "delivered";
+  return "transient_failure"; // 'failed' / 'canceled' — nobody's phone rang
+}
+
+/**
+ * How many attempts the player has used once THIS hangup is accounted for.
+ *
+ * 2026-08-05 rework: `burns` (delivered-ness via classifyAttempt) is the single
+ * source of truth. The old `wasGhost` dedupe existed because fireCall's catch
+ * ALSO counted; that catch no longer touches attempt_count (a provider failure
+ * rang nobody), so a ghost-recovered call is simply counted here like any other
+ * — iff it was delivered. This keeps VOZ-248's guarantee (one dial can never
+ * burn two attempts) while fixing its blind spot (a dial that rang nobody
+ * burning one).
+ */
+export function resolveAttemptCount(args: { current: number | null; burns: boolean }): number {
   const current = args.current ?? 0;
-  return args.wasGhost ? current : current + 1;
+  return args.burns ? current + 1 : current;
 }
 
 /**

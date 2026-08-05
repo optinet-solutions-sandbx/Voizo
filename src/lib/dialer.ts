@@ -35,6 +35,36 @@ export function isWithinCallWindow(
 }
 
 /**
+ * Hard per-number-row dial ceiling (2026-08-05, companion to the no-burn rule).
+ *
+ * Transient trunk failures no longer consume the player's attempt budget — so
+ * something else must bound the loop when a number fails forever. Every dial
+ * inserts a calls_v2 row BEFORE contacting the provider (fireCall,
+ * state-before-action), so counting those rows bounds every path: webhook
+ * retries AND provider-error retries. Realtime rollover gives each player a
+ * fresh row per day, so this is effectively a per-day cap.
+ *
+ * 9 = 3 legit ring-attempts + headroom for a full day of ~90-min transient
+ * retry cycles. The reject breaker (VOZ-278) still pauses a campaign-wide
+ * blockage within minutes; this is the per-number backstop beneath it.
+ */
+export const TOTAL_DIAL_CEILING = 9;
+
+export async function exceededDialCeiling(campaignNumberId: string): Promise<boolean> {
+  const { count, error } = await supabaseAdmin
+    .from("calls_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_number_id", campaignNumberId);
+  if (error) {
+    // Fail-open: a broken count must not halt dialing (max_attempts still
+    // bounds delivered calls; the breaker bounds systemic failure).
+    console.error(`[dialer.ceiling] count failed for ${campaignNumberId} (treating as under ceiling):`, error.message);
+    return false;
+  }
+  return (count ?? 0) >= TOTAL_DIAL_CEILING;
+}
+
+/**
  * Returns true when the campaign has work that's not yet terminal:
  *   - pending_retry numbers waiting for their retry window (next_attempt_at > now), OR
  *   - in_progress numbers (call fired but no terminal hangup webhook yet — usually
@@ -238,10 +268,11 @@ export async function fireCall(
     // Provider failed — handle it the same way voice-status would have, since
     // we never reach voice-status when the provider call itself errors:
     //   - Mark calls_v2 row 'failed' so it stops counting as in-flight.
-    //   - Increment attempt_count and apply max_attempts logic. Without this,
-    //     a sustained provider outage + the cron resume sweep would loop on
-    //     the same number forever (attempt_count never hits max → never goes
-    //     terminal → cron keeps re-firing every retry_interval_minutes).
+    //   - Schedule a retry WITHOUT burning an attempt (2026-08-05): a provider
+    //     failure rang nobody, and max_attempts measures chances the PLAYER
+    //     had. The loop is bounded by TOTAL_DIAL_CEILING (every dial inserts a
+    //     calls_v2 row first, so the count covers this path too) — not by
+    //     silently spending the player's budget on calls they never heard.
     //   - Use campaign.retry_interval_minutes (default 90) for the cooldown
     //     instead of a hardcoded 5-min value that would burn cycles fast.
     //
@@ -250,10 +281,11 @@ export async function fireCall(
     // may have ALREADY terminalized. Claim 'failed' ONLY while the row is still
     // non-terminal (mirrors voice-status's atomic idempotency claim). If the webhook
     // won the race (the call really connected), the claim matches 0 rows: leave the
-    // row and the number exactly as the webhook resolved them, and do NOT burn an
-    // attempt or queue a retry — that is the double-dial we are killing (35/55).
+    // row and the number exactly as the webhook resolved them, and do NOT queue a
+    // retry — that is the double-dial we are killing (35/55).
     // hangup_cause is deliberately left NULL so the webhook's ghost-recovery
-    // (VOZ-248) can still self-identify this row if it arrives afterwards.
+    // (VOZ-248) can still self-identify this row if it arrives afterwards; the
+    // webhook then counts the attempt iff the call was actually delivered.
     const { data: claimedFail } = await supabaseAdmin
       .from("calls_v2")
       .update({ status: "failed", ended_at: new Date().toISOString() })
@@ -262,39 +294,29 @@ export async function fireCall(
       .select("id");
 
     if (claimedFail && claimedFail.length > 0) {
-      const { data: numRow } = await supabaseAdmin
-        .from("campaign_numbers_v2")
-        .select("attempt_count")
-        .eq("id", campaignNumber.id)
-        .single();
-      const newAttemptCount = (numRow?.attempt_count ?? 0) + 1;
-
-      const { data: cfg } = await supabaseAdmin
-        .from("campaigns_v2")
-        .select("retry_interval_minutes, max_attempts")
-        .eq("id", campaignId)
-        .single();
-      const retryMinutes = cfg?.retry_interval_minutes ?? 90;
-      const maxAttempts = cfg?.max_attempts ?? 3;
-
-      if (newAttemptCount >= maxAttempts) {
-        // Exhausted via provider failures → terminal `unreached`. Mirrors the
-        // voice-status webhook's terminal-outcome logic so retry-loop behavior
-        // is identical regardless of whether voice-status fires or not.
+      if (await exceededDialCeiling(campaignNumber.id)) {
+        console.warn(
+          `[dialer.fireCall] number ${campaignNumber.id} hit the ${TOTAL_DIAL_CEILING}-dial ` +
+            `ceiling via provider failures — marking unreached (no more retries today).`,
+        );
         await supabaseAdmin
           .from("campaign_numbers_v2")
           .update({
-            attempt_count: newAttemptCount,
             last_attempted_at: new Date().toISOString(),
             outcome: "unreached",
           })
           .eq("id", campaignNumber.id);
       } else {
+        const { data: cfg } = await supabaseAdmin
+          .from("campaigns_v2")
+          .select("retry_interval_minutes")
+          .eq("id", campaignId)
+          .single();
+        const retryMinutes = cfg?.retry_interval_minutes ?? 90;
         const retryAt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
         await supabaseAdmin
           .from("campaign_numbers_v2")
           .update({
-            attempt_count: newAttemptCount,
             last_attempted_at: new Date().toISOString(),
             next_attempt_at: retryAt,
             outcome: "pending_retry",

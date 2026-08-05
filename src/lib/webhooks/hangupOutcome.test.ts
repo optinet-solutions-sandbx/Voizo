@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyAttempt,
   completedNumberOutcomeOverride,
   mapHangup,
   resolveAnswered,
@@ -100,32 +101,58 @@ describe("mapHangup — unambiguous causes are unchanged", () => {
   });
 });
 
-describe("resolveAttemptCount — ghost calls must not burn two attempts (VOZ-248)", () => {
-  it("normal call: voice-status owns the increment", () => {
-    expect(resolveAttemptCount({ current: 0, wasGhost: false })).toBe(1);
-    expect(resolveAttemptCount({ current: 2, wasGhost: false })).toBe(3);
-    expect(resolveAttemptCount({ current: null, wasGhost: false })).toBe(1);
+describe("classifyAttempt — only calls the player could hear burn attempt budget (2026-08-05)", () => {
+  it("delivered: answered, busy, and rang-out calls burn an attempt", () => {
+    expect(classifyAttempt("NORMAL_CLEARING", "completed")).toBe("delivered");
+    expect(classifyAttempt("USER_BUSY", "busy")).toBe("delivered");
+    expect(classifyAttempt("NO_ANSWER", "no_answer")).toBe("delivered");
+    // Voicemail calls map to status 'completed' (a machine answered) — they
+    // legitimately consumed a chance to reach the player.
+    expect(classifyAttempt("NORMAL_CLEARING", "completed")).toBe("delivered");
   });
 
-  it("recovered ghost: fireCall's catch ALREADY counted it, so hold the number", () => {
-    // Double-counting here would retire the player at 2 real dials on a
-    // max_attempts=3 campaign — invisible except as "we stopped calling early".
-    expect(resolveAttemptCount({ current: 1, wasGhost: true })).toBe(1);
-    expect(resolveAttemptCount({ current: 3, wasGhost: true })).toBe(3);
+  it("transient: trunk rejects and bridge failures rang NOBODY — free retry", () => {
+    // The 08-02/05 signature: out-of-funds intercepts / trunk blocks. These
+    // consumed the attempt budgets of 3,823 players whose phone never rang.
+    expect(classifyAttempt("CALL_REJECTED", "failed")).toBe("transient_failure");
+    // Our own bridge-fail cause (dialplan tail, 2026-08-05 EC2 deploy).
+    expect(classifyAttempt("NORMAL_TEMPORARY_FAILURE", "failed")).toBe("transient_failure");
+    // We hung up before it rang — our doing, not the player's missed chance.
+    expect(classifyAttempt("ORIGINATOR_CANCEL", "canceled")).toBe("transient_failure");
+    // Unknown/garbage causes default to transient (never silently burn).
+    expect(classifyAttempt(null, "failed")).toBe("transient_failure");
+    expect(classifyAttempt("SOME_NEW_CAUSE", "failed")).toBe("transient_failure");
   });
 
-  it("a ghost never pushes the player OVER the operator's cap by itself", () => {
+  it("permanent: dead/invalid numbers terminalize instead of retrying forever", () => {
+    expect(classifyAttempt("UNALLOCATED_NUMBER", "failed")).toBe("permanent_failure");
+    expect(classifyAttempt("NO_ROUTE_DESTINATION", "failed")).toBe("permanent_failure");
+    expect(classifyAttempt("INVALID_NUMBER_FORMAT", "failed")).toBe("permanent_failure");
+    // Case-insensitive on the raw cause string.
+    expect(classifyAttempt("unallocated_number", "failed")).toBe("permanent_failure");
+  });
+});
+
+describe("resolveAttemptCount — delivered-ness is the single source of truth (2026-08-05)", () => {
+  it("a delivered call burns exactly one attempt", () => {
+    expect(resolveAttemptCount({ current: 0, burns: true })).toBe(1);
+    expect(resolveAttemptCount({ current: 2, burns: true })).toBe(3);
+    expect(resolveAttemptCount({ current: null, burns: true })).toBe(1);
+  });
+
+  it("a call that rang nobody holds the count — the VOZ-248 guarantee, generalized", () => {
+    // One dial can never burn two attempts (old wasGhost dedupe), AND a dial
+    // that rang nobody can no longer burn one (the old rule's blind spot).
+    expect(resolveAttemptCount({ current: 1, burns: false })).toBe(1);
+    expect(resolveAttemptCount({ current: 3, burns: false })).toBe(3);
+    expect(resolveAttemptCount({ current: null, burns: false })).toBe(0);
+  });
+
+  it("a player at cap stays at cap through a non-burning failure (retires on time, not early)", () => {
     const maxAttempts = 3;
-    // 2 real dials so far, third dial ghosted (fireCall counted it -> 3).
-    const afterGhost = resolveAttemptCount({ current: 3, wasGhost: true });
-    expect(afterGhost).toBe(3);
-    expect(afterGhost >= maxAttempts).toBe(true); // retires exactly on time, not early
-    // Same player, had the call NOT ghosted: also 3. Behaviour is identical.
-    expect(resolveAttemptCount({ current: 2, wasGhost: false })).toBe(3);
-  });
-
-  it("null current is treated as 0 in both modes", () => {
-    expect(resolveAttemptCount({ current: null, wasGhost: true })).toBe(0);
+    const afterFailure = resolveAttemptCount({ current: 3, burns: false });
+    expect(afterFailure).toBe(3);
+    expect(afterFailure >= maxAttempts).toBe(true);
   });
 });
 

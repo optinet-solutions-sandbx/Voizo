@@ -18,9 +18,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
-import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
+import { exceededDialCeiling, findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow, TOTAL_DIAL_CEILING } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
-import { completedNumberOutcomeOverride, mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
+import { classifyAttempt, completedNumberOutcomeOverride, mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -162,7 +162,8 @@ export async function POST(request: NextRequest) {
       console.warn(
         `[freeswitch.voice-status] GHOST RECOVERED (VOZ-248): call=${callId} was marked ` +
           `'failed' by a shim timeout but really connected — corrected to status=${status}, ` +
-          `duration=${durationSeconds}s. attempt_count left as-is (fireCall already counted it).`,
+          `duration=${durationSeconds}s. Attempt counted below iff delivered (2026-08-05: ` +
+          `fireCall's catch no longer counts).`,
       );
     }
   }
@@ -189,11 +190,19 @@ export async function POST(request: NextRequest) {
     .eq("id", numberId)
     .single();
 
-  // Ghost rows (VOZ-248) must NOT be counted twice: fireCall's catch already
-  // incremented attempt_count and stamped last_attempted_at before this handler
-  // ever saw the call. Without this, a recovered ghost would burn 2 of the
-  // player's 3 attempts for a single dial and retire them a call early.
-  const newAttemptCount = resolveAttemptCount({ current: numRow?.attempt_count ?? null, wasGhost });
+  // Attempt budget measures chances THE PLAYER had (2026-08-05): only a
+  // delivered call — answered, busy, or rang out — burns one of their
+  // max_attempts. Trunk-level failures (rejects, out-of-funds intercepts,
+  // bridge failures) retry for free; the 08-02/05 incidents retired 3,823
+  // players whose phone never rang once by counting exactly those. Ghost
+  // dedupe is obsolete here: fireCall's catch no longer counts anything, so
+  // delivered-ness is the single source of truth (wasGhost still drives the
+  // status recovery above).
+  const attemptClass = classifyAttempt(payload.hangup_cause, status);
+  const newAttemptCount = resolveAttemptCount({
+    current: numRow?.attempt_count ?? null,
+    burns: attemptClass === "delivered",
+  });
 
   const { data: campaign } = await supabaseAdmin
     .from("campaigns_v2")
@@ -235,7 +244,38 @@ export async function POST(request: NextRequest) {
       .from("campaign_numbers_v2")
       .update(completedNumUpdate)
       .eq("id", numberId);
+  } else if (attemptClass === "permanent_failure") {
+    // Dead/invalid number (UNALLOCATED_NUMBER etc.) — terminal immediately.
+    // Without this, the no-burn rule above would retry an unallocated number
+    // forever (the rollover carries pending_retry across days).
+    console.warn(
+      `[freeswitch.voice-status] permanent failure (${payload.hangup_cause}) — ` +
+        `number ${numberId} marked unreached, no retries.`,
+    );
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+        outcome: "unreached",
+      })
+      .eq("id", numberId);
   } else if (newAttemptCount >= (campaign?.max_attempts ?? 3)) {
+    await supabaseAdmin
+      .from("campaign_numbers_v2")
+      .update({
+        attempt_count: newAttemptCount,
+        last_attempted_at: new Date().toISOString(),
+        outcome: "unreached",
+      })
+      .eq("id", numberId);
+  } else if (await exceededDialCeiling(numberId)) {
+    // Backstop beneath the no-burn rule: a number that keeps failing at the
+    // trunk retries for free, so total dials — not attempts — must bound it.
+    console.warn(
+      `[freeswitch.voice-status] number ${numberId} hit the ${TOTAL_DIAL_CEILING}-dial ` +
+        `ceiling — marking unreached (no more retries today).`,
+    );
     await supabaseAdmin
       .from("campaign_numbers_v2")
       .update({
