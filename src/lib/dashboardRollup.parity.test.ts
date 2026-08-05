@@ -107,17 +107,26 @@ describe.skipIf(!RUN_PARITY)("dashboard rollup parity — campaigns table (VOZ-2
         sms as unknown as DashSmsRow[],
       );
 
-      // ── NEW path: the two rollup RPCs + roster counts ──
-      const [callRollupRes, smsRollupRes] = await Promise.all([
+      // ── NEW path: the three RPCs (two rollups + SQL roster counts) ──
+      const [callRollupRes, smsRollupRes, rosterRes] = await Promise.all([
         svc.rpc("dashboard_call_rollup", { p_start: new Date(0).toISOString(), p_end: asOf }),
         svc.rpc("dashboard_sms_rollup", { p_start: new Date(0).toISOString(), p_end: asOf }),
+        svc.rpc("campaign_roster_counts"),
       ]);
       if (callRollupRes.error) throw new Error(`call rollup: ${callRollupRes.error.message}`);
       if (smsRollupRes.error) throw new Error(`sms rollup: ${smsRollupRes.error.message}`);
+      if (rosterRes.error) throw new Error(`roster counts: ${rosterRes.error.message}`);
 
+      // `players` from SQL COUNT(*), NOT from re-counting `numbers` — that is the
+      // whole point: the compared-field list below includes "players", so this
+      // asserts campaign_roster_counts() === the JS row-count over every campaign.
+      // Deliberately unbounded in time, exactly like the route (players is a
+      // lifetime count). A roster bulk-insert landing between the two reads would
+      // surface as a loud, self-explanatory `players` mismatch on that campaign —
+      // re-run rather than chase it; rosters only change on create/refresh.
       const playersByCampaign = new Map<string, number>();
-      for (const n of numbers) {
-        playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
+      for (const r of (rosterRes.data ?? []) as Array<{ campaign_id: string; players: number }>) {
+        playersByCampaign.set(r.campaign_id, Number(r.players) || 0);
       }
 
       const newRows = computeCampaignTableFromRollup(

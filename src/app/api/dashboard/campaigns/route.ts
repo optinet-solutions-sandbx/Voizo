@@ -23,9 +23,15 @@ import {
  * sms_messages_v2 row through JS (the incident's 31k-row days made that fetch
  * ~47k rows / ~16MB per load). Byte-parity with the old path is proven by
  * src/lib/dashboardRollup.parity.test.ts (run against live prod data) — the
- * response JSON shape is unchanged. The roster fetch stays (players = lifetime
- * campaign_numbers count) but slims to two columns; declined outcomes are now
- * classified inside the SQL, so `outcome` is no longer fetched.
+ * response JSON shape is unchanged. Declined outcomes are now classified inside
+ * the SQL, so `outcome` is no longer fetched.
+ *
+ * 2026-08-05: `players` also moved into SQL (campaign_roster_counts). VOZ-283 left
+ * the roster as a full-table fetchAllRows purely to COUNT rows in JS — 27 sequential
+ * round-trips at 26.6k rows, which turned out to BE this route's latency (measured
+ * 15.5-16.8s, vs 0.9-1.4s for /api/qa-prompt-testing/campaigns running the same
+ * lifetime dashboard_call_rollup without that leg). The lifetime rollup scan was
+ * never the bottleneck; round-trip count was. See 2026-08-05_campaign_roster_counts_rpc.sql.
  */
 const MS_PER_DAY = 86_400_000;
 
@@ -57,7 +63,7 @@ export async function GET(request: NextRequest) {
   // Rollups are campaign-LIFETIME ([epoch, now]) — matching the old route, where
   // Attempts/Reached were lifetime totals and from/to only echo in the response
   // (the date picker filters WHICH campaigns list client-side, not the numbers).
-  const [callRollupRes, smsRollupRes, campaigns, numbers] = await Promise.all([
+  const [callRollupRes, smsRollupRes, campaigns, rosterRes] = await Promise.all([
     supabaseAdmin.rpc("dashboard_call_rollup", {
       p_start: new Date(0).toISOString(),
       p_end: new Date(now).toISOString(),
@@ -76,21 +82,24 @@ export async function GET(request: NextRequest) {
       "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
       "id",
     ),
-    // Players (full roster count) is campaign-LIFETIME; two columns only.
-    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id", "id"),
+    // Players (full roster count) is campaign-LIFETIME. Counted in SQL: paging the
+    // whole table to count rows in JS was 27 sequential round-trips (26.6k rows) and
+    // WAS this route's wall clock — 15.5-16.8s prod, vs 0.9-1.4s for the same
+    // lifetime rollup without this leg. One GROUP BY, one round-trip.
+    supabaseAdmin.rpc("campaign_roster_counts"),
   ]);
 
-  if (callRollupRes.error || smsRollupRes.error) {
+  if (callRollupRes.error || smsRollupRes.error || rosterRes.error) {
     console.error(
       "[dashboard/campaigns] query failed:",
-      callRollupRes.error ?? smsRollupRes.error,
+      callRollupRes.error ?? smsRollupRes.error ?? rosterRes.error,
     );
     return NextResponse.json({ error: "Failed to read campaigns" }, { status: 500 });
   }
 
   const playersByCampaign = new Map<string, number>();
-  for (const n of numbers as Array<{ campaign_id: string }>) {
-    playersByCampaign.set(n.campaign_id, (playersByCampaign.get(n.campaign_id) ?? 0) + 1);
+  for (const r of (rosterRes.data ?? []) as Array<{ campaign_id: string; players: number }>) {
+    playersByCampaign.set(r.campaign_id, Number(r.players) || 0);
   }
 
   const rows = computeCampaignTableFromRollup(
