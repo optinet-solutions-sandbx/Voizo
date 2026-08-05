@@ -439,9 +439,12 @@ export async function GET(request: NextRequest) {
       .limit(REJECT_BREAKER_STREAK);
 
     if (isRejectStreak((recentCauses ?? []).map((r) => r.hangup_cause as string | null))) {
+      // last_paused_at: every pause writer stamps it (parity with /stop and the
+      // window-close paths). Breaker pauses left it NULL — Fortune Play 08-05
+      // showed as paused with no timestamp, hiding WHEN the breaker fired.
       const { data: breakerPaused } = await supabaseAdmin
         .from("campaigns_v2")
-        .update({ status: "paused" })
+        .update({ status: "paused", last_paused_at: new Date().toISOString() })
         .eq("id", campaignId)
         .eq("status", "running")
         .select("id");
@@ -478,7 +481,7 @@ export async function GET(request: NextRequest) {
       } else if (typeof spend === "number" && spend >= budgetUsd) {
         const { data: budgetPaused } = await supabaseAdmin
           .from("campaigns_v2")
-          .update({ status: "paused" })
+          .update({ status: "paused", last_paused_at: new Date().toISOString() })
           .eq("id", campaignId)
           .eq("status", "running")
           .select("id");

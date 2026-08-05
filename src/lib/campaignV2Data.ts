@@ -252,9 +252,14 @@ export async function fetchCampaignV2(id: string) {
 }
 
 export async function updateCampaignV2Status(id: string, status: string) {
+  const patch: Record<string, unknown> = { status };
+  // Pause telemetry parity: /stop and the scheduler window-close paths stamp
+  // last_paused_at; this soft-flip endpoint (detail-page pause) previously
+  // left it NULL, so "when was this paused?" had no answer for UI pauses.
+  if (status === "paused") patch.last_paused_at = new Date().toISOString();
   const { data, error } = await supabaseAdmin
     .from("campaigns_v2")
-    .update({ status })
+    .update(patch)
     .eq("id", id)
     .select()
     .single();
