@@ -17,15 +17,10 @@ import Pagination from "@/components/Pagination";
 import StatBand from "../analytics/StatBand";
 import { SectionTick } from "../analytics/SectionIsland";
 import {
-  computeCampaignAnalytics,
   computePortfolio,
   smsSentOf,
   type CampaignAnalytics,
   type PortfolioRollup,
-  type CampaignRow as AnalyticsCampaignRow,
-  type NumberRow,
-  type CallRow,
-  type SmsRow,
 } from "@/lib/campaignAnalytics";
 import CampaignExpand from "@/components/analytics/CampaignExpand";
 import { useBaseAgentNames } from "@/app/analytics/useBaseAgentNames";
@@ -149,26 +144,14 @@ function CampaignsPageInner() {
         const ids = rows.map((r: CampaignRow) => r.id as string);
         if (ids.length === 0) { setLoading(false); return; }
 
-        // PII-minimization (G6) is now enforced SERVER-SIDE: the analytics route
-        // selects ONLY aggregation columns (never phone_e164/transcript/body/
-        // to_phone_e164/error_message/provider_message_id) and reads via the
-        // service role, so the anon key never touches these tables. Per-table
-        // read errors are loud-logged server-side and degrade that bucket to []
-        // (RLS Phase A — docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md).
-        const { numbers, calls, sms } = await fetchCampaignAnalytics();
-
-        // Double-cast through unknown: the server returns Record<string,unknown>
-        // rows (the old anon client returned `any`, which cast implicitly). The
-        // runtime shapes match the analytics row types — the route selects exactly
-        // those columns.
-        const analyticsById = computeCampaignAnalytics({
-          campaigns: rows as unknown as AnalyticsCampaignRow[],
-          numbers: numbers as unknown as NumberRow[],
-          calls: calls as unknown as CallRow[],
-          sms: sms as unknown as SmsRow[],
-          now: Date.now(),
-        });
-        setAnalytics(analyticsById);
+        // computeCampaignAnalytics runs SERVER-SIDE (2026-08-05): the route returns
+        // the computed per-campaign map (~KBs), not the raw numbers/calls/sms bundle
+        // (20.8MB at 51k calls — and the engagement classifier's transcript column
+        // rode the wire with it). phone_e164/body are never selected; transcripts
+        // never leave the server. Per-table read errors degrade server-side
+        // (loud-logged), same as the old bundle behaviour.
+        // (RLS Phase A — docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md.)
+        setAnalytics(await fetchCampaignAnalytics());
       } catch (err) {
         console.error("Failed to fetch campaigns:", err);
       } finally {

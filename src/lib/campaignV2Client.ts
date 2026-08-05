@@ -9,6 +9,7 @@
 // campaignV2Shared.ts (no supabase) — import those from there, not from here.
 
 import type { CampaignV2CreateInput } from "./campaignV2Shared";
+import type { CampaignAnalytics } from "./campaignAnalytics";
 import type { RecurrencePattern } from "./types/recurrence";
 import type { QueueRow } from "./realtimeQueue";
 import type { SmsConsentMode } from "./smsDispatchDecision";
@@ -44,11 +45,6 @@ export async function fetchCampaignDetailBundle(campaignId: string): Promise<Cam
   };
 }
 
-export interface CampaignAnalyticsBundle {
-  numbers: Row[];
-  calls: Row[];
-  sms: Row[];
-}
 
 /**
  * Read the campaigns list via the auth-gated server route. Mirrors the old
@@ -77,22 +73,19 @@ export async function fetchCampaignV2(id: string): Promise<Row> {
 }
 
 /**
- * Read the campaigns-list aggregation bundle (numbers/calls/SMS) used by the
- * list page's analytics. Columns are PII-minimized SERVER-side (the route only
- * selects aggregation fields), so the wire payload never carries phone numbers,
- * transcripts, or SMS bodies. Each bucket defaults to [].
+ * Read the per-campaign analytics map for the list page. Since 2026-08-05 the
+ * route runs computeCampaignAnalytics SERVER-SIDE and returns only the computed
+ * aggregates (~KBs) — the raw {numbers, calls, sms} bundle (20.8MB at 51k calls,
+ * with transcripts riding the wire for the engagement classifier) no longer
+ * leaves the server. Defaults to {} when the key is absent.
  */
-export async function fetchCampaignAnalytics(): Promise<CampaignAnalyticsBundle> {
+export async function fetchCampaignAnalytics(): Promise<Record<string, CampaignAnalytics>> {
   const res = await fetch(`/api/campaigns-v2/analytics`);
   if (!res.ok) {
     throw new Error(`Failed to load campaign analytics (${res.status})`);
   }
-  const data = (await res.json()) as Partial<CampaignAnalyticsBundle>;
-  return {
-    numbers: data.numbers ?? [],
-    calls: data.calls ?? [],
-    sms: data.sms ?? [],
-  };
+  const data = (await res.json()) as { analytics?: Record<string, CampaignAnalytics> };
+  return data.analytics ?? {};
 }
 
 /**

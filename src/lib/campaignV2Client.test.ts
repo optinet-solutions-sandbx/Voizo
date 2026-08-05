@@ -109,24 +109,22 @@ describe("updateCampaignV2Status", () => {
 });
 
 describe("fetchCampaignAnalytics", () => {
-  it("GETs /api/campaigns-v2/analytics and returns the three buckets", async () => {
+  it("GETs /api/campaigns-v2/analytics and returns the computed per-campaign map", async () => {
+    // 2026-08-05: the route computes server-side — the response is
+    // { analytics: Record<campaignId, CampaignAnalytics> }, never raw rows.
     const { calls } = stubFetch({
       ok: true,
       status: 200,
-      json: { numbers: [{ id: "n" }], calls: [{ campaign_id: "c" }], sms: [{ campaign_id: "c" }] },
+      json: { analytics: { c1: { targeted: 10, reach: 3 } } },
     });
-    const bundle = await fetchCampaignAnalytics();
+    const analytics = await fetchCampaignAnalytics();
     expect(calls[0].url).toBe("/api/campaigns-v2/analytics");
-    expect(bundle).toEqual({
-      numbers: [{ id: "n" }],
-      calls: [{ campaign_id: "c" }],
-      sms: [{ campaign_id: "c" }],
-    });
+    expect(analytics).toEqual({ c1: { targeted: 10, reach: 3 } });
   });
 
-  it("defaults missing buckets to [] and throws on non-2xx", async () => {
+  it("defaults a missing analytics key to {} and throws on non-2xx", async () => {
     stubFetch({ ok: true, status: 200, json: {} });
-    expect(await fetchCampaignAnalytics()).toEqual({ numbers: [], calls: [], sms: [] });
+    expect(await fetchCampaignAnalytics()).toEqual({});
     stubFetch({ ok: false, status: 500 });
     await expect(fetchCampaignAnalytics()).rejects.toThrow(/500/);
   });

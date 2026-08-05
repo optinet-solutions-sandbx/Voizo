@@ -1,39 +1,66 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import {
+  computeCampaignAnalytics,
+  type CampaignRow,
+  type NumberRow,
+  type CallRow,
+  type SmsRow,
+} from "@/lib/campaignAnalytics";
 
 /**
  * GET /api/campaigns-v2/analytics
  *
- * RLS Phase A (docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md). Returns the
- * campaigns-list aggregation bundle (numbers + calls + SMS) consumed by
- * computeCampaignAnalytics on the campaigns list page. Read SERVER-SIDE via the
- * service role, replacing the page's three inline anon `.select(...)` reads.
+ * RLS Phase A (docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md), reshaped 2026-08-05:
+ * computeCampaignAnalytics now runs SERVER-SIDE and the response is the computed
+ * per-campaign map (`{ analytics: Record<campaignId, CampaignAnalytics> }`) —
+ * aggregates only, ~KBs.
  *
- * PII minimization is preserved EXACTLY (the page's "G6" column lists): only
- * aggregation columns are selected — never phone_e164, transcript, body,
- * to_phone_e164, error_message, or provider_message_id — so the wire payload
- * carries no PII even though the route is already auth-gated.
+ * WHY the reshape: the route used to return the raw {numbers, calls, sms} bundle
+ * for the page to compute client-side. That bundle had grown to ~20.8MB / 44s at
+ * 51k calls, and — because the 2026-06-26 engagement classifier needs
+ * calls_v2.transcript (substantiveUserTurnCount) — it carried every transcript to
+ * the browser while comments here still claimed "never transcript". Computing
+ * server-side keeps the transcript read (the classifier requires it) but it never
+ * leaves the server; phone_e164 / body are never selected at all.
  *
- * No campaign_id filter: the list page fetches ALL campaigns then aggregates by
- * their ids, so "all rows" == "rows for the fetched ids". computeCampaignAnalytics
- * groups by campaign_id and ignores rows for any campaign not on the page.
+ * Ghost segregation: campaigns with source='ghost_portal' are dropped BEFORE
+ * compute (mirrors the campaigns-v2 list route), so ghost aggregates never ride
+ * the wire either.
  *
  * Paginated reads (fetchAllRows): PostgREST caps an unpaginated .select() at
- * 1000 rows, which silently dropped the newest campaigns' numbers/calls (>1000
- * rows total) so the list showed 0 contacts/calls for them. fetchAllRows pages
- * past the cap, ordered by the stable `id` key, so every campaign is counted.
+ * 1000 rows. Best-effort per table: a page error degrades that bucket to the
+ * rows gathered so far (loud-logged), so one table failing skews rather than
+ * blanks the list — matching the old bundle behaviour.
  *
- * Best-effort per table: fetchAllRows logs a page error and returns the rows
- * gathered so far (loud-over-silent), so one table failing degrades that bucket
- * rather than failing the whole bundle.
+ * NOTE: still the full-table sequential-paging read underneath (~52 pages of
+ * calls_v2) — the latency root-fix is the VOZ-289 rollup cutover; this change
+ * removes the PII wire leak and the 20MB payload, not the paging cost.
  */
 export async function GET() {
-  const [numbers, calls, sms] = await Promise.all([
+  const [campaigns, numbers, calls, sms] = await Promise.all([
+    fetchAllRows(
+      supabaseAdmin,
+      "campaigns_v2",
+      "id, name, status, is_test, source, start_at, created_at, end_at, campaign_type, goal_target",
+    ),
     fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id, outcome, created_at"),
     fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail, ended_reason, transcript"),
     fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, provider"),
   ]);
 
-  return NextResponse.json({ numbers, calls, sms });
+  const realCampaigns = (campaigns as unknown as CampaignRow[]).filter(
+    (c) => c.source !== "ghost_portal",
+  );
+
+  const analytics = computeCampaignAnalytics({
+    campaigns: realCampaigns,
+    numbers: numbers as unknown as NumberRow[],
+    calls: calls as unknown as CallRow[],
+    sms: sms as unknown as SmsRow[],
+    now: Date.now(),
+  });
+
+  return NextResponse.json({ analytics });
 }
