@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useRef, useState, useSyncExternalStore } from "react";
 import {
   PhoneOff, BookOpen, LayoutDashboard, Sun, Moon, Globe2,
-  Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone, Workflow,
+  Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone, Workflow, FlaskConical,
 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
 import NotificationBell from "@/components/NotificationBell";
@@ -55,6 +55,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
     items: [
       { label: "Script Builder", href: "/script-builder", icon: Workflow, animatedIcon: WorkflowIcon,   ...NEUTRAL },
       { label: "Reviews",  href: "/reviews",  icon: ClipboardCheck, animatedIcon: ClipboardCheckIcon, ...NEUTRAL },
+      { label: "QA Prompt Testing", href: "/qa-prompt-testing", icon: FlaskConical, animatedIcon: ClipboardCheckIcon, ...NEUTRAL },
       { label: "Audience", href: "/audience", icon: Users,          animatedIcon: UsersIcon,          ...NEUTRAL },
     ],
   },

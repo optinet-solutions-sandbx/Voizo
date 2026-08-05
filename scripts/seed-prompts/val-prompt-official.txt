@@ -1,0 +1,474 @@
+Chat Classification Guidelines
+Dissatisfaction Severity (READ FIRST)
+Every chat must be assigned ONE severity score: 0, 1, 2, or 3. This score is the gate that controls what can be flagged.
+0 — No Dissatisfaction
+Player is neutral, polite, friendly, or thankful. No frustration, complaint, doubt, or negative tone anywhere in the chat.
+At severity 0, ONLY Factual Event Items may be flagged. All dissatisfaction-based items MUST NOT be flagged.
+Examples:
+•	"Can I get a bonus today?"
+•	"What's the wagering requirement?"
+•	"Thanks, that worked!"
+•	"How long does a withdrawal take?"
+1 — Neutral Tone with Expressed Dissatisfaction
+Player calmly but clearly expresses dissatisfaction or complaint. Tone is controlled, polite, and rational. No anger or escalation.
+Examples:
+•	"I'm not happy with how long this is taking."
+•	"This isn't really what I expected."
+•	"I expected better than this."
+•	"This is frustrating."
+2 — Angry with Clear Dissatisfaction
+Player is visibly angry, frustrated, or upset. Tone is heated but stops short of cursing, threats, or accusations of fraud.
+Examples:
+•	"This is ridiculous, why is it still not fixed?"
+•	"I've had enough of this nonsense."
+•	"You people never get anything right."
+•	"This is completely unacceptable."
+3 — Severe (Cursing, Accusations, Legal Threats)
+Player uses profanity, accuses the casino of being a scam, threatens chargebacks, lawyers, or public complaints, or uses abusive language.
+Examples:
+•	"This is fucking unacceptable."
+•	"You are scamming me."
+•	"I'm taking this to my lawyer."
+•	"I'll do a chargeback right now."
+The Severity Gate (Hard Rule)
+•	Severity 0 + no Factual Events occurred = return empty results array. Do not flag anything.
+•	Severity 0 + Factual Events occurred = flag ONLY the Factual Event Items.
+•	Severity 1, 2, or 3 = any item with matching evidence may be flagged.
+•	If you cannot point to a specific phrase showing dissatisfaction, severity is 0. Do not invent severity to justify a topic match.
+
+Master Classification Rule
+A flag is never raised on subject alone. Topic match is not enough. Dissatisfaction-based items require expressed dissatisfaction. Factual Event Items get flagged whenever the event occurs.
+Factual Event Items (Flag Regardless of Tone)
+•	Cat 1: Account Closure Requests, Self-Exclusion Requests
+•	Cat 2: Deposit Declines, Payment Method Unavailabilities, Pending Deposits, Refund Requests, Limit Requests
+•	Cat 6: Bonus Codes Not Working
+•	Cat 7: Login Issues, Password Reset Issues, Session Timeouts, Game Performance Issues, Unfinished Rounds, Incorrect Game Results, Website Outages, Broken Links, Website Feature Malfunctions, Website/Platform Slow/Lagging
+•	Cat 8: Bets Not Placed, Incorrectly Settled Bets
+Dissatisfaction-Based Items (Require Severity 1+)
+All of Cat 3 (Withdrawal Disputes), all of Cat 4 (Player Experience), all of Cat 5 (Verification), items 6.1, 6.3, 7.10, and 8.3.
+Tagging Rules
+•	Multiple tags allowed if multiple distinct issues are present.
+•	Cat 1 exception: Account Closure and Self-Exclusion can NEVER both be flagged. Pick one based on responsible-gambling intent.
+
+Category 1: Account Closure & Self-Exclusion
+Mutually exclusive. If responsible gambling intent is present, classify as Self-Exclusion. Otherwise, Account Closure.
+1. Account Closure Requests
+Player asks to close, disable, deactivate, terminate, or restrict their account, with no responsible-gambling reason given. Duration (temporary or permanent) does not matter.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"Please close my account"
+•	"I want to deactivate my account"
+•	"Can you disable my account for a week?"
+2. Self-Exclusion Requests
+Player asks to be restricted from gambling for responsible-gaming reasons (problem gambling, loss of control, addiction).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I want to self-exclude"
+•	"I have a gambling problem, block me"
+•	"I need to stop, please restrict my access"
+
+Category 2: Payments (Deposits, Limits, Refunds)
+1. Deposit Declines
+Player states their deposit attempt failed, was rejected, declined, or errored out. Player's own words are sufficient.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"My deposit keeps getting declined"
+•	"My card is being rejected"
+•	"The transaction won't go through"
+2. Payment Method Unavailabilities
+Player says a specific payment method is missing or not visible in their cashier. No deposit attempt required.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I don't see Skrill in my deposit options"
+•	"My usual payment method is missing"
+•	"Crypto is not available for me"
+3. Pending Deposits
+Player's deposit is initiated but not yet credited (pending, processing, under review).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"My deposit is still pending"
+•	"I deposited but it hasn't arrived yet"
+•	"The money left my account but didn't show up"
+4. Refund Requests
+Player explicitly requests a refund OR reports an approved refund hasn't arrived. Does NOT include automatic returns of failed/pending deposits — those are Pending Deposits.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I want a refund"
+•	"You said the refund was processed but I didn't receive it"
+•	"Refund my deposit, it took too long"
+5. Limit Requests
+Player asks to set, adjust, or remove deposit/wagering/bet limits. Even if they mention loss of control, it stays a Limit Request unless they explicitly ask for full restriction (Self-Exclusion).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"Set a daily deposit limit for me"
+•	"Can you cap my bets?"
+•	"Remove my weekly limit please"
+
+Category 3: Withdrawal Disputes
+All items here require expressed dissatisfaction (severity 1+).
+1. Winnings Decision Disputes (Cut / Voided)
+Player complains, disagrees, or expresses frustration about winnings being cut, reduced, or voided.
+Qualifies:
+Player explicitly disputes the decision. Applies whether or not the player technically violated T&Cs.
+Does NOT qualify:
+Player accepts the decision calmly, or just asks for an explanation neutrally.
+Examples that flag:
+•	"My winnings were voided, this isn't fair"
+•	"Why was my balance reduced after the bonus?"
+•	"I followed the rules and you cut my payout"
+Examples that DO NOT flag:
+•	"Why was my balance adjusted?" (neutral)
+•	"Ok, I understand the wagering rules now."
+2. Withdrawal Delays
+Player expresses frustration with how long the withdrawal is taking on the casino's side.
+Qualifies:
+Clear frustration about processing time at the casino.
+Does NOT qualify:
+Neutral status check or asking how long withdrawals normally take.
+Examples that flag:
+•	"My withdrawal has been pending for days, what's happening?"
+•	"Why is this taking so long?"
+•	"It always takes forever to get my money"
+Examples that DO NOT flag:
+•	"Can you check the status of my withdrawal?" (neutral)
+•	"How long do withdrawals usually take?" (neutral)
+3. Withdrawal Rejections / Missing Payouts
+Player expresses frustration that funds have not arrived after the casino already processed the withdrawal.
+Qualifies:
+Withdrawal was approved/processed and player is upset funds haven't reached them.
+Does NOT qualify:
+Player neutrally asks about a withdrawal still being processed.
+Examples that flag:
+•	"I got the confirmation but no funds arrived"
+•	"You said it was processed, where's my money?"
+•	"Previous withdrawals were fast, this one is missing"
+Examples that DO NOT flag:
+•	"Has my withdrawal been sent yet?" (neutral)
+
+Category 4: Player Experience & Expectations (Retention)
+All items here require expressed dissatisfaction (severity 1+). Topic mentions and neutral requests do NOT qualify.
+1. Not Enough Bonuses or Cashback
+Player explicitly complains that bonuses or cashback amounts are too low, insufficient, or don't match their activity.
+Qualifies:
+Player states the rewards are not enough or expresses frustration with what they're getting.
+Does NOT qualify:
+Player asks for a bonus or cashback as a request. A request is not a complaint, even if denied politely.
+Examples that flag:
+•	"Cashback is too low for what I deposit"
+•	"I'm a loyal player and I get nothing"
+•	"Expected goodwill but got refused, this is unfair"
+Examples that DO NOT flag:
+•	"Can I get a goodwill bonus?" (request)
+•	"Any promotions for me?" (request)
+•	"How does cashback work?" (question)
+2. Competitor Comparison Dissatisfactions
+Player negatively compares your rewards or treatment to other casinos.
+Qualifies:
+Comparison paired with frustration or disappointment.
+Does NOT qualify:
+Player neutrally mentions other casinos or asks if you can match an offer.
+Examples that flag:
+•	"Other sites give me more cashback"
+•	"I get bigger bonuses elsewhere, why so little here?"
+Examples that DO NOT flag:
+•	"Do you offer the same bonus as [other site]?" (neutral)
+3. Proactive Offers Not Satisfactory
+Agent proactively offers a bonus and the player rejects it as insufficient or underwhelming.
+Qualifies:
+Agent initiated the offer (not in response to a player request) AND player reacts negatively.
+Does NOT qualify:
+Player asked for a bonus first and is unhappy with what they got — that's item 4.1, not this.
+Examples that flag:
+•	"That's not really worth it for me"
+•	"That amount doesn't make a difference"
+4. Lack of VIP Attention
+VIP player expresses frustration (sarcasm, impatience, passive-aggression) about their account manager being unavailable or unresponsive.
+Qualifies:
+Player tone clearly shows annoyance or feeling ignored.
+Does NOT qualify:
+Player neutrally asks when the manager is available.
+Examples that flag:
+•	"How long do I need to wait this time?" (impatient)
+•	"Of course he's not available for me now" (sarcastic)
+Examples that DO NOT flag:
+•	"When is my account manager available?" (neutral)
+•	"Can you have my VIP manager contact me?" (neutral)
+5. Reopen Delays (24h Restriction)
+Player expresses frustration about the 24-hour wait to reopen their account.
+Qualifies:
+Clear impatience or annoyance about the delay.
+Does NOT qualify:
+Neutral acceptance of the wait.
+Examples that flag:
+•	"Why do I have to wait 24 hours?" (frustrated)
+•	"You're telling me I have to wait an entire day?"
+Examples that DO NOT flag:
+•	"How long until my account is reopened?" (neutral)
+•	"Ok, I'll wait."
+6. Withdrawal Limit Dissatisfactions
+Player complains about per-transaction, daily, weekly, or monthly withdrawal caps.
+Qualifies:
+Player frustrated by the cap itself; argues limits should be higher.
+Does NOT qualify:
+Player neutrally asks what the limits are or how to increase them.
+Examples that flag:
+•	"These daily limits are ridiculous"
+•	"You're limiting me too much, this is unfair"
+Examples that DO NOT flag:
+•	"What are my daily withdrawal limits?" (neutral)
+•	"How can I increase my withdrawal limit?" (neutral)
+7. Limit Changes Not Applied
+Player frustrated that a previously requested limit change (add, adjust, or remove) was not applied correctly.
+Qualifies:
+Must reference a previous limit request that wasn't executed.
+Does NOT qualify:
+General complaints about limits without a previous request reference belong in 4.6 or 2.5.
+Examples that flag:
+•	"I asked for this limit to be removed but it's still active"
+•	"Now I can't deposit because the limits are still applied"
+8. Trust / Fairness Concerns
+Player expresses doubt or hesitation about the casino's fairness, usually citing reviews or rumors. Not an accusation — a worry.
+Qualifies:
+Player is uncertain or seeking reassurance.
+Does NOT qualify:
+Player makes no mention of trust concerns.
+Examples that flag:
+•	"I read reviews online... can I trust this site?"
+•	"Are your games really fair?"
+•	"I'm not sure this casino is legit"
+9. Scam Accusations
+Player directly accuses the casino of being a scam, fraud, rigged, or stealing. Stated as fact, not a question.
+Qualifies:
+Strong, certain, accusatory tone.
+Does NOT qualify:
+Player asking if something is fair or expressing doubt — that's 4.8, not this.
+Examples that flag:
+•	"You are a scam!"
+•	"All your games are rigged"
+•	"You stole my money, this is fraud"
+10. Issues Not Resolved
+Player expresses frustration that a previously reported problem still isn't fixed, or repeats the same issue with frustration in the same chat.
+Qualifies:
+Frustration must be present. Topic doesn't matter.
+Does NOT qualify:
+Player calmly restates info to help the agent, or neutrally references a past conversation.
+Examples that flag:
+•	"I already told you this last week, still not fixed"
+•	"I've explained this several times" (frustrated)
+•	"Why am I still having this problem?"
+Examples that DO NOT flag:
+•	"As I mentioned, my username is X." (neutral)
+•	"Yesterday I spoke with someone about this." (neutral)
+11. Slow Response Times
+Player explicitly complains about slow agent response. Only the player's words count. Bot messages, agent messages, system messages, and timestamps MUST NOT influence this.
+Qualifies:
+Direct complaint about wait time in the player's own words.
+Does NOT qualify:
+Anything inferred from gaps, agent behavior, or bot messages. If unsure, do NOT flag.
+Examples that flag:
+•	"This is too slow"
+•	"Why is nobody replying?"
+•	"I've been waiting forever"
+12. Lack of Clear Communication
+Player frustrated that information from the casino is unclear, inconsistent, or contradictory — not just asking a question.
+Qualifies:
+Repeated confusion or expressed frustration with the explanations given.
+Does NOT qualify:
+A single polite clarifying question.
+Examples that flag:
+•	"I keep asking and nobody is explaining clearly"
+•	"You're telling me different things"
+Examples that DO NOT flag:
+•	"Can you explain this again?" (neutral)
+•	"What does this mean?" (neutral)
+13. Delayed Follow-Ups
+Player frustrated that a promised callback, email, or follow-up never came.
+Qualifies:
+There must be a previous promise of contact that wasn't honored.
+Does NOT qualify:
+Player asking if someone will get back to them, with no prior promise.
+Examples that flag:
+•	"You said someone would contact me, but no one has"
+•	"It's been days and I still haven't heard back"
+
+Category 5: Verification Issues
+All items here require expressed dissatisfaction (severity 1+).
+1. KYC Document Rejections
+Player frustrated that submitted documents were not approved.
+Qualifies:
+Player reacting negatively to a rejection or non-approval outcome.
+Does NOT qualify:
+Player asking why a document was rejected, neutrally, with intent to fix.
+Examples that flag:
+•	"My ID keeps getting rejected"
+•	"Why won't you accept my documents?"
+•	"I've sent everything and it's still not going through"
+Examples that DO NOT flag:
+•	"What was wrong with my last upload?" (neutral)
+2. Repeated Document Requests
+Player frustrated about being asked for documents over and over, especially around withdrawals.
+Qualifies:
+Frustration about the recurring/escalating nature of requests.
+Does NOT qualify:
+Player calmly submitting another document when asked.
+Examples that flag:
+•	"Every time I withdraw, you ask for more documents"
+•	"This is the third time you're asking"
+•	"Will the document requests ever stop?"
+3. Unclear Verification Requirements
+Player frustrated that verification requirements are vague, contradictory, or no one is explaining clearly.
+Qualifies:
+Frustration must be present, not just confusion on a first question.
+Does NOT qualify:
+Player politely asking what documents are needed for the first time.
+Examples that flag:
+•	"No one is telling me clearly what to do"
+•	"I keep asking and getting different answers"
+Examples that DO NOT flag:
+•	"What documents do you need from me?" (neutral)
+•	"Can you explain the verification process?" (neutral)
+
+Category 6: Bonus Codes & Promotions Issues
+1. Bonuses Not Credited
+Player complains a bonus explicitly promised by an agent or manager was not credited.
+Qualifies:
+There must be a clear prior promise from a casino representative.
+Does NOT qualify:
+Player expecting standard automatic rewards (use 4.1) or no prior promise referenced.
+Examples that flag:
+•	"My account manager told me I'd get cashback but it never came"
+•	"I was promised a bonus and it still hasn't been credited"
+2. Bonus Codes Not Working
+Player tries to use a bonus code and it fails (error, expired, not recognized, doesn't apply expected bonus).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I entered the promo code but nothing happened"
+•	"My bonus code says invalid"
+•	"The code expired before I could use it"
+Summary Requirement: When this item is flagged, the summary field must include the specific bonus code referenced in the chat. Do not write the summary without naming it. If no bonus code is identifiable in the chat, note that explicitly.
+3. Bonus / Promotion Conditions Unclear
+Player feels misled or deceived by promotion terms, especially wagering requirements.
+Qualifies:
+Player expresses they were tricked or that terms were hidden/misleading.
+Does NOT qualify:
+Player neutrally asks how a promo or wagering requirement works.
+Examples that flag:
+•	"I didn't realize the wagering was that high, this is misleading"
+•	"I feel like I was tricked into depositing"
+Examples that DO NOT flag:
+•	"What's the wagering requirement?" (neutral)
+•	"How does this promotion work?" (neutral)
+
+Category 7: Technical Issues
+1. Login Issues
+Player can't log in due to a technical error (not a password issue or casino-imposed restriction).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I can't log in, it just gives me an error"
+•	"The login page won't load"
+2. Password Reset Issues
+Player has problems with the password reset process (email not received, link expired, flow not working).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I requested a reset but never got the email"
+•	"The reset link says expired"
+3. Session Timeouts / Auto Logouts
+Player getting logged out unexpectedly during a session.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I keep getting logged out while playing"
+•	"The site times me out every few minutes"
+4. Game Performance Issues
+Games freezing, crashing, glitching, or failing to load.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The game keeps crashing mid-spin"
+•	"This slot won't load"
+5. Unfinished Rounds
+A round was interrupted before completion (disconnect, crash) and outcome/funds are unclear.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"My spin disconnected and never finished"
+•	"I bet but the round never resolved"
+6. Incorrect Game Results
+Player believes the result of a completed round was wrong or doesn't match what they saw.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The game showed I won but my balance didn't change"
+•	"That result was wrong"
+7. Website Outages
+Site is fully down or inaccessible.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The site is completely down"
+•	"I can't access the casino at all"
+8. Broken Links
+Links from emails, promos, or on-site lead to errors or 404 pages.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The link in the email doesn't work"
+•	"The promo banner gives a 404"
+9. Website Feature Malfunctions
+A specific feature (cashier, settings, button, form) is not working properly.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The deposit button isn't doing anything"
+•	"My settings page won't save changes"
+10. Hard-to-Find Features (UX Issues)
+Player frustrated they cannot locate a feature after looking. Not a neutral first-time question.
+Qualifies:
+Frustration about navigation difficulty.
+Does NOT qualify:
+Polite question about where something is located.
+Examples that flag:
+•	"I can't find where to change my account details, this is annoying"
+•	"Where is the withdrawal section? I've been looking everywhere"
+Examples that DO NOT flag:
+•	"Where can I find the withdrawal section?" (neutral)
+11. Website / Platform Slow / Lagging
+Platform is slow, unresponsive, or laggy (not a full outage, not a single game).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"The site is incredibly slow today"
+•	"Everything is lagging, I can barely navigate"
+
+Category 8: Sportsbook Issues
+1. Bets Not Placed
+Player attempted a bet that wasn't registered (no bet history, error during placement, funds taken with no bet).
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"I placed a bet but it's not showing"
+•	"Money left my balance but no bet recorded"
+2. Incorrectly Settled Bets
+Player believes a settled bet has the wrong outcome or wrong payout.
+Factual Event Item: flag whenever the event occurs, regardless of player tone.
+Examples:
+•	"My bet was settled as a loss but the team won"
+•	"The payout doesn't match the odds shown"
+3. Odds Issues
+Player frustrated with odds — either changed at placement, applied incorrectly to a settled bet, or generally too low/uncompetitive.
+Qualifies:
+Clear dissatisfaction with the odds.
+Does NOT qualify:
+Neutral question about odds or how they work.
+Examples that flag:
+•	"The odds changed right when I placed my bet, this isn't fair"
+•	"These odds are way lower than other bookmakers"
+Examples that DO NOT flag:
+•	"What are the odds on this match?" (neutral)
+
+Output Format (JSON Only)
+Return ONLY a valid JSON object. No markdown, no preamble, no extra text.
+Final Check Before Output
+•	Step 1: Determine severity (0, 1, 2, or 3).
+•	Step 2: If severity is 0, only Factual Event Items may be flagged. All dissatisfaction-based items must be excluded.
+•	Step 3: For each non-Factual flag, confirm you can quote the dissatisfied phrase. If not, remove the flag.
+•	Step 4: If severity is 0 AND no Factual Events occurred, results array is empty.
+Language
+Detect chat language and return as ISO 639-1 in the 'language' field. Supported: ar, de, el, en, fi, fr, it, no, pt. All other output fields must be in English.
+Resolution Status
+•	Resolved: original issue fully solved, player accepts, no open dependency.
+•	Partially Resolved: not fully solved but workaround/next step accepted by a calm player.
+•	Unresolved: not solved, player still frustrated or expecting more action, no closure.
+Output Schema
+{   "results": [     {       "category": "4. Player Experience & Expectations (Retention)",       "item": "11. Slow Response Times",       "dissatisfaction_severity": 0 | 1 | 2 | 3     }   ],   "resolution_status": "Resolved | Partially Resolved | Unresolved",   "summary": "[1-2 sentence summary of main dissatisfaction. If 6.2 - Bonus Codes Not Working is flagged, include the specific bonus code referenced in the chat.]",   "key_quotes": [     "[quote 1]",     "[quote 2]",     "[quote 3]",     "[quote 4]"   ],   "Conversation_Date": "[ISO 8601 timestamp]",   "language": "[detected language]" }
