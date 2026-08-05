@@ -285,15 +285,15 @@ export default function CallAnalysisDetail({ call, prompts }: { call: QaCallClie
 
   // ── panel content ─────────────────────────────────────────────────────────
   const transcriptContent = (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 h-full">
       {call.audioUrl ? (
-        <audio controls preload="none" src={call.audioUrl} className="w-full" style={{ height: 38 }}>
+        <audio controls preload="none" src={call.audioUrl} className="w-full shrink-0" style={{ height: 38 }}>
           Your browser does not support audio playback.
         </audio>
       ) : (
-        <div className="text-[11px] text-[var(--text-3)]">No recording for this call.</div>
+        <div className="text-[11px] text-[var(--text-3)] shrink-0">No recording for this call.</div>
       )}
-      <CallTranscript text={call.transcript} />
+      <CallTranscript text={call.transcript} fill />
     </div>
   );
 
