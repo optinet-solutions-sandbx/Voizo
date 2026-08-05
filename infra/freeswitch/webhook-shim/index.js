@@ -158,6 +158,14 @@ function translateEvent(event) {
     // answer_stamp exists ONLY on an answered channel, so it settles the
     // question even when a pickup-and-drop rounds billsec down to 0.
     answer_stamp: get("answer_stamp"),
+    // 2026-08-05: the carrier's actual SIP reply. During the 15s-intercept
+    // investigation the ONLY record of WHY a call died was our own coarse
+    // hangup_cause — the SIP final response code was recorded nowhere. These
+    // three settle "who ended it and with what code" per call. The Vercel
+    // route ignores unknown fields, so this deploys independently.
+    sip_term_status: get("sip_term_status"),
+    sip_hangup_disposition: get("sip_hangup_disposition"),
+    proto_specific_hangup_cause: get("proto_specific_hangup_cause"),
     timestamp: event.getHeader("Event-Date-Timestamp"),
   };
 }
@@ -201,7 +209,9 @@ function start() {
       console.log(
         `[shim] event received — call=${payload.voizo_call_id} ` +
         `cause=${payload.hangup_cause} total=${payload.duration}s talk=${payload.talk_seconds}s ` +
-        `answered=${payload.answer_stamp ? "yes" : "no"}`,
+        `answered=${payload.answer_stamp ? "yes" : "no"} ` +
+        `sip=${payload.sip_term_status || "-"} by=${payload.sip_hangup_disposition || "-"} ` +
+        `proto=${payload.proto_specific_hangup_cause || "-"}`,
       );
       postToVoizo(payload);
     });

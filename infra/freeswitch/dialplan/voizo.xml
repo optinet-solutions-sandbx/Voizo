@@ -17,8 +17,9 @@
     origination_caller_id_number — Caller ID presented to customer
 
   SIP routing: each campaign gets its own Vapi SIP phone number (Option B).
-  The originate-shim resolves the campaign's SIP URI into voizo_vapi_sip_user
-  and falls back to "voizo-poc" for campaigns created before multi-agent.
+  The originate-shim resolves the campaign's SIP URI into voizo_vapi_sip_user.
+  (The old "voizo-poc" fallback was removed 2026-08-05 — that SIP user is dead;
+  the shim now refuses to originate without an explicit vapiSipUri.)
 -->
 <include>
   <extension name="voizo_bridge_to_vapi">
@@ -30,6 +31,16 @@
       <action application="set" data="hangup_after_bridge=true"/>
 
       <action application="bridge" data="[sip_auth_username=${voizo_vapi_sip_user},sip_auth_password=${voizo_vapi_sip_pass}]sofia/external/sip:${voizo_vapi_sip_user}@sip.vapi.ai"/>
+
+      <!-- Reached ONLY when the bridge to Vapi FAILED: on a successful bridge,
+           hangup_after_bridge=true kills the channel before these run. The
+           customer has already answered and heard silence — the worst failure
+           mode there is. Log loudly (Vapi concurrency cap is the realistic
+           trigger) and hang up with a distinct cause: mapHangup() classifies
+           NORMAL_TEMPORARY_FAILURE as failed→retry, and it does NOT trip the
+           CALL_REJECTED breaker, so the campaign keeps dialing. -->
+      <action application="log" data="ERR Voizo bridge FAILED (customer answered, Vapi leg did not join): call_id=${voizo_call_id} sip_user=${voizo_vapi_sip_user} disposition=${originate_disposition} vapi_cause=${last_bridge_hangup_cause}"/>
+      <action application="hangup" data="NORMAL_TEMPORARY_FAILURE"/>
 
     </condition>
   </extension>

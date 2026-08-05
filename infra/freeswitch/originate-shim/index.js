@@ -30,6 +30,9 @@ function validateEnv() {
   const missing = [];
   if (!SHIM_SECRET) missing.push("SHIM_SECRET");
   if (!ESL_PASSWORD) missing.push("ESL_PASSWORD");
+  // 2026-08-05: required. The old "test123" default would let every bridge
+  // fail Vapi auth AFTER the customer answered — dead air on a real person.
+  if (!process.env.VAPI_SIP_AUTH_PASSWORD) missing.push("VAPI_SIP_AUTH_PASSWORD");
   if (missing.length > 0) {
     console.error(`FATAL: missing required env vars: ${missing.join(", ")}`);
     process.exit(1);
@@ -120,16 +123,20 @@ async function handleOriginate(req, res, rawBody) {
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: "invalid 'vapiAssistantId'" }));
   }
-  if (vapiSipUri && !/^sip:[a-zA-Z0-9_-]+@sip\.vapi\.ai$/.test(vapiSipUri)) {
+  // 2026-08-05: vapiSipUri is REQUIRED. The old fallback bridged to
+  // "voizo-poc", a SIP user verified DEAD on 2026-07-31 — a real person's
+  // phone would ring, they'd answer, and hear silence. A 400 here instead
+  // means nobody's phone rings: the dialer's catch marks the call failed and
+  // schedules a retry, same as any provider error.
+  if (!vapiSipUri || !/^sip:[a-zA-Z0-9_-]+@sip\.vapi\.ai$/.test(vapiSipUri)) {
     res.writeHead(400, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: "invalid 'vapiSipUri' format" }));
+    return res.end(JSON.stringify({
+      error: "missing or invalid 'vapiSipUri' — refusing to originate (dead voizo-poc fallback removed 2026-08-05)",
+    }));
   }
 
-  // Extract SIP username from URI, or fall back to voizo-poc for old campaigns
-  const sipUser = vapiSipUri
-    ? vapiSipUri.replace(/^sip:/, "").replace(/@.*$/, "")
-    : "voizo-poc";
-  const sipPass = process.env.VAPI_SIP_AUTH_PASSWORD || "test123";
+  const sipUser = vapiSipUri.replace(/^sip:/, "").replace(/@.*$/, "");
+  const sipPass = process.env.VAPI_SIP_AUTH_PASSWORD; // required at startup (validateEnv)
 
   const channelVars = [
     `origination_caller_id_number=${callerId}`,
@@ -138,6 +145,9 @@ async function handleOriginate(req, res, rawBody) {
     `voizo_vapi_sip_user=${sipUser}`,
     `voizo_vapi_sip_pass=${sipPass}`,
     "ignore_early_media=true",
+    // Bound the ring window (runbook standard 45s; FS default is 60s). At K=1
+    // an unanswered ring holds the campaign's only dial lane — 15s/dial adds up.
+    "origination_timeout=45",
     campaignId ? `voizo_campaign_id=${campaignId}` : null,
     numberId ? `voizo_number_id=${numberId}` : null,
   ]
