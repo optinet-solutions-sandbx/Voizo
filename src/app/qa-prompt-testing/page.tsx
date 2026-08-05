@@ -3,16 +3,15 @@
 // QA Prompt Testing — landing. Two tabs:
 //   • Campaigns    → pick a campaign, then a call, then test a prompt against it.
 //   • Prompt Library → manage the reusable QA prompts.
-// Campaign data reuses GET /api/reviews/campaigns (the same real-conversation
-// aggregate the Reviews tool uses) with the same search / sort / filter / paginate
-// controls for consistency.
+// Campaign data comes from GET /api/qa-prompt-testing/campaigns (SQL rollup — fast),
+// with name search / sort / region filter / pagination for consistency with Reviews.
 
 "use client";
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ArrowDownWideNarrow, ChevronRight, FlaskConical, ClipboardList, Library, Search,
+  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, Library, Search,
 } from "lucide-react";
 import { campaignRegion } from "@/lib/campaignRegion";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
@@ -20,12 +19,12 @@ import Pagination from "@/components/Pagination";
 import { SectionTick } from "../analytics/SectionIsland";
 import PromptLibrary from "@/components/qa/PromptLibrary";
 
-interface ReviewCampaign {
+interface QaCampaign {
   campaignId: string;
   campaignName: string;
   isTest: boolean;
   createdAt: string;
-  conversationCount: number;
+  conversationCount: number; // reached a live person (rollup `reach`)
   totalCallCount: number;
   goalReachedCount: number;
   labeledCount: number;
@@ -33,7 +32,7 @@ interface ReviewCampaign {
 
 const PAGE_SIZE = 10;
 const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
-  { key: "conversations", label: "Most conversations" },
+  { key: "conversations", label: "Most reached" },
   { key: "newest", label: "Newest" },
   { key: "calls", label: "Most calls" },
   { key: "region", label: "Region" },
@@ -41,12 +40,11 @@ const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
 
 export default function QaPromptTestingPage() {
   const [tab, setTab] = useState<"campaigns" | "library">("campaigns");
-  const [campaigns, setCampaigns] = useState<ReviewCampaign[] | null>(null);
+  const [campaigns, setCampaigns] = useState<QaCampaign[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // controls
-  const [kind, setKind] = useState<"real" | "test">("real");
   const [sort, setSort] = useState<ReviewSortKey>("conversations");
   const [region, setRegion] = useState<string>("all");
   const [query, setQuery] = useState("");
@@ -55,9 +53,9 @@ export default function QaPromptTestingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/reviews/campaigns?testOnly=false", { cache: "no-store" });
+      const r = await fetch("/api/qa-prompt-testing/campaigns", { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const { campaigns } = (await r.json()) as { campaigns: ReviewCampaign[] };
+      const { campaigns } = (await r.json()) as { campaigns: QaCampaign[] };
       setCampaigns(campaigns);
       setError(null);
     } catch (e) {
@@ -72,19 +70,13 @@ export default function QaPromptTestingPage() {
   }, [tab, load]);
 
   const all = useMemo(() => campaigns ?? [], [campaigns]);
-  const realCount = useMemo(() => all.filter((c) => !c.isTest).length, [all]);
-  const testCount = useMemo(() => all.filter((c) => c.isTest).length, [all]);
-  const byKind = useMemo(
-    () => all.filter((c) => (kind === "test" ? c.isTest : !c.isTest)),
-    [all, kind],
-  );
-  const regions = useMemo(() => regionsOf(byKind), [byKind]);
+  const regions = useMemo(() => regionsOf(all), [all]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const searched = q ? byKind.filter((c) => c.campaignName.toLowerCase().includes(q)) : byKind;
+    const searched = q ? all.filter((c) => c.campaignName.toLowerCase().includes(q)) : all;
     return sortReviewCampaigns(filterByRegion(searched, region), sort);
-  }, [byKind, region, sort, query]);
+  }, [all, region, sort, query]);
 
   // safePage clamps every render so a filter change that shrinks the list can't
   // strand the view on a now-empty page; the control handlers also reset to 1.
@@ -98,10 +90,6 @@ export default function QaPromptTestingPage() {
   const tabCls = (on: boolean) =>
     `inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium transition whitespace-nowrap ${
       on ? "bg-[var(--bg-elevated)] text-[var(--text-1)]" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
-    }`;
-  const kindBtn = (k: "real" | "test") =>
-    `px-2.5 py-1 rounded-md text-xs font-medium transition whitespace-nowrap ${
-      kind === k ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
     }`;
 
   return (
@@ -118,28 +106,13 @@ export default function QaPromptTestingPage() {
         </p>
       </div>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex w-fit gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl">
-          <button onClick={() => setTab("campaigns")} className={tabCls(tab === "campaigns")}>
-            <ClipboardList size={13} /> Campaigns
-          </button>
-          <button onClick={() => setTab("library")} className={tabCls(tab === "library")}>
-            <Library size={13} /> Prompt Library
-          </button>
-        </div>
-        {tab === "campaigns" && !loading && !error && (
-          <div
-            className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]"
-            title="Real and test campaigns are listed separately"
-          >
-            <button onClick={() => { setKind("real"); setRegion("all"); setPage(1); }} className={kindBtn("real")}>
-              Real{realCount > 0 ? ` (${realCount})` : ""}
-            </button>
-            <button onClick={() => { setKind("test"); setRegion("all"); setPage(1); }} className={kindBtn("test")}>
-              <FlaskConical size={11} className="inline -mt-0.5 mr-1" />Test{testCount > 0 ? ` (${testCount})` : ""}
-            </button>
-          </div>
-        )}
+      <div className="flex w-fit gap-1 p-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl">
+        <button onClick={() => setTab("campaigns")} className={tabCls(tab === "campaigns")}>
+          <ClipboardList size={13} /> Campaigns
+        </button>
+        <button onClick={() => setTab("library")} className={tabCls(tab === "library")}>
+          <Library size={13} /> Prompt Library
+        </button>
       </div>
 
       {tab === "library" ? (
@@ -154,10 +127,8 @@ export default function QaPromptTestingPage() {
         <p className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
           <AlertCircle size={11} /> {error}
         </p>
-      ) : byKind.length === 0 ? (
-        <div className="text-center py-16 text-sm text-[var(--text-3)]">
-          No {kind === "test" ? "test " : ""}campaigns with real conversations yet.
-        </div>
+      ) : all.length === 0 ? (
+        <div className="text-center py-16 text-sm text-[var(--text-3)]">No campaigns with calls yet.</div>
       ) : (
         <>
           {/* search + sort + region controls */}
@@ -196,14 +167,9 @@ export default function QaPromptTestingPage() {
                             {campaignRegion(c.campaignName)}
                           </span>
                         )}
-                        {c.isTest && (
-                          <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-violet-500/15 text-violet-400 border-violet-500/30 flex-shrink-0 inline-flex items-center gap-1">
-                            <FlaskConical size={9} /> test
-                          </span>
-                        )}
                       </div>
                       <p className="text-[10px] text-[var(--text-3)] font-mono mt-1">
-                        {c.conversationCount} conversation{c.conversationCount === 1 ? "" : "s"} · {c.totalCallCount} calls
+                        {c.conversationCount} reached · {c.totalCallCount} calls
                       </p>
                     </div>
                     <ChevronRight size={16} className="text-[var(--text-3)] group-hover:text-[var(--text-1)] transition flex-shrink-0" />

@@ -120,7 +120,7 @@ export default function QaCallDetailPage() {
         </Link>
       </div>
 
-      <div className="flex-1 min-h-0 p-3 sm:p-4">
+      <div className="flex-1 min-h-0 p-3 sm:p-4 flex flex-col">
         <CallAnalysisDetail call={call} prompts={prompts} />
       </div>
     </div>
