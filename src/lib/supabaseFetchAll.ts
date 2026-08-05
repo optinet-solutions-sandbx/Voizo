@@ -81,6 +81,85 @@ export async function fetchAllRows(
   return all;
 }
 
+// ── Parallel full-table read (read-path analytics ONLY) ─────────────────────
+//
+// fetchAllRows awaits its pages ONE AT A TIME, so a full-table read is N/1000
+// SEQUENTIAL round-trips — and on Vercel→Supabase each hop is ~530ms, which is
+// how /api/campaigns-v2/analytics hit 44s at 51k calls (52 serial hops; the
+// 20MB payload itself turned out to be ~free — measured 2026-08-05).
+// This variant counts first, then fires every page concurrently (POOL in
+// flight), cutting wall time to ~ceil(pages/POOL) hops.
+//
+// READ-PATH ANALYTICS ONLY — never for dial-path decisions (resume /
+// refresh-segment / duplicate stay on fetchAllRows): failure semantics differ
+// (this THROWS; a parallel partial would have GAPS in the middle, which is
+// worse than fetchAllRows' documented prefix-partial, so there is no
+// best-effort mode here — callers catch and degrade explicitly), and firing
+// POOL concurrent scans is a load pattern safety reads shouldn't adopt
+// blindly. Same insert-race caveat as fetchAllRows: offset pages under
+// concurrent INSERTs can skip/duplicate boundary rows; analytics reads accept
+// this (shorter read window here actually narrows it). If the last page comes
+// back exactly full, sequential tail pages extend past the initial count so
+// rows inserted after the count aren't truncated.
+
+const PARALLEL_POOL = 8;
+
+/**
+ * Fetch ALL rows of a table with concurrent pages. THROWS on a count error or
+ * on any page that fails after one retry — never returns a gappy partial.
+ */
+export async function fetchAllRowsParallel(
+  client: SupabaseClient,
+  table: string,
+  columns: string,
+  orderColumn = "id",
+): Promise<Row[]> {
+  const { count, error: countErr } = await client
+    .from(table)
+    .select(orderColumn, { count: "exact", head: true });
+  if (countErr) throw new Error(`fetchAllRowsParallel(${table}) count failed: ${countErr.message}`);
+  const total = count ?? 0;
+  if (total === 0) return [];
+
+  const readPage = async (page: number): Promise<Row[]> => {
+    const from = page * PAGE_SIZE;
+    for (let attempt = 0; ; attempt++) {
+      const { data, error } = await client
+        .from(table)
+        .select(columns)
+        .order(orderColumn, { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (!error) return (data ?? []) as unknown as Row[];
+      console.error(`[fetchAllRowsParallel] ${table} page ${page} attempt ${attempt + 1} failed:`, error);
+      if (attempt >= 1) {
+        throw new Error(`fetchAllRowsParallel(${table}) page ${page} failed twice: ${error.message ?? "unknown"}`);
+      }
+    }
+  };
+
+  // Fixed page list from the count, drained by a small worker pool.
+  const pageCount = Math.ceil(total / PAGE_SIZE);
+  const pages: Row[][] = new Array(pageCount);
+  let next = 0;
+  const worker = async () => {
+    for (let p = next++; p < pageCount; p = next++) pages[p] = await readPage(p);
+  };
+  await Promise.all(Array.from({ length: Math.min(PARALLEL_POOL, pageCount) }, worker));
+
+  const all = pages.flat();
+  // Tail extension: rows inserted after the count call land past the last
+  // offset (by count, not key order — but a FULL last page is the signal more
+  // may exist either way). Sequential from here; the tail is at most a page or two.
+  if (pages[pageCount - 1].length === PAGE_SIZE) {
+    for (let p = pageCount; p < pageCount + MAX_PAGES; p++) {
+      const tail = await readPage(p);
+      all.push(...tail);
+      if (tail.length < PAGE_SIZE) break;
+    }
+  }
+  return all;
+}
+
 // ── .in() list chunking ─────────────────────────────────────────────────────
 //
 // The row-count clamp is not the only PostgREST limit: an .in() filter rides

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchAllRows, fetchRowsIn, updateRowsIn, sortRowsByCreatedAt } from "./supabaseFetchAll";
+import {
+  fetchAllRows,
+  fetchAllRowsParallel,
+  fetchRowsIn,
+  updateRowsIn,
+  sortRowsByCreatedAt,
+} from "./supabaseFetchAll";
 
 // fetchAllRows paginates past PostgREST's default 1000-row cap by issuing
 // successive .range() requests ordered by a stable key. These tests pin that
@@ -338,5 +344,92 @@ describe("fetchAllRows opts.inFilter (the outcome IN (pending,pending_retry) fam
     expect(out).toHaveLength(1040);
     expect(log).toHaveLength(2);
     for (const entry of log) expect(entry.inArg).toEqual(["outcome", ["pending", "pending_retry"]]);
+  });
+});
+
+// ── fetchAllRowsParallel ─────────────────────────────────────────────────────
+// Count-then-concurrent-pages. The mock answers the head:true count call from
+// `total`, then serves each .range() by page index (like makeClient), with
+// optional scripted failures: failAt[page] = number of times that page errors
+// before succeeding (Infinity = always fails).
+
+function makeParallelClient(total: number, pageData: (page: number) => Row[], failAt: Record<number, number> = {}, countError: { message: string } | null = null) {
+  const rangeCalls: number[] = [];
+  const failsLeft: Record<number, number> = { ...failAt };
+  const builder = (table: string) => {
+    let isCount = false;
+    const b = {
+      select(_cols: string, opts?: { count?: string; head?: boolean }) {
+        isCount = opts?.head === true;
+        return b;
+      },
+      order() { return b; },
+      range(from: number) {
+        const page = Math.floor(from / 1000);
+        rangeCalls.push(page);
+        if ((failsLeft[page] ?? 0) > 0) {
+          failsLeft[page]!--;
+          return Promise.resolve({ data: null, error: { message: `page ${page} boom` } });
+        }
+        return Promise.resolve({ data: pageData(page), error: null });
+      },
+      // The count call is awaited directly on the builder (no .range()).
+      then(resolve: (v: unknown) => void) {
+        if (isCount) resolve(countError ? { count: null, error: countError } : { count: total, error: null });
+      },
+    };
+    void table;
+    return b;
+  };
+  return { client: { from: builder } as never, rangeCalls };
+}
+
+describe("fetchAllRowsParallel", () => {
+  it("counts, fires all pages, and preserves page order (2172 rows = 3 pages)", async () => {
+    const { client, rangeCalls } = makeParallelClient(2172, (p) =>
+      rows(p === 2 ? 172 : 1000, `p${p}-`),
+    );
+    const out = await fetchAllRowsParallel(client, "calls_v2", "id, campaign_id");
+    expect(out).toHaveLength(2172);
+    // Order preserved regardless of completion order: page 0 rows first, page 2 last.
+    expect(out[0].id).toBe("p0-0");
+    expect(out[1000].id).toBe("p1-0");
+    expect(out[2171].id).toBe("p2-171");
+    expect(new Set(rangeCalls)).toEqual(new Set([0, 1, 2]));
+  });
+
+  it("retries a failed page once and succeeds", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client } = makeParallelClient(1500, (p) => rows(p === 1 ? 500 : 1000, `p${p}-`), { 1: 1 });
+    const out = await fetchAllRowsParallel(client, "calls_v2", "id");
+    expect(out).toHaveLength(1500);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("throws (never a gappy partial) when a page fails twice", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client } = makeParallelClient(1500, (p) => rows(p === 1 ? 500 : 1000), { 1: Infinity });
+    await expect(fetchAllRowsParallel(client, "calls_v2", "id")).rejects.toThrow(/page 1 failed twice/);
+    spy.mockRestore();
+  });
+
+  it("throws on a count error", async () => {
+    const { client } = makeParallelClient(0, () => [], {}, { message: "count boom" });
+    await expect(fetchAllRowsParallel(client, "calls_v2", "id")).rejects.toThrow(/count failed: count boom/);
+  });
+
+  it("returns [] for an empty table without firing page reads", async () => {
+    const { client, rangeCalls } = makeParallelClient(0, () => rows(1000));
+    expect(await fetchAllRowsParallel(client, "calls_v2", "id")).toEqual([]);
+    expect(rangeCalls).toHaveLength(0);
+  });
+
+  it("extends past the count when the last page is exactly full (insert-during-read tail)", async () => {
+    // count said 1000 (1 page) but 1050 rows exist by read time.
+    const { client } = makeParallelClient(1000, (p) => (p === 0 ? rows(1000, "a") : p === 1 ? rows(50, "b") : []));
+    const out = await fetchAllRowsParallel(client, "calls_v2", "id");
+    expect(out).toHaveLength(1050);
+    expect(out[1049].id).toBe("b49");
   });
 });

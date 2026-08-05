@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import { fetchAllRowsParallel } from "@/lib/supabaseFetchAll";
 import {
   computeCampaignAnalytics,
   type CampaignRow,
@@ -8,6 +8,8 @@ import {
   type CallRow,
   type SmsRow,
 } from "@/lib/campaignAnalytics";
+
+type Row = Record<string, unknown>;
 
 /**
  * GET /api/campaigns-v2/analytics
@@ -29,25 +31,32 @@ import {
  * compute (mirrors the campaigns-v2 list route), so ghost aggregates never ride
  * the wire either.
  *
- * Paginated reads (fetchAllRows): PostgREST caps an unpaginated .select() at
- * 1000 rows. Best-effort per table: a page error degrades that bucket to the
- * rows gathered so far (loud-logged), so one table failing skews rather than
- * blanks the list — matching the old bundle behaviour.
- *
- * NOTE: still the full-table sequential-paging read underneath (~52 pages of
- * calls_v2) — the latency root-fix is the VOZ-289 rollup cutover; this change
- * removes the PII wire leak and the 20MB payload, not the paging cost.
+ * Paginated reads via fetchAllRowsParallel (2026-08-05): PostgREST caps an
+ * unpaginated .select() at 1000 rows, and fetchAllRows' SEQUENTIAL pages were
+ * this route's entire latency (~52 serial ~530ms hops for calls_v2 = the
+ * measured 44s; cutting the 20MB payload moved nothing). Concurrent pages cut
+ * wall time to ~ceil(pages/POOL) hops. Degrade stays per-table but is now
+ * all-or-nothing per bucket: the parallel helper THROWS rather than return a
+ * gappy partial (a mid-gap partial silently understates; the old prefix
+ * partial did too — [] is honest), and the catch degrades that ONE bucket.
  */
 export async function GET() {
+  // Per-table degrade: one failing table blanks ITS bucket (loud-logged), the
+  // rest of the list stays live — mirrors the old bundle behaviour's intent.
+  const read = (table: string, columns: string): Promise<Row[]> =>
+    fetchAllRowsParallel(supabaseAdmin, table, columns).catch((err: unknown) => {
+      console.error(`[campaigns-v2/analytics] ${table} read failed — bucket degraded to []:`, err);
+      return [] as Row[];
+    });
+
   const [campaigns, numbers, calls, sms] = await Promise.all([
-    fetchAllRows(
-      supabaseAdmin,
+    read(
       "campaigns_v2",
       "id, name, status, is_test, source, start_at, created_at, end_at, campaign_type, goal_target",
     ),
-    fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id, campaign_id, outcome, created_at"),
-    fetchAllRows(supabaseAdmin, "calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail, ended_reason, transcript"),
-    fetchAllRows(supabaseAdmin, "sms_messages_v2", "campaign_id, status, provider"),
+    read("campaign_numbers_v2", "id, campaign_id, outcome, created_at"),
+    read("calls_v2", "campaign_id, campaign_number_id, status, goal_reached, duration_seconds, created_at, voicemail, ended_reason, transcript"),
+    read("sms_messages_v2", "campaign_id, status, provider"),
   ]);
 
   const realCampaigns = (campaigns as unknown as CampaignRow[]).filter(
