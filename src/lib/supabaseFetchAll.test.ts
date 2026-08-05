@@ -355,6 +355,7 @@ describe("fetchAllRows opts.inFilter (the outcome IN (pending,pending_retry) fam
 
 function makeParallelClient(total: number, pageData: (page: number) => Row[], failAt: Record<number, number> = {}, countError: { message: string } | null = null) {
   const rangeCalls: number[] = [];
+  const gteCalls: Array<[string, unknown]> = [];
   const failsLeft: Record<number, number> = { ...failAt };
   const builder = (table: string) => {
     let isCount = false;
@@ -363,6 +364,7 @@ function makeParallelClient(total: number, pageData: (page: number) => Row[], fa
         isCount = opts?.head === true;
         return b;
       },
+      gte(col: string, val: unknown) { gteCalls.push([col, val]); return b; },
       order() { return b; },
       range(from: number) {
         const page = Math.floor(from / 1000);
@@ -381,7 +383,7 @@ function makeParallelClient(total: number, pageData: (page: number) => Row[], fa
     void table;
     return b;
   };
-  return { client: { from: builder } as never, rangeCalls };
+  return { client: { from: builder } as never, rangeCalls, gteCalls };
 }
 
 describe("fetchAllRowsParallel", () => {
@@ -423,6 +425,18 @@ describe("fetchAllRowsParallel", () => {
     const { client, rangeCalls } = makeParallelClient(0, () => rows(1000));
     expect(await fetchAllRowsParallel(client, "calls_v2", "id")).toEqual([]);
     expect(rangeCalls).toHaveLength(0);
+  });
+
+  it("applies gte to BOTH the count call and every page", async () => {
+    const { client, gteCalls } = makeParallelClient(1500, (p) => rows(p === 1 ? 500 : 1000));
+    const out = await fetchAllRowsParallel(client, "calls_v2", "id", "id", {
+      column: "created_at",
+      value: "2026-07-06T00:00:00Z",
+    });
+    expect(out).toHaveLength(1500);
+    // 1 count + 2 pages = 3 gte applications, all identical.
+    expect(gteCalls).toHaveLength(3);
+    for (const g of gteCalls) expect(g).toEqual(["created_at", "2026-07-06T00:00:00Z"]);
   });
 
   it("extends past the count when the last page is exactly full (insert-during-read tail)", async () => {

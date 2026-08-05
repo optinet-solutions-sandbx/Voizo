@@ -107,16 +107,19 @@ const PARALLEL_POOL = 8;
 /**
  * Fetch ALL rows of a table with concurrent pages. THROWS on a count error or
  * on any page that fails after one retry — never returns a gappy partial.
+ * `gte` (e.g. a created_at window start) applies to BOTH the count and every
+ * page — a mismatch there would silently truncate, so they share one code path.
  */
 export async function fetchAllRowsParallel(
   client: SupabaseClient,
   table: string,
   columns: string,
   orderColumn = "id",
+  gte?: { column: string; value: string },
 ): Promise<Row[]> {
-  const { count, error: countErr } = await client
-    .from(table)
-    .select(orderColumn, { count: "exact", head: true });
+  let countQuery = client.from(table).select(orderColumn, { count: "exact", head: true });
+  if (gte) countQuery = countQuery.gte(gte.column, gte.value);
+  const { count, error: countErr } = await countQuery;
   if (countErr) throw new Error(`fetchAllRowsParallel(${table}) count failed: ${countErr.message}`);
   const total = count ?? 0;
   if (total === 0) return [];
@@ -124,9 +127,9 @@ export async function fetchAllRowsParallel(
   const readPage = async (page: number): Promise<Row[]> => {
     const from = page * PAGE_SIZE;
     for (let attempt = 0; ; attempt++) {
-      const { data, error } = await client
-        .from(table)
-        .select(columns)
+      let q = client.from(table).select(columns);
+      if (gte) q = q.gte(gte.column, gte.value);
+      const { data, error } = await q
         .order(orderColumn, { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
       if (!error) return (data ?? []) as unknown as Row[];

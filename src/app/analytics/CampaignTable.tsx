@@ -9,6 +9,7 @@
 // Data: /api/dashboard/campaigns?from=&to=.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import type { TodayPerfDay } from "@/lib/dashboardAnalytics";
@@ -137,7 +138,9 @@ export default function CampaignTable() {
     try {
       const res = await fetch(`/api/dashboard/campaigns`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as Resp);
+      const json = (await res.json()) as Resp;
+      setData(json);
+      saveSnapshot("dashboard.campaigns", json);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -147,6 +150,11 @@ export default function CampaignTable() {
   }, []);
 
   useEffect(() => {
+    // Stale-while-revalidate (2026-08-05): paint the last session's snapshot
+    // instantly (skeleton gates on !data; `loading` renders the non-destructive
+    // "Updating…" pill), then load() replaces it.
+    const snap = loadSnapshot<Resp>("dashboard.campaigns");
+    if (snap) setData(snap);
     load();
   }, [load]);
 

@@ -19,7 +19,7 @@ import {
   type TodayPerfDay,
 } from "@/lib/dashboardAnalytics";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
-import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import { fetchAllRows, fetchAllRowsParallel } from "@/lib/supabaseFetchAll";
 import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
 import { rangeToWindow, MS_PER_DAY } from "@/lib/rangeWindow";
 
@@ -77,34 +77,34 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Page past PostgREST's 1000-row cap. calls_v2 exceeds it within the 30d window
-  // (1613 rows on 2026-06-17) — unbounded, it silently truncated the chart, KPIs,
-  // trend, and heatmap to the first 1000. campaigns_v2 is paged too (defensive: it
-  // feeds the index filterCalls joins against). fetchAllRows degrades-to-partial and
-  // logs loudly on a page error, so there's no all-or-nothing 500 here.
+  // Page past PostgREST's 1000-row cap — CONCURRENTLY (2026-08-05). The 30d window
+  // holds ~49k calls_v2 rows (post-incident) = ~50 pages; fetchAllRows awaited them
+  // one at a time at ~530ms per Vercel→Supabase hop, which is most of why this route
+  // measured 88s on prod. fetchAllRowsParallel fires the pages through a pool (gte
+  // applied to count AND pages). Failure shape: THROWS instead of the old silent
+  // prefix-partial — the catch degrades that ONE bucket to [] (loud), so a table
+  // failure skews a section rather than 500ing the dashboard, same intent as before.
+  const read = (table: string, columns: string, win?: { column: string; value: string }) =>
+    fetchAllRowsParallel(supabaseAdmin, table, columns, "id", win).catch((err: unknown) => {
+      console.error(`[dashboard/analytics] ${table} read failed — degraded to []:`, err);
+      return [] as Awaited<ReturnType<typeof fetchAllRowsParallel>>;
+    });
+
   const [callRows, campaignRows, smsRows] = await Promise.all([
-    fetchAllRows(
-      supabaseAdmin,
+    read(
       "calls_v2",
       "id, campaign_id, campaign_number_id, status, goal_reached, created_at, voicemail, ended_reason, duration_seconds",
-      "id",
-      undefined,
       { column: "created_at", value: startIso },
     ),
-    fetchAllRows(
-      supabaseAdmin,
+    read(
       "campaigns_v2",
       // cio_workspace: the brand scope shown on the Global Performance header (VOZ-216).
       "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, system_prompt, start_at, created_at, end_at, timezone",
-      "id",
     ),
     // SMS-sent series/columns (Slice 3): windowed, scoped to in-filter campaigns below.
-    fetchAllRows(
-      supabaseAdmin,
+    read(
       "sms_messages_v2",
       "campaign_id, created_at, status, call_id, campaign_number_id",
-      "id",
-      undefined,
       { column: "created_at", value: startIso },
     ),
   ]);
@@ -147,24 +147,23 @@ export async function GET(request: NextRequest) {
     if (sha) smsByPrompt.set(sha, (smsByPrompt.get(sha) ?? 0) + n);
   }
 
-  // Declined contacts for the Reached split (campaign_numbers_v2.outcome='declined_offer'), scoped
-  // to the filtered call set. Chunk .in() at 150 (PostgREST ~16KB URL header guard).
+  // Declined contacts for the Reached split — FLIPPED (2026-08-05): the old loop sent
+  // every distinct in-window contact id through sequential .in() chunks of 150 to ask
+  // "which of these are declined?" — at the incident-scale window that was 200+ serial
+  // round-trips to find what is globally ~20 rows. Ask the other direction instead:
+  // ONE indexed read of ALL outcome='declined_offer' rows (fetchAllRows pages if it
+  // ever outgrows a page), then intersect with the filtered set in JS. Same result set
+  // by construction: {id : outcome=declined AND id ∈ filtered contacts}.
   const declinedIds = new Set<string>();
-  const declinedNumIds = [...new Set(filtered.map((c) => c.campaign_number_id).filter((x): x is string => !!x))];
-  const DECLINED_IN_CHUNK = 150;
-  for (let i = 0; i < declinedNumIds.length; i += DECLINED_IN_CHUNK) {
-    const { data, error } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("id, outcome")
-      .in("id", declinedNumIds.slice(i, i + DECLINED_IN_CHUNK));
-    if (error) {
-      // Degrade, don't fail: the Reached→Declined split is slightly under-counted; everything else is fine.
-      console.error("[dashboard/analytics] declined-numbers query failed:", error);
-      break;
-    }
-    for (const n of (data ?? []) as { id: string; outcome: string | null }[]) {
-      if ((n.outcome ?? "") === "declined_offer") declinedIds.add(n.id);
-    }
+  const filteredNumIds = new Set(filtered.map((c) => c.campaign_number_id).filter((x): x is string => !!x));
+  // fetchAllRows degrades to partial on error (loud-logged) — the Reached→Declined
+  // split under-counts slightly in that case; everything else is fine (as before).
+  const declinedRows = await fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "id", "id", {
+    column: "outcome",
+    value: "declined_offer",
+  });
+  for (const n of declinedRows as Array<{ id: string }>) {
+    if (filteredNumIds.has(n.id)) declinedIds.add(n.id);
   }
 
   // Ranged 3-card Performance (Global Performance, Val's mockup). Reuses the already-filtered in-memory

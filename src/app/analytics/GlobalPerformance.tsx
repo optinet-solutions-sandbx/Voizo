@@ -7,6 +7,7 @@
 // Connect = ANSWER (incl. voicemail); Success% = goal/connected. Ghost+test excluded.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import { Search, X, SlidersHorizontal } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
@@ -196,7 +197,9 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
     try {
       const res = await fetch(`/api/dashboard/analytics?${query}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as AnalyticsResponse);
+      const json = (await res.json()) as AnalyticsResponse;
+      setData(json);
+      saveSnapshot(`dashboard.analytics:${query}`, json);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -207,6 +210,14 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
 
   const query = buildQuery(filters);
   useEffect(() => {
+    // Stale-while-revalidate (2026-08-05): paint the last snapshot for THIS filter
+    // combination instantly (skeleton gates on !data; `loading` renders the
+    // non-destructive "Updating…" pill), then the debounced fetch replaces it.
+    const snap = loadSnapshot<AnalyticsResponse>(`dashboard.analytics:${query}`);
+    if (snap) {
+      setData(snap);
+      setError(null);
+    }
     const id = setTimeout(() => load(query), 300); // debounce (covers phone typing)
     return () => clearTimeout(id);
   }, [query, load]);

@@ -11,6 +11,7 @@ import { Radio } from "lucide-react";
 import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
+import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import { distinctBrandLabels } from "@/lib/campaignDisplay";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
@@ -39,7 +40,9 @@ export default function DashboardView() {
     try {
       const r = await fetch("/api/dashboard/today", { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData((await r.json()) as TodaySnapshot);
+      const json = (await r.json()) as TodaySnapshot;
+      setData(json);
+      saveSnapshot("dashboard.today", json);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -49,6 +52,10 @@ export default function DashboardView() {
   }, []);
 
   useEffect(() => {
+    // Stale-while-revalidate (2026-08-05): paint the last session's snapshot
+    // instantly, then load() replaces it (and keeps replacing on the poll).
+    const snap = loadSnapshot<TodaySnapshot>("dashboard.today");
+    if (snap) setData(snap);
     load();
     const id = window.setInterval(load, POLL_MS);
     return () => clearInterval(id);
