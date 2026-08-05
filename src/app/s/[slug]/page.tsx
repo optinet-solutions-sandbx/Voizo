@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowLeft, Ghost, Phone } from "lucide-react";
 import { ghostPortalEnabled } from "@/lib/ghost/ghostConfig";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { getGhostRunBySlug } from "@/lib/ghost/ghostRunData";
 import { StatusBadge, TierBadge } from "../../ghost/badges";
 import RefreshButton from "./RefreshButton";
@@ -37,17 +38,23 @@ export default async function GhostRunDetailPage({ params }: { params: Promise<{
   let callsPlaced = 0;
   let outcomeBreakdown: Array<{ outcome: string; count: number }> = [];
   if (run.campaign_id) {
-    const [{ data: campaign }, totalRes, callsRes, outcomesRes] = await Promise.all([
+    const [{ data: campaign }, totalRes, callsRes, outcomeRows] = await Promise.all([
       supabaseAdmin.from("campaigns_v2").select("status").eq("id", run.campaign_id).maybeSingle(),
       supabaseAdmin.from("campaign_numbers_v2").select("id", { count: "exact", head: true }).eq("campaign_id", run.campaign_id),
       supabaseAdmin.from("calls_v2").select("id", { count: "exact", head: true }).eq("campaign_id", run.campaign_id),
-      supabaseAdmin.from("campaign_numbers_v2").select("outcome").eq("campaign_id", run.campaign_id).range(0, 1999),
+      // fetchAllRows, not a big .range(): PostgREST clamps ANY range at 1000 (measured —
+      // see supabaseFetchAll docstring), so the old .range(0, 1999) silently tallied an
+      // arbitrary (unordered) 1000 rows once a run's roster passed the cap.
+      fetchAllRows(supabaseAdmin, "campaign_numbers_v2", "outcome", "id", {
+        column: "campaign_id",
+        value: run.campaign_id,
+      }),
     ]);
     campaignStatus = (campaign?.status as string) ?? null;
     totalNumbers = totalRes.count ?? 0;
     callsPlaced = callsRes.count ?? 0;
     const tally = new Map<string, number>();
-    for (const r of outcomesRes.data ?? []) {
+    for (const r of outcomeRows) {
       const o = (r.outcome as string) ?? "pending";
       tally.set(o, (tally.get(o) ?? 0) + 1);
     }

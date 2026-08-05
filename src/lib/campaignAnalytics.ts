@@ -366,6 +366,12 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   // Heuristics over existing fields, not a persisted sentiment. Mixing note: 'declined' joins a
   // (call-level) reached call to its (contact-level) declined_offer outcome — fine for the common
   // one-call-per-reached-contact case; documented as an estimate.
+  //
+  // KNOWN DIVERGENCE vs dashboardAnalytics.deriveAttemptTag (pending Val/Maria sign-off): here
+  // the connected-check runs FIRST, so an UNCONNECTED goal_reached call is excluded entirely;
+  // deriveAttemptTag puts goal_reached above the connection check (Val 2026-07-03/07-06), so the
+  // same call reads "positive" on the dashboard. ≤4 prod records historically. If sign-off says
+  // align: hoist the goal_reached check above the CONNECTED_STATUSES continue below.
   const declinedContactIds = new Set(
     numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
   );

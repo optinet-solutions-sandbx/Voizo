@@ -60,7 +60,12 @@ export async function selectUnscoredCalls(
     const { data, error } = await q
       .order("created_at", { ascending: false })
       .range(from, from + PAGE - 1);
-    if (error || !data) break;
+    if (error || !data) {
+      // Degrade to fewer candidates (under-selection costs nothing; next tick retries)
+      // — but never silently: a quiet break here looks like "no unscored calls left".
+      if (error) console.error(`[qaScoreData] candidate page at ${from} failed:`, error.message);
+      break;
+    }
     for (const r of data as Array<Record<string, unknown>>) {
       const transcript = txt(r.transcript);
       if (!hasRealConversation(transcript)) continue;
@@ -83,14 +88,20 @@ export async function selectUnscoredCalls(
     if (candidates.length >= safeCap * 5) break; // bound the scan; we filter scored next
   }
   // Subtract already-scored ids for this judge_version (chunked .in()).
+  // THROWS on a chunk error: both callers immediately spend LLM tokens on the returned
+  // set, so a silently-empty subtraction re-judges already-scored calls (the unique
+  // (call_id, judge_version) upsert prevents corruption, but the spend is real). A loud
+  // failure skips the tick; the next one retries. Chunk 200, not 500 — PostgREST echoes
+  // the .in() in Content-Location and ~390+ uuids blows undici's 16KB header cap.
   const scored = new Set<string>();
   const ids = candidates.map((c) => c.id);
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data } = await supabaseAdmin
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabaseAdmin
       .from("qa_scores")
       .select("call_id")
       .eq("judge_version", judgeVersion)
-      .in("call_id", ids.slice(i, i + 500));
+      .in("call_id", ids.slice(i, i + 200));
+    if (error) throw new Error(`scored-subtraction chunk at ${i} failed: ${error.message}`);
     for (const s of (data ?? []) as Array<{ call_id: string }>) scored.add(s.call_id);
   }
   return candidates.filter((c) => !scored.has(c.id)).slice(0, safeCap);

@@ -17,11 +17,16 @@ import {
  * duration / failure-mix / retry-payoff / 9 metrics + CSV/JSON export). Lazy: fetched only
  * when a row is expanded, so the dashboard glance stays light.
  *
- * Mirrors the campaigns-list bundle (/api/campaigns-v2/analytics) columns — PII-minimized
- * (never phone_e164 / transcript / body) — but scoped to this campaign via the shared
- * fetchAllRows `eq` filter so it pages past PostgREST's 1000-row cap (a single hot campaign
- * can exceed it). LIFETIME (not date-bounded) so the deep-dive matches the /campaigns expand;
- * the table row's calls/connect/success stay window-bounded by design.
+ * Mirrors the campaigns-list bundle (/api/campaigns-v2/analytics) columns — scoped to this
+ * campaign via the shared fetchAllRows `eq` filter so it pages past PostgREST's 1000-row cap
+ * (a single hot campaign can exceed it). LIFETIME (not date-bounded) so the deep-dive matches
+ * the /campaigns expand; the table row's calls/connect/success stay window-bounded by design.
+ *
+ * PII: `transcript` IS selected — computeCampaignAnalytics needs it for the engagement-based
+ * early-hangup split (substantiveUserTurnCount, 2026-06-26) — but it never leaves the server:
+ * this route computes server-side and responds with aggregate analytics only. phone_e164 /
+ * body are never selected. (An earlier "never transcript" claim here predated the 06-26
+ * classifier and had rotted.)
  *
  * Ghost runs return null (segregation, mirrors the [id]/records route). Read-only; lenient origin.
  */

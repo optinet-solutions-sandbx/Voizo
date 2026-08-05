@@ -81,13 +81,16 @@ export async function fetchAgentPerformance(): Promise<AgentPerfResult> {
   }
 
   // Campaign meta for the distinct campaign ids (chunked .in()).
+  // Chunk of 200, same reason as the calls_v2 read below: PostgREST echoes the .in()
+  // back in Content-Location, and ~390+ uuids blows undici's 16KB response-header cap
+  // (reproduced live) — 500 here contradicted the file's own documented limit.
   const campaignIds = [...new Set(rows.map((r) => r.campaign_id).filter((x): x is string => !!x))];
   const campaignMeta = new Map<string, CampaignMeta>();
-  for (let i = 0; i < campaignIds.length; i += 500) {
+  for (let i = 0; i < campaignIds.length; i += 200) {
     const { data, error } = await supabaseAdmin
       .from("campaigns_v2")
       .select("id, name, base_assistant_id, is_test")
-      .in("id", campaignIds.slice(i, i + 500));
+      .in("id", campaignIds.slice(i, i + 200));
     if (error) throw error;
     for (const c of (data ?? []) as Array<Record<string, unknown>>) {
       campaignMeta.set(c.id as string, {

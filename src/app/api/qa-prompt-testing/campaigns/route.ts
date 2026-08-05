@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
+import { fetchAllRows } from "@/lib/supabaseFetchAll";
 
 /**
  * GET /api/qa-prompt-testing/campaigns
@@ -32,7 +33,10 @@ export async function GET(request: NextRequest) {
       p_start: new Date(0).toISOString(),
       p_end: new Date(now).toISOString(),
     }),
-    supabaseAdmin.from("campaigns_v2").select("id, name, is_test, created_at"),
+    // fetchAllRows: a bare .select() clamps at PostgREST's 1000-row cap with no stable
+    // order — campaigns_v2 grows ~9 recurring day-children/day (162 rows 2026-08-05),
+    // so campaigns would silently vanish from this list within months.
+    fetchAllRows(supabaseAdmin, "campaigns_v2", "id, name, is_test, created_at", "id"),
   ]);
 
   if (rollup.error) {
@@ -41,7 +45,7 @@ export async function GET(request: NextRequest) {
   }
 
   const meta = new Map<string, { name: string | null; isTest: boolean; createdAt: string | null }>();
-  for (const c of (camps.data ?? []) as Array<Record<string, unknown>>) {
+  for (const c of camps as Array<Record<string, unknown>>) {
     meta.set(c.id as string, {
       name: (c.name as string) ?? null,
       isTest: Boolean(c.is_test),
