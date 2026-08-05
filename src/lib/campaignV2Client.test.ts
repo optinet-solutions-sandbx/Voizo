@@ -5,6 +5,8 @@ import {
   createCampaignV2,
   updateCampaignV2Status,
   fetchCampaignAnalytics,
+  loadCampaignsPageCache,
+  saveCampaignsPageCache,
 } from "./campaignV2Client";
 
 // campaignV2Client is the BROWSER half of RLS Phase A: every function fetches an
@@ -105,6 +107,60 @@ describe("updateCampaignV2Status", () => {
   it("throws on a non-2xx response", async () => {
     stubFetch({ ok: false, status: 400, json: { error: "Invalid status" } });
     await expect(updateCampaignV2Status("c1", "bogus")).rejects.toThrow(/Invalid status/);
+  });
+});
+
+// ── campaigns page cache (stale-while-revalidate) ────────────────────────────
+// Node test env has no sessionStorage — a Map-backed fake is installed per test
+// and removed after. The helpers' contract: NEVER throw (corrupt JSON, missing
+// key, quota, or absent storage all degrade to null / a warning).
+
+function stubSessionStorage(opts: { throwOnSet?: boolean } = {}) {
+  const store = new Map<string, string>();
+  (globalThis as Record<string, unknown>).sessionStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      if (opts.throwOnSet) throw new Error("QuotaExceededError");
+      store.set(k, v);
+    },
+  };
+  return store;
+}
+
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>).sessionStorage;
+});
+
+describe("campaigns page cache", () => {
+  it("round-trips campaigns + analytics through sessionStorage", () => {
+    stubSessionStorage();
+    saveCampaignsPageCache([{ id: "c1" }], { c1: { targeted: 5 } } as never);
+    const cached = loadCampaignsPageCache();
+    expect(cached?.campaigns).toEqual([{ id: "c1" }]);
+    expect(cached?.analytics).toEqual({ c1: { targeted: 5 } });
+    expect(typeof cached?.savedAt).toBe("number");
+  });
+
+  it("returns null when the snapshot is absent, corrupt, or mis-shaped", () => {
+    const store = stubSessionStorage();
+    expect(loadCampaignsPageCache()).toBeNull(); // absent
+    store.set("voizo.campaignsPage.v1", "{not json");
+    expect(loadCampaignsPageCache()).toBeNull(); // corrupt
+    store.set("voizo.campaignsPage.v1", JSON.stringify({ campaigns: "nope", analytics: {} }));
+    expect(loadCampaignsPageCache()).toBeNull(); // mis-shaped
+  });
+
+  it("returns null when sessionStorage itself is unavailable (SSR/disabled)", () => {
+    // No stub installed — accessing sessionStorage throws ReferenceError.
+    expect(loadCampaignsPageCache()).toBeNull();
+  });
+
+  it("save never throws — a quota error degrades to a warning", () => {
+    stubSessionStorage({ throwOnSet: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => saveCampaignsPageCache([], {})).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });
 

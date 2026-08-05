@@ -72,6 +72,54 @@ export async function fetchCampaignV2(id: string): Promise<Row> {
   return (await res.json()) as Row;
 }
 
+// ── /campaigns page cache (stale-while-revalidate) ──────────────────────────
+//
+// Discord-style first paint (2026-08-05): the list page hydrates INSTANTLY from
+// the last session snapshot, then refetches in the background and replaces both
+// state and cache when fresh data lands. The analytics fetch is the slow leg
+// (~8s prod even after parallel paging), so without this every tab switch
+// stared at a spinner. sessionStorage (not localStorage): a browser restart
+// starts clean, so a snapshot never outlives the session that made it.
+// All storage access is try/caught — quota, disabled storage, or corrupt JSON
+// degrade to "no cache" (the page then behaves exactly as before).
+
+const PAGE_CACHE_KEY = "voizo.campaignsPage.v1";
+
+export interface CampaignsPageCache {
+  campaigns: Row[];
+  analytics: Record<string, CampaignAnalytics>;
+  savedAt: number; // epoch ms — for future staleness UI; unused today
+}
+
+/** Last session snapshot, or null (absent / corrupt / storage unavailable). */
+export function loadCampaignsPageCache(): CampaignsPageCache | null {
+  try {
+    const raw = sessionStorage.getItem(PAGE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CampaignsPageCache>;
+    if (!Array.isArray(parsed.campaigns)) return null;
+    if (!parsed.analytics || typeof parsed.analytics !== "object") return null;
+    return parsed as CampaignsPageCache;
+  } catch {
+    return null;
+  }
+}
+
+/** Overwrite the snapshot; a failed write is a warning, never an error. */
+export function saveCampaignsPageCache(
+  campaigns: Row[],
+  analytics: Record<string, CampaignAnalytics>,
+): void {
+  try {
+    sessionStorage.setItem(
+      PAGE_CACHE_KEY,
+      JSON.stringify({ campaigns, analytics, savedAt: Date.now() } satisfies CampaignsPageCache),
+    );
+  } catch (err) {
+    console.warn("[campaignV2Client] campaigns page cache save failed:", err);
+  }
+}
+
 /**
  * Read the per-campaign analytics map for the list page. Since 2026-08-05 the
  * route runs computeCampaignAnalytics SERVER-SIDE and returns only the computed

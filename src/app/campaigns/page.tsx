@@ -12,7 +12,12 @@ import { triggerDownload } from "@/lib/download";
 import { buildAnalyticsCsv, buildAnalyticsJson } from "@/lib/analyticsExport";
 import { PlusIcon } from "@/components/icons/animated/plus";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
-import { fetchCampaignsV2, fetchCampaignAnalytics } from "@/lib/campaignV2Client";
+import {
+  fetchCampaignsV2,
+  fetchCampaignAnalytics,
+  loadCampaignsPageCache,
+  saveCampaignsPageCache,
+} from "@/lib/campaignV2Client";
 import Pagination from "@/components/Pagination";
 import StatBand from "../analytics/StatBand";
 import { SectionTick } from "../analytics/SectionIsland";
@@ -134,8 +139,18 @@ function CampaignsPageInner() {
       return next;
     });
 
-  // Initial fetch: campaigns + per-campaign aggregation from numbers + calls.
+  // Initial fetch — stale-while-revalidate (2026-08-05): hydrate instantly from
+  // the last session snapshot (sessionStorage), then refetch in the background
+  // and replace state + snapshot when fresh data lands. A refetch failure keeps
+  // the stale render (loud-logged) — stale numbers beat a blank page; the 30s
+  // status poll below still refreshes row statuses independently.
   useEffect(() => {
+    const cached = loadCampaignsPageCache();
+    if (cached) {
+      setCampaigns(cached.campaigns);
+      setAnalytics(cached.analytics);
+      setLoading(false);
+    }
     (async () => {
       try {
         const rows = await fetchCampaignsV2();
@@ -151,7 +166,9 @@ function CampaignsPageInner() {
         // never leave the server. Per-table read errors degrade server-side
         // (loud-logged), same as the old bundle behaviour.
         // (RLS Phase A — docs/2026-06-04_SPEC_RLS_Anon_PII_Lockdown.md.)
-        setAnalytics(await fetchCampaignAnalytics());
+        const analyticsById = await fetchCampaignAnalytics();
+        setAnalytics(analyticsById);
+        saveCampaignsPageCache(rows, analyticsById);
       } catch (err) {
         console.error("Failed to fetch campaigns:", err);
       } finally {
