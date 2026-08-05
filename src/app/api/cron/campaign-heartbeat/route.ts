@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
+import { freeMaintenanceSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
 import { CRON_NAMES, postSlackAlert, recordHeartbeat } from "@/lib/alerts/slack";
 import crypto from "crypto";
 
@@ -510,10 +510,24 @@ async function reconcileRelease(
   }
 
   // 3. Release slot to free.
-  const released = await releaseSlot(supabaseAdmin, slotId).catch((err: Error) => {
+  let released = await releaseSlot(supabaseAdmin, slotId).catch((err: Error) => {
     warnings.push(`${slotLabel} releaseSlot failed: ${err.message}`);
     return false;
   });
+  // VOZ-319: release_vapi_sip_slot frees only status='leased' rows, but Rule 4
+  // hands this function 'maintenance' slots by design — so for them the RPC
+  // matches 0 rows FOREVER and the recovery loop was unwinnable (slot 3,
+  // 08-04→05: detach + assistant-delete succeeded every 30min, then this
+  // returned false, ~48 "still stuck" WARNs/day). The detach above has already
+  // succeeded, so the Vapi side is verified clean: complete maintenance→free
+  // directly. Guarded UPDATE — a no-op on leased slots, so the Rule 1/2 paths
+  // are unchanged.
+  if (!released) {
+    released = await freeMaintenanceSlot(supabaseAdmin, slotId).catch((err: Error) => {
+      warnings.push(`${slotLabel} freeMaintenanceSlot failed: ${err.message}`);
+      return false;
+    });
+  }
   if (released) {
     console.warn(`[campaign-heartbeat] ${slotLabel} RELEASED to free`);
   }

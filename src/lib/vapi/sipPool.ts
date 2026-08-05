@@ -101,6 +101,40 @@ export async function releaseSlot(
 }
 
 /**
+ * Free a slot parked in 'maintenance' after its Vapi state is verified clean
+ * (VOZ-319). release_vapi_sip_slot frees only status='leased' rows, but the
+ * heartbeat's Rule 4 hands it 'maintenance' slots by design — the RPC matches
+ * 0 rows forever and the recovery loop is unwinnable (slot 3 wedged 08-04→05,
+ * ~48 Slack WARNs/day). Deliberately NOT a change to the RPC: releaseSlot has
+ * CRITICAL blast radius (6 callers, 11 flows); this guarded UPDATE is a no-op
+ * on any slot that is not currently in maintenance.
+ *
+ * Same caller contract as releaseSlot: detach the Vapi phone number FIRST.
+ */
+export async function freeMaintenanceSlot(
+  supabase: SupabaseClient,
+  slotId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("vapi_sip_pool")
+    .update({
+      status: "free",
+      current_assistant_id: null,
+      current_campaign_id: null,
+      released_at: new Date().toISOString(),
+    })
+    .eq("id", slotId)
+    .eq("status", "maintenance")
+    .select("id");
+
+  if (error) {
+    throw new Error(`freeMaintenanceSlot failed: ${error.message}`);
+  }
+
+  return (data?.length ?? 0) === 1;
+}
+
+/**
  * PATCH a Vapi phone number's assistantId. Thin wrapper around the
  * Vapi REST API used by lease and release flows. Phase 0 verified
  * both `<id>` and `null` are accepted as values.
