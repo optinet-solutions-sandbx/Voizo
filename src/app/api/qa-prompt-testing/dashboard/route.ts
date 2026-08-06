@@ -19,10 +19,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden — invalid origin" }, { status: 403 });
     }
   }
-  const daysRaw = Number(new URL(request.url).searchParams.get("days"));
-  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
+  const sp = new URL(request.url).searchParams;
+  const num = (k: string): number | null => {
+    const v = Number(sp.get(k));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
   try {
-    const data = await getQaAnalysisDashboard({ days });
+    const data = await getQaAnalysisDashboard({ fromMs: num("fromMs"), toMs: num("toMs") });
     return NextResponse.json(data);
   } catch (err) {
     console.error("[qa-prompt-testing/dashboard] failed:", err);

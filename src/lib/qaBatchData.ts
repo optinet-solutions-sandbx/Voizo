@@ -305,21 +305,60 @@ function one(v: unknown): Record<string, unknown> | null {
   return (v as Record<string, unknown>) ?? null;
 }
 
-/** Analysis history list — newest first, optionally scoped to one campaign. */
-export async function listAnalysisRuns(opts: { campaignId?: string; limit?: number }): Promise<AnalysisRunListItem[]> {
-  let q = supabaseAdmin
-    .from("listener_qa_analysis_runs")
-    .select(
-      "id, call_id, campaign_id, prompt_title, summary, analyzed_at, " +
-        "campaigns_v2!campaign_id(name), " +
-        "calls_v2!call_id(created_at, duration_seconds, goal_reached, campaign_numbers_v2!campaign_number_id(phone_e164, display_name))",
-    )
-    .order("analyzed_at", { ascending: false })
-    .limit(opts.limit ?? 500);
-  if (opts.campaignId) q = q.eq("campaign_id", opts.campaignId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return ((data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => {
+/** Strip ```json fences before JSON.parse of a stored result. */
+function stripFences(s: string): string {
+  return s.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
+}
+/** Parse a stored result's call_attempt + reached_category (empty when absent; parsed=false on non-JSON). */
+export function parseCategories(summary: string | null): { callAttempt: string; reachedCategory: string; parsed: boolean } {
+  try {
+    const o = JSON.parse(stripFences(summary ?? "")) as Record<string, unknown>;
+    return {
+      callAttempt: typeof o.call_attempt === "string" ? o.call_attempt.trim() : "",
+      reachedCategory: typeof o.reached_category === "string" ? o.reached_category.trim() : "",
+      parsed: true,
+    };
+  } catch {
+    return { callAttempt: "", reachedCategory: "", parsed: false };
+  }
+}
+
+/**
+ * Analysis history / drill-down list. All filters optional: campaign, call-date
+ * window [fromMs, toMs), and call_attempt / reached_category (parsed from the stored
+ * result). Pages fully so the window/category filters aren't truncated by the row cap.
+ */
+export async function listAnalysisRuns(opts: {
+  campaignId?: string;
+  limit?: number;
+  fromMs?: number | null;
+  toMs?: number | null;
+  callAttempt?: string;
+  reachedCategory?: string;
+} = {}): Promise<AnalysisRunListItem[]> {
+  // Only the filtered drill-down needs a full page-through; the plain history list
+  // (newest-first, no window/category filter) can stop after it has `limit` rows.
+  const wantAll = opts.fromMs != null || opts.toMs != null || !!opts.callAttempt || !!opts.reachedCategory;
+  const rows: Array<Record<string, unknown>> = [];
+  for (let from = 0; from < 12000; from += 1000) {
+    let q = supabaseAdmin
+      .from("listener_qa_analysis_runs")
+      .select(
+        "id, call_id, campaign_id, prompt_title, summary, analyzed_at, " +
+          "campaigns_v2!campaign_id(name), " +
+          "calls_v2!call_id(created_at, duration_seconds, goal_reached, campaign_numbers_v2!campaign_number_id(phone_e164, display_name))",
+      )
+      .order("analyzed_at", { ascending: false })
+      .range(from, from + 999);
+    if (opts.campaignId) q = q.eq("campaign_id", opts.campaignId);
+    const { data, error } = await q;
+    if (error) throw error;
+    const page = (data ?? []) as unknown as Array<Record<string, unknown>>;
+    rows.push(...page);
+    if (page.length < 1000) break;
+    if (!wantAll && rows.length >= (opts.limit ?? 500)) break;
+  }
+  let items: AnalysisRunListItem[] = rows.map((r) => {
     const camp = one(r.campaigns_v2);
     const call = one(r.calls_v2);
     const cust = call ? one(call.campaign_numbers_v2) : null;
@@ -338,6 +377,24 @@ export async function listAnalysisRuns(opts: { campaignId?: string; limit?: numb
       goalReached: (call?.goal_reached as boolean | null) ?? null,
     };
   });
+  if (opts.fromMs != null || opts.toMs != null) {
+    items = items.filter((it) => {
+      if (!it.callCreatedAt) return false;
+      const t = new Date(it.callCreatedAt).getTime();
+      if (opts.fromMs != null && t < opts.fromMs) return false;
+      if (opts.toMs != null && t >= opts.toMs) return false;
+      return true;
+    });
+  }
+  if (opts.callAttempt || opts.reachedCategory) {
+    items = items.filter((it) => {
+      const c = parseCategories(it.summary);
+      if (opts.callAttempt && c.callAttempt !== opts.callAttempt) return false;
+      if (opts.reachedCategory && c.reachedCategory !== opts.reachedCategory) return false;
+      return true;
+    });
+  }
+  return opts.limit && opts.limit > 0 ? items.slice(0, opts.limit) : items;
 }
 
 export interface AnalysisRunRow {
@@ -380,8 +437,6 @@ export async function getAnalysisRun(id: string): Promise<AnalysisRunRow | null>
 // call_attempt (Reached / Voicemail / Unreachable / …) and reached_category
 // (Positive / Neutral / Declined / Early Hang-up / Agent Timeout).
 
-const stripFences = (s: string) => s.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
-
 export interface QaDashboardCampaign {
   campaignId: string;
   campaignName: string | null;
@@ -395,50 +450,53 @@ export interface QaDashboardData {
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: QaDashboardCampaign[];
-  sinceIso: string | null;
 }
 
-export async function getQaAnalysisDashboard(opts: { days?: number } = {}): Promise<QaDashboardData> {
-  const sinceIso = opts.days && opts.days > 0 ? new Date(Date.now() - opts.days * 86_400_000).toISOString() : null;
-
-  const rows: Array<{ campaign_id: string; summary: string | null }> = [];
-  for (let from = 0; ; from += 1000) {
-    let q = supabaseAdmin
+export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toMs?: number | null } = {}): Promise<QaDashboardData> {
+  const rows: Array<Record<string, unknown>> = [];
+  for (let from = 0; from < 12000; from += 1000) {
+    const { data, error } = await supabaseAdmin
       .from("listener_qa_analysis_runs")
-      .select("campaign_id, summary, analyzed_at")
+      .select("campaign_id, summary, calls_v2!call_id(created_at)")
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
-    if (sinceIso) q = q.gte("analyzed_at", sinceIso);
-    const { data, error } = await q;
     if (error) throw error;
-    const page = (data ?? []) as Array<{ campaign_id: string; summary: string | null }>;
+    const page = (data ?? []) as unknown as Array<Record<string, unknown>>;
     rows.push(...page);
     if (page.length < 1000) break;
   }
+
+  const inWindow = (r: Record<string, unknown>): boolean => {
+    if (opts.fromMs == null && opts.toMs == null) return true;
+    const iso = one(r.calls_v2)?.created_at as string | undefined;
+    if (!iso) return false;
+    const t = new Date(iso).getTime();
+    if (opts.fromMs != null && t < opts.fromMs) return false;
+    if (opts.toMs != null && t >= opts.toMs) return false;
+    return true;
+  };
 
   const byCallAttempt: Record<string, number> = {};
   const byReachedCategory: Record<string, number> = {};
   const perC = new Map<string, QaDashboardCampaign>();
   let unparseable = 0;
+  let total = 0;
 
   for (const r of rows) {
-    let attempt = "Unclassified";
-    let category = "";
-    try {
-      const o = JSON.parse(stripFences(r.summary ?? "")) as Record<string, unknown>;
-      if (typeof o.call_attempt === "string" && o.call_attempt.trim()) attempt = o.call_attempt.trim();
-      if (typeof o.reached_category === "string" && o.reached_category.trim()) category = o.reached_category.trim();
-    } catch {
-      unparseable++;
-      attempt = "Unparseable";
-    }
+    if (!inWindow(r)) continue;
+    total += 1;
+    const p = parseCategories(r.summary as string | null);
+    if (!p.parsed) unparseable += 1;
+    const attempt = p.callAttempt || (p.parsed ? "Unclassified" : "Unparseable");
+    const category = p.reachedCategory;
     byCallAttempt[attempt] = (byCallAttempt[attempt] ?? 0) + 1;
     if (category) byReachedCategory[category] = (byReachedCategory[category] ?? 0) + 1;
 
-    let c = perC.get(r.campaign_id);
+    const cid = r.campaign_id as string;
+    let c = perC.get(cid);
     if (!c) {
-      c = { campaignId: r.campaign_id, campaignName: null, total: 0, callAttempt: {}, reachedCategory: {} };
-      perC.set(r.campaign_id, c);
+      c = { campaignId: cid, campaignName: null, total: 0, callAttempt: {}, reachedCategory: {} };
+      perC.set(cid, c);
     }
     c.total += 1;
     c.callAttempt[attempt] = (c.callAttempt[attempt] ?? 0) + 1;
@@ -456,11 +514,10 @@ export async function getQaAnalysisDashboard(opts: { days?: number } = {}): Prom
   }
 
   return {
-    total: rows.length,
+    total,
     unparseable,
     byCallAttempt,
     byReachedCategory,
     campaigns: [...perC.values()].sort((a, b) => b.total - a.total),
-    sinceIso,
   };
 }

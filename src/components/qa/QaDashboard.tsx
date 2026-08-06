@@ -1,17 +1,18 @@
 "use client";
 
 // QaDashboard — TEMPORARY QA analysis dashboard. Read-only roll-up of the QA
-// prompt-analysis results (listener_qa_analysis_runs) via /api/qa-prompt-testing/
-// dashboard. Follows the campaigns dashboard's shape (KPI band + breakdown card +
-// per-campaign table) but is fully isolated from it — it never reads calls_v2 /
-// the SQL rollups, so it can't affect the campaigns dashboard.
+// prompt-analysis results (listener_qa_analysis_runs), mirroring the campaigns
+// dashboard: Today / Yesterday / date-range filter, KPI totals, an outcome
+// breakdown, and a per-campaign table — every total/cell is clickable and opens a
+// records drawer (the runs behind that number). Fully isolated from the campaigns
+// dashboard (never reads calls_v2 / the SQL rollups).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, BarChart3, ClipboardList } from "lucide-react";
 import { SectionTick } from "../../app/analytics/SectionIsland";
-import StatBand from "../../app/analytics/StatBand";
 import WidgetCard from "../../app/analytics/WidgetCard";
 import Pagination from "@/components/Pagination";
+import QaRecordsDrawer, { type DrawerSlice } from "./QaRecordsDrawer";
 
 interface Campaign {
   campaignId: string;
@@ -26,31 +27,66 @@ interface DashData {
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: Campaign[];
-  sinceIso: string | null;
 }
 
+type Period = "today" | "yesterday" | "7d" | "30d" | "all";
+const PERIODS: { key: Period; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+  { key: "all", label: "All" },
+];
 const PAGE_SIZE = 15;
 const RC_ORDER = ["Positive", "Neutral", "Declined", "Early Hang-up", "Agent Timeout"];
 const RC_COLOR: Record<string, string> = {
-  Positive: "#3ec08a",
-  Neutral: "#5b9bf0",
-  Declined: "#e46664",
-  "Early Hang-up": "#e0814a",
-  "Agent Timeout": "#c264d6",
+  Positive: "#3ec08a", Neutral: "#5b9bf0", Declined: "#e46664", "Early Hang-up": "#e0814a", "Agent Timeout": "#c264d6",
 };
 const n = (o: Record<string, number>, k: string) => o[k] ?? 0;
 
+// Date window (browser-local) by call date — matches how the campaigns dashboard scopes Today/Yesterday.
+function windowFor(p: Period): { fromMs: number | null; toMs: number | null } {
+  const now = Date.now();
+  const d = new Date();
+  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  switch (p) {
+    case "today": return { fromMs: midnight, toMs: null };
+    case "yesterday": return { fromMs: midnight - 86_400_000, toMs: midnight };
+    case "7d": return { fromMs: now - 7 * 86_400_000, toMs: null };
+    case "30d": return { fromMs: now - 30 * 86_400_000, toMs: null };
+    default: return { fromMs: null, toMs: null };
+  }
+}
+
+function KpiCard({ label, value, accent, sub, onClick }: { label: string; value: number; accent?: string; sub?: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="text-left bg-[#12141a] px-[18px] py-[15px] min-w-0 hover:bg-[var(--bg-hover)] transition" title="Click to see these calls">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] whitespace-nowrap truncate">{label}</div>
+      <div className="text-[27px] leading-[1.1] font-semibold font-mono tracking-[-0.02em] mt-1.5" style={{ color: accent ?? "var(--text-1)" }}>
+        {value.toLocaleString()}
+      </div>
+      <div className="text-[11px] text-[var(--text-4)] mt-0.5 h-[14px] whitespace-nowrap truncate">{sub ?? ""}</div>
+    </button>
+  );
+}
+
 export default function QaDashboard() {
-  const [days, setDays] = useState<0 | 7 | 30>(0); // 0 = all
+  const [period, setPeriod] = useState<Period>("all");
+  const win = useMemo(() => windowFor(period), [period]);
   const [data, setData] = useState<DashData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [slice, setSlice] = useState<DrawerSlice | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/qa-prompt-testing/dashboard${days ? `?days=${days}` : ""}`, { cache: "no-store" });
+      const p = new URLSearchParams();
+      if (win.fromMs != null) p.set("fromMs", String(win.fromMs));
+      if (win.toMs != null) p.set("toMs", String(win.toMs));
+      const qs = p.toString();
+      const r = await fetch(`/api/qa-prompt-testing/dashboard${qs ? `?${qs}` : ""}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as DashData);
       setError(null);
@@ -59,7 +95,7 @@ export default function QaDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [win]);
 
   useEffect(() => {
     load();
@@ -82,6 +118,10 @@ export default function QaDashboard() {
     [data, safePage],
   );
 
+  // A drawer slice always carries the current window (set by the component via props).
+  const open = (s: DrawerSlice) => setSlice(s);
+  const cellBtn = "hover:underline cursor-pointer";
+
   const dayCls = (on: boolean) =>
     `px-2.5 py-1 rounded-md text-xs font-medium transition whitespace-nowrap ${
       on ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
@@ -96,14 +136,13 @@ export default function QaDashboard() {
             <h1 className="text-lg font-semibold tracking-tight text-[var(--text-1)]">QA Analysis Dashboard</h1>
           </div>
           <p className="mt-1 text-xs text-[var(--text-3)]">
-            Rolled up from your prompt analyses (temporary) — separate from the campaigns Dashboard, which tracks call
-            outcomes.
+            From your prompt analyses (temporary) — separate from the campaigns Dashboard. Click any total to see the calls behind it.
           </p>
         </div>
         <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
-          <button onClick={() => { setDays(0); setPage(1); }} className={dayCls(days === 0)}>All</button>
-          <button onClick={() => { setDays(7); setPage(1); }} className={dayCls(days === 7)}>7d</button>
-          <button onClick={() => { setDays(30); setPage(1); }} className={dayCls(days === 30)}>30d</button>
+          {PERIODS.map((p) => (
+            <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1); }} className={dayCls(period === p.key)}>{p.label}</button>
+          ))}
         </div>
       </div>
 
@@ -113,37 +152,31 @@ export default function QaDashboard() {
           <div className="h-40 rounded-xl bg-[var(--bg-elevated)] animate-pulse" />
         </div>
       ) : error ? (
-        <p className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
-          <AlertCircle size={11} /> {error}
-        </p>
+        <p className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1"><AlertCircle size={11} /> {error}</p>
       ) : !data || data.total === 0 ? (
-        <div className="text-center py-16 text-sm text-[var(--text-3)]">
-          No analysis results yet{days ? " in this window" : ""}. Run a Bulk analysis to populate this.
-        </div>
+        <div className="text-center py-16 text-sm text-[var(--text-3)]">No analysis results in this period.</div>
       ) : (
         <>
-          {/* KPI band — call_attempt dispositions (+ Agent Timeout from reached_category, the go-live signal) */}
-          <StatBand
-            stats={[
-              { label: "Analyzed", value: data.total },
-              { label: "Reached", value: n(data.byCallAttempt, "Reached"), accent: "#3ec08a" },
-              { label: "Voicemail", value: n(data.byCallAttempt, "Voicemail"), accent: "#8f86e6" },
-              { label: "Unreachable", value: n(data.byCallAttempt, "Unreachable"), accent: "#e0a53c" },
-              { label: "Agent Timeout", value: n(data.byReachedCategory, "Agent Timeout"), accent: "#c264d6", sub: "of reached" },
-            ]}
-          />
+          {/* KPI band — clickable */}
+          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(5,minmax(0,1fr))" }}>
+            <KpiCard label="Analyzed" value={data.total} onClick={() => open({ title: "All analyzed calls" })} />
+            <KpiCard label="Reached" value={n(data.byCallAttempt, "Reached")} accent="#3ec08a" onClick={() => open({ title: "Reached", callAttempt: "Reached" })} />
+            <KpiCard label="Voicemail" value={n(data.byCallAttempt, "Voicemail")} accent="#8f86e6" onClick={() => open({ title: "Voicemail", callAttempt: "Voicemail" })} />
+            <KpiCard label="Unreachable" value={n(data.byCallAttempt, "Unreachable")} accent="#e0a53c" onClick={() => open({ title: "Unreachable", callAttempt: "Unreachable" })} />
+            <KpiCard label="Agent Timeout" value={n(data.byReachedCategory, "Agent Timeout")} accent="#c264d6" sub="of reached" onClick={() => open({ title: "Agent Timeout", reachedCategory: "Agent Timeout" })} />
+          </div>
 
-          {/* Reached — outcome breakdown (reached_category) */}
+          {/* Reached outcome breakdown — clickable rows */}
           <WidgetCard title="Reached — outcome breakdown" icon={<BarChart3 size={14} className="text-primary" />} context={`${reachedTotal.toLocaleString()} reached`}>
             {rcKeys.length === 0 ? (
-              <p className="text-xs text-[var(--text-3)]">No reached calls in this window.</p>
+              <p className="text-xs text-[var(--text-3)]">No reached calls in this period.</p>
             ) : (
               <div className="grid gap-2">
                 {rcKeys.map((k) => {
                   const v = n(data.byReachedCategory, k);
                   const pct = reachedTotal ? Math.round((v / reachedTotal) * 100) : 0;
                   return (
-                    <div key={k} className="flex items-center gap-3">
+                    <button key={k} onClick={() => open({ title: `Reached · ${k}`, reachedCategory: k })} className="flex items-center gap-3 text-left hover:bg-[var(--bg-hover)] rounded-md px-1 py-0.5 transition">
                       <span className="w-28 shrink-0 text-xs text-[var(--text-2)]">{k}</span>
                       <div className="flex-1 h-2.5 rounded-full bg-[var(--bg-elevated)] overflow-hidden">
                         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: RC_COLOR[k] ?? "#7d828c" }} />
@@ -151,20 +184,15 @@ export default function QaDashboard() {
                       <span className="w-24 shrink-0 text-right text-xs font-mono text-[var(--text-1)]">
                         {v.toLocaleString()} <span className="text-[var(--text-3)]">· {pct}%</span>
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
             )}
           </WidgetCard>
 
-          {/* Per-campaign table */}
-          <WidgetCard
-            title="By campaign"
-            icon={<ClipboardList size={14} className="text-blue-400" />}
-            context={`${data.campaigns.length} campaign${data.campaigns.length === 1 ? "" : "s"}`}
-            bodyClassName="p-0"
-          >
+          {/* Per-campaign table — clickable cells */}
+          <WidgetCard title="By campaign" icon={<ClipboardList size={14} className="text-blue-400" />} context={`${data.campaigns.length} campaign${data.campaigns.length === 1 ? "" : "s"}`} bodyClassName="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -177,37 +205,52 @@ export default function QaDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border)]">
-                  {pageCampaigns.map((c) => (
-                    <tr key={c.campaignId} className="hover:bg-[var(--bg-hover)] transition">
-                      <td className="px-4 py-2 text-[var(--text-1)] max-w-[420px] truncate">{c.campaignName ?? c.campaignId.slice(0, 8)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-[var(--text-1)]">{c.total.toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right font-mono text-emerald-400">{n(c.callAttempt, "Reached").toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right font-mono text-[var(--text-2)]">{n(c.callAttempt, "Voicemail").toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right font-mono" style={{ color: n(c.reachedCategory, "Agent Timeout") > 0 ? "#c264d6" : "var(--text-3)" }}>
-                        {n(c.reachedCategory, "Agent Timeout").toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
+                  {pageCampaigns.map((c) => {
+                    const at = n(c.reachedCategory, "Agent Timeout");
+                    return (
+                      <tr key={c.campaignId} className="hover:bg-[var(--bg-hover)] transition">
+                        <td className="px-4 py-2 max-w-[380px] truncate">
+                          <button onClick={() => open({ title: c.campaignName ?? "Campaign", campaignId: c.campaignId })} className={`text-[var(--text-1)] ${cellBtn}`}>
+                            {c.campaignName ?? c.campaignId.slice(0, 8)}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-[var(--text-1)]">{c.total.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          <button onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Reached`, campaignId: c.campaignId, callAttempt: "Reached" })} className={`text-emerald-400 ${cellBtn}`}>
+                            {n(c.callAttempt, "Reached").toLocaleString()}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          <button onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Voicemail`, campaignId: c.campaignId, callAttempt: "Voicemail" })} className={`text-[var(--text-2)] ${cellBtn}`}>
+                            {n(c.callAttempt, "Voicemail").toLocaleString()}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          <button
+                            onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Agent Timeout`, campaignId: c.campaignId, reachedCategory: "Agent Timeout" })}
+                            className={cellBtn}
+                            style={{ color: at > 0 ? "#c264d6" : "var(--text-3)" }}
+                          >
+                            {at.toLocaleString()}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </WidgetCard>
 
-          <Pagination
-            currentPage={safePage}
-            totalPages={totalPages}
-            totalItems={data.campaigns.length}
-            pageSize={PAGE_SIZE}
-            onPageChange={setPage}
-          />
+          <Pagination currentPage={safePage} totalPages={totalPages} totalItems={data.campaigns.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
 
           {data.unparseable > 0 && (
-            <p className="text-[10px] text-[var(--text-3)]">
-              {data.unparseable} result{data.unparseable === 1 ? "" : "s"} couldn&rsquo;t be parsed as JSON (excluded from the breakdown).
-            </p>
+            <p className="text-[10px] text-[var(--text-3)]">{data.unparseable} result{data.unparseable === 1 ? "" : "s"} couldn&rsquo;t be parsed as JSON (excluded).</p>
           )}
         </>
       )}
+
+      {slice && <QaRecordsDrawer slice={slice} fromMs={win.fromMs} toMs={win.toMs} onClose={() => setSlice(null)} />}
     </div>
   );
 }
