@@ -2725,10 +2725,18 @@ export default function ScriptBuilder({ onClose, initialScriptId }: Props) {
                             </button>
                           ))}
                         </div>
+                        {(((sd.config.openingDelivery as string) ?? "verbatim") === "reword") && (
+                          <p className="mt-1.5 text-[10px] text-amber-400 leading-snug">
+                            Heads up: &ldquo;Agent rewords it&rdquo; makes the AI write the opener on every call — it adds
+                            a short delay before the agent speaks, and the agent can&rsquo;t open the call at all if the AI
+                            provider is down. &ldquo;Exact line&rdquo; speaks instantly and keeps working through an outage.
+                          </p>
+                        )}
                         <p className="mt-1 text-[10px] text-[var(--text-3)]">
                           Spoken as the very first thing on the call — overrides the global &ldquo;First
-                          Message&rdquo; scenario. Use {"{{name}}"} for the client&rsquo;s name. Exact line is spoken
-                          word-for-word; Agent rewords it keeps the meaning in the agent&rsquo;s own phrasing.
+                          Message&rdquo; scenario. Use {"{{name}}"} for the client&rsquo;s name.{" "}
+                          <strong className="text-[var(--text-2)]">Exact line</strong> is spoken word-for-word (fastest,
+                          resilient — recommended); Agent rewords it keeps the meaning in the agent&rsquo;s own phrasing.
                         </p>
                       </div>
                     )}
