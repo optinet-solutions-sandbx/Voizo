@@ -23,7 +23,7 @@ import {
   CONNECTED_STATUSES,
   TERMINAL_NONCONNECT,
 } from "./campaignAnalytics";
-import { ANALYTICS_CONFIG } from "./analyticsConfig";
+import { ANALYTICS_CONFIG, isAgentTimeout } from "./analyticsConfig";
 import { substantiveUserTurnCount } from "./transcriptClassify";
 import { formatCampaign } from "./campaignDisplay";
 
@@ -1052,7 +1052,7 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
 // mirror campaignAnalytics.computeOne's outcomeBreakdown (+ ANALYTICS_CONFIG.EARLY_HANGUP_SEC);
 // the contact tag is the funnel-furthest attempt tag (positive > declined > neutral >
 // early_hangup > voicemail > unreachable), or an outcome-derived tag when there are no calls.
-export type AttemptTag = "unreachable" | "voicemail" | "positive" | "declined" | "early_hangup" | "neutral";
+export type AttemptTag = "unreachable" | "voicemail" | "positive" | "declined" | "agent_timeout" | "early_hangup" | "neutral";
 export type ContactTag = AttemptTag | "awaiting_retry" | "wrong_number";
 
 export interface CallAttempt {
@@ -1076,6 +1076,7 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
   voicemail: "Voicemail detected",
   positive: "Positive response",
   declined: "Declined",
+  agent_timeout: "Agent timeout",
   early_hangup: "Early hangup",
   neutral: "Neutral",
   awaiting_retry: "Awaiting retry",
@@ -1090,6 +1091,7 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   positive: "Agreed to receive the offer SMS (goal reached) — not a confirmed sale.",
   neutral: "Connected to a person, but no clear positive or negative outcome was detected.",
   declined: "Contact declined the offer — applied to the whole contact, so it can show on earlier attempts too.",
+  agent_timeout: "Reached a person, but the agent failed to respond (AI pipeline error/timeout) — a missed live pickup.",
   early_hangup: "Connected but ended with little or no real conversation — a quick hangup or no engagement.",
   voicemail: "Best-effort automated voicemail detection; may misclassify.",
   unreachable: "Call didn't connect (no answer, busy, or failed).",
@@ -1103,6 +1105,7 @@ export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
   positive: "#3ec08a",
   neutral: "#5b9bf0",
   declined: "#e46664",
+  agent_timeout: "#c264d6",
   early_hangup: "#e0814a",
   voicemail: "#8f86e6",
   unreachable: "#e0a53c",
@@ -1111,7 +1114,7 @@ export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
 };
 
 // Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
-const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "voicemail", "unreachable"];
+const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "agent_timeout", "voicemail", "unreachable"];
 
 /** calls_v2.transcript is jsonb `{ text }` from the DB, but a plain string in unit tests. */
 function transcriptText(t: DashCallRow["transcript"]): string {
@@ -1158,6 +1161,10 @@ export function deriveAttemptTag(
   if (call.goal_reached === true) return "positive";
   if (!isConnected(call.status)) return "unreachable";
   if (call.voicemail === true) return "voicemail";
+  // Agent timeout = reached a human but the AI pipeline failed to respond (e.g. OpenAI
+  // quota death). Its own category under Reached, ahead of early_hangup (a 3s 429 call
+  // would otherwise read as a duration-based early hangup).
+  if (isAgentTimeout(call.ended_reason)) return "agent_timeout";
   if (declinedContact) return "declined";
   return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
 }
@@ -1236,7 +1243,7 @@ export function recordHasAttemptOutcome(record: CallRecord, tag: AttemptTag): bo
 
 /** Attempt tags that mean a live human conversation happened (the inverse of voicemail/unreachable).
  *  Backs the "Reached" drill-down group on the Today cards. */
-export const HUMAN_TAGS: ReadonlySet<AttemptTag> = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup"]);
+export const HUMAN_TAGS: ReadonlySet<AttemptTag> = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup", "agent_timeout"]);
 
 /** True when the contact was reached by a live human on ANY attempt — the records-side counterpart
  *  of the Reached card metric. Pure; no classification logic here. */

@@ -410,9 +410,9 @@ describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy)
     const a = r["ob"];
     expect(a.connected).toBe(5);
     expect(a.reach).toBe(4); // 5 connected − 1 voicemail
-    expect(a.outcomeBreakdown).toEqual({ positive: 1, declined: 1, earlyHangup: 1, neutral: 1 });
+    expect(a.outcomeBreakdown).toEqual({ positive: 1, declined: 1, agentTimeout: 0, earlyHangup: 1, neutral: 1 });
     const b = a.outcomeBreakdown;
-    expect(b.positive + b.declined + b.earlyHangup + b.neutral).toBe(a.reach); // clean partition of reach
+    expect(b.positive + b.declined + b.agentTimeout + b.earlyHangup + b.neutral).toBe(a.reach); // clean partition of reach
   });
 
   it("counts silence-timeouts and pickup-and-bails as earlyHangup (engagement rule)", () => {
@@ -435,8 +435,8 @@ describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy)
     });
     const a = r["eg"];
     expect(a.reach).toBe(3);
-    expect(a.outcomeBreakdown).toEqual({ positive: 0, declined: 0, earlyHangup: 2, neutral: 1 });
-    expect(a.outcomeBreakdown.positive + a.outcomeBreakdown.declined + a.outcomeBreakdown.earlyHangup + a.outcomeBreakdown.neutral).toBe(a.reach);
+    expect(a.outcomeBreakdown).toEqual({ positive: 0, declined: 0, agentTimeout: 0, earlyHangup: 2, neutral: 1 });
+    expect(a.outcomeBreakdown.positive + a.outcomeBreakdown.declined + a.outcomeBreakdown.agentTimeout + a.outcomeBreakdown.earlyHangup + a.outcomeBreakdown.neutral).toBe(a.reach);
   });
 
   it("priority: goal beats all; explicit decline beats a sub-threshold early hangup", () => {
@@ -452,7 +452,7 @@ describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy)
       ],
       sms: [], now: FIXTURE_INPUT.now,
     });
-    expect(r["p"].outcomeBreakdown).toEqual({ positive: 1, declined: 1, earlyHangup: 0, neutral: 0 });
+    expect(r["p"].outcomeBreakdown).toEqual({ positive: 1, declined: 1, agentTimeout: 0, earlyHangup: 0, neutral: 0 });
   });
 
   it("no reached humans → all buckets 0 (no NaN, clean partition)", () => {
@@ -466,6 +466,6 @@ describe("computeCampaignAnalytics — connected-calls outcome breakdown (proxy)
       sms: [], now: FIXTURE_INPUT.now,
     });
     expect(r["z"].reach).toBe(0);
-    expect(r["z"].outcomeBreakdown).toEqual({ positive: 0, declined: 0, earlyHangup: 0, neutral: 0 });
+    expect(r["z"].outcomeBreakdown).toEqual({ positive: 0, declined: 0, agentTimeout: 0, earlyHangup: 0, neutral: 0 });
   });
 });

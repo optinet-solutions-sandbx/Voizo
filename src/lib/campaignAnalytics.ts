@@ -8,7 +8,7 @@
  * Dead buckets (NEVER key a metric on these): calls_v2.status 'voicemail'/'answered'
  * and campaign_numbers_v2.outcome 'wrong_number' are never written by any code path.
  */
-import { ANALYTICS_CONFIG, CONFIG_RATE_PER_MIN } from "./analyticsConfig";
+import { ANALYTICS_CONFIG, CONFIG_RATE_PER_MIN, isAgentTimeout } from "./analyticsConfig";
 import { substantiveUserTurnCount } from "./transcriptClassify";
 
 // ── Input row shapes (only the columns Task 8 selects) ──────────────────────
@@ -113,12 +113,14 @@ export function smsInFlightOf(sms: SmsCounts): number {
 
 export interface OutcomeBreakdown {
   // Partition of REACHED human calls (connected, not voicemail; count == reach). Sums to reach.
-  // ALL FOUR ARE PROXIES (labeled "est." in the UI) over existing fields — NOT a persisted
-  // disposition. positive = goal_reached (SMS opt-in, upstream of a sale); declined = the call's
-  // contact has outcome 'declined_offer'; earlyHangup = reached call shorter than EARLY_HANGUP_SEC
-  // with no goal/decline; neutral = the remainder. See computeOne for the priority order.
+  // ALL PROXIES (labeled "est." in the UI) over existing fields — NOT a persisted disposition.
+  // positive = goal_reached (SMS opt-in, upstream of a sale); declined = the call's contact has
+  // outcome 'declined_offer'; agentTimeout = the AI pipeline failed to respond (pipeline-error /
+  // assistant-not-responding) so a live pickup got silence; earlyHangup = reached call shorter than
+  // EARLY_HANGUP_SEC with no goal/decline; neutral = the remainder. See computeOne for priority.
   positive: number;
   declined: number;
+  agentTimeout: number;
   earlyHangup: number;
   neutral: number;
 }
@@ -375,11 +377,12 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   const declinedContactIds = new Set(
     numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
   );
-  const outcomeBreakdown: OutcomeBreakdown = { positive: 0, declined: 0, earlyHangup: 0, neutral: 0 };
+  const outcomeBreakdown: OutcomeBreakdown = { positive: 0, declined: 0, agentTimeout: 0, earlyHangup: 0, neutral: 0 };
   for (const c of calls) {
     if (!CONNECTED_STATUSES.has(c.status ?? "")) continue;
     if (c.voicemail === true && c.goal_reached !== true) continue; // voicemail (unless goal reached) is not a reached human — keeps sum == reach (Val 2026-07-03)
     if (c.goal_reached === true) { outcomeBreakdown.positive++; continue; }
+    if (isAgentTimeout(c.ended_reason)) { outcomeBreakdown.agentTimeout++; continue; } // AI pipeline failed to respond — a missed live pickup (mirrors deriveAttemptTag)
     if (c.campaign_number_id && declinedContactIds.has(c.campaign_number_id)) { outcomeBreakdown.declined++; continue; }
     // Engagement-based early-hangup — MIRRORS dashboardAnalytics.deriveAttemptTag (2026-06-26).
     // Only DEFINITIVE no-conversation signals reclassify; ambiguous null/null connects stay neutral.

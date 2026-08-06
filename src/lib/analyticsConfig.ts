@@ -44,3 +44,15 @@ export const ANALYTICS_CONFIG = {
 /** Combined per-minute proxy rate (telephony + AI). Labeled "est." everywhere it surfaces. */
 export const CONFIG_RATE_PER_MIN =
   ANALYTICS_CONFIG.CONFIG_RATE_TELEPHONY_PER_MIN + ANALYTICS_CONFIG.CONFIG_RATE_AI_PER_MIN;
+
+/**
+ * "Agent timeout" — a REACHED call where the AI agent failed to respond, so a live
+ * pickup gets silence and hangs up (the OpenAI-quota incident signature: customer
+ * says "Hello?", agent's LLM is dead, call dies in ~3s). Keyed on Vapi's ended_reason:
+ * any `pipeline-error*` (provider/quota death) or `assistant-not-responding`. Its own
+ * category under Reached so it isn't hidden inside "early hangup". Pure — no I/O.
+ */
+export function isAgentTimeout(endedReason: string | null | undefined): boolean {
+  if (!endedReason) return false;
+  return endedReason.startsWith("pipeline-error") || endedReason === "assistant-not-responding";
+}

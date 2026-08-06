@@ -26,7 +26,7 @@ export const DISPO_COLOR: Record<RecordStatus, string> = {
   wrong_number: "#8b939c",
 };
 // Attempt columns + the outcome filter = per-call OUTCOME categories (the AttemptTag set).
-export const OUTCOME_ORDER: AttemptTag[] = ["positive", "neutral", "declined", "early_hangup", "voicemail", "unreachable"];
+export const OUTCOME_ORDER: AttemptTag[] = ["positive", "neutral", "declined", "agent_timeout", "early_hangup", "voicemail", "unreachable"];
 
 // ── Per-row CSV export (A1) ──────────────────────────────────────────────────
 // Serialize ONE contact's visible fields to a self-describing 1-row CSV (BOM + header + row),
@@ -63,7 +63,7 @@ export type RecordSlice =
   | { kind: "texted"; refine?: "reached" | AttemptTag };
 
 // "Reached" = a live human answered — any attempt that connected to a person (not voicemail / no-connect).
-const REACHED_TAGS = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup"]);
+const REACHED_TAGS = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup", "agent_timeout"]);
 const isReached = (r: CallRecord) => r.attempts.some((a) => REACHED_TAGS.has(a.tag));
 
 export function sliceMatches(r: CallRecord, s: RecordSlice): boolean {
