@@ -372,3 +372,95 @@ export async function getAnalysisRun(id: string): Promise<AnalysisRunRow | null>
     analyzedAt: r.analyzed_at as string,
   };
 }
+
+// ── QA Analysis dashboard aggregation ─────────────────────────────────────────
+// A READ-ONLY roll-up of listener_qa_analysis_runs for the temporary QA dashboard.
+// Completely isolated from the campaigns dashboard (which reads calls_v2 + the SQL
+// rollups) — this only parses stored prompt results. Buckets by the model's schema:
+// call_attempt (Reached / Voicemail / Unreachable / …) and reached_category
+// (Positive / Neutral / Declined / Early Hang-up / Agent Timeout).
+
+const stripFences = (s: string) => s.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
+
+export interface QaDashboardCampaign {
+  campaignId: string;
+  campaignName: string | null;
+  total: number;
+  callAttempt: Record<string, number>;
+  reachedCategory: Record<string, number>;
+}
+export interface QaDashboardData {
+  total: number;
+  unparseable: number;
+  byCallAttempt: Record<string, number>;
+  byReachedCategory: Record<string, number>;
+  campaigns: QaDashboardCampaign[];
+  sinceIso: string | null;
+}
+
+export async function getQaAnalysisDashboard(opts: { days?: number } = {}): Promise<QaDashboardData> {
+  const sinceIso = opts.days && opts.days > 0 ? new Date(Date.now() - opts.days * 86_400_000).toISOString() : null;
+
+  const rows: Array<{ campaign_id: string; summary: string | null }> = [];
+  for (let from = 0; ; from += 1000) {
+    let q = supabaseAdmin
+      .from("listener_qa_analysis_runs")
+      .select("campaign_id, summary, analyzed_at")
+      .order("analyzed_at", { ascending: false })
+      .range(from, from + 999);
+    if (sinceIso) q = q.gte("analyzed_at", sinceIso);
+    const { data, error } = await q;
+    if (error) throw error;
+    const page = (data ?? []) as Array<{ campaign_id: string; summary: string | null }>;
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+
+  const byCallAttempt: Record<string, number> = {};
+  const byReachedCategory: Record<string, number> = {};
+  const perC = new Map<string, QaDashboardCampaign>();
+  let unparseable = 0;
+
+  for (const r of rows) {
+    let attempt = "Unclassified";
+    let category = "";
+    try {
+      const o = JSON.parse(stripFences(r.summary ?? "")) as Record<string, unknown>;
+      if (typeof o.call_attempt === "string" && o.call_attempt.trim()) attempt = o.call_attempt.trim();
+      if (typeof o.reached_category === "string" && o.reached_category.trim()) category = o.reached_category.trim();
+    } catch {
+      unparseable++;
+      attempt = "Unparseable";
+    }
+    byCallAttempt[attempt] = (byCallAttempt[attempt] ?? 0) + 1;
+    if (category) byReachedCategory[category] = (byReachedCategory[category] ?? 0) + 1;
+
+    let c = perC.get(r.campaign_id);
+    if (!c) {
+      c = { campaignId: r.campaign_id, campaignName: null, total: 0, callAttempt: {}, reachedCategory: {} };
+      perC.set(r.campaign_id, c);
+    }
+    c.total += 1;
+    c.callAttempt[attempt] = (c.callAttempt[attempt] ?? 0) + 1;
+    if (category) c.reachedCategory[category] = (c.reachedCategory[category] ?? 0) + 1;
+  }
+
+  // Campaign names (chunked .in()).
+  const ids = [...perC.keys()];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await supabaseAdmin.from("campaigns_v2").select("id, name").in("id", ids.slice(i, i + 200));
+    for (const c of (data ?? []) as Array<{ id: string; name: string | null }>) {
+      const e = perC.get(c.id);
+      if (e) e.campaignName = c.name ?? null;
+    }
+  }
+
+  return {
+    total: rows.length,
+    unparseable,
+    byCallAttempt,
+    byReachedCategory,
+    campaigns: [...perC.values()].sort((a, b) => b.total - a.total),
+    sinceIso,
+  };
+}

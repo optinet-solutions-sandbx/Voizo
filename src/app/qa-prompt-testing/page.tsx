@@ -11,7 +11,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, History, Library, Search,
+  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, History, LayoutDashboard, Library, Search,
 } from "lucide-react";
 import { campaignRegion } from "@/lib/campaignRegion";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
@@ -19,6 +19,7 @@ import Pagination from "@/components/Pagination";
 import { SectionTick } from "../analytics/SectionIsland";
 import PromptLibrary from "@/components/qa/PromptLibrary";
 import AnalysisHistory from "@/components/qa/AnalysisHistory";
+import QaDashboard from "@/components/qa/QaDashboard";
 
 interface QaCampaign {
   campaignId: string;
@@ -40,7 +41,7 @@ const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
 ];
 
 export default function QaPromptTestingPage() {
-  const [tab, setTab] = useState<"campaigns" | "library" | "history">("campaigns");
+  const [tab, setTab] = useState<"campaigns" | "library" | "history" | "dashboard">("campaigns");
   const [campaigns, setCampaigns] = useState<QaCampaign[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,12 +118,17 @@ export default function QaPromptTestingPage() {
         <button onClick={() => setTab("history")} className={tabCls(tab === "history")}>
           <History size={13} /> Analysis History
         </button>
+        <button onClick={() => setTab("dashboard")} className={tabCls(tab === "dashboard")}>
+          <LayoutDashboard size={13} /> Dashboard
+        </button>
       </div>
 
       {tab === "library" ? (
         <PromptLibrary />
       ) : tab === "history" ? (
         <AnalysisHistory />
+      ) : tab === "dashboard" ? (
+        <QaDashboard />
       ) : loading ? (
         <div className="grid gap-2">
           {Array.from({ length: 6 }).map((_, i) => (
