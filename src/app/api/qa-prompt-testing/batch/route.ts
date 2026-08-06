@@ -6,6 +6,7 @@ import {
   getBatchJobs,
   getBatchJobById,
   upsertAnalysisRuns,
+  pollActiveJobs,
   type AnalysisRunInsert,
 } from "@/lib/qaBatchData";
 
@@ -98,17 +99,6 @@ async function createBatch(fileId: string, apiKey: string): Promise<string> {
   if (!res.ok) throw new Error(`OpenAI batch create failed: ${data.error?.message ?? res.status}`);
   return data.id as string;
 }
-
-const STATUS_MAP: Record<string, string> = {
-  validating: "validating",
-  in_progress: "in_progress",
-  finalizing: "finalizing",
-  completed: "completed",
-  expired: "expired",
-  cancelling: "cancelling",
-  cancelled: "cancelled",
-  failed: "failed",
-};
 
 // ── POST: submit a batch for one campaign ─────────────────────────────────────
 export async function POST(request: NextRequest) {
@@ -216,44 +206,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to read jobs" }, { status: 500 });
   }
 
-  if (apiKey) {
-    await Promise.all(
-      jobs
-        .filter((j) => j.openaiBatchId && ACTIVE.has(j.status))
-        .map(async (job) => {
-          try {
-            const res = await fetch(`https://api.openai.com/v1/batches/${job.openaiBatchId}`, {
-              headers: { Authorization: `Bearer ${apiKey}` },
-            });
-            if (!res.ok) return;
-            const b = await res.json();
-            const status = STATUS_MAP[b.status] ?? "in_progress";
-            const counts = b.request_counts ?? {};
-            const patch: Record<string, unknown> = {
-              status,
-              completed_conversations: counts.completed ?? job.completedConversations,
-              failed_conversations: counts.failed ?? job.failedConversations,
-            };
-            if (status === "completed") {
-              patch.output_file_id = b.output_file_id ?? null;
-              patch.completed_at = new Date().toISOString();
-            }
-            if (status === "failed" || status === "expired") {
-              patch.error_message = b.errors?.data?.[0]?.message ?? status;
-            }
-            await updateBatchJob(job.id, patch);
-            Object.assign(job, {
-              status,
-              outputFileId: (patch.output_file_id as string) ?? job.outputFileId,
-              completedConversations: patch.completed_conversations as number,
-              failedConversations: patch.failed_conversations as number,
-            });
-          } catch {
-            /* transient — leave the job as-is this tick */
-          }
-        }),
-    );
-  }
+  if (apiKey) await pollActiveJobs(jobs, apiKey);
 
   return NextResponse.json({ jobs });
 }

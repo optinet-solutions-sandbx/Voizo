@@ -187,6 +187,72 @@ export async function getBatchJobById(id: string): Promise<QaBatchJob | null> {
   return data ? rowToJob(data as Record<string, unknown>) : null;
 }
 
+/** Every batch job across all campaigns (newest first), each with its campaign name. */
+export async function getAllBatchJobs(limit = 300): Promise<(QaBatchJob & { campaignName: string | null })[]> {
+  const { data, error } = await supabaseAdmin
+    .from("listener_qa_batch_jobs")
+    .select(`${JOB_COLS}, campaigns_v2!campaign_id(name)`)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const camp = one(r.campaigns_v2);
+    return { ...rowToJob(r), campaignName: (camp?.name as string) ?? null };
+  });
+}
+
+// ── OpenAI polling (shared by the per-campaign + all-campaigns GET routes) ────
+const POLL_ACTIVE = new Set(["validating", "in_progress", "finalizing"]);
+const OPENAI_STATUS_MAP: Record<string, string> = {
+  validating: "validating",
+  in_progress: "in_progress",
+  finalizing: "finalizing",
+  completed: "completed",
+  expired: "expired",
+  cancelling: "cancelling",
+  cancelled: "cancelled",
+  failed: "failed",
+};
+
+/** Poll OpenAI for each still-active job, persist status/counts, and mutate the
+ *  passed job objects in place so the caller can return the fresh view. */
+export async function pollActiveJobs(jobs: QaBatchJob[], apiKey: string): Promise<void> {
+  await Promise.all(
+    jobs
+      .filter((j) => j.openaiBatchId && POLL_ACTIVE.has(j.status))
+      .map(async (job) => {
+        try {
+          const res = await fetch(`https://api.openai.com/v1/batches/${job.openaiBatchId}`, {
+            headers: { Authorization: `Bearer ${apiKey}` },
+          });
+          if (!res.ok) return;
+          const b = await res.json();
+          const status = OPENAI_STATUS_MAP[b.status] ?? "in_progress";
+          const counts = b.request_counts ?? {};
+          const patch: Record<string, unknown> = {
+            status,
+            completed_conversations: counts.completed ?? job.completedConversations,
+            failed_conversations: counts.failed ?? job.failedConversations,
+          };
+          if (status === "completed") {
+            patch.output_file_id = b.output_file_id ?? null;
+            patch.completed_at = new Date().toISOString();
+          }
+          if (status === "failed" || status === "expired") {
+            patch.error_message = b.errors?.data?.[0]?.message ?? status;
+          }
+          await updateBatchJob(job.id, patch);
+          job.status = status;
+          job.outputFileId = (patch.output_file_id as string) ?? job.outputFileId;
+          job.completedConversations = patch.completed_conversations as number;
+          job.failedConversations = patch.failed_conversations as number;
+        } catch {
+          /* transient — leave the job as-is this tick */
+        }
+      }),
+  );
+}
+
 // ── Analysis runs ───────────────────────────────────────────────────────────
 
 export interface AnalysisRunInsert {

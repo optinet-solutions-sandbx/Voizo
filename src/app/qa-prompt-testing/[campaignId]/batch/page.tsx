@@ -28,7 +28,7 @@ interface BatchJob {
 }
 
 const ACTIVE = new Set(["validating", "in_progress", "finalizing"]);
-const POLL_MS = 30_000;
+const POLL_MS = 6_000;
 
 const fmt = (iso: string | null) => {
   if (!iso) return "";
@@ -114,7 +114,10 @@ export default function CampaignBatchPage() {
   // Auto-poll while any job is active.
   useEffect(() => {
     const active = jobs.some((j) => ACTIVE.has(j.status));
-    if (active && !pollRef.current) pollRef.current = setInterval(fetchJobs, POLL_MS);
+    if (active && !pollRef.current) {
+      fetchJobs(); // immediate refresh so progress starts updating without a manual reload
+      pollRef.current = setInterval(fetchJobs, POLL_MS);
+    }
     if (!active && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
@@ -298,7 +301,7 @@ export default function CampaignBatchPage() {
           onClick={fetchJobs}
           className="inline-flex items-center gap-1.5 text-xs text-[var(--text-3)] hover:text-[var(--text-1)] transition"
         >
-          <RefreshCw size={12} /> Refresh{hasActive ? " · auto every 30s" : ""}
+          <RefreshCw size={12} /> Refresh{hasActive ? " · auto every 6s" : ""}
         </button>
       </div>
 
