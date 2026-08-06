@@ -33,7 +33,7 @@ interface QaCampaign {
 
 const PAGE_SIZE = 10;
 const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
-  { key: "conversations", label: "Most reached" },
+  { key: "conversations", label: "Most conversations" },
   { key: "newest", label: "Newest" },
   { key: "calls", label: "Most calls" },
   { key: "region", label: "Region" },
@@ -175,7 +175,7 @@ export default function QaPromptTestingPage() {
                         )}
                       </div>
                       <p className="text-[10px] text-[var(--text-3)] font-mono mt-1">
-                        {c.conversationCount} reached · {c.totalCallCount} calls
+                        {c.conversationCount} conversations · {c.totalCallCount} calls
                       </p>
                     </div>
                     <ChevronRight size={16} className="text-[var(--text-3)] group-hover:text-[var(--text-1)] transition flex-shrink-0" />

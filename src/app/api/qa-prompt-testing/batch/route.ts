@@ -50,7 +50,7 @@ function jsonlLine(callId: string, transcript: string, promptContent: string): s
         { role: "system", content: promptContent },
         { role: "user", content: `Score this call transcript:\n\n${transcript}` },
       ],
-      max_completion_tokens: 2000,
+      max_completion_tokens: 4096, // matches the ai-chat-qa analyzer (gpt-5.4-mini, no temperature)
     },
   });
 }

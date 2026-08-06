@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
         { role: "system", content: promptContent },
         { role: "user", content: `Score this call transcript:\n\n${call.transcript}` },
       ],
-      max_completion_tokens: 2000,
+      max_completion_tokens: 4096, // matches the ai-chat-qa analyzer (gpt-5.4-mini, no temperature)
     };
     const completion = await openai.chat.completions.create(
       params as unknown as Parameters<typeof openai.chat.completions.create>[0],
