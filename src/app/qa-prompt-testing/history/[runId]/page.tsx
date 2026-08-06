@@ -4,12 +4,15 @@
 // the call it scored, and renders the same detail view seeded with the stored prompt
 // and analysis (transcript + audio + customer/campaign alongside). Re-running is still
 // available (it just overwrites nothing — a fresh run would go through Bulk analysis).
+//
+// `?from=<path>` sets where "Back" returns — so opening a result from a campaign's
+// Bulk-analysis page returns there (to pick another), not to the global History tab.
 
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import CallAnalysisDetail, { type QaCallClient, type QaPromptClient } from "@/components/qa/CallAnalysisDetail";
 
@@ -35,9 +38,19 @@ const fmtDateTime = (iso: string | null) => {
   }
 };
 
-export default function AnalysisRunPage() {
+// Only honor an internal QA-tool path (no open-redirect via a crafted ?from).
+function safeBack(from: string | null): { href: string; label: string } {
+  if (from && /^\/qa-prompt-testing(\/|$)/.test(from)) {
+    return { href: from, label: from.includes("/batch") ? "Bulk analysis" : "Back" };
+  }
+  return { href: "/qa-prompt-testing", label: "History" };
+}
+
+function AnalysisRunPageInner() {
   const params = useParams<{ runId: string }>();
   const runId = String(params?.runId ?? "");
+  const searchParams = useSearchParams();
+  const back = useMemo(() => safeBack(searchParams?.get("from") ?? null), [searchParams]);
 
   const [run, setRun] = useState<RunRow | null>(null);
   const [call, setCall] = useState<QaCallClient | null>(null);
@@ -88,8 +101,8 @@ export default function AnalysisRunPage() {
       <div className="flex flex-col items-center justify-center h-64 text-center p-6 gap-3">
         <h2 className="text-base font-semibold text-[var(--text-1)]">Analysis run not found</h2>
         <p className="text-sm text-[var(--text-3)]">It may have been deleted.</p>
-        <Link href="/qa-prompt-testing" className="text-sm text-primary hover:opacity-80 font-medium transition">
-          ← Back to QA Prompt Testing
+        <Link href={back.href} className="text-sm text-primary hover:opacity-80 font-medium transition">
+          ← Back
         </Link>
       </div>
     );
@@ -121,8 +134,8 @@ export default function AnalysisRunPage() {
             <span>Prompt: <span className="font-medium text-[var(--text-1)]">{run.promptTitle}</span></span>
           </>
         )}
-        <Link href="/qa-prompt-testing" className="ml-auto inline-flex items-center gap-1 text-primary hover:opacity-80 font-medium transition">
-          <ArrowLeft size={13} /> History
+        <Link href={back.href} className="ml-auto inline-flex items-center gap-1 text-primary hover:opacity-80 font-medium transition">
+          <ArrowLeft size={13} /> {back.label}
         </Link>
       </div>
 
@@ -136,5 +149,19 @@ export default function AnalysisRunPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function AnalysisRunPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-64">
+          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <AnalysisRunPageInner />
+    </Suspense>
   );
 }

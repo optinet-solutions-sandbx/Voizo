@@ -80,7 +80,20 @@ function digest(summary: string | null): { chip: string | null; text: string } {
   }
 }
 
-export default function AnalysisHistory({ campaignId }: { campaignId?: string }) {
+export default function AnalysisHistory({
+  campaignId,
+  showBatches = true,
+  fromHref,
+  refreshKey,
+}: {
+  campaignId?: string;
+  // Hide the Batches section (the batch page already shows the jobs above this list).
+  showBatches?: boolean;
+  // When set, result links carry ?from=<href> so the run detail can return here.
+  fromHref?: string;
+  // Bump to force a re-fetch (e.g. after an import on the batch page).
+  refreshKey?: number;
+}) {
   const [runs, setRuns] = useState<RunItem[] | null>(null);
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,18 +127,18 @@ export default function AnalysisHistory({ campaignId }: { campaignId?: string })
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([fetchRuns(), fetchBatches()]);
+      await Promise.all([fetchRuns(), showBatches ? fetchBatches() : Promise.resolve()]);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load history");
     } finally {
       setLoading(false);
     }
-  }, [fetchRuns, fetchBatches]);
+  }, [fetchRuns, fetchBatches, showBatches]);
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   // Live-poll batches while any is active (monitoring).
   useEffect(() => {
@@ -275,7 +288,7 @@ export default function AnalysisHistory({ campaignId }: { campaignId?: string })
                 return (
                   <Link
                     key={r.id}
-                    href={`/qa-prompt-testing/history/${r.id}`}
+                    href={fromHref ? `/qa-prompt-testing/history/${r.id}?from=${encodeURIComponent(fromHref)}` : `/qa-prompt-testing/history/${r.id}`}
                     className="flex items-center gap-4 px-4 sm:px-5 py-3.5 hover:bg-[var(--bg-hover)] transition group"
                   >
                     <div className="flex-1 min-w-0">

@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, Layers, RefreshCw } from "lucide-react";
+import AnalysisHistory from "@/components/qa/AnalysisHistory";
 
 interface QaPrompt { id: string; title: string; content: string; isActive: boolean }
 interface BatchJob {
@@ -62,6 +63,7 @@ export default function CampaignBatchPage() {
   const [submitMsg, setSubmitMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
   const [importingId, setImportingId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [resultsRefresh, setResultsRefresh] = useState(0); // bumped after an import so the results list below re-fetches
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchJobs = useCallback(async () => {
@@ -181,8 +183,9 @@ export default function CampaignBatchPage() {
       });
       const data = (await r.json()) as { imported?: number; failed?: number; error?: string };
       if (!r.ok) throw new Error(data.error ?? "Import failed");
-      setSubmitMsg({ kind: "ok", text: `Imported ${data.imported ?? 0} result(s)${data.failed ? `, ${data.failed} failed` : ""}. See Analysis History.` });
+      setSubmitMsg({ kind: "ok", text: `Imported ${data.imported ?? 0} result(s)${data.failed ? `, ${data.failed} failed` : ""}. See the analyzed conversations below.` });
       await fetchJobs();
+      setResultsRefresh((n) => n + 1);
     } catch (e) {
       setSubmitMsg({ kind: "err", text: e instanceof Error ? e.message : "Import failed" });
     } finally {
@@ -376,6 +379,18 @@ export default function CampaignBatchPage() {
           })}
         </div>
       )}
+
+      {/* Analyzed conversations for THIS campaign — review finished results while the
+          batch is still running or after it's done. Clicking one returns here (?from). */}
+      <div className="mt-2 grid gap-2">
+        <h2 className="text-sm font-semibold text-[var(--text-1)]">Analyzed conversations</h2>
+        <AnalysisHistory
+          campaignId={campaignId}
+          showBatches={false}
+          fromHref={`/qa-prompt-testing/${campaignId}/batch`}
+          refreshKey={resultsRefresh}
+        />
+      </div>
     </div>
   );
 }
