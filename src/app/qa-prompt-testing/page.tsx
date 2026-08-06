@@ -11,13 +11,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, Library, Search,
+  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, History, Library, Search,
 } from "lucide-react";
 import { campaignRegion } from "@/lib/campaignRegion";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
 import Pagination from "@/components/Pagination";
 import { SectionTick } from "../analytics/SectionIsland";
 import PromptLibrary from "@/components/qa/PromptLibrary";
+import AnalysisHistory from "@/components/qa/AnalysisHistory";
 
 interface QaCampaign {
   campaignId: string;
@@ -39,7 +40,7 @@ const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
 ];
 
 export default function QaPromptTestingPage() {
-  const [tab, setTab] = useState<"campaigns" | "library">("campaigns");
+  const [tab, setTab] = useState<"campaigns" | "library" | "history">("campaigns");
   const [campaigns, setCampaigns] = useState<QaCampaign[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,10 +114,15 @@ export default function QaPromptTestingPage() {
         <button onClick={() => setTab("library")} className={tabCls(tab === "library")}>
           <Library size={13} /> Prompt Library
         </button>
+        <button onClick={() => setTab("history")} className={tabCls(tab === "history")}>
+          <History size={13} /> Analysis History
+        </button>
       </div>
 
       {tab === "library" ? (
         <PromptLibrary />
+      ) : tab === "history" ? (
+        <AnalysisHistory />
       ) : loading ? (
         <div className="grid gap-2">
           {Array.from({ length: 6 }).map((_, i) => (

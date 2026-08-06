@@ -10,7 +10,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowDownWideNarrow, ArrowLeft, ChevronRight, Search, Target, Volume2, VolumeX } from "lucide-react";
+import { AlertCircle, ArrowDownWideNarrow, ArrowLeft, ChevronRight, Layers, Search, Target, Volume2, VolumeX } from "lucide-react";
 import Pagination from "@/components/Pagination";
 
 interface QueueItem {
@@ -135,11 +135,19 @@ export default function CampaignCallsPage() {
               {items ? `${items.length} conversation${items.length === 1 ? "" : "s"} · pick one to test a prompt` : ""}
             </p>
           </div>
-          {error && (
-            <span className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
-              <AlertCircle size={11} /> {error}
-            </span>
-          )}
+          <div className="flex items-center gap-3 shrink-0">
+            {error && (
+              <span className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
+                <AlertCircle size={11} /> {error}
+              </span>
+            )}
+            <Link
+              href={`/qa-prompt-testing/${campaignId}/batch`}
+              className="inline-flex items-center gap-1.5 bg-primary hover:opacity-90 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition whitespace-nowrap"
+            >
+              <Layers size={13} /> Bulk analysis
+            </Link>
+          </div>
         </div>
       </div>
 

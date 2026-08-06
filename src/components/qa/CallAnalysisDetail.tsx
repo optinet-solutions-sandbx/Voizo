@@ -171,7 +171,20 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
-export default function CallAnalysisDetail({ call, prompts }: { call: QaCallClient; prompts: QaPromptClient[] }) {
+export default function CallAnalysisDetail({
+  call,
+  prompts,
+  initialPromptContent,
+  initialPromptTitle,
+  initialAnalysis,
+}: {
+  call: QaCallClient;
+  prompts: QaPromptClient[];
+  // When replaying a stored Analysis-History run: seed the prompt + result.
+  initialPromptContent?: string;
+  initialPromptTitle?: string | null;
+  initialAnalysis?: string | null;
+}) {
   const [shownPanels, setShownPanels] = useState<Set<PanelId>>(new Set(["transcript", "prompt", "analysis"]));
   const [fullscreen, setFullscreen] = useState<PanelId | null>(null);
 
@@ -181,18 +194,25 @@ export default function CallAnalysisDetail({ call, prompts }: { call: QaCallClie
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
-  const [analysisText, setAnalysisText] = useState<string | null>(null);
+  const [analysisText, setAnalysisText] = useState<string | null>(initialAnalysis ?? null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Pre-load the active prompt (or the first) on mount / when the library changes.
+  // Seed the prompt: a replayed run uses its stored prompt; otherwise pre-load the
+  // library's active prompt (or the first).
   useEffect(() => {
+    if (initialPromptContent != null) {
+      setSelectedPromptId(null);
+      setPromptContent(initialPromptContent);
+      setPromptDirty(false);
+      return;
+    }
     if (prompts.length === 0) return;
     const active = prompts.find((p) => p.isActive) ?? prompts[0];
     setSelectedPromptId(active.id);
     setPromptContent(active.content);
     setPromptDirty(false);
-  }, [prompts]);
+  }, [prompts, initialPromptContent]);
 
   // Panel widths — reset to equal whenever the shown set changes.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -307,7 +327,7 @@ export default function CallAnalysisDetail({ call, prompts }: { call: QaCallClie
       ) : (
         <>
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[var(--text-2)]">{selectedPrompt?.title ?? "Custom"}</span>
+            <span className="text-xs font-medium text-[var(--text-2)]">{selectedPrompt?.title ?? initialPromptTitle ?? "Custom"}</span>
             {promptDirty && <span className="text-[10px] text-amber-400 font-medium">unsaved edits (used for this run)</span>}
           </div>
           <textarea
