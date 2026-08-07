@@ -57,6 +57,10 @@ export interface DashCampaignRow {
   created_at?: string | null;
   end_at?: string | null;
   timezone?: string | null; // IANA tz for local-time heatmap bucketing (falls back to UTC when absent)
+  // Campaign Performance filters (Val 2026-08-07): script + segment identity.
+  script_id?: string | null;
+  script_name?: string | null;
+  segment_id?: string | null;
 }
 export interface DashSmsRow {
   campaign_id: string;
@@ -756,6 +760,10 @@ export interface CampaignTableRow {
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
+  // Script/segment identity for the section filters + mass export (Val 2026-08-07).
+  scriptId: string | null;
+  scriptName: string | null;
+  segmentId: string | null;
   calls: number;
   connected: number;
   terminal: number;
@@ -819,6 +827,9 @@ export function computeCampaignTable(
         voiceId: c.voice_id ?? null,
         agentLabel: c.vapi_assistant_name ?? null,
         baseAssistantId: c.base_assistant_id ?? null,
+        scriptId: c.script_id ?? null,
+        scriptName: c.script_name ?? null,
+        segmentId: c.segment_id ?? null,
         calls: r?.calls ?? 0,
         connected: r?.connected ?? 0,
         terminal: r?.terminal ?? 0,
@@ -988,6 +999,9 @@ export function computeCampaignTableFromRollup(
         voiceId: c.voice_id ?? null,
         agentLabel: c.vapi_assistant_name ?? null,
         baseAssistantId: c.base_assistant_id ?? null,
+        scriptId: c.script_id ?? null,
+        scriptName: c.script_name ?? null,
+        segmentId: c.segment_id ?? null,
         calls: a?.attempts ?? 0,
         connected,
         terminal,
@@ -1891,6 +1905,31 @@ function smsBreakdownFromRollup(
   // callBreakdownFromRollup above).
   b.earlyHangup += Math.max(0, b.reached - b.positive - b.neutral - b.declined - b.earlyHangup);
   return b;
+}
+
+/**
+ * Windowed 3-card summary over a SET of campaigns, summed from the same
+ * day-grain rollup rows the Campaign Performance table is built from — so the
+ * section's summary block always equals the sum of the rows it sits above
+ * (Val 2026-08-07: "summary reflects totals across all campaigns matching the
+ * filters"). Bounds are inclusive ms timestamps (null = open side); rollup rows
+ * are day-grain, judged by their UTC day start — matching how the table's own
+ * per-row perf blocks window. Same lean semantics + agent_timeout caveat as
+ * the table (see the rollup-DDL notes above). Pure; client-safe.
+ */
+export function summarizeRollupWindow(
+  callRollup: CallRollupRow[],
+  smsRollup: SmsRollupRow[],
+  campaignIds: ReadonlySet<string>,
+  fromMs: number | null,
+  toMs: number | null,
+): TodayPerfDay {
+  const lo = fromMs ?? Number.NEGATIVE_INFINITY;
+  const hi = toMs === null ? Number.POSITIVE_INFINITY : toMs + 1; // breakdown fns treat the end as exclusive
+  return assembleWindowPerf(
+    callBreakdownFromRollup(callRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi, 0),
+    smsBreakdownFromRollup(smsRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi, 0),
+  );
 }
 
 /** RateRow from rollup rows in [startMs, endMs) — mirrors accumulate()+finalizeRate(). */

@@ -11,17 +11,28 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
-import type { TodayPerfDay } from "@/lib/dashboardAnalytics";
-import { formatCampaign, distinctBrandLabels } from "@/lib/campaignDisplay";
+import { ArrowRight, Download, Search, X } from "lucide-react";
+import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type SmsRollupRow } from "@/lib/dashboardAnalytics";
+import { formatCampaign, distinctBrandLabels, brandLabel } from "@/lib/campaignDisplay";
+import { voiceName } from "@/lib/voiceOptions";
+import { triggerDownload } from "@/lib/download";
 import PromptModal from "./PromptModal";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
+import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { SortControl, type SortKey } from "./SortControl";
 import { useExpandSlices } from "./useExpandSlices";
+import { useBaseAgentNames } from "./useBaseAgentNames";
 import { CampaignRowsSkeleton } from "./loadingSkeletons";
+import { DISPO_LABEL } from "./recordsDisplay";
 import WidgetCard from "./WidgetCard";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
+import CampaignSummary from "./CampaignSummary";
+import {
+  agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, scriptKeyOf,
+  NO_CAMPAIGN_FILTERS, NO_SCRIPT, type CampaignFilterState,
+} from "./campaignFilters";
+import { buildCampaignPerfCsv } from "./campaignPerfCsv";
 
 interface Row {
   id: string;
@@ -33,6 +44,10 @@ interface Row {
   voiceId: string | null;
   agentLabel: string | null;
   baseAssistantId: string | null;
+  // Optional: session snapshots saved before 2026-08-07 predate these fields.
+  scriptId?: string | null;
+  scriptName?: string | null;
+  segmentId?: string | null;
   calls: number;
   connected: number;
   terminal: number;
@@ -51,6 +66,26 @@ interface Resp {
   from: string;
   to: string;
   rows: Row[];
+  /** Day-grain rollup rows (2026-08-07) — the summary block + mass export sum
+   *  these client-side per the active filters. Optional: pre-deploy snapshots. */
+  rollup?: { calls: CallRollupRow[]; sms: SmsRollupRow[] };
+}
+
+/** One phone-lookup match from /api/dashboard/campaigns/phone-lookup. */
+interface PhoneMatch {
+  numberId: string;
+  campaignId: string;
+  phone: string;
+  displayName: string | null;
+  outcome: string | null;
+  attemptCount: number;
+  lastAttemptedAt: string | null;
+  smsSent: boolean;
+}
+interface PhoneLookup {
+  query: string;
+  truncated: boolean;
+  matches: PhoneMatch[];
 }
 
 const STATUS_ORDER: DisplayStatus[] = ["running", "paused", "finished"];
@@ -128,6 +163,49 @@ export default function CampaignTable() {
   const { expanded, slices, toggleExpand, pickMetric, clearSlice } = useExpandSlices();
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
   const [page, setPage] = useState(1);
+  // Section filters (Val 2026-08-07): country / brand / agent / script + player-phone lookup.
+  const [filters, setFilters] = useState<CampaignFilterState>(NO_CAMPAIGN_FILTERS);
+  const [phone, setPhone] = useState("");
+  const [phoneRes, setPhoneRes] = useState<PhoneLookup | null>(null);
+  const [phoneErr, setPhoneErr] = useState<string | null>(null);
+  const [phoneLoading, setPhoneLoading] = useState(false);
+  const baseAgentName = useBaseAgentNames();
+
+  const setFilter = (patch: Partial<CampaignFilterState>) => {
+    setPage(1);
+    setFilters((prev) => ({ ...prev, ...patch }));
+  };
+
+  // Player-phone lookup — debounced; needs ≥4 digits (the API refuses less).
+  useEffect(() => {
+    const needle = phone.replace(/[^\d+]/g, "");
+    if (needle.length < 4) {
+      setPhoneRes(null);
+      setPhoneErr(phone.trim() ? "Enter at least 4 digits." : null);
+      return;
+    }
+    let stale = false;
+    setPhoneLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/dashboard/campaigns/phone-lookup?phone=${encodeURIComponent(needle)}`, { cache: "no-store" });
+        const json = (await res.json()) as PhoneLookup & { error?: string };
+        if (stale) return;
+        if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+        setPhoneRes(json);
+        setPhoneErr(null);
+        setPage(1);
+      } catch (e) {
+        if (!stale) {
+          setPhoneRes(null);
+          setPhoneErr(e instanceof Error ? e.message : "Lookup failed");
+        }
+      } finally {
+        if (!stale) setPhoneLoading(false);
+      }
+    }, 400);
+    return () => { stale = true; clearTimeout(t); };
+  }, [phone]);
 
   // The server returns ALL live campaigns with LIFETIME metrics regardless of from/to (it does not
   // window them). So we fetch ONCE and let the date range filter the list client-side (see `visible`
@@ -176,13 +254,115 @@ export default function CampaignTable() {
   // Date range (client-side): keep campaigns whose activity span overlaps the picked [from, to].
   const fromMs = parseDayMs(from, false);
   const toMs = parseDayMs(to, true);
+  // Phone lookup narrows to the campaigns holding the number (Val's "filter +
+  // phone number interaction": records for that number WITHIN the filtered set).
+  const phoneCampaignIds = useMemo(
+    () => (phoneRes ? new Set(phoneRes.matches.map((m) => m.campaignId)) : null),
+    [phoneRes],
+  );
   const visible = rows
-    .filter((r) => !hidden.has(r.displayStatus) && activeInRange(r, fromMs, toMs))
+    .filter(
+      (r) =>
+        !hidden.has(r.displayStatus) &&
+        activeInRange(r, fromMs, toMs) &&
+        matchesCampaignFilters(r, filters) &&
+        (phoneCampaignIds === null || phoneCampaignIds.has(r.id)),
+    )
     .sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
 
   // Brands present in the CURRENTLY-LISTED rows (post status/date filter) — the
   // scope line must describe what's on screen, not everything in the database.
   const visibleBrands = distinctBrandLabels(visible.map((r) => r.cioWorkspace));
+
+  // Agent chip identity — the SAME resolution CampaignRow renders (base agent
+  // name, falling back to the voice), so the dropdown can never disagree with
+  // the chips in the rows.
+  const agentLabelOf = useCallback(
+    (r: Pick<Row, "baseAssistantId" | "voiceId" | "agentLabel">): string =>
+      baseAgentName(r.baseAssistantId) ?? voiceName(r.voiceId, { short: true }) ?? r.agentLabel ?? "Unknown agent",
+    [baseAgentName],
+  );
+
+  // Dropdown options derive from status+date-scoped rows (not the fully
+  // filtered set — a picked option must not vanish from its own dropdown).
+  const optionRows = useMemo(
+    () => rows.filter((r) => !hidden.has(r.displayStatus) && activeInRange(r, fromMs, toMs)),
+    [rows, hidden, fromMs, toMs],
+  );
+  const countryOptions: DropdownOption[] = useMemo(() => {
+    const uniq = [...new Set(optionRows.map((r) => r.country).filter(Boolean))].sort();
+    return [{ value: "", label: "All countries" }, ...uniq.map((c) => ({ value: c, label: c }))];
+  }, [optionRows]);
+  const agentOptions: DropdownOption[] = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const r of optionRows) {
+      const key = agentKeyOf(r);
+      if (key && !byKey.has(key)) byKey.set(key, agentLabelOf(r));
+    }
+    return [
+      { value: "", label: "All voice agents" },
+      ...[...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label })),
+    ];
+  }, [optionRows, agentLabelOf]);
+  const scriptOptions: DropdownOption[] = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const r of optionRows) {
+      const key = scriptKeyOf(r);
+      if (!byKey.has(key)) byKey.set(key, key === NO_SCRIPT ? "No script" : (r.scriptName ?? "Unnamed script"));
+    }
+    return [
+      { value: "", label: "All scripts" },
+      ...[...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label })),
+    ];
+  }, [optionRows]);
+  const brandChoices = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const r of optionRows) {
+      const key = brandKeyOf(r);
+      if (!byKey.has(key)) byKey.set(key, brandLabel(r.cioWorkspace));
+    }
+    return [...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [optionRows]);
+  const toggleBrand = (key: string) =>
+    setFilter({
+      brands: filters.brands.includes(key) ? filters.brands.filter((b) => b !== key) : [...filters.brands, key],
+    });
+
+  // Summary + export: windowed sums over the SAME rollup rows the table rows
+  // were built from, scoped to exactly the ids on screen — so the summary block
+  // always equals the sum of the listed rows (Val 2026-08-07).
+  const rollup = data?.rollup ?? null;
+  const summaryPerf = useMemo(
+    () => (rollup ? summarizeRollupWindow(rollup.calls, rollup.sms, new Set(visible.map((r) => r.id)), fromMs, toMs) : null),
+    // visible is derived (not state) — key the memo on its identity inputs instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rollup, rows, hidden, fromMs, toMs, filters, phoneCampaignIds],
+  );
+  const scopeLabel = `${visible.length} ${visible.length === 1 ? "campaign" : "campaigns"} · ${
+    from || to ? "metrics in the picked date range" : "lifetime metrics"
+  }`;
+
+  const exportCsv = () => {
+    if (!rollup || visible.length === 0) return;
+    const csv = buildCampaignPerfCsv({
+      rows: visible,
+      callRollup: rollup.calls,
+      smsRollup: rollup.sms,
+      fromMs,
+      toMs,
+      brandLabelOf: (ws) => brandLabel(ws),
+      agentLabelOf: (r) => agentLabelOf(r as unknown as Row),
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8" }), `voizo-campaign-performance-${stamp}.csv`);
+  };
+
+  // Phone strip: matches inside the visible set (with campaign names), and a
+  // count of matches the current filters exclude.
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const visibleIds = useMemo(() => new Set(visible.map((r) => r.id)), [visible]);
+  const phoneMatchesShown = phoneRes ? phoneRes.matches.filter((m) => visibleIds.has(m.campaignId)) : [];
+  const phoneMatchesHidden = phoneRes ? phoneRes.matches.length - phoneMatchesShown.length : 0;
 
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -194,12 +374,25 @@ export default function CampaignTable() {
       title="Campaign Performance"
       context="status, run window & full call records · its own date range"
       actions={
-        <SortControl
-          sort={sort}
-          setSort={(s) => { setSort(s); setPage(1); }}
-          keys={["newest", "calls", "reached", "sms"]}
-          labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
-        />
+        <div className="flex items-center gap-2">
+          {/* Mass export (Val 2026-08-07): one CSV, one row per campaign
+              currently matching the filters, windowed metrics + TOTAL row. */}
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={!rollup || visible.length === 0}
+            title={!rollup ? "Loading…" : `Export ${visible.length} campaigns as CSV (opens in Excel)`}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            <Download size={13} /> Export CSV
+          </button>
+          <SortControl
+            sort={sort}
+            setSort={(s) => { setSort(s); setPage(1); }}
+            keys={["newest", "calls", "reached", "sms"]}
+            labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
+          />
+        </div>
       }
       bodyClassName="p-0"
       footer={
@@ -249,6 +442,103 @@ export default function CampaignTable() {
         {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
+
+      {/* Section filters (Val 2026-08-07): country · brand · voice agent · script · player phone. */}
+      <div className="flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b border-[var(--border)]">
+        <StyledSelect size="sm" options={countryOptions} value={filters.country} onChange={(v) => setFilter({ country: v })} placeholder="All countries" />
+        <StyledSelect size="sm" options={agentOptions} value={filters.agent} onChange={(v) => setFilter({ agent: v })} placeholder="All voice agents" />
+        <StyledSelect size="sm" options={scriptOptions} value={filters.script} onChange={(v) => setFilter({ script: v })} placeholder="All scripts" />
+        {brandChoices.length > 1 && (
+          <>
+            <span className="w-px h-5 bg-[var(--border)] mx-1" />
+            {brandChoices.map(([key, label]) => {
+              const on = filters.brands.includes(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => toggleBrand(key)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                    on
+                      ? "bg-blue-500/15 text-blue-400 border-blue-500/40"
+                      : "bg-transparent text-[var(--text-3)] border-[var(--border)] hover:text-[var(--text-2)]"
+                  }`}
+                  title={on ? `Showing ${label} — click to remove` : `Only show ${label} campaigns`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </>
+        )}
+        <span className="w-px h-5 bg-[var(--border)] mx-1" />
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
+          <input
+            type="text"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Player number…"
+            aria-label="Search by player phone number"
+            className="pl-8 pr-7 py-1.5 w-[180px] rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+          />
+          {phone && (
+            <button type="button" aria-label="Clear phone search" onClick={() => setPhone("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-1)]">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        {phoneLoading && <span className="text-[11px] text-[var(--text-3)]">Searching…</span>}
+        {phoneErr && <span className="text-[11px] text-amber-400">{phoneErr}</span>}
+        {(anyCampaignFilterActive(filters) || phone) && (
+          <button
+            type="button"
+            onClick={() => { setFilters(NO_CAMPAIGN_FILTERS); setPhone(""); setPage(1); }}
+            className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Player-number results — records for the number WITHIN the filtered campaigns (Val 2026-08-07). */}
+      {phoneRes && (
+        <div className="px-3.5 py-2.5 border-b border-[var(--border)] flex flex-col gap-1.5">
+          <div className="text-[11px] text-[var(--text-3)]">
+            {phoneMatchesShown.length === 0
+              ? `No campaigns in the current filters hold a number matching “${phoneRes.query}”.`
+              : `Number found in ${phoneMatchesShown.length} ${phoneMatchesShown.length === 1 ? "campaign" : "campaigns"}:`}
+            {phoneMatchesHidden > 0 && (
+              <span> ({phoneMatchesHidden} more {phoneMatchesHidden === 1 ? "match is" : "matches are"} outside the current filters — clear filters to see them)</span>
+            )}
+            {phoneRes.truncated && <span className="text-amber-400"> · showing the first 500 matches, refine the number</span>}
+          </div>
+          {phoneMatchesShown.slice(0, 12).map((m) => {
+            const camp = rowById.get(m.campaignId);
+            return (
+              <div key={m.numberId} className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="font-mono text-[var(--text-1)]">{m.phone}</span>
+                {m.displayName && <span className="text-[var(--text-2)]">{m.displayName}</span>}
+                <span className="text-[var(--text-3)]">in</span>
+                <span className="text-[var(--text-2)]">{camp ? formatCampaign(camp.name).display : m.campaignId}</span>
+                <span className="px-2 py-0.5 rounded-full border border-[var(--border)] text-[11px] text-[var(--text-2)]">
+                  {DISPO_LABEL[deriveRecordStatus(m.outcome, false)]}
+                </span>
+                <span className="text-[var(--text-3)]">
+                  {m.attemptCount === 0 ? "never called" : `${m.attemptCount} ${m.attemptCount === 1 ? "call attempt" : "call attempts"}`}
+                  {m.smsSent ? " · SMS sent" : ""}
+                </span>
+              </div>
+            );
+          })}
+          {phoneMatchesShown.length > 12 && (
+            <div className="text-[11px] text-[var(--text-3)]">…and {phoneMatchesShown.length - 12} more in these campaigns.</div>
+          )}
+        </div>
+      )}
+
+      {/* Filter-scoped summary (Val 2026-08-07) — totals for exactly the campaigns listed below. */}
+      {summaryPerf && <CampaignSummary perf={summaryPerf} scopeLabel={scopeLabel} />}
 
       {/* Rows (shared camp-row, same as Today's campaigns). WidgetCard is the frame. */}
       <div className="overflow-x-auto">

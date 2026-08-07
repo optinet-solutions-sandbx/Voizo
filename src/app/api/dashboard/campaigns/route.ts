@@ -79,7 +79,8 @@ export async function GET(request: NextRequest) {
       supabaseAdmin,
       "campaigns_v2",
       // cio_workspace: the per-row brand chip (VOZ-216).
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
+      // script_id/script_name/segment_id: the section filters + mass export (Val 2026-08-07).
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at, script_id, script_name, segment_id",
       "id",
     ),
     // Players (full roster count) is campaign-LIFETIME. Counted in SQL: paging the
@@ -111,9 +112,20 @@ export async function GET(request: NextRequest) {
     playersByCampaign,
   );
 
+  // Ghost/test campaigns never surface in rows; strip their rollup rows too so
+  // the client-side summary can't count what the table refuses to list.
+  const liveIds = new Set(rows.map((r) => r.id));
+  const callRollup = ((callRollupRes.data ?? []) as CallRollupRow[]).filter((r) => liveIds.has(r.campaign_id));
+  const smsRollup = ((smsRollupRes.data ?? []) as SmsRollupRow[]).filter((r) => liveIds.has(r.campaign_id));
+
   return NextResponse.json({
     from: new Date(fromMs).toISOString(),
     to: new Date(toMs).toISOString(),
     rows,
+    // Day-grain rollup rows (already fetched for the table sums above — this
+    // reuses, not re-queries). The client windows/sums these per the ACTIVE
+    // filters for the section summary block + mass export (Val 2026-08-07),
+    // so summary === sum of listed rows by construction.
+    rollup: { calls: callRollup, sms: smsRollup },
   });
 }

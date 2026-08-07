@@ -186,6 +186,33 @@ describe("smsWindowBreakdown + callWindowBreakdown — no hidden reached buckets
     expect(deriveAttemptTag(calls[4], false)).toBe("agent_timeout");
   });
 
+  it("summarizeRollupWindow scopes by id set and window, partitions sum (Val 2026-08-07 summary block)", async () => {
+    const { summarizeRollupWindow } = await import("./dashboardAnalytics");
+    const cr = (campaign_id: string, day_utc: string, attempts: number) => ({
+      campaign_id, day_utc, attempts, terminal: attempts, connected: 2, voicemail: 1, reach: 1,
+      positive: 1, declined: 0, early_hangup_lean: 0, neutral_lean: 0,
+      successful: 1, voicemail_evaluated: 2, last_call_at: null,
+    });
+    const sr = (campaign_id: string, day_utc: string, sent: number) => ({
+      campaign_id, day_utc, sent, reached: sent, voicemail: 0, unreachable: 0,
+      positive: sent, neutral: 0, declined: 0,
+    });
+    const callRows = [cr("a", "2026-08-01", 5), cr("a", "2026-08-02", 7), cr("b", "2026-08-01", 11)];
+    const smsRows = [sr("a", "2026-08-01", 2), sr("b", "2026-08-01", 3)];
+
+    // Scope: only campaign a, only Aug 2.
+    const one = summarizeRollupWindow(callRows, smsRows, new Set(["a"]), Date.UTC(2026, 7, 2), Date.UTC(2026, 7, 2) + 86_399_999);
+    expect(one.callAttempts.total).toBe(7);
+    expect(one.sms.total).toBe(0);
+
+    // Scope: both campaigns, open window — totals sum; Reached partition sums to reach.
+    const all = summarizeRollupWindow(callRows, smsRows, new Set(["a", "b"]), null, null);
+    expect(all.callAttempts.total).toBe(23);
+    expect(all.sms.total).toBe(5);
+    const named = all.reached.rows.reduce((s, r) => s + r.count, 0);
+    expect(named).toBe(all.reached.total);
+  });
+
   it("Today assembly exposes the new sub-rows on the SMS card", () => {
     const campaigns = [camp("x", { status: "running" })];
     const snap = computeToday(calls, campaigns, [s("e"), s("a")], T + 12 * 3_600_000, []);
