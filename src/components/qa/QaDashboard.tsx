@@ -45,9 +45,10 @@ const RC_COLOR: Record<string, string> = {
 };
 const n = (o: Record<string, number>, k: string) => o[k] ?? 0;
 
-// CSV column vocabulary (matches the on-screen breakdown).
+// CSV + per-campaign-table column vocabulary (matches the on-screen breakdown).
 const CA_COLS = ["Reached", "Voicemail", "Unreachable"]; // call_attempt
 const RC_COLS = ["Positive", "Neutral", "Declined", "Early Hang-up", "Agent Timeout"]; // reached_category
+const CA_COL_CLS: Record<string, string> = { Reached: "text-emerald-400", Voicemail: "text-[var(--text-2)]", Unreachable: "text-[var(--text-2)]" };
 
 // A viewer-local YYYY-MM-DD, offset by `deltaDays` — the reference for the Today/Yesterday buttons.
 function localDateStr(deltaDays = 0): string {
@@ -353,49 +354,63 @@ export default function QaDashboard() {
             )}
           </WidgetCard>
 
-          {/* Per-campaign table — clickable cells */}
+          {/* Per-campaign table — clickable cells. Call-attempt totals + the full
+              reached-outcome breakdown (Positive … Agent Timeout), each cell drills down. */}
           <WidgetCard title="By campaign" icon={<ClipboardList size={14} className="text-blue-400" />} context={`${data.campaigns.length} campaign${data.campaigns.length === 1 ? "" : "s"}`} bodyClassName="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-                    <th className="text-left font-semibold px-4 py-2">Campaign</th>
+                    <th className="text-left font-semibold px-4 py-2 sticky left-0 bg-[var(--bg-card)]">Campaign</th>
                     <th className="text-right font-semibold px-3 py-2">Analyzed</th>
-                    <th className="text-right font-semibold px-3 py-2">Reached</th>
-                    <th className="text-right font-semibold px-3 py-2">Voicemail</th>
-                    <th className="text-right font-semibold px-3 py-2" style={{ color: "#c264d6" }}>Agent Timeout</th>
+                    {CA_COLS.map((k) => (
+                      <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap">{k}</th>
+                    ))}
+                    <th className="px-1 py-2 text-[var(--text-4)]">·</th>
+                    {RC_COLS.map((k) => (
+                      <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap" style={{ color: RC_COLOR[k] }}>{k}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border)]">
                   {pageCampaigns.map((c) => {
-                    const at = n(c.reachedCategory, "Agent Timeout");
+                    const name = c.campaignName ?? c.campaignId.slice(0, 8);
                     return (
                       <tr key={c.campaignId} className="hover:bg-[var(--bg-hover)] transition">
-                        <td className="px-4 py-2 max-w-[380px] truncate">
-                          <button onClick={() => open({ title: c.campaignName ?? "Campaign", campaignId: c.campaignId })} className={`text-[var(--text-1)] ${cellBtn}`}>
-                            {c.campaignName ?? c.campaignId.slice(0, 8)}
+                        <td className="px-4 py-2 max-w-[280px] truncate sticky left-0 bg-[var(--bg-card)]">
+                          <button onClick={() => open({ title: name, campaignId: c.campaignId })} className={`text-[var(--text-1)] ${cellBtn}`}>
+                            {name}
                           </button>
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-[var(--text-1)]">{c.total.toLocaleString()}</td>
-                        <td className="px-3 py-2 text-right font-mono">
-                          <button onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Reached`, campaignId: c.campaignId, callAttempt: "Reached" })} className={`text-emerald-400 ${cellBtn}`}>
-                            {n(c.callAttempt, "Reached").toLocaleString()}
-                          </button>
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono">
-                          <button onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Voicemail`, campaignId: c.campaignId, callAttempt: "Voicemail" })} className={`text-[var(--text-2)] ${cellBtn}`}>
-                            {n(c.callAttempt, "Voicemail").toLocaleString()}
-                          </button>
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono">
-                          <button
-                            onClick={() => open({ title: `${c.campaignName ?? "Campaign"} · Agent Timeout`, campaignId: c.campaignId, reachedCategory: "Agent Timeout" })}
-                            className={cellBtn}
-                            style={{ color: at > 0 ? "#c264d6" : "var(--text-3)" }}
-                          >
-                            {at.toLocaleString()}
-                          </button>
-                        </td>
+                        {CA_COLS.map((k) => {
+                          const v = n(c.callAttempt, k);
+                          return (
+                            <td key={k} className="px-3 py-2 text-right font-mono">
+                              <button
+                                onClick={() => open({ title: `${name} · ${k}`, campaignId: c.campaignId, callAttempt: k })}
+                                className={`${cellBtn} ${v > 0 ? CA_COL_CLS[k] : "text-[var(--text-3)]"}`}
+                              >
+                                {v.toLocaleString()}
+                              </button>
+                            </td>
+                          );
+                        })}
+                        <td className="px-1 text-[var(--border-2)]">·</td>
+                        {RC_COLS.map((k) => {
+                          const v = n(c.reachedCategory, k);
+                          return (
+                            <td key={k} className="px-3 py-2 text-right font-mono">
+                              <button
+                                onClick={() => open({ title: `${name} · ${k}`, campaignId: c.campaignId, reachedCategory: k })}
+                                className={cellBtn}
+                                style={{ color: v > 0 ? RC_COLOR[k] : "var(--text-3)" }}
+                              >
+                                {v.toLocaleString()}
+                              </button>
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
