@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
 import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { deriveAttemptTag } from "@/lib/dashboardAnalytics";
 import { resolveCallCosts, type VapiCostPayload } from "@/lib/callCost";
 
 export async function processEndOfCall(message: Record<string, unknown>): Promise<NextResponse> {
@@ -350,6 +351,16 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
   }
 
   // ── Update calls_v2 with transcript, goal_reached, recording_url + observability signals ──
+  // Hoisted (2026-08-07) so the optin_reached_only attempt-tag below reads the
+  // SAME values this update persists — dispatch classifies exactly what the
+  // dashboard will later read back.
+  const endedReason = (message.endedReason ?? vapiCall?.endedReason ?? null) as string | null;
+  const durationSeconds =
+    typeof callRow.duration_seconds === "number"
+      ? callRow.duration_seconds
+      : typeof message.durationSeconds === "number"
+        ? (message.durationSeconds as number)
+        : null;
   await supabaseAdmin
     .from("calls_v2")
     .update({
@@ -366,7 +377,7 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
       // `vapiCall.endedReason` (= message.call.endedReason) yielded null for 115/115 real calls
       // while the Vapi API had a real reason (assistant-ended-call/silence-timed-out/…). Read
       // `message.endedReason` first; keep `vapiCall.endedReason` as a fallback for the alt shape.
-      ended_reason: (message.endedReason ?? vapiCall?.endedReason ?? null) as string | null,
+      ended_reason: endedReason,
       voicemail: voicemailDetected,
       // Budget guardrail (2026-08-04): per-call cost ingestion. Same message-
       // level-first read as endedReason/artifact above (report fields live as
@@ -380,13 +391,7 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
           cost: (message.cost ?? vapiCall?.cost) as number | null | undefined,
           costBreakdown: (message.costBreakdown ?? vapiCall?.costBreakdown) as VapiCostPayload["costBreakdown"],
         };
-        const dur =
-          typeof callRow.duration_seconds === "number"
-            ? callRow.duration_seconds
-            : typeof message.durationSeconds === "number"
-              ? (message.durationSeconds as number)
-              : null;
-        const costs = resolveCallCosts(costPayload, dur);
+        const costs = resolveCallCosts(costPayload, durationSeconds);
         return { vapi_cost_usd: costs.vapiCostUsd, openai_cost_usd: costs.openaiCostUsd };
       })(),
     })
@@ -437,12 +442,36 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
     }
   }
   const smsMode: SmsConsentMode = resolveSmsConsentMode(campaign?.sms_consent_mode);
+  // optin_reached_only trigger (Val 2026-08-07): classify THIS call with the
+  // dashboard's own attempt tagger, from the same values persisted to calls_v2
+  // above — so dispatch and the SMS card's sub-rows share one classifier and
+  // no text can ever land under a bucket the mode refuses (the Early hang-up
+  // filter invariant). status "completed": deriveAttemptTag only needs it to
+  // clear the isConnected gate, and an end-of-call report is by definition a
+  // connected call. declinedContact=false: the contact-level decline outcome is
+  // written after dispatch — and this mode texts decliners anyway (literal Val).
+  const attemptTag = deriveAttemptTag(
+    {
+      id: (callRow.id as string | null) ?? null,
+      campaign_id: (callRow.campaign_id as string | null) ?? "",
+      campaign_number_id: (callRow.campaign_number_id as string | null) ?? null,
+      status: "completed",
+      goal_reached: goalReached,
+      voicemail: voicemailDetected,
+      ended_reason: endedReason,
+      duration_seconds: durationSeconds,
+      transcript: transcript ?? null,
+      created_at: (callRow.created_at as string | null) ?? null,
+    },
+    false,
+  );
   const decision = decideSmsDispatch({
     mode: smsMode,
     goalReached,
     nativeSuccess,
     voicemailDetected,
     optedOut,
+    attemptTag,
     hasVerbalConsent: transcript ? hasGenuineCustomerConsent(transcript) : false,
     agentAnnouncedSms: transcript ? agentMentionedSms(transcript) : false,
     customerDeclinedSms: transcript ? customerDeclinedSms(transcript) : false,

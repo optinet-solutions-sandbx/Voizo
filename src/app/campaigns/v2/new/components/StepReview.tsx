@@ -362,11 +362,13 @@ export default function StepReview({ state, dispatch, dialIdentities }: Props) {
               <ReviewRow
                 label="Send timing"
                 value={
-                  state.smsConsentMode === "optin_any_pickup"
-                    ? "To anyone who picks up (list opted in at signup)"
-                    : state.smsConsentMode === "registered_optin"
-                      ? "To everyone reached (list opted in at signup)"
-                      : "Only after the customer says yes on the call"
+                  state.smsConsentMode === "optin_reached_only"
+                    ? "To everyone we talk to. Never answering machines."
+                    : state.smsConsentMode === "optin_any_pickup"
+                      ? "To anyone who picks up, answering machines included"
+                      : state.smsConsentMode === "registered_optin"
+                        ? "To everyone we reach, answering machines included"
+                        : "Only if they say yes on the call"
                 }
               />
               <ReviewRow

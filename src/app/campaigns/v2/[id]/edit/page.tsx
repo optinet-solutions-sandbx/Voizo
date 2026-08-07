@@ -27,7 +27,7 @@ import { resolveCallDelay } from "@/lib/campaignV2Shared";
 import { resolveSegmentPresence } from "@/lib/segmentPresence";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "../../new/wizardState";
-import { resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
+import { modeHasLastResort, resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
 
 type Row = Record<string, unknown>;
 
@@ -228,9 +228,9 @@ export default function EditAlwaysOnCampaignPage() {
       dailyCap: capNumber,
       goalTarget: goalNumber,
       ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
-      // Both opt-in modes own a last-resort template (VOZ-245); the resolver keeps
-      // NULL/unknown on the verbal_yes side rather than a bare !== comparison.
-      ...(resolveSmsConsentMode(row.sms_consent_mode) !== "verbal_yes"
+      // LAST_RESORT_MODES own a last-resort template (VOZ-245); verbal_yes and
+      // optin_reached_only (never texts unreached — Val 2026-08-07) never write it.
+      ...(modeHasLastResort(resolveSmsConsentMode(row.sms_consent_mode))
         ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
         : {}),
       ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
@@ -448,7 +448,7 @@ export default function EditAlwaysOnCampaignPage() {
               />
             </div>
 
-            {resolveSmsConsentMode(row.sms_consent_mode) !== "verbal_yes" && (
+            {modeHasLastResort(resolveSmsConsentMode(row.sms_consent_mode)) && (
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="edit-lr" className="text-xs font-medium text-[var(--text-2)]">
                   Last-resort text

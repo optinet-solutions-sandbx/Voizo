@@ -81,9 +81,9 @@ describe("decideSmsDispatch — optin_any_pickup (VOZ-245)", () => {
 });
 
 describe("parseSmsConsentMode — STRICT, for writes (VOZ-245)", () => {
-  it("accepts exactly the three real values", () => {
+  it("accepts exactly the four real values", () => {
     for (const m of SMS_CONSENT_MODES) expect(parseSmsConsentMode(m)).toBe(m);
-    expect(SMS_CONSENT_MODES).toHaveLength(3);
+    expect(SMS_CONSENT_MODES).toHaveLength(4); // + optin_reached_only (Val 2026-08-07)
   });
 
   it("returns null on anything else so the API 400s instead of coercing", () => {
@@ -247,5 +247,89 @@ describe("decideLastResortSend — the one exhaustion text (VOZ-132 §8)", () =>
     expect(decideLastResortSend({ ...ok, outcome: "sent_sms" })).toBe(false);
     expect(decideLastResortSend({ ...ok, campaignStatus: "completed" })).toBe(false);
     expect(decideLastResortSend({ ...ok, campaignStatus: "inactive" })).toBe(false);
+  });
+});
+
+// optin_reached_only (Val, 2026-08-07 — relayed by Jasiel): text everyone we
+// GENUINELY talk to — even an on-call SMS refusal does not veto (Val's literal
+// rule, Jasiel confirmed 2026-08-07 over the promote-emphatic alternative).
+// Never text: voicemail, early hang-up (dead-air pickup), agent timeout
+// (pipeline died — we owe them a redial, not a text), unreached (and therefore
+// no last-resort either). "Stop calling" opt-out still beats everything.
+//
+// The engagement signal is the DASHBOARD's own attempt tag (deriveAttemptTag),
+// so the SMS card's Reached sub-rows and dispatch can never disagree — the
+// invariant Val asked for: no SMS may ever appear under the Early hang-up filter.
+describe("decideSmsDispatch — optin_reached_only (Val 2026-08-07)", () => {
+  const reached: SmsDispatchInput = {
+    ...base,
+    mode: "optin_reached_only",
+    humanConversation: true,
+    attemptTag: "neutral",
+  };
+
+  it("texts a neutral reached human (no goal, no consent evidence needed)", () => {
+    expect(decideSmsDispatch(reached)).toEqual({ attempt: true, reason: "reached_engaged" });
+  });
+
+  it("texts a positive (goal reached)", () => {
+    expect(decideSmsDispatch({ ...reached, goalReached: true, attemptTag: "positive" }))
+      .toEqual({ attempt: true, reason: "reached_engaged" });
+  });
+
+  it("texts a declined contact — refusers still get the text (literal Val)", () => {
+    expect(decideSmsDispatch({ ...reached, attemptTag: "declined", customerDeclinedSms: true }))
+      .toEqual({ attempt: true, reason: "reached_engaged" });
+  });
+
+  it('an on-call SMS refusal ("don\'t text me") does NOT veto in this mode', () => {
+    expect(decideSmsDispatch({ ...reached, customerDeclinedSms: true }))
+      .toEqual({ attempt: true, reason: "reached_engaged" });
+  });
+
+  it('"stop calling" opt-out still beats everything', () => {
+    expect(decideSmsDispatch({ ...reached, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+
+  it("voicemail is NEVER texted — even with a last-resort template configured", () => {
+    expect(decideSmsDispatch({ ...reached, voicemailDetected: true, humanConversation: false, attemptTag: "voicemail" }))
+      .toEqual({ attempt: false, reason: "voicemail" });
+    // last-resort must NOT convert this into a deferred text (mode excludes last-resort)
+    expect(decideSmsDispatch({ ...reached, voicemailDetected: true, humanConversation: false, attemptTag: "voicemail", lastResortMode: true }))
+      .toEqual({ attempt: false, reason: "voicemail" });
+  });
+
+  it("early hang-up is never texted — the dashboard-filter invariant", () => {
+    expect(decideSmsDispatch({ ...reached, humanConversation: false, attemptTag: "early_hangup" }))
+      .toEqual({ attempt: false, reason: "early_hangup" });
+  });
+
+  it("agent timeout (pipeline death on a live pickup) is never texted", () => {
+    expect(decideSmsDispatch({ ...reached, attemptTag: "agent_timeout" }))
+      .toEqual({ attempt: false, reason: "agent_timeout" });
+  });
+
+  it("a missing attempt tag fails SAFE: no text", () => {
+    expect(decideSmsDispatch({ ...reached, attemptTag: undefined }).attempt).toBe(false);
+  });
+
+  it("unreachable tag never texts", () => {
+    expect(decideSmsDispatch({ ...reached, attemptTag: "unreachable" }).attempt).toBe(false);
+  });
+
+  it("does NOT qualify for the last-resort text (Val: never text unreached)", () => {
+    const ok = {
+      outcome: "unreached", attemptCount: 3, maxAttempts: 3, smsEnabled: true,
+      lastResortTemplate: "Sorry we missed you! ...", campaignStatus: "running",
+    };
+    expect(decideLastResortSend({ ...ok, mode: "optin_reached_only" })).toBe(false);
+  });
+
+  it("resolver + validator accept the new mode; unknowns still coerce to verbal_yes", () => {
+    expect(resolveSmsConsentMode("optin_reached_only")).toBe("optin_reached_only");
+    expect(parseSmsConsentMode("optin_reached_only")).toBe("optin_reached_only");
+    expect(SMS_CONSENT_MODES).toContain("optin_reached_only");
+    expect(resolveSmsConsentMode("optin_reached_onlyX")).toBe("verbal_yes");
   });
 });

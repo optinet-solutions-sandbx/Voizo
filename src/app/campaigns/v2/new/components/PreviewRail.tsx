@@ -53,11 +53,13 @@ function tipsFor(state: WizardState): string[] {
     case 4:
       return [
         "One text per player per campaign, never more.",
-        state.smsConsentMode === "optin_any_pickup"
-          ? "Any answered line counts — even a bad or silent call. Only “don’t text me”, “stop calling” or the DNC list stop it."
-          : state.smsConsentMode === "registered_optin"
-            ? "Last resort on: a voicemail gets a call back, and the text goes out only after the last failed try."
-            : "The agent must hear a clear yes on the call before any text goes out.",
+        state.smsConsentMode === "optin_reached_only"
+          ? "Only real conversations get a text. Never answering machines, silent pickups, or numbers we could not reach."
+          : state.smsConsentMode === "optin_any_pickup"
+            ? "Any answered line counts, even a bad or silent call. Answering machines get a text too."
+            : state.smsConsentMode === "registered_optin"
+              ? "Everyone we reach gets a text. Answering machines get one as a missed-call follow-up."
+              : "The agent has to hear a clear yes before any text goes out. Sends very few texts.",
         "“Don’t text me” and the Do-Not-Call list always win.",
       ];
     default:

@@ -28,7 +28,7 @@ import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/Recurre
 import StyledSelect from "@/components/StyledSelect";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
-import { resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { modeHasLastResort, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 import Toggle from "@/components/ui/Toggle";
 
 type CampaignRow = Record<string, unknown>;
@@ -521,15 +521,25 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
 
                   {/* Follow-up text (VOZ-245). Operators previously had to rebuild the
                       campaign to change either of these. Both live on the PARENT, so
-                      they apply from tomorrow's child. */}
+                      they apply from tomorrow's child.
+                      Narrowed to two choices 2026-08-07 (Val): the dropped modes
+                      (registered_optin, optin_any_pickup) both text detected voicemail.
+                      A campaign already saved on one still shows it as a third,
+                      read-only row — otherwise the group would render with nothing
+                      selected and a Save would look like a no-op while silently
+                      keeping the old policy. */}
                   <div className="flex flex-col gap-1.5">
                     <span className="text-[11px] font-medium text-[var(--text-2)]">Who gets the follow-up text</span>
                     <div className="flex flex-col gap-1">
-                      {([
-                        ["verbal_yes", "Only after the customer says yes on the call"],
-                        ["registered_optin", "Everyone we reach (the list already opted in)"],
-                        ["optin_any_pickup", "Anyone who picks up — even if the call went badly"],
-                      ] as const).map(([value, label]) => (
+                      {(
+                        [
+                          ["optin_reached_only", "Everyone we talk to"],
+                          ["verbal_yes", "Only if they say yes on the call"],
+                          ...(draft.smsConsentMode === "optin_reached_only" || draft.smsConsentMode === "verbal_yes"
+                            ? []
+                            : [[draft.smsConsentMode, "Old setting: also texts answering machines. Pick one above to replace it."] as const]),
+                        ] as ReadonlyArray<readonly [SmsConsentMode, string]>
+                      ).map(([value, label]) => (
                         <label key={value} className="flex items-start gap-2 cursor-pointer">
                           <input
                             type="radio"
@@ -543,7 +553,7 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                       ))}
                     </div>
                     <p className="text-[11px] text-[var(--text-3)]">
-                      &quot;Don&apos;t text me&quot;, &quot;stop calling&quot; and the Do-Not-Call list always win. One text per player.
+                      &quot;Stop calling&quot; and the Do-Not-Call list always win. One text per player.
                     </p>
                   </div>
 
@@ -567,11 +577,12 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                     </p>
                   </div>
 
-                  {draft.smsConsentMode !== "verbal_yes" && (
+                  {modeHasLastResort(draft.smsConsentMode) && (
                     <div className="flex flex-col gap-2">
                       {/* VOZ-249: an explicit switch. This used to be "leave the box
                           empty to turn it off", which reads as a missing value, not a
-                          decision. Same control as the wizard now. */}
+                          decision. Same control as the wizard now. Hidden for
+                          optin_reached_only — that mode never texts unreached (Val 2026-08-07). */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-[11px] font-medium text-[var(--text-2)]">

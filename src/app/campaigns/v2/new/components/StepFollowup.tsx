@@ -4,6 +4,7 @@ import { useMemo, type Dispatch } from "react";
 import { AlertTriangle, MessageSquareText } from "lucide-react";
 import Toggle from "@/components/ui/Toggle";
 import { DEFAULT_WS } from "@/components/SegmentImporter";
+import { modeHasLastResort } from "@/lib/smsDispatchDecision";
 
 import {
   SHORTENED_URL_LENGTH, smsSegmentCount,
@@ -117,15 +118,32 @@ export default function StepFollowup({ state, dispatch, dialIdentities }: Props)
           </div>
         )}
 
-        {/* Send-timing mode (2026-06-11): verbal_yes = on-call yes required;
-            registered_optin = client-attested signup opt-in (Val), including the
-            voicemail missed-call follow-up. The webhook still vetoes "don't text
-            me" / opt-outs / suppression in BOTH modes; voicemail vetoes
-            verbal_yes only. */}
+        {/* Send-timing mode. Narrowed to two choices 2026-08-07 (Val): the two
+            dropped ones (registered_optin, optin_any_pickup) both text detected
+            voicemail, which is the thing he ruled out. They stay valid in the DB
+            and the resolver for campaigns already on them — only the picker
+            narrows, so nobody can newly select them. */}
         {state.smsEnabled && (
           <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)]">
             <div className="text-sm font-semibold text-[var(--text-1)]">When should the text go out?</div>
             <div className="mt-3 flex flex-col gap-2.5">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="smsConsentMode"
+                  checked={state.smsConsentMode === "optin_reached_only"}
+                  onChange={() => setSms("smsConsentMode", "optin_reached_only")}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-[var(--text-1)]">To everyone we talk to</span>
+                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
+                    One text per player. Never answering machines, calls where nobody spoke, or
+                    numbers we could not reach. We still text people who turned the text down on
+                    the call. Only &quot;stop calling&quot; and the Do-Not-Call list stop it.
+                  </span>
+                </span>
+              </label>
               <label className="flex items-start gap-2.5 cursor-pointer">
                 <input
                   type="radio"
@@ -135,44 +153,10 @@ export default function StepFollowup({ state, dispatch, dialIdentities }: Props)
                   className="mt-0.5 accent-blue-500"
                 />
                 <span className="min-w-0">
-                  <span className="block text-sm text-[var(--text-1)]">Only after the customer says yes on the call</span>
+                  <span className="block text-sm text-[var(--text-1)]">Only if they say yes on the call</span>
                   <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
-                    Default. The agent must hear a clear yes before the text goes out.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="radio"
-                  name="smsConsentMode"
-                  checked={state.smsConsentMode === "registered_optin"}
-                  onChange={() => setSms("smsConsentMode", "registered_optin")}
-                  className="mt-0.5 accent-blue-500"
-                />
-                <span className="min-w-0">
-                  <span className="block text-sm text-[var(--text-1)]">To everyone we reach (the list already opted in)</span>
-                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
-                    Only for lists that ticked &quot;Receive SMS Promos&quot; at signup. One text per
-                    player: live answers right away, voicemails as a missed-call follow-up.
-                    &quot;Don&apos;t text me&quot; and the Do-Not-Call list always win.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="radio"
-                  name="smsConsentMode"
-                  checked={state.smsConsentMode === "optin_any_pickup"}
-                  onChange={() => setSms("smsConsentMode", "optin_any_pickup")}
-                  className="mt-0.5 accent-blue-500"
-                />
-                <span className="min-w-0">
-                  <span className="block text-sm text-[var(--text-1)]">To anyone who picks up the phone</span>
-                  <span className="block text-xs text-[var(--text-3)] mt-0.5 leading-relaxed">
-                    Widest reach, same opted-in lists. Counts a pickup as reached even if the
-                    call went badly — rushed, hard to follow, hung up early, or answered in
-                    silence. &quot;Don&apos;t text me&quot;, &quot;stop calling&quot; and the
-                    Do-Not-Call list still win, and it is still one text per player.
+                    The agent has to hear a clear yes. Sends very few texts, so pick this only
+                    when a client asks for spoken permission every time.
                   </span>
                 </span>
               </label>
@@ -180,12 +164,14 @@ export default function StepFollowup({ state, dispatch, dialIdentities }: Props)
           </div>
         )}
 
-        {/* Last-resort mode (VOZ-132 §8) — both opt-in modes (VOZ-245). The editable
+        {/* Last-resort mode (VOZ-132 §8) — LAST_RESORT_MODES only. The editable
             message field is how per-campaign compliance wording gets applied.
             NOTE for optin_any_pickup: this governs detected VOICEMAIL only. A
             pickup where nobody spoke is treated as reached and texted right away
-            (Jasiel/Val, 2026-07-28) — it is not a voicemail, so it never waits. */}
-        {state.smsEnabled && state.smsConsentMode !== "verbal_yes" && (
+            (Jasiel/Val, 2026-07-28) — it is not a voicemail, so it never waits.
+            optin_reached_only deliberately has NO last-resort (Val 2026-08-07:
+            never text someone we didn't reach) — the switch hides for it. */}
+        {state.smsEnabled && modeHasLastResort(state.smsConsentMode) && (
           <div className="p-4 rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-app)] flex flex-col gap-3">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">

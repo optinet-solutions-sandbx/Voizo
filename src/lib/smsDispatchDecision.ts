@@ -49,7 +49,30 @@
 //                      Measured on the 2026-07-27/28 realtime run: verbal_yes
 //                      sent 6 (of 14 real humans who had heard the SMS offer),
 //                      registered_optin would send 201, this mode 230.
-export type SmsConsentMode = "verbal_yes" | "registered_optin" | "optin_any_pickup";
+//   optin_reached_only — Val, 2026-08-07 (relayed + confirmed by Jasiel): text
+//                      everyone we GENUINELY talk to and nobody else. Same
+//                      consent basis as the other opt-in modes (registration
+//                      "Receive SMS Promos"), but the trigger is the DASHBOARD's
+//                      own attempt tag: positive / neutral / declined get the
+//                      text; voicemail, early hang-up (dead-air pickup), agent
+//                      timeout (pipeline death — we owe a redial, not a text)
+//                      and unreached never do. Two deliberate departures from
+//                      the older opt-in modes, both Val's explicit calls:
+//                        • an on-call SMS refusal does NOT veto (literal-Val
+//                          rule, Jasiel chose it over promote-emphatic-to-DNC
+//                          2026-08-07) — only the "stop calling" opt-out does;
+//                        • no voicemail follow-up and NO last-resort text
+//                          ("never text someone we didn't reach").
+//                      Reusing deriveAttemptTag as the trigger is the invariant
+//                      Val asked for after finding texted players hiding under
+//                      the Early hang-up filter: dispatch and the SMS card's
+//                      sub-rows share one classifier, so no SMS can ever appear
+//                      under a bucket this mode refuses to text.
+/** The dashboard's per-attempt tag (dashboardAnalytics.deriveAttemptTag) — the
+ *  optin_reached_only trigger signal. Type-only import: no runtime dependency. */
+import type { AttemptTag } from "./dashboardAnalytics";
+
+export type SmsConsentMode = "verbal_yes" | "registered_optin" | "optin_any_pickup" | "optin_reached_only";
 
 export interface SmsDispatchInput {
   mode: SmsConsentMode;
@@ -77,6 +100,12 @@ export interface SmsDispatchInput {
    *  (scheduler last-resort sweep). OPTIONAL so the flag's absence (every
    *  pre-existing caller/campaign) preserves today's behavior byte-for-byte. */
   lastResortMode?: boolean;
+  /** deriveAttemptTag for THIS call (optin_reached_only's trigger). Computed by
+   *  the webhook from the same fields the dashboard reads, so dispatch can never
+   *  disagree with the card/drawer bucket. Optional because the older modes
+   *  don't consume it; when optin_reached_only sees it missing, it fails SAFE
+   *  (no text) rather than guessing. */
+  attemptTag?: AttemptTag;
 }
 
 export interface SmsDispatchDecision {
@@ -95,7 +124,13 @@ export interface SmsDispatchDecision {
     | "voicemail_redial_first"
     | "goal_not_reached"
     | "no_consent_evidence"
-    | "verbal_consent";
+    | "verbal_consent"
+    /** optin_reached_only outcomes (Val 2026-08-07) — one reason per refused
+     *  dashboard bucket so logs show exactly WHICH bucket blocked the text. */
+    | "early_hangup"
+    | "agent_timeout"
+    | "not_reached"
+    | "reached_engaged";
 }
 
 /**
@@ -110,7 +145,9 @@ export interface SmsDispatchDecision {
  * 0-SMS incident. One resolver, so a new mode reaches every caller at once.
  */
 export function resolveSmsConsentMode(raw: unknown): SmsConsentMode {
-  return raw === "registered_optin" || raw === "optin_any_pickup" ? raw : "verbal_yes";
+  return raw === "registered_optin" || raw === "optin_any_pickup" || raw === "optin_reached_only"
+    ? raw
+    : "verbal_yes";
 }
 
 /** Every value the column accepts, in operator-facing order. Single source for
@@ -119,7 +156,19 @@ export const SMS_CONSENT_MODES: readonly SmsConsentMode[] = [
   "verbal_yes",
   "registered_optin",
   "optin_any_pickup",
+  "optin_reached_only",
 ];
+
+/** Modes that own a last-resort ("sorry we missed you") text. optin_reached_only
+ *  is deliberately absent — Val 2026-08-07: never text someone we didn't reach.
+ *  Single source for decideLastResortSend AND the UI's last-resort controls, so
+ *  a mode can't qualify for the sweep while hiding the operator switch (or the
+ *  reverse). */
+export const LAST_RESORT_MODES: readonly SmsConsentMode[] = ["registered_optin", "optin_any_pickup"];
+
+export function modeHasLastResort(mode: SmsConsentMode): boolean {
+  return (LAST_RESORT_MODES as readonly string[]).includes(mode);
+}
 
 /**
  * WRITE-side counterpart of resolveSmsConsentMode: returns null on anything
@@ -136,6 +185,32 @@ export function parseSmsConsentMode(raw: unknown): SmsConsentMode | null {
 
 export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
+
+  if (i.mode === "optin_reached_only") {
+    // The dashboard's attempt tag IS the policy (Val 2026-08-07): the three
+    // Reached-card sub-buckets that mean a live human engaged get the text —
+    // including "declined" and on-call SMS refusals (customerDeclinedSms is
+    // deliberately NOT consulted; literal-Val rule, Jasiel 2026-08-07). The
+    // opted_out veto above still catches "stop calling".
+    switch (i.attemptTag) {
+      case "positive":
+      case "neutral":
+      case "declined":
+        return { attempt: true, reason: "reached_engaged" };
+      // lastResortMode is deliberately ignored: this mode never defers a
+      // voicemail into a later text — it just never texts one.
+      case "voicemail":
+        return { attempt: false, reason: "voicemail" };
+      case "agent_timeout":
+        return { attempt: false, reason: "agent_timeout" };
+      case "early_hangup":
+        return { attempt: false, reason: "early_hangup" };
+      default:
+        // unreachable — or no tag supplied. A caller that can't say which
+        // bucket the call landed in doesn't get to text (fail-safe).
+        return { attempt: false, reason: "not_reached" };
+    }
+  }
 
   if (i.mode === "registered_optin" || i.mode === "optin_any_pickup") {
     // Missed-call follow-up (2026-06-11 EOD, Jasiel: agreed with Val off-thread, announced in
@@ -218,10 +293,11 @@ export function decideLastResortSend(args: {
   return (
     args.outcome === "unreached" &&
     (args.attemptCount ?? 0) >= args.maxAttempts &&
-    // Both opt-in modes qualify (VOZ-245): the last-resort text is a property of
-    // the registration consent basis, not of the trigger bar. Omitting
-    // optin_any_pickup here would silently disable last-resort for it.
-    (args.mode === "registered_optin" || args.mode === "optin_any_pickup") &&
+    // LAST_RESORT_MODES (VOZ-245): the last-resort text is a property of the
+    // registration consent basis, not of the trigger bar — except
+    // optin_reached_only, which excludes it on purpose (Val 2026-08-07: never
+    // text someone we didn't reach).
+    modeHasLastResort(args.mode) &&
     args.smsEnabled &&
     typeof args.lastResortTemplate === "string" &&
     args.lastResortTemplate.trim().length > 0 &&
