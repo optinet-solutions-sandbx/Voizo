@@ -134,6 +134,71 @@ describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => 
   });
 });
 
+// Val 2026-08-07 (via Jasiel): he drilled Early hang-up on a campaign and found
+// texted players the SMS card never named — sub-rows summed to 2 of "Reached 12".
+// Every reached text must now carry a named bucket: the partition
+// positive+neutral+declined+earlyHangup+agentTimeout === reached, on BOTH cards.
+describe("smsWindowBreakdown + callWindowBreakdown — no hidden reached buckets (Val 2026-08-07)", () => {
+  const T = Date.UTC(2026, 7, 6);
+  const DAY = 86_400_000;
+  const c = (id: string, over: Partial<DashCallRow> = {}): DashCallRow => ({
+    id,
+    campaign_id: "x",
+    campaign_number_id: id,
+    status: "completed",
+    goal_reached: false,
+    voicemail: false,
+    created_at: new Date(T + 1000).toISOString(),
+    ...over,
+  });
+  const s = (call_id: string | null): DashSmsRow => ({
+    campaign_id: "x",
+    call_id,
+    campaign_number_id: call_id,
+    status: "delivered",
+    created_at: new Date(T + 2000).toISOString(),
+  });
+  // one call per bucket
+  const calls = [
+    c("p", { goal_reached: true }),
+    c("n", { duration_seconds: 40, ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: tell me more\nUser: okay sounds good" }), // 2 turns → neutral
+    c("d"), // declined contact (via declinedIds)
+    c("e", { duration_seconds: 5 }), // <15s → early hang-up
+    c("a", { duration_seconds: 3, ended_reason: "pipeline-error-openai-429-exceeded-quota" }), // agent timeout — ranks ABOVE early hang-up
+    c("v", { voicemail: true }),
+  ];
+
+  it("SMS card: every reached text is named — partition sums exactly to reached", () => {
+    const messages = [s("p"), s("n"), s("d"), s("e"), s("a"), s("v")];
+    const b = smsWindowBreakdown(messages, calls, new Set(["d"]), T, T + DAY);
+    expect(b.reached).toBe(5);
+    expect(b.earlyHangup).toBe(1); // the texts Val found hiding
+    expect(b.agentTimeout).toBe(1); // 3s pipeline-death call is NOT an early hang-up
+    expect(b.positive + b.neutral + b.declined + b.earlyHangup + b.agentTimeout).toBe(b.reached);
+  });
+
+  it("Reached card mirrors deriveAttemptTag: agent timeout is its own bucket (Chris's VOZ-330 tag)", () => {
+    const b = callWindowBreakdown(calls, new Set(["d"]), T, T + DAY);
+    expect(b.agentTimeout).toBe(1);
+    expect(b.earlyHangup).toBe(1);
+    expect(b.positive + b.neutral + b.declined + b.earlyHangup + b.agentTimeout).toBe(b.reach);
+    // card bucket must equal the records-drawer tag for the same call
+    expect(deriveAttemptTag(calls[4], false)).toBe("agent_timeout");
+  });
+
+  it("Today assembly exposes the new sub-rows on the SMS card", () => {
+    const campaigns = [camp("x", { status: "running" })];
+    const snap = computeToday(calls, campaigns, [s("e"), s("a")], T + 12 * 3_600_000, []);
+    const smsReached = snap.today.sms.rows.find((r) => r.key === "reached")!;
+    const subKeys = (smsReached.subRows ?? []).map((r) => r.key);
+    expect(subKeys).toEqual(expect.arrayContaining(["positive", "neutral", "declined", "early_hangup", "agent_timeout"]));
+    const early = smsReached.subRows!.find((r) => r.key === "early_hangup")!;
+    const at = smsReached.subRows!.find((r) => r.key === "agent_timeout")!;
+    expect(early.count).toBe(1);
+    expect(at.count).toBe(1);
+  });
+});
+
 describe("computeToday — today/yesterday performance blocks (3-card redesign)", () => {
   const NOON = Date.UTC(2026, 5, 27, 12); // June 27 2026, noon UTC
   it("emits today + yesterday TodayPerfDay with breakdowns and dual deltas", () => {

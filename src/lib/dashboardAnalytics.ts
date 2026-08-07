@@ -928,7 +928,7 @@ export function computeCampaignTableFromRollup(
   for (const r of smsRollup) {
     let s = smsAgg.get(r.campaign_id);
     if (!s) {
-      s = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+      s = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
       smsAgg.set(r.campaign_id, s);
     }
     s.total += r.sent;
@@ -938,9 +938,13 @@ export function computeCampaignTableFromRollup(
     s.positive += r.positive;
     s.neutral += r.neutral;
     s.declined += r.declined;
+    // Lean SQL rollup can't split early-hangup vs agent-timeout texts — the
+    // named remainder lands in earlyHangup so the partition still sums to
+    // reached (same VOZ-283 note as smsBreakdownFromRollup).
+    s.earlyHangup = Math.max(0, s.reached - s.positive - s.neutral - s.declined);
   }
 
-  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
@@ -964,6 +968,7 @@ export function computeCampaignTableFromRollup(
         neutral: a?.neutral ?? 0,
         declined: a?.declined ?? 0,
         earlyHangup: a?.earlyHangup ?? 0,
+        agentTimeout: 0, // rollup rows predate the agent_timeout tag (see callBreakdownFromRollup note)
       };
       const sb = smsAgg.get(c.id) ?? emptySms;
       return {
@@ -1277,6 +1282,10 @@ export interface CallBreakdown {
   neutral: number;
   declined: number;
   earlyHangup: number;
+  /** VOZ-330 tag on the card too (2026-08-07): deriveAttemptTag gained
+   *  agent_timeout but this breakdown didn't, so the Reached card disagreed
+   *  with the records drawer for pipeline-death calls. Mirrors the tag. */
+  agentTimeout: number;
 }
 
 /** Partition calls with created_at in [startMs, endMs) into the Call-Attempts + Reached card
@@ -1290,7 +1299,7 @@ export function callWindowBreakdown(
 ): CallBreakdown {
   const b: CallBreakdown = {
     total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
-    positive: 0, neutral: 0, declined: 0, earlyHangup: 0,
+    positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0,
   };
   for (const c of calls) {
     const t = c.created_at ? Date.parse(c.created_at) : NaN;
@@ -1303,6 +1312,7 @@ export function callWindowBreakdown(
     // Reached human → outcome split (mirror deriveAttemptTag priority verbatim via the shared seam).
     b.reach += 1;
     if (c.goal_reached === true) { b.positive += 1; continue; }
+    if (isAgentTimeout(c.ended_reason)) { b.agentTimeout += 1; continue; } // ahead of declined/early — same slot as deriveAttemptTag
     if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) { b.declined += 1; continue; }
     if (isEarlyHangup(c, opts)) b.earlyHangup += 1; else b.neutral += 1;
   }
@@ -1313,13 +1323,19 @@ export function callWindowBreakdown(
 
 export interface SmsBreakdown {
   total: number; // sent|delivered SMS in the window
-  reached: number; // SMS to a reached human (positive|neutral|declined|early_hangup)
+  reached: number; // SMS to a reached human (positive|neutral|declined|early_hangup|agent_timeout)
   voicemail: number; // SMS to a voicemail pickup (registered_optin follow-up)
   unreachable: number; // SMS whose call didn't connect
-  // by-response of the reached SMS (early_hangup has no named sub-row; it still counts in `reached`).
+  // by-response of the reached SMS. Every reached text is NAMED — the partition
+  // positive+neutral+declined+earlyHangup+agentTimeout === reached. early_hangup
+  // used to hide inside `reached` with no sub-row, which is exactly how Val found
+  // texted players under the Early hang-up filter that the SMS card never showed
+  // (2026-08-07: Reached 12, sub-rows summed to 2).
   positive: number;
   neutral: number;
   declined: number;
+  earlyHangup: number;
+  agentTimeout: number;
 }
 
 /** Bucket each sent|delivered SMS (created_at in [startMs, endMs)) by its recipient call's
@@ -1335,7 +1351,7 @@ export function smsWindowBreakdown(
 ): SmsBreakdown {
   const callById = new Map<string, DashCallRow>();
   for (const c of calls) if (c.id) callById.set(c.id, c);
-  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   for (const m of sms) {
     if (!isSmsSent(m.status)) continue;
     const t = m.created_at ? Date.parse(m.created_at) : NaN;
@@ -1346,10 +1362,12 @@ export function smsWindowBreakdown(
     const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)), opts);
     if (tag === "voicemail") { b.voicemail += 1; continue; }
     if (tag === "unreachable") { b.unreachable += 1; continue; }
-    b.reached += 1; // positive | neutral | declined | early_hangup
+    b.reached += 1; // positive | neutral | declined | early_hangup | agent_timeout
     if (tag === "positive") b.positive += 1;
     else if (tag === "neutral") b.neutral += 1;
     else if (tag === "declined") b.declined += 1;
+    else if (tag === "early_hangup") b.earlyHangup += 1;
+    else if (tag === "agent_timeout") b.agentTimeout += 1;
   }
   return b;
 }
@@ -1444,12 +1462,17 @@ function assembleTodayPerf(
     mkRow("neutral", "Neutral", cb.neutral, cb.reach, cbP.neutral, cbP.reach, cb7.neutral, cb7.reach, est),
     mkRow("declined", "Declined", cb.declined, cb.reach, cbP.declined, cbP.reach, cb7.declined, cb7.reach, est),
     mkRow("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, cbP.earlyHangup, cbP.reach, cb7.earlyHangup, cb7.reach, est),
+    mkRow("agent_timeout", "Agent timeout", cb.agentTimeout, cb.reach, cbP.agentTimeout, cbP.reach, cb7.agentTimeout, cb7.reach, est),
   ]);
 
+  // Every reached text named (Val 2026-08-07) — the sub-rows now PARTITION the
+  // Reached count instead of silently omitting early hang-up / agent timeout.
   const smsReachedSub = [
     mkRow("positive", "Positive", sb.positive, sb.reached, sbP.positive, sbP.reached, sb7.positive, sb7.reached),
     mkRow("neutral", "Neutral", sb.neutral, sb.reached, sbP.neutral, sbP.reached, sb7.neutral, sb7.reached),
     mkRow("declined", "Declined", sb.declined, sb.reached, sbP.declined, sbP.reached, sb7.declined, sb7.reached),
+    mkRow("early_hangup", "Early hang-up", sb.earlyHangup, sb.reached, sbP.earlyHangup, sbP.reached, sb7.earlyHangup, sb7.reached),
+    mkRow("agent_timeout", "Agent timeout", sb.agentTimeout, sb.reached, sbP.agentTimeout, sbP.reached, sb7.agentTimeout, sb7.reached),
   ];
   const sms = mkMetric(sb.total, sbP.total, sb7.total, [
     mkRow("reached", "Reached", sb.reached, sb.total, sbP.reached, sbP.total, sb7.reached, sb7.total, { subRows: smsReachedSub }),
@@ -1521,12 +1544,16 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
     mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
     mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
     mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
+    mkRowNoDelta("agent_timeout", "Agent timeout", cb.agentTimeout, cb.reach, est),
   ]);
 
+  // Same named partition as the Today assembly (Val 2026-08-07) — no hidden reached texts.
   const smsReachedSub = [
     mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
     mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
     mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
+    mkRowNoDelta("early_hangup", "Early hang-up", sb.earlyHangup, sb.reached),
+    mkRowNoDelta("agent_timeout", "Agent timeout", sb.agentTimeout, sb.reached),
   ];
   const smsMetric = mkMetricNoDelta(sb.total, [
     mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
@@ -1806,7 +1833,12 @@ function callBreakdownFromRollup(
 ): CallBreakdown {
   const b: CallBreakdown = {
     total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
-    positive: 0, neutral: 0, declined: 0, earlyHangup: 0,
+    // agentTimeout stays 0 on the rollup path: the SQL rollup predates the
+    // agent_timeout tag (VOZ-330) and its rows can't split it out — those calls
+    // remain inside early_hangup_lean/neutral_lean here. The VOZ-283 parity gate
+    // will surface this the moment the rollup cutover is attempted; the rollup
+    // DDL needs an agent_timeout column before this path can go live.
+    positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0,
   };
   for (const r of rows) {
     const t = dayUtcToMs(r.day_utc);
@@ -1836,7 +1868,7 @@ function smsBreakdownFromRollup(
   endMs: number,
   candidateDelta: number,
 ): SmsBreakdown {
-  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0 };
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   for (const r of rows) {
     const t = dayUtcToMs(r.day_utc);
     if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
@@ -1848,9 +1880,16 @@ function smsBreakdownFromRollup(
     b.neutral += r.neutral;
     b.declined += r.declined;
   }
-  // Transcript delta: the attached call flips neutral → early_hangup, which has
-  // no named SMS sub-row but still counts in `reached` — so only neutral moves.
+  // Transcript delta: the attached call flips neutral → early_hangup (now a
+  // NAMED sub-row, Val 2026-08-07), so the count moves between buckets.
   b.neutral -= candidateDelta;
+  b.earlyHangup += candidateDelta;
+  // The lean SQL rollup can't split early-hangup vs agent-timeout texts (no
+  // ended_reason in its SMS rows) — reconcile the remainder into earlyHangup so
+  // the named partition still sums to `reached`; agentTimeout stays 0 on this
+  // path until the rollup DDL learns the tag (same VOZ-283 parity note as
+  // callBreakdownFromRollup above).
+  b.earlyHangup += Math.max(0, b.reached - b.positive - b.neutral - b.declined - b.earlyHangup);
   return b;
 }
 

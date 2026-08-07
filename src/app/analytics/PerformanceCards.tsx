@@ -22,6 +22,7 @@ export const ROW_COLOR: Record<string, string> = {
   neutral: "#5b9bf0",
   declined: "#e46664",
   early_hangup: "#e0814a",
+  agent_timeout: "#c264d6", // matches ATTEMPT_TAG_COLOR (VOZ-330)
 };
 
 // Delta colors from the same semantic set (green up, red down, neutral flat).
