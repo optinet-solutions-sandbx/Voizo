@@ -11,7 +11,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, History, LayoutDashboard, Library, Search,
+  AlertCircle, ArrowDownWideNarrow, ChevronRight, ClipboardList, History, LayoutDashboard, Library, Rocket, Search,
 } from "lucide-react";
 import { campaignRegion } from "@/lib/campaignRegion";
 import { sortReviewCampaigns, regionsOf, filterByRegion, type ReviewSortKey } from "@/lib/reviewSort";
@@ -20,6 +20,7 @@ import { SectionTick } from "../analytics/SectionIsland";
 import PromptLibrary from "@/components/qa/PromptLibrary";
 import AnalysisHistory from "@/components/qa/AnalysisHistory";
 import QaDashboard from "@/components/qa/QaDashboard";
+import QaBulkRunner from "@/components/qa/QaBulkRunner";
 
 interface QaCampaign {
   campaignId: string;
@@ -41,7 +42,7 @@ const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
 ];
 
 export default function QaPromptTestingPage() {
-  const [tab, setTab] = useState<"campaigns" | "library" | "history" | "dashboard">("campaigns");
+  const [tab, setTab] = useState<"campaigns" | "runner" | "library" | "history" | "dashboard">("campaigns");
   const [campaigns, setCampaigns] = useState<QaCampaign[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,6 +113,9 @@ export default function QaPromptTestingPage() {
         <button onClick={() => setTab("campaigns")} className={tabCls(tab === "campaigns")}>
           <ClipboardList size={13} /> Campaigns
         </button>
+        <button onClick={() => setTab("runner")} className={tabCls(tab === "runner")}>
+          <Rocket size={13} /> Bulk Runner
+        </button>
         <button onClick={() => setTab("library")} className={tabCls(tab === "library")}>
           <Library size={13} /> Prompt Library
         </button>
@@ -123,7 +127,9 @@ export default function QaPromptTestingPage() {
         </button>
       </div>
 
-      {tab === "library" ? (
+      {tab === "runner" ? (
+        <QaBulkRunner />
+      ) : tab === "library" ? (
         <PromptLibrary />
       ) : tab === "history" ? (
         <AnalysisHistory />

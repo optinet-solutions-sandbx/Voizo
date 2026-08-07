@@ -521,3 +521,91 @@ export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toM
     campaigns: [...perC.values()].sort((a, b) => b.total - a.total),
   };
 }
+
+// ── Cross-campaign selection (all-campaigns manual run + daily cron) ───────────
+/**
+ * Every reached call (person or voicemail, with a transcript) across ALL non-ghost
+ * campaigns in the [fromMs,toMs) call-date window, NOT yet analyzed with this prompt,
+ * grouped by campaign. The window is applied in SQL; ghost + already-analyzed excluded.
+ */
+export async function selectReachedUnanalyzedAcrossCampaigns(opts: {
+  promptId: string;
+  fromMs?: number | null;
+  toMs?: number | null;
+}): Promise<Map<string, ReachedCall[]>> {
+  const rows: Array<{ id: string; campaign_id: string; transcript: unknown }> = [];
+  for (let from = 0; ; from += 1000) {
+    let q = supabaseAdmin
+      .from("calls_v2")
+      .select("id, campaign_id, transcript")
+      .in("status", CONNECTED_STATUSES as unknown as string[])
+      .not("transcript", "is", null)
+      .order("created_at", { ascending: false })
+      .range(from, from + 999);
+    if (opts.fromMs != null) q = q.gte("created_at", new Date(opts.fromMs).toISOString());
+    if (opts.toMs != null) q = q.lt("created_at", new Date(opts.toMs).toISOString());
+    const { data, error } = await q;
+    if (error) throw error;
+    const page = (data ?? []) as Array<{ id: string; campaign_id: string; transcript: unknown }>;
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+
+  const ghost = new Set<string>();
+  const { data: camps } = await supabaseAdmin.from("campaigns_v2").select("id, source");
+  for (const c of (camps ?? []) as Array<{ id: string; source: string | null }>) {
+    if (c.source === "ghost_portal") ghost.add(c.id);
+  }
+
+  const analyzed = new Set<string>();
+  const { data: runs } = await supabaseAdmin.from("listener_qa_analysis_runs").select("call_id").eq("prompt_id", opts.promptId);
+  for (const r of (runs ?? []) as Array<{ call_id: string }>) analyzed.add(r.call_id);
+
+  const map = new Map<string, ReachedCall[]>();
+  for (const r of rows) {
+    if (ghost.has(r.campaign_id) || analyzed.has(r.id)) continue;
+    const t = transcriptText(r.transcript);
+    if (!t.trim()) continue;
+    if (!map.has(r.campaign_id)) map.set(r.campaign_id, []);
+    map.get(r.campaign_id)!.push({ id: r.id, transcript: t });
+  }
+  return map;
+}
+
+// ── Daily-analysis schedule (singleton config) ────────────────────────────────
+export interface QaSchedule {
+  enabled: boolean;
+  promptId: string | null;
+  lastRunAt: string | null;
+  lastRunSummary: string | null;
+}
+
+export async function getQaSchedule(): Promise<QaSchedule> {
+  const { data, error } = await supabaseAdmin
+    .from("listener_qa_schedule")
+    .select("enabled, prompt_id, last_run_at, last_run_summary")
+    .eq("id", "default")
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    enabled: Boolean(data?.enabled),
+    promptId: (data?.prompt_id as string | null) ?? null,
+    lastRunAt: (data?.last_run_at as string | null) ?? null,
+    lastRunSummary: (data?.last_run_summary as string | null) ?? null,
+  };
+}
+
+export async function setQaSchedule(patch: {
+  enabled?: boolean;
+  promptId?: string | null;
+  lastRunAt?: string;
+  lastRunSummary?: string;
+}): Promise<void> {
+  const upd: Record<string, unknown> = { id: "default" };
+  if (patch.enabled !== undefined) upd.enabled = patch.enabled;
+  if (patch.promptId !== undefined) upd.prompt_id = patch.promptId;
+  if (patch.lastRunAt !== undefined) upd.last_run_at = patch.lastRunAt;
+  if (patch.lastRunSummary !== undefined) upd.last_run_summary = patch.lastRunSummary;
+  const { error } = await supabaseAdmin.from("listener_qa_schedule").upsert(upd, { onConflict: "id" });
+  if (error) throw error;
+}

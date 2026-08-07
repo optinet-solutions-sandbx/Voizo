@@ -39,6 +39,14 @@
     {
       "path": "/api/cron/daily-snapshot",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/qa-analysis-daily",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/qa-import-sweep",
+      "schedule": "0 */3 * * *"
     }
   ]
 }
