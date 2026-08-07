@@ -30,8 +30,9 @@ export async function GET(request: NextRequest) {
   const reachedCategory = sp.get("reachedCategory") || undefined;
   const dayRaw = sp.get("day");
   const day = dayRaw && /^\d{4}-\d{2}-\d{2}$/.test(dayRaw) ? dayRaw : null;
+  const latestPerCall = sp.get("latestPerCall") === "1";
   try {
-    const runs = await listAnalysisRuns({ campaignId, limit, fromMs: num("fromMs"), toMs: num("toMs"), day, callAttempt, reachedCategory });
+    const runs = await listAnalysisRuns({ campaignId, limit, fromMs: num("fromMs"), toMs: num("toMs"), day, callAttempt, reachedCategory, latestPerCall });
     return NextResponse.json({ runs });
   } catch (err) {
     console.error("[qa-prompt-testing/runs] failed:", err);

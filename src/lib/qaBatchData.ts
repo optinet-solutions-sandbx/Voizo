@@ -364,10 +364,11 @@ export async function listAnalysisRuns(opts: {
   day?: string | null;
   callAttempt?: string;
   reachedCategory?: string;
+  latestPerCall?: boolean;
 } = {}): Promise<AnalysisRunListItem[]> {
   // Only the filtered drill-down needs a full page-through; the plain history list
   // (newest-first, no window/category filter) can stop after it has `limit` rows.
-  const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || !!opts.callAttempt || !!opts.reachedCategory;
+  const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || opts.latestPerCall === true || !!opts.callAttempt || !!opts.reachedCategory;
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     let q = supabaseAdmin
@@ -407,6 +408,16 @@ export async function listAnalysisRuns(opts: {
       goalReached: (call?.goal_reached as boolean | null) ?? null,
     };
   });
+  // Dedup to the latest run per call (rows are newest-first) BEFORE category filtering,
+  // so the drill-down matches the dashboard's "latest prompt wins" counts.
+  if (opts.latestPerCall) {
+    const seen = new Set<string>();
+    items = items.filter((it) => {
+      if (seen.has(it.callId)) return false;
+      seen.add(it.callId);
+      return true;
+    });
+  }
   if (opts.day != null) {
     // Campaign-local day match (each run in its own campaign's timezone).
     items = items.filter((it) => it.callCreatedAt != null && localDateInTz(it.callCreatedAt, it.campaignTimezone) === opts.day);
@@ -474,6 +485,7 @@ export interface QaDashboardCampaign {
   campaignId: string;
   campaignName: string | null;
   timezone: string;
+  lastAnalyzedAt: string | null;
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
@@ -491,6 +503,11 @@ export interface QaDashboardData {
  * (YYYY-MM-DD — each run bucketed in ITS campaign's timezone) OR a UTC [fromMs,toMs)
  * range; `day` wins when both are given. `day` is the daily/yesterday snapshot Val asked
  * for, correct across AU/CA. Campaign name + timezone come from the embedded join.
+ *
+ * DEDUP: a call re-analyzed under several prompts has several rows; we count each call
+ * ONCE using its LATEST run (rows come newest-first, so first-seen per call_id wins).
+ * "Latest prompt takes precedence" — otherwise near-identical re-runs double-count and
+ * confuse the totals. `lastAnalyzedAt` per campaign is that latest run's time.
  */
 export async function getQaAnalysisDashboard(
   opts: { fromMs?: number | null; toMs?: number | null; day?: string | null } = {},
@@ -499,7 +516,7 @@ export async function getQaAnalysisDashboard(
   for (let from = 0; from < 12000; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from("listener_qa_analysis_runs")
-      .select("campaign_id, summary, calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
+      .select("call_id, campaign_id, summary, analyzed_at, calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
     if (error) throw error;
@@ -524,14 +541,18 @@ export async function getQaAnalysisDashboard(
   const byCallAttempt: Record<string, number> = {};
   const byReachedCategory: Record<string, number> = {};
   const perC = new Map<string, QaDashboardCampaign>();
+  const seenCalls = new Set<string>();
   let unparseable = 0;
   let total = 0;
 
   for (const r of rows) {
+    const callId = r.call_id as string;
+    if (seenCalls.has(callId)) continue; // older re-run of a call already counted
     const camp = one(r.campaigns_v2);
     const tz = (camp?.timezone as string) || DEFAULT_QA_TZ;
     const createdAt = one(r.calls_v2)?.created_at as string | undefined;
-    if (!matches(createdAt, tz)) continue;
+    if (!matches(createdAt, tz)) continue; // window is call-level, identical for every run of this call
+    seenCalls.add(callId);
     total += 1;
     const p = parseCategories(r.summary as string | null);
     if (!p.parsed) unparseable += 1;
@@ -543,7 +564,8 @@ export async function getQaAnalysisDashboard(
     const cid = r.campaign_id as string;
     let c = perC.get(cid);
     if (!c) {
-      c = { campaignId: cid, campaignName: (camp?.name as string) ?? null, timezone: tz, total: 0, callAttempt: {}, reachedCategory: {} };
+      // First row for this campaign (newest-first) → its latest analyzed_at.
+      c = { campaignId: cid, campaignName: (camp?.name as string) ?? null, timezone: tz, lastAnalyzedAt: (r.analyzed_at as string) ?? null, total: 0, callAttempt: {}, reachedCategory: {} };
       perC.set(cid, c);
     }
     c.total += 1;

@@ -18,6 +18,7 @@ interface Campaign {
   campaignId: string;
   campaignName: string | null;
   timezone: string;
+  lastAnalyzedAt: string | null;
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
@@ -110,6 +111,14 @@ function localDay(iso: string | null, tz: string): string {
     return "";
   }
 }
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  } catch {
+    return "";
+  }
+}
 interface RawRun {
   campaignName: string | null;
   campaignTimezone: string;
@@ -179,11 +188,12 @@ export default function QaDashboard() {
   // ── CSV exports ───────────────────────────────────────────────────────────────
   const exportSummary = useCallback(() => {
     if (!data) return;
-    const header = ["Campaign", "Timezone", "Scope", "Analyzed", ...CA_COLS, ...RC_COLS];
+    const header = ["Campaign", "Timezone", "Scope", "Last analyzed", "Analyzed", ...CA_COLS, ...RC_COLS];
     const rows: (string | number)[][] = data.campaigns.map((c) => [
       c.campaignName ?? c.campaignId,
       c.timezone,
       scope.day ?? scopeLabel,
+      fmtDateTime(c.lastAnalyzedAt),
       c.total,
       ...CA_COLS.map((k) => c.callAttempt[k] ?? 0),
       ...RC_COLS.map((k) => c.reachedCategory[k] ?? 0),
@@ -195,7 +205,7 @@ export default function QaDashboard() {
     setExporting(true);
     setError(null);
     try {
-      const p = new URLSearchParams({ limit: "5000" });
+      const p = new URLSearchParams({ limit: "5000", latestPerCall: "1" });
       if (scope.day) p.set("day", scope.day);
       else {
         if (scope.fromMs != null) p.set("fromMs", String(scope.fromMs));
@@ -377,10 +387,16 @@ export default function QaDashboard() {
                     const name = c.campaignName ?? c.campaignId.slice(0, 8);
                     return (
                       <tr key={c.campaignId} className="hover:bg-[var(--bg-hover)] transition">
-                        <td className="px-4 py-2 max-w-[280px] truncate sticky left-0 bg-[var(--bg-card)]">
-                          <button onClick={() => open({ title: name, campaignId: c.campaignId })} className={`text-[var(--text-1)] ${cellBtn}`}>
+                        <td className="px-4 py-2 min-w-[240px] max-w-[440px] sticky left-0 bg-[var(--bg-card)] align-top">
+                          <button
+                            onClick={() => open({ title: name, campaignId: c.campaignId })}
+                            className={`text-left text-[var(--text-1)] whitespace-normal break-words ${cellBtn}`}
+                          >
                             {name}
                           </button>
+                          {c.lastAnalyzedAt && (
+                            <div className="text-[10px] text-[var(--text-3)] font-mono mt-0.5">Analyzed {fmtDateTime(c.lastAnalyzedAt)}</div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-[var(--text-1)]">{c.total.toLocaleString()}</td>
                         {CA_COLS.map((k) => {

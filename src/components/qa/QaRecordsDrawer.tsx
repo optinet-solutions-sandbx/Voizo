@@ -70,7 +70,7 @@ export default function QaRecordsDrawer({
     setRuns(null);
     setError(null);
     try {
-      const p = new URLSearchParams({ limit: "500" });
+      const p = new URLSearchParams({ limit: "500", latestPerCall: "1" });
       if (day) p.set("day", day);
       else {
         if (fromMs != null) p.set("fromMs", String(fromMs));
