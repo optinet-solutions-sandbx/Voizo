@@ -131,6 +131,51 @@ describe("createClone — stopSpeakingPlan phrase-list preservation (VOZ-128)", 
   });
 });
 
+// ── 2026-08-07: Vapi added assistant versioning — GET /assistant now returns a
+// `latestVersion` field, and POST /assistant 400s on it ("property latestVersion
+// should not exist"). The {...base} spread carried it into the create body,
+// breaking every clone (spawns, create, rebind, ghost). It must be stripped like
+// id/orgId. This pins that — and the other server-set fields — never post.
+describe("createClone — strips Vapi server-set fields from the POST body", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  type FakeRes = { ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> };
+  function stubVapi(base: Record<string, unknown>) {
+    const posted: { body: Record<string, unknown> | null } = { body: null };
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit): Promise<FakeRes> => {
+      if (init?.method === "POST") {
+        posted.body = JSON.parse(String(init.body));
+        return { ok: true, status: 200, json: async () => ({ id: "clone_1", name: "n" }), text: async () => "" };
+      }
+      return { ok: true, status: 200, json: async () => base, text: async () => "" };
+    }));
+    return posted;
+  }
+
+  // A base as Vapi returns it today: real config + every server-set field.
+  const SERVER_BASE = () => ({
+    id: "asst_base", orgId: "org_1", createdAt: "2026-01-01", updatedAt: "2026-08-07",
+    latestVersion: "v1", isServerUrlSecretSet: true, phoneNumberIds: ["p1"],
+    name: "Val", model: { messages: [{ role: "system", content: "hi" }] },
+  });
+
+  it("strips latestVersion (JSON.stringify drops undefined so the key never posts)", async () => {
+    const posted = stubVapi(SERVER_BASE());
+    const res = await createClone("k", "base_val", {});
+    expect(res.ok).toBe(true);
+    expect(posted.body).not.toBeNull();
+    expect("latestVersion" in (posted.body as object)).toBe(false);
+  });
+
+  it("strips every known Vapi server-set field POST /assistant rejects", async () => {
+    const posted = stubVapi(SERVER_BASE());
+    await createClone("k", "base_val", {});
+    const body = posted.body as Record<string, unknown>;
+    const serverSet = ["id", "orgId", "createdAt", "updatedAt", "latestVersion", "isServerUrlSecretSet", "phoneNumberIds"];
+    expect(serverSet.filter((k) => k in body)).toEqual([]); // none should survive into the POST
+  });
+});
+
 // ── VOZ-254: the drift self-heal must MERGE over the clone's existing voice.
 // A wholesale { provider, voiceId } PATCH body drops the tuned knobs (model,
 // speed, optimizeStreamingLatency) — the same nested-object mistake VOZ-128

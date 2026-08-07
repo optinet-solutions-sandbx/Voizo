@@ -787,6 +787,12 @@ export async function createClone(
     orgId: undefined,
     createdAt: undefined,
     updatedAt: undefined,
+    // Vapi added assistant versioning (2026-08-07): GET /assistant now returns
+    // latestVersion ("v1"), and POST /assistant rejects it with 400 "property
+    // latestVersion should not exist". The {...base} spread carried it into the
+    // create body, 400ing EVERY clone — daily spawns, campaign create, rebind,
+    // and ghost all dark until stripped. Same class as id/orgId above.
+    latestVersion: undefined,
     // Defensive: associations don't transfer; each clone gets its own SIP phone
     phoneNumberIds: undefined,
     isServerUrlSecretSet: undefined,
