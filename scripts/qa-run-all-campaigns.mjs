@@ -103,7 +103,7 @@ async function main() {
     try {
       const jsonl = calls.map((c) => JSON.stringify({
         custom_id: `call-${c.id}`, method: "POST", url: "/v1/chat/completions",
-        body: { model: MODEL, messages: [{ role: "system", content: prompt.content }, { role: "user", content: `Score this call transcript:\n\n${c.transcript}` }], max_completion_tokens: 4096 },
+        body: { model: MODEL, messages: [{ role: "system", content: prompt.content }, { role: "user", content: `Score this call transcript:\n\n${c.transcript}` }], max_completion_tokens: 4096, temperature: 0, seed: 7 },
       })).join("\n");
 
       const form = new FormData();

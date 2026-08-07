@@ -29,6 +29,10 @@ function jsonlLine(callId: string, transcript: string, promptContent: string): s
         { role: "user", content: `Score this call transcript:\n\n${transcript}` },
       ],
       max_completion_tokens: 4096,
+      // Deterministic classification so re-runs don't flip borderline calls
+      // (Neutral <-> Early Hang-up). See qa-prompt-testing/run/route.ts.
+      temperature: 0,
+      seed: 7,
     },
   });
 }

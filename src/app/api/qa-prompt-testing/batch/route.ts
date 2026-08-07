@@ -51,7 +51,12 @@ function jsonlLine(callId: string, transcript: string, promptContent: string): s
         { role: "system", content: promptContent },
         { role: "user", content: `Score this call transcript:\n\n${transcript}` },
       ],
-      max_completion_tokens: 4096, // matches the ai-chat-qa analyzer (gpt-5.4-mini, no temperature)
+      max_completion_tokens: 4096,
+      // Deterministic classification: at the default temperature (~1.0) a borderline
+      // call flips Neutral <-> Early Hang-up between runs. temperature 0 + a fixed seed
+      // make the same transcript score the same way every time.
+      temperature: 0,
+      seed: 7,
     },
   });
 }
