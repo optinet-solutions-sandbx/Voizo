@@ -11,8 +11,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import Link from "next/link";
-import { ArrowRight, Download, Search, X } from "lucide-react";
-import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type SmsRollupRow } from "@/lib/dashboardAnalytics";
+import { ArrowRight, Download, Eye, EyeOff, Search, X } from "lucide-react";
+import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type SmsRollupRow, type PerfRow } from "@/lib/dashboardAnalytics";
+import { MAX_CAMPAIGNS } from "@/lib/rangedRecords";
 import { formatCampaign, distinctBrandLabels, brandLabel } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { triggerDownload } from "@/lib/download";
@@ -27,7 +28,11 @@ import { CampaignRowsSkeleton } from "./loadingSkeletons";
 import { DISPO_LABEL } from "./recordsDisplay";
 import WidgetCard from "./WidgetCard";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData, type DisplayStatus, STATUS_META } from "./CampaignRow";
-import CampaignSummary from "./CampaignSummary";
+// The summary reuses the SAME cards + click-to-drill drawer as Global
+// Performance (Jasiel 2026-08-07: "Val would want that same mechanism").
+import PerformanceCards from "./PerformanceCards";
+import RangedRecordsDrawer, { totalFilter, rowFilter, type DrawerFilter } from "./RangedRecordsDrawer";
+import type { Filters as GlobalFilters } from "./GlobalPerformance";
 import {
   agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, scriptKeyOf,
   NO_CAMPAIGN_FILTERS, NO_SCRIPT, type CampaignFilterState,
@@ -169,6 +174,15 @@ export default function CampaignTable() {
   const [phoneRes, setPhoneRes] = useState<PhoneLookup | null>(null);
   const [phoneErr, setPhoneErr] = useState<string | null>(null);
   const [phoneLoading, setPhoneLoading] = useState(false);
+  // Summary visibility (Jasiel 2026-08-07: collapsible so the table stays the
+  // hero) — remembered across visits like the rest of the section state.
+  const [showSummary, setShowSummary] = useState<boolean>(() => loadSnapshot<boolean>("dashboard.campaigns.showSummary") ?? true);
+  const toggleSummary = () => setShowSummary((prev) => { const next = !prev; saveSnapshot("dashboard.campaigns.showSummary", next); return next; });
+  // Click-to-drill drawer — identical mechanism to Global Performance (same
+  // totalFilter/rowFilter mapping, same drawer). Clicking an already-open slice
+  // closes it (Global's toggle semantics).
+  const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
+  const [drawerBlocked, setDrawerBlocked] = useState(false);
   const baseAgentName = useBaseAgentNames();
 
   const setFilter = (patch: Partial<CampaignFilterState>) => {
@@ -249,7 +263,12 @@ export default function CampaignTable() {
     });
   };
 
-  const rows = useMemo(() => data?.rows ?? [], [data]);
+  // Recurring PARENTS are schedules, not dialers (Jasiel 2026-08-07): they
+  // never place a call themselves, so they showed as permanent all-zero rows.
+  // They stay visible on /campaigns (Always-on section); here only campaigns
+  // that actually dial — fixed ones and spawned children — are listed, summed,
+  // and exported.
+  const rows = useMemo(() => (data?.rows ?? []).filter((r) => r.scheduleType !== "recurring"), [data]);
 
   // Date range (client-side): keep campaigns whose activity span overlaps the picked [from, to].
   const fromMs = parseDayMs(from, false);
@@ -341,6 +360,38 @@ export default function CampaignTable() {
   const scopeLabel = `${visible.length} ${visible.length === 1 ? "campaign" : "campaigns"} · ${
     from || to ? "metrics in the picked date range" : "lifetime metrics"
   }`;
+
+  // Drawer scope: the records endpoint takes campaignIds (≤ MAX_CAMPAIGNS) +
+  // the custom window + the phone needle — so a drill-down shows records for
+  // exactly the filtered campaigns, and, when a player search is active, only
+  // that number's records (Val's interaction requirement, in the drawer too).
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const drawerFilters: GlobalFilters = {
+    range: from || to ? "custom" : "lifetime",
+    // The drawer needs BOTH bounds for a custom window; synthesize the open
+    // side (2026-04-01 predates the first call ever; today closes an open end).
+    from: from || to ? (from || "2026-04-01") : undefined,
+    to: from || to ? (to || todayStr) : undefined,
+    campaignIds: visible.map((r) => r.id),
+    country: "",
+    prompt: "",
+    phone,
+  };
+  const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
+    !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
+  const guardScope = (): boolean => {
+    const blocked = visible.length > MAX_CAMPAIGNS;
+    setDrawerBlocked(blocked);
+    return blocked;
+  };
+  const openTotal = (card: "callAttempts" | "reached" | "sms") => {
+    if (guardScope()) return;
+    setDrawerFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
+  };
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) => {
+    if (guardScope()) return;
+    setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
+  };
 
   const exportCsv = () => {
     if (!rollup || visible.length === 0) return;
@@ -537,8 +588,31 @@ export default function CampaignTable() {
         </div>
       )}
 
-      {/* Filter-scoped summary (Val 2026-08-07) — totals for exactly the campaigns listed below. */}
-      {summaryPerf && <CampaignSummary perf={summaryPerf} scopeLabel={scopeLabel} />}
+      {/* Filter-scoped summary (Val 2026-08-07) — the SAME cards + click-to-drill
+          drawer as Global Performance, scoped to exactly the campaigns listed
+          below. Collapsible (Jasiel 2026-08-07) and remembered. */}
+      <div className="px-3.5 pt-3 pb-1 flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={toggleSummary}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition"
+        >
+          {showSummary ? <EyeOff size={13} /> : <Eye size={13} />}
+          {showSummary ? "Hide summary" : "Show summary"}
+        </button>
+        <span className="text-[11px] text-[var(--text-3)]">Summary of the campaigns listed below · {scopeLabel}</span>
+        {drawerBlocked && (
+          <span className="text-[11px] text-amber-400">
+            Too many campaigns to drill into records ({visible.length} &gt; {MAX_CAMPAIGNS}) — narrow the filters first.
+          </span>
+        )}
+      </div>
+      {showSummary && summaryPerf && (
+        <div className="px-3.5 pb-2">
+          <PerformanceCards perf={summaryPerf} showDeltas={false} onOpenTotal={openTotal} onOpenRow={openRow} />
+          <RangedRecordsDrawer filters={drawerFilters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
+        </div>
+      )}
 
       {/* Rows (shared camp-row, same as Today's campaigns). WidgetCard is the frame. */}
       <div className="overflow-x-auto">

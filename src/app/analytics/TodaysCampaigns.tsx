@@ -35,10 +35,15 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
   const { expanded, slices, toggleExpand, pickMetric, clearSlice } = useExpandSlices();
   const [promptFor, setPromptFor] = useState<{ id: string; title: string } | null>(null);
 
-  if (campaigns.length === 0) return null;
+  // Recurring PARENTS are schedules, not dialers (Jasiel 2026-08-07): they sat
+  // here as permanent all-zero "Scheduled" rows — pure clutter in a list about
+  // today's dialing. They keep their home on /campaigns (Always-on section);
+  // their CHILDREN appear here as their own rows when they dial.
+  const rows = campaigns
+    .filter((c) => c.scheduleType !== "recurring")
+    .sort((a, b) => b.perf.callAttempts.total - a.perf.callAttempts.total);
 
-  // Most active today first.
-  const rows = [...campaigns].sort((a, b) => b.perf.callAttempts.total - a.perf.callAttempts.total);
+  if (rows.length === 0) return null;
 
   return (
     <section className="grid gap-2">

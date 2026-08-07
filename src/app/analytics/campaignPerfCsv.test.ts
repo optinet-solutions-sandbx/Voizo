@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCampaignPerfCsv, type ExportableCampaignRow } from "./campaignPerfCsv";
-import type { CallRollupRow, SmsRollupRow } from "@/lib/dashboardAnalytics";
+import type { CallRollupRow, SmsRollupRow } from "../../lib/dashboardAnalytics";
 
 const call = (campaign_id: string, day_utc: string, over: Partial<CallRollupRow> = {}): CallRollupRow => ({
   campaign_id, day_utc,

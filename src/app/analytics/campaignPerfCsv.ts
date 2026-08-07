@@ -8,14 +8,16 @@
 // on each campaign's own Export dropdown (CSV / Audio / Transcripts).
 //
 // Pure string builder (unit-tested); the component triggers the download.
-import { csvCell, CSV_BOM } from "@/lib/download";
+// Relative imports: tested modules must resolve without the "@/" alias
+// (vitest has no alias config — same note as recordsDisplay.ts).
+import { csvCell, CSV_BOM } from "../../lib/download";
 import {
   summarizeRollupWindow,
   type CallRollupRow,
   type SmsRollupRow,
   type PerfMetric,
   type TodayPerfDay,
-} from "@/lib/dashboardAnalytics";
+} from "../../lib/dashboardAnalytics";
 
 export interface ExportableCampaignRow {
   id: string;
