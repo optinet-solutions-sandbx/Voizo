@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown, Maximize2, Minimize2, Play } from "lucide-react";
 import CallTranscript from "@/components/CallTranscript";
 import QaAnalysisResultView from "@/components/qa/QaAnalysisResultView";
+import TimedTranscript, { type TimelineTurn } from "@/components/qa/TimedTranscript";
 
 // ── Client-side shapes (mirror lib/qaPromptData, kept local to avoid importing a
 // server-only module into a client component) ────────────────────────────────
@@ -198,6 +199,12 @@ export default function CallAnalysisDetail({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Per-turn timing: fetched on demand from Vapi (we don't store it). Null while loading;
+  // the transcript falls back to the flat CallTranscript when it's unavailable.
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [timeline, setTimeline] = useState<{ available: boolean; durationSec: number | null; turns: TimelineTurn[] } | null>(null);
+  const [timelineLoaded, setTimelineLoaded] = useState(false);
+
   // Seed the prompt: a replayed run uses its stored prompt; otherwise pre-load the
   // library's active prompt (or the first).
   useEffect(() => {
@@ -213,6 +220,18 @@ export default function CallAnalysisDetail({
     setPromptContent(active.content);
     setPromptDirty(false);
   }, [prompts, initialPromptContent]);
+
+  // Per-turn timing (on-demand from Vapi). Refetch when the call changes.
+  useEffect(() => {
+    let cancelled = false;
+    setTimeline(null);
+    setTimelineLoaded(false);
+    fetch(`/api/qa-prompt-testing/call/${encodeURIComponent(call.callId)}/timeline`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) { setTimeline(d); setTimelineLoaded(true); } })
+      .catch(() => { if (!cancelled) setTimelineLoaded(true); });
+    return () => { cancelled = true; };
+  }, [call.callId]);
 
   // Panel widths — reset to equal whenever the shown set changes.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -304,16 +323,34 @@ export default function CallAnalysisDetail({
   };
 
   // ── panel content ─────────────────────────────────────────────────────────
+  const seek = (sec: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = sec;
+    a.play().catch(() => {});
+  };
+  const hasTimed = Boolean(timeline?.available && timeline.turns.length > 0);
   const transcriptContent = (
     <div className="flex flex-col gap-3 h-full">
       {call.audioUrl ? (
-        <audio controls preload="none" src={call.audioUrl} className="w-full shrink-0" style={{ height: 38 }}>
+        <audio ref={audioRef} controls preload="none" src={call.audioUrl} className="w-full shrink-0" style={{ height: 38 }}>
           Your browser does not support audio playback.
         </audio>
       ) : (
         <div className="text-[11px] text-[var(--text-3)] shrink-0">No recording for this call.</div>
       )}
-      <CallTranscript text={call.transcript} fill />
+      {hasTimed ? (
+        <TimedTranscript turns={timeline!.turns} durationSec={timeline!.durationSec} onSeek={seek} />
+      ) : (
+        <>
+          <CallTranscript text={call.transcript} fill />
+          {timelineLoaded && (
+            <div className="text-[10px] text-[var(--text-3)] shrink-0">
+              Per-turn timing isn&rsquo;t available for this call (older calls may no longer be retained by Vapi).
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 
