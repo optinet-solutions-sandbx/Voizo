@@ -24,8 +24,10 @@ export async function GET(request: NextRequest) {
     const v = Number(sp.get(k));
     return Number.isFinite(v) && v > 0 ? v : null;
   };
+  const dayRaw = sp.get("day");
+  const day = dayRaw && /^\d{4}-\d{2}-\d{2}$/.test(dayRaw) ? dayRaw : null;
   try {
-    const data = await getQaAnalysisDashboard({ fromMs: num("fromMs"), toMs: num("toMs") });
+    const data = await getQaAnalysisDashboard({ fromMs: num("fromMs"), toMs: num("toMs"), day });
     return NextResponse.json(data);
   } catch (err) {
     console.error("[qa-prompt-testing/dashboard] failed:", err);

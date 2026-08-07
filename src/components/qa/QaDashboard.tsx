@@ -8,7 +8,7 @@
 // dashboard (never reads calls_v2 / the SQL rollups).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, BarChart3, ClipboardList } from "lucide-react";
+import { AlertCircle, BarChart3, ClipboardList, Download } from "lucide-react";
 import { SectionTick } from "../../app/analytics/SectionIsland";
 import WidgetCard from "../../app/analytics/WidgetCard";
 import Pagination from "@/components/Pagination";
@@ -17,6 +17,7 @@ import QaRecordsDrawer, { type DrawerSlice } from "./QaRecordsDrawer";
 interface Campaign {
   campaignId: string;
   campaignName: string | null;
+  timezone: string;
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
@@ -29,7 +30,7 @@ interface DashData {
   campaigns: Campaign[];
 }
 
-type Period = "today" | "yesterday" | "7d" | "30d" | "all";
+type Period = "today" | "yesterday" | "date" | "7d" | "30d" | "all";
 const PERIODS: { key: Period; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "yesterday", label: "Yesterday" },
@@ -44,18 +45,79 @@ const RC_COLOR: Record<string, string> = {
 };
 const n = (o: Record<string, number>, k: string) => o[k] ?? 0;
 
-// Date window (browser-local) by call date — matches how the campaigns dashboard scopes Today/Yesterday.
-function windowFor(p: Period): { fromMs: number | null; toMs: number | null } {
-  const now = Date.now();
+// CSV column vocabulary (matches the on-screen breakdown).
+const CA_COLS = ["Reached", "Voicemail", "Unreachable"]; // call_attempt
+const RC_COLS = ["Positive", "Neutral", "Declined", "Early Hang-up", "Agent Timeout"]; // reached_category
+
+// A viewer-local YYYY-MM-DD, offset by `deltaDays` — the reference for the Today/Yesterday buttons.
+function localDateStr(deltaDays = 0): string {
   const d = new Date();
-  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  switch (p) {
-    case "today": return { fromMs: midnight, toMs: null };
-    case "yesterday": return { fromMs: midnight - 86_400_000, toMs: midnight };
-    case "7d": return { fromMs: now - 7 * 86_400_000, toMs: null };
-    case "30d": return { fromMs: now - 30 * 86_400_000, toMs: null };
-    default: return { fromMs: null, toMs: null };
+  d.setDate(d.getDate() + deltaDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// UTC range for the multi-day periods; single-day periods use `day` (campaign-local) instead.
+function rangeFor(p: Period): { fromMs: number | null; toMs: number | null } {
+  const now = Date.now();
+  if (p === "7d") return { fromMs: now - 7 * 86_400_000, toMs: null };
+  if (p === "30d") return { fromMs: now - 30 * 86_400_000, toMs: null };
+  return { fromMs: null, toMs: null };
+}
+
+// ── CSV helpers ────────────────────────────────────────────────────────────────
+function csvEscape(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadCsv(filename: string, rows: (string | number | null)[][]) {
+  const body = rows.map((r) => r.map(csvEscape).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + body], { type: "text/csv;charset=utf-8;" }); // BOM → Excel reads UTF-8
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function stripFences(s: string): string {
+  return s.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
+}
+function parseCats(summary: string | null): { callAttempt: string; reachedCategory: string } {
+  try {
+    const o = JSON.parse(stripFences(summary ?? "")) as Record<string, unknown>;
+    return {
+      callAttempt: typeof o.call_attempt === "string" ? o.call_attempt : "",
+      reachedCategory: typeof o.reached_category === "string" ? o.reached_category : "",
+    };
+  } catch {
+    return { callAttempt: "", reachedCategory: "" };
   }
+}
+function oneLineSummary(summary: string | null): string {
+  if (!summary) return "";
+  const c = stripFences(summary);
+  try {
+    const o = JSON.parse(c) as Record<string, unknown>;
+    if (typeof o.summary === "string") return o.summary.replace(/\s+/g, " ");
+  } catch { /* not JSON */ }
+  return c.replace(/\s+/g, " ");
+}
+function localDay(iso: string | null, tz: string): string {
+  if (!iso) return "";
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+  } catch {
+    return "";
+  }
+}
+interface RawRun {
+  campaignName: string | null;
+  campaignTimezone: string;
+  customerName: string | null;
+  customerPhone: string | null;
+  callCreatedAt: string | null;
+  durationSeconds: number | null;
+  goalReached: boolean | null;
+  summary: string | null;
 }
 
 function KpiCard({ label, value, accent, sub, onClick }: { label: string; value: number; accent?: string; sub?: string; onClick: () => void }) {
@@ -71,20 +133,36 @@ function KpiCard({ label, value, accent, sub, onClick }: { label: string; value:
 }
 
 export default function QaDashboard() {
-  const [period, setPeriod] = useState<Period>("all");
-  const win = useMemo(() => windowFor(period), [period]);
+  const [period, setPeriod] = useState<Period>("today");
+  const [customDate, setCustomDate] = useState<string>(localDateStr());
   const [data, setData] = useState<DashData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [slice, setSlice] = useState<DrawerSlice | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  // Scope: a single campaign-local `day` (Today/Yesterday/picked date) OR a UTC range (7d/30d/all).
+  const scope = useMemo(() => {
+    if (period === "today") return { day: localDateStr(0), fromMs: null as number | null, toMs: null as number | null };
+    if (period === "yesterday") return { day: localDateStr(-1), fromMs: null, toMs: null };
+    if (period === "date") return { day: customDate, fromMs: null, toMs: null };
+    return { day: null as string | null, ...rangeFor(period) };
+  }, [period, customDate]);
+
+  const scopeLabel = scope.day
+    ? `${scope.day} · each campaign's local day`
+    : period === "7d" ? "Last 7 days" : period === "30d" ? "Last 30 days" : "All time";
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const p = new URLSearchParams();
-      if (win.fromMs != null) p.set("fromMs", String(win.fromMs));
-      if (win.toMs != null) p.set("toMs", String(win.toMs));
+      if (scope.day) p.set("day", scope.day);
+      else {
+        if (scope.fromMs != null) p.set("fromMs", String(scope.fromMs));
+        if (scope.toMs != null) p.set("toMs", String(scope.toMs));
+      }
       const qs = p.toString();
       const r = await fetch(`/api/qa-prompt-testing/dashboard${qs ? `?${qs}` : ""}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -95,7 +173,60 @@ export default function QaDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [win]);
+  }, [scope]);
+
+  // ── CSV exports ───────────────────────────────────────────────────────────────
+  const exportSummary = useCallback(() => {
+    if (!data) return;
+    const header = ["Campaign", "Timezone", "Scope", "Analyzed", ...CA_COLS, ...RC_COLS];
+    const rows: (string | number)[][] = data.campaigns.map((c) => [
+      c.campaignName ?? c.campaignId,
+      c.timezone,
+      scope.day ?? scopeLabel,
+      c.total,
+      ...CA_COLS.map((k) => c.callAttempt[k] ?? 0),
+      ...RC_COLS.map((k) => c.reachedCategory[k] ?? 0),
+    ]);
+    downloadCsv(`qa-daily-summary-${scope.day ?? period}.csv`, [header, ...rows]);
+  }, [data, scope, scopeLabel, period]);
+
+  const exportRaw = useCallback(async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const p = new URLSearchParams({ limit: "5000" });
+      if (scope.day) p.set("day", scope.day);
+      else {
+        if (scope.fromMs != null) p.set("fromMs", String(scope.fromMs));
+        if (scope.toMs != null) p.set("toMs", String(scope.toMs));
+      }
+      const r = await fetch(`/api/qa-prompt-testing/runs?${p.toString()}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const runs = ((await r.json()) as { runs: RawRun[] }).runs ?? [];
+      const header = ["Local day", "Call time (UTC)", "Campaign", "Timezone", "Customer", "Phone", "Call attempt", "Reached category", "Goal reached", "Duration (s)", "Summary"];
+      const rows: (string | number)[][] = runs.map((rn) => {
+        const cat = parseCats(rn.summary);
+        return [
+          localDay(rn.callCreatedAt, rn.campaignTimezone),
+          rn.callCreatedAt ?? "",
+          rn.campaignName ?? "",
+          rn.campaignTimezone ?? "",
+          rn.customerName ?? "",
+          rn.customerPhone ?? "",
+          cat.callAttempt,
+          cat.reachedCategory,
+          rn.goalReached == null ? "" : rn.goalReached ? "yes" : "no",
+          rn.durationSeconds ?? "",
+          oneLineSummary(rn.summary),
+        ];
+      });
+      downloadCsv(`qa-raw-${scope.day ?? period}.csv`, [header, ...rows]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Raw export failed");
+    } finally {
+      setExporting(false);
+    }
+  }, [scope, period]);
 
   useEffect(() => {
     load();
@@ -137,12 +268,43 @@ export default function QaDashboard() {
           </div>
           <p className="mt-1 text-xs text-[var(--text-3)]">
             From your prompt analyses (temporary) — separate from the campaigns Dashboard. Click any total to see the calls behind it.
+            <span className="text-[var(--text-2)]"> Showing {scopeLabel}.</span>
           </p>
         </div>
-        <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
-          {PERIODS.map((p) => (
-            <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1); }} className={dayCls(period === p.key)}>{p.label}</button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
+            {PERIODS.map((p) => (
+              <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1); }} className={dayCls(period === p.key)}>{p.label}</button>
+            ))}
+          </div>
+          <input
+            type="date"
+            value={scope.day ?? ""}
+            max={localDateStr(0)}
+            onChange={(e) => { if (e.target.value) { setCustomDate(e.target.value); setPeriod("date"); setPage(1); } }}
+            title="Show a specific day (each campaign's local day)"
+            className={`text-xs rounded-lg px-2 py-1 border transition ${
+              period === "date" ? "bg-primary/15 border-primary/40 text-[var(--text-1)]" : "bg-[var(--bg-card)] border-[var(--border)] text-[var(--text-2)]"
+            }`}
+          />
+          <div className="inline-flex gap-1">
+            <button
+              onClick={exportSummary}
+              disabled={!data || data.total === 0}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-40 transition"
+              title="Export the per-campaign summary for this scope"
+            >
+              <Download size={13} /> Summary
+            </button>
+            <button
+              onClick={exportRaw}
+              disabled={exporting || !data || data.total === 0}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-1)] disabled:opacity-40 transition"
+              title="Export one row per analyzed call for this scope"
+            >
+              <Download size={13} /> {exporting ? "Exporting…" : "Raw calls"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -250,7 +412,7 @@ export default function QaDashboard() {
         </>
       )}
 
-      {slice && <QaRecordsDrawer slice={slice} fromMs={win.fromMs} toMs={win.toMs} onClose={() => setSlice(null)} />}
+      {slice && <QaRecordsDrawer slice={slice} day={scope.day} fromMs={scope.fromMs} toMs={scope.toMs} onClose={() => setSlice(null)} />}
     </div>
   );
 }

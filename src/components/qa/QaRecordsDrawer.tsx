@@ -52,11 +52,13 @@ function digest(summary: string | null): { chip: string | null; text: string } {
 
 export default function QaRecordsDrawer({
   slice,
+  day,
   fromMs,
   toMs,
   onClose,
 }: {
   slice: DrawerSlice;
+  day: string | null;
   fromMs: number | null;
   toMs: number | null;
   onClose: () => void;
@@ -69,8 +71,11 @@ export default function QaRecordsDrawer({
     setError(null);
     try {
       const p = new URLSearchParams({ limit: "500" });
-      if (fromMs != null) p.set("fromMs", String(fromMs));
-      if (toMs != null) p.set("toMs", String(toMs));
+      if (day) p.set("day", day);
+      else {
+        if (fromMs != null) p.set("fromMs", String(fromMs));
+        if (toMs != null) p.set("toMs", String(toMs));
+      }
       if (slice.campaignId) p.set("campaignId", slice.campaignId);
       if (slice.callAttempt) p.set("callAttempt", slice.callAttempt);
       if (slice.reachedCategory) p.set("reachedCategory", slice.reachedCategory);
@@ -80,7 +85,7 @@ export default function QaRecordsDrawer({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load records");
     }
-  }, [slice, fromMs, toMs]);
+  }, [slice, day, fromMs, toMs]);
 
   useEffect(() => {
     load();

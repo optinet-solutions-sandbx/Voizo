@@ -290,6 +290,7 @@ export interface AnalysisRunListItem {
   callId: string;
   campaignId: string;
   campaignName: string | null;
+  campaignTimezone: string;
   promptTitle: string | null;
   analyzedAt: string;
   summary: string | null;
@@ -323,6 +324,33 @@ export function parseCategories(summary: string | null): { callAttempt: string; 
   }
 }
 
+// The campaigns_v2 default timezone — used when a campaign has none set. Val's concern:
+// a campaign only calls ~10h/day in its OWN timezone, so a "day" must be the campaign-local
+// calendar date, not the viewer's. We derive it from the UTC created_at + campaign timezone
+// (the same IANA zone the dialer's call-window gate uses), so AU/CA days line up correctly.
+export const DEFAULT_QA_TZ = "America/Toronto";
+const _tzFmt = new Map<string, Intl.DateTimeFormat>();
+function tzFormatter(tz: string): Intl.DateTimeFormat {
+  let f = _tzFmt.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+    } catch {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: DEFAULT_QA_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+    }
+    _tzFmt.set(tz, f);
+  }
+  return f;
+}
+/** The local calendar date (YYYY-MM-DD) of a UTC instant in the given IANA timezone. */
+export function localDateInTz(iso: string, tz: string): string {
+  const parts = tzFormatter(tz || DEFAULT_QA_TZ).formatToParts(new Date(iso));
+  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const m = parts.find((p) => p.type === "month")?.value ?? "01";
+  const d = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${y}-${m}-${d}`;
+}
+
 /**
  * Analysis history / drill-down list. All filters optional: campaign, call-date
  * window [fromMs, toMs), and call_attempt / reached_category (parsed from the stored
@@ -333,19 +361,20 @@ export async function listAnalysisRuns(opts: {
   limit?: number;
   fromMs?: number | null;
   toMs?: number | null;
+  day?: string | null;
   callAttempt?: string;
   reachedCategory?: string;
 } = {}): Promise<AnalysisRunListItem[]> {
   // Only the filtered drill-down needs a full page-through; the plain history list
   // (newest-first, no window/category filter) can stop after it has `limit` rows.
-  const wantAll = opts.fromMs != null || opts.toMs != null || !!opts.callAttempt || !!opts.reachedCategory;
+  const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || !!opts.callAttempt || !!opts.reachedCategory;
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     let q = supabaseAdmin
       .from("listener_qa_analysis_runs")
       .select(
         "id, call_id, campaign_id, prompt_title, summary, analyzed_at, " +
-          "campaigns_v2!campaign_id(name), " +
+          "campaigns_v2!campaign_id(name, timezone), " +
           "calls_v2!call_id(created_at, duration_seconds, goal_reached, campaign_numbers_v2!campaign_number_id(phone_e164, display_name))",
       )
       .order("analyzed_at", { ascending: false })
@@ -367,6 +396,7 @@ export async function listAnalysisRuns(opts: {
       callId: r.call_id as string,
       campaignId: r.campaign_id as string,
       campaignName: (camp?.name as string) ?? null,
+      campaignTimezone: (camp?.timezone as string) || DEFAULT_QA_TZ,
       promptTitle: (r.prompt_title as string | null) ?? null,
       analyzedAt: r.analyzed_at as string,
       summary: (r.summary as string | null) ?? null,
@@ -377,7 +407,10 @@ export async function listAnalysisRuns(opts: {
       goalReached: (call?.goal_reached as boolean | null) ?? null,
     };
   });
-  if (opts.fromMs != null || opts.toMs != null) {
+  if (opts.day != null) {
+    // Campaign-local day match (each run in its own campaign's timezone).
+    items = items.filter((it) => it.callCreatedAt != null && localDateInTz(it.callCreatedAt, it.campaignTimezone) === opts.day);
+  } else if (opts.fromMs != null || opts.toMs != null) {
     items = items.filter((it) => {
       if (!it.callCreatedAt) return false;
       const t = new Date(it.callCreatedAt).getTime();
@@ -440,6 +473,7 @@ export async function getAnalysisRun(id: string): Promise<AnalysisRunRow | null>
 export interface QaDashboardCampaign {
   campaignId: string;
   campaignName: string | null;
+  timezone: string;
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
@@ -452,12 +486,20 @@ export interface QaDashboardData {
   campaigns: QaDashboardCampaign[];
 }
 
-export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toMs?: number | null } = {}): Promise<QaDashboardData> {
+/**
+ * Roll-up of the QA analysis results. Scope is EITHER a single campaign-local `day`
+ * (YYYY-MM-DD — each run bucketed in ITS campaign's timezone) OR a UTC [fromMs,toMs)
+ * range; `day` wins when both are given. `day` is the daily/yesterday snapshot Val asked
+ * for, correct across AU/CA. Campaign name + timezone come from the embedded join.
+ */
+export async function getQaAnalysisDashboard(
+  opts: { fromMs?: number | null; toMs?: number | null; day?: string | null } = {},
+): Promise<QaDashboardData> {
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from("listener_qa_analysis_runs")
-      .select("campaign_id, summary, calls_v2!call_id(created_at)")
+      .select("campaign_id, summary, calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
     if (error) throw error;
@@ -466,11 +508,14 @@ export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toM
     if (page.length < 1000) break;
   }
 
-  const inWindow = (r: Record<string, unknown>): boolean => {
+  const matches = (createdAt: string | undefined, tz: string): boolean => {
+    if (opts.day != null) {
+      if (!createdAt) return false;
+      return localDateInTz(createdAt, tz) === opts.day;
+    }
     if (opts.fromMs == null && opts.toMs == null) return true;
-    const iso = one(r.calls_v2)?.created_at as string | undefined;
-    if (!iso) return false;
-    const t = new Date(iso).getTime();
+    if (!createdAt) return false;
+    const t = new Date(createdAt).getTime();
     if (opts.fromMs != null && t < opts.fromMs) return false;
     if (opts.toMs != null && t >= opts.toMs) return false;
     return true;
@@ -483,7 +528,10 @@ export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toM
   let total = 0;
 
   for (const r of rows) {
-    if (!inWindow(r)) continue;
+    const camp = one(r.campaigns_v2);
+    const tz = (camp?.timezone as string) || DEFAULT_QA_TZ;
+    const createdAt = one(r.calls_v2)?.created_at as string | undefined;
+    if (!matches(createdAt, tz)) continue;
     total += 1;
     const p = parseCategories(r.summary as string | null);
     if (!p.parsed) unparseable += 1;
@@ -495,22 +543,12 @@ export async function getQaAnalysisDashboard(opts: { fromMs?: number | null; toM
     const cid = r.campaign_id as string;
     let c = perC.get(cid);
     if (!c) {
-      c = { campaignId: cid, campaignName: null, total: 0, callAttempt: {}, reachedCategory: {} };
+      c = { campaignId: cid, campaignName: (camp?.name as string) ?? null, timezone: tz, total: 0, callAttempt: {}, reachedCategory: {} };
       perC.set(cid, c);
     }
     c.total += 1;
     c.callAttempt[attempt] = (c.callAttempt[attempt] ?? 0) + 1;
     if (category) c.reachedCategory[category] = (c.reachedCategory[category] ?? 0) + 1;
-  }
-
-  // Campaign names (chunked .in()).
-  const ids = [...perC.keys()];
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data } = await supabaseAdmin.from("campaigns_v2").select("id, name").in("id", ids.slice(i, i + 200));
-    for (const c of (data ?? []) as Array<{ id: string; name: string | null }>) {
-      const e = perC.get(c.id);
-      if (e) e.campaignName = c.name ?? null;
-    }
   }
 
   return {
