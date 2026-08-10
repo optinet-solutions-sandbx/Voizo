@@ -14,8 +14,30 @@ export interface CallWindowLite {
   end: string; // "HH:MM" 24h
 }
 
-/** True if `atMs` falls within an enabled call window, evaluated in `timezone`.
- *  Empty windows = always open (matches dialer.ts). */
+/** "HH:MM" (24h) → minutes since midnight. Defensive parse (NaN → 0).
+ *
+ *  VOZ-365: this replaced a LEXICAL string compare, which was silently wrong for
+ *  unpadded input. An operator-entered "9:00" made `"18:47" >= "9:00"` evaluate
+ *  FALSE (because "1" < "9"), so the window never opened after 09:59 — with no
+ *  error anywhere. Nothing validates zero-padding on write, so we parse instead
+ *  of trusting the format. */
+function hhmmToMinutes(hhmm: string): number {
+  const [h, m] = String(hhmm ?? "").split(":");
+  return (Number(h) || 0) * 60 + (Number(m) || 0);
+}
+
+/** True if `atMs` falls within ANY enabled call window for that weekday, evaluated
+ *  in `timezone`. Empty windows = always open (matches dialer.ts).
+ *
+ *  Boundary semantics (locked by tests): OPEN edge inclusive, CLOSE edge exclusive
+ *  (`>= start`, `< end`) — aligned campaigns must never false-block.
+ *
+ *  VOZ-360: this used `windows.find(w => w.day === weekday)`, which honoured only
+ *  the FIRST window on a day and silently ignored the rest. A split window such as
+ *  09:00–10:00 + 15:00–19:00 never dialled its afternoon band, with nothing logged.
+ *  `.some()` evaluates every window for the day and also subsumes the old
+ *  "no window for today → false" branch. A malformed window where start >= end
+ *  simply never matches, which is the safe direction. */
 export function isWithinCallWindowAt(windows: CallWindowLite[], timezone: string, atMs: number): boolean {
   if (!windows || windows.length === 0) return true;
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -29,10 +51,14 @@ export function isWithinCallWindowAt(windows: CallWindowLite[], timezone: string
   let hour = parts.find((p) => p.type === "hour")?.value || "00";
   if (hour === "24") hour = "00"; // V8 hour12:false midnight edge
   const minute = parts.find((p) => p.type === "minute")?.value || "00";
-  const currentTime = `${hour}:${minute}`;
-  const today = windows.find((w) => w.day === weekday);
-  if (!today) return false;
-  return currentTime >= today.start && currentTime < today.end;
+  const nowMinutes = hhmmToMinutes(`${hour}:${minute}`);
+
+  return windows.some(
+    (w) =>
+      w.day === weekday &&
+      nowMinutes >= hhmmToMinutes(w.start) &&
+      nowMinutes < hhmmToMinutes(w.end),
+  );
 }
 
 export type StartMode = "now" | "delay" | "scheduled";
@@ -66,14 +92,11 @@ export function clockHHMMInTimezone(atMs: number, timezone: string): string {
   return `${hour}:${minute}`;
 }
 
-/** Minutes between two "HH:MM" 24h times on the same day (end - start). Defensive
- *  parse (NaN -> 0), matching the formatters above. */
+/** Minutes between two "HH:MM" 24h times on the same day (end - start). Shares
+ *  hhmmToMinutes with isWithinCallWindowAt so the two can never disagree on how a
+ *  time is parsed (this file previously carried a private duplicate of that parser). */
 function windowLengthMinutes(start: string, end: string): number {
-  const toMin = (hhmm: string): number => {
-    const [h, m] = hhmm.split(":");
-    return (Number(h) || 0) * 60 + (Number(m) || 0);
-  };
-  return toMin(end) - toMin(start);
+  return hhmmToMinutes(end) - hhmmToMinutes(start);
 }
 
 /** Shortest enabled call-window length in minutes, or null when there are NO

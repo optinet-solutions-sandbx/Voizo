@@ -29,6 +29,43 @@ describe("isWithinCallWindowAt", () => {
     expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-02T22:00:00Z"))).toBe(true)); // Tue 18:00
   it("false at the CLOSE edge (start == window.end) — matches the cron's `< end`", () =>
     expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-03T01:00:00Z"))).toBe(false)); // Tue 21:00
+
+  // ── VOZ-360 regression locks: MULTIPLE windows on one day ──────────────────
+  // The old `.find()` honoured only the FIRST window per day, so the afternoon band
+  // of a split window never dialled. 2026-06-01 is a Monday; Toronto in June = EDT (UTC-4).
+  const split = [
+    { day: "mon", start: "09:00", end: "10:00" },
+    { day: "mon", start: "15:00", end: "19:00" },
+  ];
+  it("true inside the FIRST of two same-day windows", () =>
+    expect(isWithinCallWindowAt(split, tz, Date.parse("2026-06-01T13:30:00Z"))).toBe(true)); // Mon 09:30
+  it("true inside the SECOND of two same-day windows (old .find() returned false)", () =>
+    expect(isWithinCallWindowAt(split, tz, Date.parse("2026-06-01T20:00:00Z"))).toBe(true)); // Mon 16:00
+  it("false in the GAP between two same-day windows", () =>
+    expect(isWithinCallWindowAt(split, tz, Date.parse("2026-06-01T16:00:00Z"))).toBe(false)); // Mon 12:00
+  it("false after the LAST of two same-day windows closes", () =>
+    expect(isWithinCallWindowAt(split, tz, Date.parse("2026-06-01T23:30:00Z"))).toBe(false)); // Mon 19:30
+
+  // ── VOZ-365 regression lock: integer compare, not lexical ─────────────────
+  // Lexically "18:30" >= "9:00" is FALSE ("1" < "9"), so an unpadded start silently
+  // closed the window after 09:59. Nothing validates zero-padding on write.
+  it("true with an UNPADDED start time (lexical compare said false)", () =>
+    expect(
+      isWithinCallWindowAt([{ day: "tue", start: "9:00", end: "20:00" }], tz, Date.parse("2026-06-02T22:30:00Z")),
+    ).toBe(true)); // Tue 18:30
+
+  // ── midnight edge: the dialer used to lack the "24" normalization entirely ──
+  it("true at exactly 00:00 for a midnight-opening window", () =>
+    expect(
+      isWithinCallWindowAt([{ day: "tue", start: "00:00", end: "08:00" }], tz, Date.parse("2026-06-02T04:00:00Z")),
+    ).toBe(true)); // Tue 00:00 Toronto
+
+  // ── malformed windows must never match, rather than match unpredictably ────
+  const inverted = [{ day: "tue", start: "21:00", end: "18:00" }]; // start >= end
+  it("false for an inverted window, before its start", () =>
+    expect(isWithinCallWindowAt(inverted, tz, Date.parse("2026-06-02T23:00:00Z"))).toBe(false)); // Tue 19:00
+  it("false for an inverted window, after its start (never matches)", () =>
+    expect(isWithinCallWindowAt(inverted, tz, Date.parse("2026-06-03T02:00:00Z"))).toBe(false)); // Tue 22:00
 });
 
 describe("resolveStartAt", () => {

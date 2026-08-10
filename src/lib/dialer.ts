@@ -1,37 +1,32 @@
 import { supabaseAdmin } from "./supabaseServer";
 import { originateCall } from "./freeswitch/originate";
 import { resolveFreeswitchCallerId } from "./freeswitch/callerId";
+import { isWithinCallWindowAt } from "./scheduleWindow";
 
 /**
  * Check if the current time falls within the campaign's call windows.
  * Manifesto §6: "Check call window before every dial. Not once at campaign start — every time."
+ *
+ * DELEGATES to scheduleWindow.isWithinCallWindowAt (VOZ-360/VOZ-365). This function
+ * used to carry its own ~20-line copy of the logic, described in scheduleWindow.ts as
+ * "a deliberate, documented ~15-line mirror". The two copies then DIVERGED: the V8
+ * `hour12:false` "24" midnight normalization was added to the mirror only, and its
+ * comment claimed the omission "never affects a dial decision" — but THIS function is
+ * the one that decides dials, so the dialer was the copy missing the fix. Both copies
+ * also shared the `.find()` single-window bug and the lexical time compare.
+ *
+ * One implementation now, so the wizard's "open now?" preview can never disagree with
+ * what actually dials.
+ *
+ * ⚠️ scheduleWindow.ts must stay pure and dependency-free — it is imported by client
+ * components (StepSchedule/wizardState) AND by this server-only module. A client-only
+ * dependency added there would break the dial path at build time.
  */
 export function isWithinCallWindow(
   callWindows: Array<{ day: string; start: string; end: string }>,
   timezone: string,
 ): boolean {
-  if (!callWindows || callWindows.length === 0) return true; // no windows = always open
-
-  // Get current time in the campaign's timezone
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(now);
-  const weekday = parts.find((p) => p.type === "weekday")?.value?.toLowerCase().slice(0, 3) || "";
-  const hour = parts.find((p) => p.type === "hour")?.value || "00";
-  const minute = parts.find((p) => p.type === "minute")?.value || "00";
-  const currentTime = `${hour}:${minute}`;
-
-  const todayWindow = callWindows.find((w) => w.day === weekday);
-  if (!todayWindow) return false; // no window defined for today
-
-  return currentTime >= todayWindow.start && currentTime < todayWindow.end;
+  return isWithinCallWindowAt(callWindows, timezone, Date.now());
 }
 
 /**
