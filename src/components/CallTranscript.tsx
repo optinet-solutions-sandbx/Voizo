@@ -24,7 +24,8 @@ export default function CallTranscript({ text, fill = false }: { text: string; f
         const isAI = /^(?:AI|Assistant|Bot)\b/i.test(line);
         const isUser = /^(?:User|Customer|Caller|Human)\b/i.test(line);
         return (
-          <div key={i} className="text-xs leading-relaxed">
+          <div key={i} className="text-xs leading-relaxed flex gap-2">
+            <span className="shrink-0 select-none font-mono text-[10px] text-[var(--text-3)] pt-0.5 w-[68px]">Message {i + 1}</span>
             <span className={isAI ? "text-blue-400 font-medium" : isUser ? "text-[var(--text-1)] font-medium" : "text-[var(--text-2)]"}>{line}</span>
           </div>
         );

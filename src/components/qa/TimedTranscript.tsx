@@ -62,7 +62,7 @@ export default function TimedTranscript({
               </button>
               <div className="min-w-0 flex-1">
                 <span className={isAgent ? "text-blue-400 font-medium" : "text-[var(--text-1)] font-medium"}>
-                  {isAgent ? "Agent" : "Customer"}:{" "}
+                  Message {i + 1} · {isAgent ? "Agent" : "Customer"}:{" "}
                 </span>
                 <span className={isAgent ? "text-[var(--text-2)]" : "text-[var(--text-1)]"}>{t.text}</span>
                 {t.isResponse && t.gapSec != null && t.gapSec >= 0.1 && (

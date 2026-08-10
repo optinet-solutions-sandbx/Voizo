@@ -32,6 +32,8 @@ const daysArg = process.argv.find((a) => a.startsWith("--days="));
 const DAYS = daysArg ? Number(daysArg.split("=")[1]) : null;
 
 const transcriptText = (t) => (!t ? "" : typeof t === "string" ? t : typeof t === "object" && typeof t.text === "string" ? t.text : "");
+// Prefix each spoken line with "Message N: " (mirror of src/lib/qaTranscript.ts).
+const numberTranscript = (text) => { if (!text) return text; let n = 0; return text.split(/\r?\n/).map((l) => { const t = l.trim(); if (!t) return l; n += 1; return `Message ${n}: ${t}`; }).join("\n"); };
 const isEnqueueLimit = (msg) => /enqueued|token_limit|queue|limit|quota|too many|429/i.test(msg);
 
 async function resolvePrompt() {
@@ -103,7 +105,7 @@ async function main() {
     try {
       const jsonl = calls.map((c) => JSON.stringify({
         custom_id: `call-${c.id}`, method: "POST", url: "/v1/chat/completions",
-        body: { model: MODEL, messages: [{ role: "system", content: prompt.content }, { role: "user", content: `Score this call transcript:\n\n${c.transcript}` }], max_completion_tokens: 4096, temperature: 0, seed: 7 },
+        body: { model: MODEL, messages: [{ role: "system", content: prompt.content }, { role: "user", content: `Score this call transcript:\n\n${numberTranscript(c.transcript)}` }], max_completion_tokens: 4096, temperature: 0, seed: 7 },
       })).join("\n");
 
       const form = new FormData();

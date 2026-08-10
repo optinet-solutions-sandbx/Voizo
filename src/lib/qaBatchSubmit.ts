@@ -14,6 +14,7 @@ import {
   type ReachedCall,
   type AnalysisRunInsert,
 } from "./qaBatchData";
+import { numberTranscript } from "./qaTranscript";
 
 const MODEL = "gpt-5.4-mini";
 
@@ -26,7 +27,7 @@ function jsonlLine(callId: string, transcript: string, promptContent: string): s
       model: MODEL,
       messages: [
         { role: "system", content: promptContent },
-        { role: "user", content: `Score this call transcript:\n\n${transcript}` },
+        { role: "user", content: `Score this call transcript:\n\n${numberTranscript(transcript)}` },
       ],
       max_completion_tokens: 4096,
       // Deterministic classification so re-runs don't flip borderline calls

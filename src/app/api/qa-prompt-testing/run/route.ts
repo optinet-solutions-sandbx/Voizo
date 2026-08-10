@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { getQaCallDetail } from "@/lib/qaPromptData";
+import { numberTranscript } from "@/lib/qaTranscript";
 
 /**
  * POST /api/qa-prompt-testing/run
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
       model: MODEL,
       messages: [
         { role: "system", content: promptContent },
-        { role: "user", content: `Score this call transcript:\n\n${call.transcript}` },
+        { role: "user", content: `Score this call transcript:\n\n${numberTranscript(call.transcript)}` },
       ],
       max_completion_tokens: 4096,
       // Deterministic: without this a re-run can flip a borderline call's category

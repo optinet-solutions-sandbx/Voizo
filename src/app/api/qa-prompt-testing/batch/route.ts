@@ -9,6 +9,7 @@ import {
   pollActiveJobs,
   type AnalysisRunInsert,
 } from "@/lib/qaBatchData";
+import { numberTranscript } from "@/lib/qaTranscript";
 
 /**
  * /api/qa-prompt-testing/batch — per-campaign bulk analysis via the OpenAI Batch API.
@@ -49,7 +50,7 @@ function jsonlLine(callId: string, transcript: string, promptContent: string): s
       model: MODEL,
       messages: [
         { role: "system", content: promptContent },
-        { role: "user", content: `Score this call transcript:\n\n${transcript}` },
+        { role: "user", content: `Score this call transcript:\n\n${numberTranscript(transcript)}` },
       ],
       max_completion_tokens: 4096,
       // Deterministic classification: at the default temperature (~1.0) a borderline
