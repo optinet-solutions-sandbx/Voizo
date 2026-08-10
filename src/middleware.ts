@@ -19,7 +19,6 @@ import { NextRequest, NextResponse } from "next/server";
  *   /api/webhooks/*               — signed by Vapi/Mobivate-side
  *                                   (HMAC, x-vapi-secret, reference UUID)
  *   /api/cron/*                   — Bearer CRON_SECRET (Vercel-injected)
- *   /api/freeswitch/originate     — own x-auth-secret header (Phase 0 PoC)
  *   /api/lab/webhook              — x-vapi-secret (VOZ-186; Vapi can't do
  *                                   Basic Auth — route carries its own check)
  *   /_next/*, /favicon, /icon     — static assets
@@ -40,10 +39,14 @@ import { NextRequest, NextResponse } from "next/server";
  *   inference of credentials.
  */
 
+// NOTE: every entry is matched with startsWith(), so an entry WITHOUT a trailing
+// slash makes every sibling path sharing that prefix public too. Keep the trailing
+// slash on directory-style prefixes. (`/api/freeswitch/originate` was removed with
+// the route in VOZ-363 — it had no trailing slash, so it also exposed any future
+// `/api/freeswitch/originate*` path.)
 const PUBLIC_PATH_PREFIXES = [
   "/api/webhooks/",
   "/api/cron/",
-  "/api/freeswitch/originate",
   "/api/lab/webhook",
 ];
 
