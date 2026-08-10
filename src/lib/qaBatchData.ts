@@ -91,17 +91,43 @@ async function fetchReachedCalls(campaignId: string): Promise<ReachedCall[]> {
   return out;
 }
 
-/** Call ids already analyzed for this campaign + prompt (so re-submit is safe). */
+/**
+ * The prompt's last-edited time — the freeze boundary. A call scored at/after this is
+ * "current" (frozen, won't be re-scored); a call scored BEFORE it means the prompt has
+ * been edited since, so it's eligible for re-scoring. Null if the prompt no longer exists
+ * (then we fall back to freezing by prompt id alone). Editing a prompt bumps updated_at
+ * via the set_updated_at trigger on listener_qa_prompts.
+ */
+async function promptUpdatedAt(promptId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin.from("listener_qa_prompts").select("updated_at").eq("id", promptId).maybeSingle();
+  return (data?.updated_at as string | null) ?? null;
+}
+
+/**
+ * Call ids already analyzed for this campaign with the CURRENT version of this prompt —
+ * i.e. scored at/after the prompt's last edit. Re-running the same prompt freezes these
+ * (they're skipped); editing the prompt makes older scores eligible again. Fully paged so
+ * a campaign with >1000 scored calls doesn't silently drop rows (which would re-score them).
+ */
 async function analyzedCallIds(campaignId: string, promptId: string | null): Promise<Set<string>> {
   if (!promptId) return new Set();
+  const since = await promptUpdatedAt(promptId);
   const ids = new Set<string>();
-  const { data, error } = await supabaseAdmin
-    .from("listener_qa_analysis_runs")
-    .select("call_id")
-    .eq("campaign_id", campaignId)
-    .eq("prompt_id", promptId);
-  if (error) throw error;
-  for (const r of (data ?? []) as Array<{ call_id: string }>) ids.add(r.call_id);
+  for (let from = 0; ; from += 1000) {
+    let q = supabaseAdmin
+      .from("listener_qa_analysis_runs")
+      .select("call_id")
+      .eq("campaign_id", campaignId)
+      .eq("prompt_id", promptId)
+      .order("analyzed_at", { ascending: false })
+      .range(from, from + 999);
+    if (since) q = q.gte("analyzed_at", since);
+    const { data, error } = await q;
+    if (error) throw error;
+    const page = (data ?? []) as Array<{ call_id: string }>;
+    for (const r of page) ids.add(r.call_id);
+    if (page.length < 1000) break;
+  }
   return ids;
 }
 
@@ -617,9 +643,24 @@ export async function selectReachedUnanalyzedAcrossCampaigns(opts: {
     if (c.source === "ghost_portal") ghost.add(c.id);
   }
 
+  // Frozen = already scored with the CURRENT prompt version (at/after its last edit).
+  // Paged fully so >1000 scored calls aren't silently dropped (which would re-score them).
+  const since = await promptUpdatedAt(opts.promptId);
   const analyzed = new Set<string>();
-  const { data: runs } = await supabaseAdmin.from("listener_qa_analysis_runs").select("call_id").eq("prompt_id", opts.promptId);
-  for (const r of (runs ?? []) as Array<{ call_id: string }>) analyzed.add(r.call_id);
+  for (let from = 0; ; from += 1000) {
+    let rq = supabaseAdmin
+      .from("listener_qa_analysis_runs")
+      .select("call_id")
+      .eq("prompt_id", opts.promptId)
+      .order("analyzed_at", { ascending: false })
+      .range(from, from + 999);
+    if (since) rq = rq.gte("analyzed_at", since);
+    const { data: runs, error: runsErr } = await rq;
+    if (runsErr) throw runsErr;
+    const page = (runs ?? []) as Array<{ call_id: string }>;
+    for (const r of page) analyzed.add(r.call_id);
+    if (page.length < 1000) break;
+  }
 
   const map = new Map<string, ReachedCall[]>();
   for (const r of rows) {
