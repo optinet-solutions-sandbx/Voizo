@@ -73,25 +73,61 @@ export async function exceededDialCeiling(campaignNumberId: string): Promise<boo
  *
  * Name kept (rather than renamed to e.g. hasOpenWork) for diff-history clarity;
  * the in_progress branch is a defensive expansion documented inline.
+ *
+ * FAILS SAFE toward "true" (VOZ-365). Both counts previously destructured only
+ * `count`, so a transient Supabase error left it undefined, `(undefined ?? 0) > 0`
+ * evaluated false, and the function reported "no work left" on bad data.
+ *
+ * "true" is the safe answer because every one of the four call sites uses this to
+ * decide whether to COMPLETE a campaign, and true always means "stay running":
+ *   - campaign-scheduler:569  `if (!hasPendingRetry(...))` → completes + releases the SIP slot
+ *   - campaign-scheduler:860  `if (hasPendingRetry(...)) continue` → else completes
+ *   - start/route:141         `if (hasPendingRetry(...)) return waiting` → else completes
+ *   - voice-status:383        `if (hasPendingRetry(...)) return idle` → else completes
+ * Completing wrongly is destructive and asymmetric: it strands every queued retry
+ * until the next spawn, and at three of those sites (when PAUSE_RELEASES_SLOT is on)
+ * it also clears the Vapi assistant/SIP pointers and releases the pool slot, so
+ * recovery needs a re-lease and re-clone. Staying `running` costs one more cron
+ * tick, which then re-checks. So on error we report open work and log loudly.
  */
 export async function hasPendingRetry(campaignId: string): Promise<boolean> {
   const nowIso = new Date().toISOString();
 
   // (a) pending_retry numbers waiting for their retry window
-  const { count: retryCount } = await supabaseAdmin
+  const { count: retryCount, error: retryErr } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("id", { count: "exact", head: true })
     .eq("campaign_id", campaignId)
     .eq("outcome", "pending_retry")
     .gt("next_attempt_at", nowIso);
+  if (retryErr) {
+    // FAIL SAFE (VOZ-365): a query error used to leave `count` undefined, and
+    // `(undefined ?? 0) > 0` is false — so a transient DB blip read as "no work
+    // left" and every caller completed the campaign. See the doc comment above
+    // for why "true" is the safe answer at all four call sites.
+    console.error(
+      `[dialer.hasPendingRetry] pending_retry count failed for campaign ${campaignId} — ` +
+        `reporting OPEN WORK so the campaign is not completed on bad data:`,
+      retryErr.message,
+    );
+    return true;
+  }
   if ((retryCount ?? 0) > 0) return true;
 
   // (b) in_progress numbers (defensive against lost terminal webhook)
-  const { count: inProgressCount } = await supabaseAdmin
+  const { count: inProgressCount, error: inProgressErr } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("id", { count: "exact", head: true })
     .eq("campaign_id", campaignId)
     .eq("outcome", "in_progress");
+  if (inProgressErr) {
+    console.error(
+      `[dialer.hasPendingRetry] in_progress count failed for campaign ${campaignId} — ` +
+        `reporting OPEN WORK so the campaign is not completed on bad data:`,
+      inProgressErr.message,
+    );
+    return true;
+  }
   return (inProgressCount ?? 0) > 0;
 }
 
