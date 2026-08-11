@@ -131,6 +131,54 @@ export async function hasPendingRetry(campaignId: string): Promise<boolean> {
   return (inProgressCount ?? 0) > 0;
 }
 
+/** Candidate window per fetch. Doubles as the .in() batch size for the suppression
+ *  lookups — 20 is far below the ~200 chunk ceiling undici's header cap imposes. */
+const SUPPRESSION_WINDOW_SIZE = 20;
+/** Bounds the fully-suppressed-window scan at 20 x 500 = 10,000 numbers. The recursion
+ *  this replaced was unbounded, and spun forever if the "mark suppressed" write failed. */
+const MAX_SUPPRESSION_WINDOWS = 500;
+/** How long to defer a number whose suppression status could not be verified (VOZ-364). */
+const DEFER_UNVERIFIABLE_MS = 60_000;
+
+/**
+ * FAIL CLOSED (VOZ-364). We could not prove this number is absent from the DNC
+ * lists, so we must not dial it. The old code destructured only `data`, so a
+ * transient DB error produced `null`, read as "not suppressed", and the dial
+ * proceeded — a database blip became a call to a do-not-call number.
+ *
+ * We deliberately do NOT simply `return null`. Every caller treats null as
+ * "nothing to dial", and `hasPendingRetry` counts only pending_retry/in_progress
+ * rows — NOT plain 'pending'. So a bare null on a campaign whose remaining numbers
+ * are all 'pending' would mark it COMPLETED and, with PAUSE_RELEASES_SLOT on, also
+ * release its SIP slot and clear its Vapi pointers. Deferring keeps the campaign
+ * alive, retries a minute later, and burns no attempt (VOZ-321 no-burn semantics).
+ */
+async function deferUnverifiableSuppression(
+  row: { id: string },
+  reason: string,
+): Promise<null> {
+  console.error(
+    `[dialer.findNextNumber] suppression lookup UNVERIFIABLE for number ${row.id} — ` +
+      `refusing to dial, deferring ${DEFER_UNVERIFIABLE_MS / 1000}s:`,
+    reason,
+  );
+  const { error } = await supabaseAdmin
+    .from("campaign_numbers_v2")
+    .update({
+      outcome: "pending_retry",
+      next_attempt_at: new Date(Date.now() + DEFER_UNVERIFIABLE_MS).toISOString(),
+    })
+    .eq("id", row.id);
+  if (error) {
+    console.error(
+      `[dialer.findNextNumber] defer write ALSO failed for ${row.id} — the campaign can ` +
+        `still be wrongly completed if nothing else is queued:`,
+      error.message,
+    );
+  }
+  return null;
+}
+
 /**
  * Find the next eligible number in a campaign:
  * - outcome = 'pending' or 'pending_retry'
@@ -148,80 +196,120 @@ export async function findNextNumber(campaignId: string) {
     .single();
   if (cErr || !campaign) return null;
 
-  const now = new Date().toISOString();
+  // VOZ-365 #2: this was `return findNextNumber(campaignId)` once per suppressed
+  // number — every level added a stack frame AND re-ran four queries, so a segment
+  // overlapping the suppression list cost 4N queries and, at a few thousand, blew the
+  // stack. Now a BOUNDED loop, with both suppression lookups batched across the whole
+  // window via .in(), so skipping N suppressed numbers costs a constant query count.
+  // The loop only re-fetches when an ENTIRE window was suppressed, which preserves the
+  // old behaviour of continuing past the first 20.
+  for (let pass = 0; pass < MAX_SUPPRESSION_WINDOWS; pass++) {
+    const now = new Date().toISOString();
 
-  // Eligibility is filtered IN THE QUERY (not after .limit), and due-soonest is ordered
-  // first. This fixes a starvation stall: campaign_numbers are batch-loaded with a single
-  // shared created_at, so .order("created_at") was a meaningless tie and the arbitrary
-  // limit(20) window could be filled entirely by not-yet-due pending_retry rows — making
-  // findNextNumber return null even though many 'pending' numbers were due NOW (they sat
-  // beyond the window). With the eligibility filter the window holds only dialable rows;
-  // nullsFirst puts fresh 'pending' (null next_attempt_at) ahead of due retries.
-  // id ascending is the final STABLE tiebreak: created_at is batch-identical, so without it the
-  // limit(20) window + pick are non-deterministic. id (uuid PK) makes dial order reproducible and
-  // matches campaignRunFlow.deriveRunFlow, so the detail page's "Up next" == the number we dial.
-  const { data: numbers, error: nErr } = await supabaseAdmin
-    .from("campaign_numbers_v2")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .lt("attempt_count", campaign.max_attempts)
-    .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${now})`)
-    .order("next_attempt_at", { ascending: true, nullsFirst: true })
-    .order("created_at", { ascending: true })
-    .order("id", { ascending: true })
-    .limit(20);
-
-  if (nErr || !numbers || numbers.length === 0) return null;
-
-  // Defensive backstop (redundant with the query filter above): never surface a
-  // not-yet-due pending_retry to dial, even if the filter were ever malformed.
-  const eligible = numbers.find((n) => {
-    if (n.outcome === "pending_retry") {
-      return n.next_attempt_at && n.next_attempt_at <= now;
-    }
-    return true;
-  });
-
-  if (!eligible) return null;
-
-  // Suppression check (Manifesto §6: before every calls.create, no exceptions)
-  //
-  // Two tables coexist during V1→V2 transition (architecture doc §3.8):
-  //   - suppression_list (V2): used by the Campaign V2 dialer, richer schema
-  //   - do_not_call (V1): used by the /do-not-call dashboard page, seeded data
-  //
-  // Both must be checked. A number in EITHER table is suppressed.
-  // Consolidation (migrating V1 rows into V2, deprecating do_not_call) is
-  // planned for post-demo. Until then, dual-check is the compliance gate.
-  //
-  // Performance: both tables have UNIQUE index on their phone column.
-  // Two indexed lookups = ~2ms total. Negligible even at 100k calls/day.
-
-  const { data: suppressedV2 } = await supabaseAdmin
-    .from("suppression_list")
-    .select("id")
-    .eq("phone_e164", eligible.phone_e164)
-    .limit(1);
-
-  const { data: suppressedV1 } = await supabaseAdmin
-    .from("do_not_call")
-    .select("id")
-    .eq("phone_number", eligible.phone_e164)
-    .limit(1);
-
-  const isSuppressed =
-    (suppressedV2 && suppressedV2.length > 0) ||
-    (suppressedV1 && suppressedV1.length > 0);
-
-  if (isSuppressed) {
-    await supabaseAdmin
+    // Eligibility is filtered IN THE QUERY (not after .limit), and due-soonest is ordered
+    // first. This fixes a starvation stall: campaign_numbers are batch-loaded with a single
+    // shared created_at, so .order("created_at") was a meaningless tie and the arbitrary
+    // limit(20) window could be filled entirely by not-yet-due pending_retry rows — making
+    // findNextNumber return null even though many 'pending' numbers were due NOW (they sat
+    // beyond the window). With the eligibility filter the window holds only dialable rows;
+    // nullsFirst puts fresh 'pending' (null next_attempt_at) ahead of due retries.
+    // id ascending is the final STABLE tiebreak: created_at is batch-identical, so without it the
+    // limit(20) window + pick are non-deterministic. id (uuid PK) makes dial order reproducible and
+    // matches campaignRunFlow.deriveRunFlow, so the detail page's "Up next" == the number we dial.
+    const { data: numbers, error: nErr } = await supabaseAdmin
       .from("campaign_numbers_v2")
-      .update({ outcome: "suppressed" })
-      .eq("id", eligible.id);
-    return findNextNumber(campaignId); // recurse to next
+      .select("*")
+      .eq("campaign_id", campaignId)
+      .lt("attempt_count", campaign.max_attempts)
+      .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${now})`)
+      .order("next_attempt_at", { ascending: true, nullsFirst: true })
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(SUPPRESSION_WINDOW_SIZE);
+
+    if (nErr || !numbers || numbers.length === 0) return null;
+
+    // Defensive backstop (redundant with the query filter above): never surface a
+    // not-yet-due pending_retry to dial, even if the filter were ever malformed.
+    // Order is preserved, so candidates[0] is still exactly what the old code dialled.
+    const candidates = numbers.filter((n) =>
+      n.outcome === "pending_retry" ? Boolean(n.next_attempt_at && n.next_attempt_at <= now) : true,
+    );
+
+    if (candidates.length === 0) return null;
+
+    // Suppression check (Manifesto §6: before every calls.create, no exceptions)
+    //
+    // Two tables coexist during V1→V2 transition (architecture doc §3.8):
+    //   - suppression_list (V2): used by the Campaign V2 dialer, richer schema
+    //   - do_not_call (V1): used by the /do-not-call dashboard page, seeded data
+    //
+    // Both must be checked. A number in EITHER table is suppressed.
+    // Consolidation (migrating V1 rows into V2, deprecating do_not_call) is
+    // planned for post-demo. Until then, dual-check is the compliance gate.
+    //
+    // Both have a UNIQUE index on their phone column. They were two sequential
+    // awaits per candidate; they are independent, so they now run concurrently
+    // and cover the whole window in one round trip each.
+    const phones = [...new Set(candidates.map((c) => c.phone_e164))];
+    const [supV2, supV1] = await Promise.all([
+      supabaseAdmin.from("suppression_list").select("phone_e164").in("phone_e164", phones),
+      supabaseAdmin.from("do_not_call").select("phone_number").in("phone_number", phones),
+    ]);
+
+    // FAIL CLOSED (VOZ-364): unverifiable is treated as suppressed, never as clean.
+    if (supV2.error || supV1.error) {
+      return deferUnverifiableSuppression(
+        candidates[0],
+        (supV2.error ?? supV1.error)?.message ?? "unknown suppression lookup error",
+      );
+    }
+
+    const blocked = new Set<string>([
+      ...(supV2.data ?? []).map((r) => r.phone_e164),
+      ...(supV1.data ?? []).map((r) => r.phone_number),
+    ]);
+
+    const firstClean = candidates.findIndex((c) => !blocked.has(c.phone_e164));
+    // Mark exactly the numbers the old code would have marked as it walked past them:
+    // everything ahead of the first clean candidate (or the whole window if none is).
+    const toSuppress = firstClean === -1 ? candidates : candidates.slice(0, firstClean);
+
+    if (toSuppress.length > 0) {
+      const { error: markErr } = await supabaseAdmin
+        .from("campaign_numbers_v2")
+        .update({ outcome: "suppressed" })
+        .in(
+          "id",
+          toSuppress.map((c) => c.id),
+        );
+      if (markErr) {
+        console.error(
+          `[dialer.findNextNumber] could not mark ${toSuppress.length} number(s) suppressed ` +
+            `for campaign ${campaignId}:`,
+          markErr.message,
+        );
+        // Marking is bookkeeping — a number we positively verified as clean is still
+        // safe to dial, so don't stall the campaign over a failed write.
+        if (firstClean !== -1) return candidates[firstClean];
+        // Nothing clean AND the suppressions didn't record: re-fetching would return
+        // the identical window forever (the old recursion did exactly that). Defer.
+        return deferUnverifiableSuppression(
+          candidates[0],
+          `could not record suppression: ${markErr.message}`,
+        );
+      }
+    }
+
+    if (firstClean !== -1) return candidates[firstClean];
+    // Whole window suppressed AND recorded → loop to fetch the next window.
   }
 
-  return eligible;
+  console.error(
+    `[dialer.findNextNumber] campaign ${campaignId}: stopped after ${MAX_SUPPRESSION_WINDOWS} ` +
+      `consecutive fully-suppressed windows (${MAX_SUPPRESSION_WINDOWS * SUPPRESSION_WINDOW_SIZE} numbers).`,
+  );
+  return null;
 }
 
 /**
