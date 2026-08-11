@@ -8,6 +8,12 @@ import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
 import { isRejectStreak, REJECT_BREAKER_STREAK, REJECT_BREAKER_WINDOW_MINUTES } from "@/lib/scheduler/rejectBreaker";
+import {
+  assessTrunkHealth,
+  selectProbeParent,
+  TRUNK_WINDOW_HOURS,
+  type TrunkHealth,
+} from "@/lib/scheduler/trunkBreaker";
 import { runAnomalySweep } from "@/lib/alerts/anomalySweep";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
@@ -945,7 +951,13 @@ export async function GET(request: NextRequest) {
   // auto-pause collision that would happen if children were created 'running'
   // before their window.
   const recurringResults: Array<
-    { parentId: string; parentName: string } & (SpawnOutcome | { result: "deferred_low_budget" })
+    { parentId: string; parentName: string } & (
+      | SpawnOutcome
+      | { result: "deferred_low_budget" }
+      // Trunk-refusal gate held this parent's spawn. NOT part of SpawnOutcome:
+      // no spawn was attempted, so it is not a spawn outcome.
+      | { result: "skipped_trunk_refusing" }
+    )
   > = [];
   // select * (was an explicit 13-column list): the realtime branch (VOZ-132)
   // needs `realtime` + `daily_cap` off the parent, and * is deploy-order safe —
@@ -967,6 +979,103 @@ export async function GET(request: NextRequest) {
     if (!vapiKey) {
       console.error("[campaign-scheduler] VAPI_PRIVATE_KEY missing; skipping recurring branch");
     } else {
+      // ── Trunk-refusal spawn gate ──
+      // The VOZ-278 breaker stops ONE DAY'S CHILD; the parent is untouched and
+      // spawns a fresh one tomorrow. Measured 2026-08-11: 107 dials, 0 connects,
+      // 4 breaker alerts — every day since 08-08. This holds the daily spawn while
+      // the trunk refuses, letting ONE parent through as the recovery probe.
+      //
+      // FAILS OPEN by design (opposite of the VOZ-364 suppression gate): a wrong
+      // REFUSING verdict would stop all calling, which is far worse than the ~90
+      // free rejected dials it saves. Any error ⇒ UNKNOWN ⇒ everyone spawns.
+      //
+      // Counts, not rows: PostgREST clamps reads at 1000 and 08-01 was 2,828 dials.
+      const trunkSince = new Date(Date.now() - TRUNK_WINDOW_HOURS * 3_600_000).toISOString();
+      const [dialsRes, connectedRes] = await Promise.all([
+        supabaseAdmin
+          .from("calls_v2")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", trunkSince),
+        supabaseAdmin
+          .from("calls_v2")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", trunkSince)
+          // Same definition as detectConnectCollapse. duration_seconds > 0 is
+          // load-bearing: 2026-08-06 had 147 NORMAL_CLEARING rows but only 88 with
+          // audio, so hangup_cause alone reads a dead trunk as healthy.
+          .eq("hangup_cause", "NORMAL_CLEARING")
+          .gt("duration_seconds", 0),
+      ]);
+
+      let trunkHealth: TrunkHealth = "UNKNOWN";
+      if (dialsRes.error || connectedRes.error) {
+        console.error(
+          "[scheduler.trunkGate] count query failed — FAILING OPEN (all parents spawn):",
+          dialsRes.error?.message ?? connectedRes.error?.message,
+        );
+      } else {
+        trunkHealth = assessTrunkHealth({
+          dials: dialsRes.count ?? 0,
+          connected: connectedRes.count ?? 0,
+        });
+        console.log(
+          `[scheduler.trunkGate] ${trunkHealth} — ${connectedRes.count ?? 0} connected of ` +
+            `${dialsRes.count ?? 0} dials in the last ${TRUNK_WINDOW_HOURS}h`,
+        );
+      }
+
+      // Newest child per parent: picks the probe AND tells the skip path which
+      // child still holds a SIP slot. Queried per parent with limit(1) rather than
+      // one big .in() — children accumulate daily and a pooled read would hit the
+      // 1000-row clamp within months.
+      const newestChildByParent = new Map<
+        string,
+        { id: string; startAt: string | null; assistantId: string | null; slotId: string | null }
+      >();
+      let probeParentId: string | null = null;
+
+      if (trunkHealth === "REFUSING") {
+        for (const p of recurringParents) {
+          const { data: child, error: childErr } = await supabaseAdmin
+            .from("campaigns_v2")
+            .select("id, start_at, vapi_assistant_id, vapi_pool_slot_id")
+            .eq("parent_campaign_id", p.id as string)
+            .neq("status", "skipped")
+            .order("start_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (childErr) {
+            // FAIL OPEN: without a reliable probe pick we must not hold spawns.
+            console.error(
+              `[scheduler.trunkGate] newest-child lookup failed for ${p.id as string} — FAILING OPEN:`,
+              childErr.message,
+            );
+            trunkHealth = "UNKNOWN";
+            break;
+          }
+          newestChildByParent.set(p.id as string, {
+            id: (child?.id as string | undefined) ?? "",
+            startAt: (child?.start_at as string | null | undefined) ?? null,
+            assistantId: (child?.vapi_assistant_id as string | null | undefined) ?? null,
+            slotId: (child?.vapi_pool_slot_id as string | null | undefined) ?? null,
+          });
+        }
+      }
+
+      if (trunkHealth === "REFUSING") {
+        probeParentId = selectProbeParent(
+          recurringParents.map((p) => ({
+            id: p.id as string,
+            newestChildStartAt: newestChildByParent.get(p.id as string)?.startAt ?? null,
+          })),
+        );
+        console.log(
+          `[scheduler.trunkGate] holding daily spawns; probe parent = ${probeParentId ?? "(none)"}`,
+        );
+      }
+
+      const skippedByTrunkGate: string[] = [];
+
       for (const parent of recurringParents) {
         // F11: never START a spawn we can't finish this tick. A hard maxDuration
         // kill between leaseSlot and the final INSERT/linkSlot would orphan a
@@ -992,6 +1101,52 @@ export async function GET(request: NextRequest) {
             result: "budget_full",
           });
           break;
+        }
+        // Trunk is refusing and this parent is not today's probe → do not spawn.
+        // Deliberately creates NO child: rolloverLeftovers reads only the MOST
+        // RECENT prior child, so an intervening child would permanently strand
+        // this parent's queued players (realtimePoll.ts:156-178).
+        if (trunkHealth === "REFUSING" && (parent.id as string) !== probeParentId) {
+          skippedByTrunkGate.push(parent.name as string);
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "skipped_trunk_refusing",
+          });
+          // Release the pinned SIP slot. Skipping means rolloverLeftovers never runs,
+          // and a paused child holds its slot until it does (realtimePoll.ts:267-270 —
+          // observed: 140.8h on slot 1). The child stays 'paused' and is NOT closed, so
+          // it remains the most-recent-prior child and still carries its players forward
+          // on the eventual real spawn. Release is UNCONDITIONAL (not behind
+          // PAUSE_RELEASES_SLOT): that flag governs operator pause/complete semantics;
+          // this leak is the specific harm the gate exists to prevent.
+          const heldChild = newestChildByParent.get(parent.id as string);
+          if (heldChild?.id && (heldChild.assistantId || heldChild.slotId)) {
+            const { error: clearErr } = await supabaseAdmin
+              .from("campaigns_v2")
+              .update({ vapi_assistant_id: null, vapi_pool_slot_id: null, vapi_sip_uri: null })
+              .eq("id", heldChild.id);
+            if (clearErr) {
+              console.error(
+                `[scheduler.trunkGate] could not clear Vapi pointers on child ${heldChild.id}:`,
+                clearErr.message,
+              );
+            } else {
+              const { vapiWarnings } = await performCampaignVapiCleanup(supabaseAdmin, {
+                vapiKey,
+                campaignName: parent.name as string,
+                vapiAssistantId: heldChild.assistantId,
+                vapiPoolSlotId: heldChild.slotId,
+              });
+              if (vapiWarnings.length > 0) {
+                console.warn(
+                  `[scheduler.trunkGate] slot release warnings for ${parent.name as string}: ` +
+                    vapiWarnings.join(" | "),
+                );
+              }
+            }
+          }
+          continue;
         }
         const outcome = await spawnChildIfDue(
           supabaseAdmin,
@@ -1045,6 +1200,40 @@ export async function GET(request: NextRequest) {
               { onConflict: "parent_id" },
             );
           }
+        }
+      }
+
+      // One alert for the whole gate, deduped to once per day via alert_state.
+      // Deliberately NOT one per parent: four breaker alerts a day is exactly the
+      // noise that let the 08-02 outage run four days unnoticed.
+      if (skippedByTrunkGate.length > 0) {
+        const TRUNK_GATE_ALERT_KEY = "trunk_refusing_spawn_gate";
+        const { data: gateState, error: gateStateErr } = await supabaseAdmin
+          .from("alert_state")
+          .select("last_alerted_at")
+          .eq("key", TRUNK_GATE_ALERT_KEY)
+          .maybeSingle();
+        if (gateStateErr) {
+          // Fail-open on the DEDUPE only: a broken dedupe row must not silence a real alert.
+          console.error(
+            "[scheduler.trunkGate] alert_state read failed (alerting anyway):",
+            gateStateErr.message,
+          );
+        }
+        const lastAlertedAt = (gateState?.last_alerted_at as string | null) ?? null;
+        if (gateStateErr || shouldAlertSpawnFail(lastAlertedAt, Date.now(), 24 * 60 * 60 * 1000)) {
+          await postSlackAlert("ALERT", "Trunk refusing — daily spawns held", [
+            `${skippedByTrunkGate.length} recurring campaign(s) did NOT spawn today: ${skippedByTrunkGate.join(", ")}.`,
+            `No call has connected in the last ${TRUNK_WINDOW_HOURS}h despite dialling. Holding spawns stops ~90 refused calls/day.`,
+            `Still probing daily via: ${probeParentId ?? "(none)"} — spawning resumes automatically the moment a call connects.`,
+            "No action needed to recover. To force a full restart, fix the trunk (SquareTalk error 902).",
+          ]);
+          await supabaseAdmin
+            .from("alert_state")
+            .upsert(
+              { key: TRUNK_GATE_ALERT_KEY, last_alerted_at: new Date().toISOString() },
+              { onConflict: "key" },
+            );
         }
       }
     }
