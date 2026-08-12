@@ -350,6 +350,25 @@ export async function fireCall(
     return null;
   }
 
+  // P0.2 (VOZ-357): resolve the ANI BEFORE the insert, so caller_id_e164 lands on
+  // the row even when the originate FAILS — which is the case we most need it for.
+  // On 2026-08-12, 2,027 dials failed and not one recorded which number it would
+  // have presented; establishing per-ANI history for the 08-10 outage needed SSH
+  // and a 413 MB CDR file. SquareTalk's own rule is per-caller-ID volume, so we
+  // cannot enforce a rule whose variable we never store.
+  //
+  // resolveFreeswitchCallerId THROWS when nothing is configured. That throw must
+  // still happen INSIDE the try below and nowhere else: the number is already
+  // claimed 'in_progress' above, and only the catch schedules its retry — throwing
+  // here would strand the player in_progress forever. So swallow here and let the
+  // authoritative call re-throw.
+  let plannedCallerId: string | null = null;
+  try {
+    plannedCallerId = resolveFreeswitchCallerId(campaignNumber.phone_e164);
+  } catch {
+    // Deliberately ignored — re-thrown below, where the failure path owns it.
+  }
+
   // Create calls_v2 row BEFORE contacting the provider (state-before-action)
   const { data: callRow, error: callErr } = await supabaseAdmin
     .from("calls_v2")
@@ -358,6 +377,7 @@ export async function fireCall(
       campaign_number_id: campaignNumber.id,
       provider: "freeswitch",
       status: "initiated",
+      caller_id_e164: plannedCallerId,
     })
     .select()
     .single();
@@ -367,7 +387,8 @@ export async function fireCall(
   try {
     // Per-country owned DID (CA/AU/NZ) with FREESWITCH_CALLER_ID as fallback;
     // throws when nothing is configured (same loud failure as before).
-    const callerId = resolveFreeswitchCallerId(campaignNumber.phone_e164);
+    // Reuse the value resolved above; re-throws here (and only here) if it failed.
+    const callerId = plannedCallerId ?? resolveFreeswitchCallerId(campaignNumber.phone_e164);
     const result = await originateCall({
       to: campaignNumber.phone_e164,
       callerId,

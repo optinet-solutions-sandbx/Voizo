@@ -44,6 +44,15 @@ interface ShimPayload {
   talk_seconds?: string | null;
   /** VOZ-247: FreeSWITCH `answer_stamp` — present only on an answered channel. */
   answer_stamp?: string | null;
+  /** VOZ-323: the carrier's OWN SIP reply code (e.g. "603", "200"). Sent by the EC2
+   *  shim since 2026-08-05 (webhook-shim/index.js) and dropped by this route until
+   *  2026-08-12 — which is why "603" sat on the wire for six days and nowhere in
+   *  our data. Optional: absent if the shim is ever rolled back. */
+  sip_term_status?: string | null;
+  /** Which side hung up, per FreeSWITCH (e.g. "recv_refuse", "send_bye"). */
+  sip_hangup_disposition?: string | null;
+  /** Protocol-specific cause text, when the carrier supplies one. */
+  proto_specific_hangup_cause?: string | null;
   timestamp: string | null;
 }
 
@@ -104,6 +113,22 @@ export async function POST(request: NextRequest) {
     hangup_cause: payload.hangup_cause,
   };
   if (payload.call_uuid) updatePayload.provider_call_id = payload.call_uuid;
+
+  // P0.3 (VOZ-323): persist the carrier's own SIP reply alongside our coarse status.
+  // With this column, the 08-05 "603" would have been on the dashboard on day one
+  // instead of costing six days, a tcpdump and a spectrogram to find.
+  //
+  // Set-only-when-present, mirroring provider_call_id above: a later event that
+  // omits these fields (or a shim rollback) must not null out a good value. Applies
+  // to the ghost-recovery path too, which reuses this same payload.
+  const sipVal = (v: string | null | undefined): string | null =>
+    typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+  const sipTermStatus = sipVal(payload.sip_term_status);
+  const sipHangupDisposition = sipVal(payload.sip_hangup_disposition);
+  const protoCause = sipVal(payload.proto_specific_hangup_cause);
+  if (sipTermStatus) updatePayload.sip_term_status = sipTermStatus;
+  if (sipHangupDisposition) updatePayload.sip_hangup_disposition = sipHangupDisposition;
+  if (protoCause) updatePayload.proto_specific_hangup_cause = protoCause;
 
   // Atomic idempotency claim. We try to flip calls_v2 from a non-terminal
   // state to the new terminal state in a single UPDATE filtered by status.
