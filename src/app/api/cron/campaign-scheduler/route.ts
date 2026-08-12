@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
-import { spawnChildIfDue, type RecurringParent, type SpawnOutcome } from "@/lib/scheduler/recurringSpawn";
+import {
+  spawnChildIfDue,
+  startOfDayIsoInTz,
+  type RecurringParent,
+  type SpawnOutcome,
+} from "@/lib/scheduler/recurringSpawn";
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
@@ -1024,23 +1029,42 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // Newest child per parent: picks the probe AND tells the skip path which
-      // child still holds a SIP slot. Queried per parent with limit(1) rather than
-      // one big .in() — children accumulate daily and a pooled read would hit the
-      // 1000-row clamp within months.
-      const newestChildByParent = new Map<
-        string,
-        { id: string; startAt: string | null; assistantId: string | null; slotId: string | null }
-      >();
+      // Newest PRE-TODAY child per parent — the probe pick's ranking key. Queried
+      // per parent with limit(1) rather than one big .in() — children accumulate
+      // daily and a pooled read would hit the 1000-row clamp within months.
+      //
+      // `.lt("start_at", dayStart)` is load-bearing, and omitting it IS the
+      // 2026-08-12 regression (4 spawns, 1,660 dials, all calling dead): the pick
+      // ranks by this start_at, so including today's child lets a spawn change its
+      // OWN sort key — the winner then moves every tick and each parent spawns in
+      // turn. Excluding today makes the key immutable for the whole day, so the pick
+      // holds across ticks and still rotates day to day. Same day definition as
+      // spawnChildIfDue's idempotency check, so "today" cannot drift between them.
+      const newestPreTodayChildStartAt = new Map<string, string | null>();
       let probeParentId: string | null = null;
 
       if (trunkHealth === "REFUSING") {
+        const gateNow = new Date();
         for (const p of recurringParents) {
+          // FAIL OPEN on a missing timezone. startOfDayIsoInTz throws a RangeError
+          // on a null tz (Intl rejects it), and an uncaught throw HERE would kill the
+          // whole tick — no spawns, no heartbeat, no last-resort sweep — for every
+          // parent, not just the broken one. Today such a parent merely returns
+          // spawn_failed, so throwing would be strictly worse.
+          const tz = p.timezone as string | null;
+          if (!tz) {
+            console.error(
+              `[scheduler.trunkGate] parent ${p.id as string} has no timezone — FAILING OPEN`,
+            );
+            trunkHealth = "UNKNOWN";
+            break;
+          }
           const { data: child, error: childErr } = await supabaseAdmin
             .from("campaigns_v2")
-            .select("id, start_at, vapi_assistant_id, vapi_pool_slot_id")
+            .select("start_at")
             .eq("parent_campaign_id", p.id as string)
             .neq("status", "skipped")
+            .lt("start_at", startOfDayIsoInTz(gateNow, tz))
             .order("start_at", { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -1053,12 +1077,10 @@ export async function GET(request: NextRequest) {
             trunkHealth = "UNKNOWN";
             break;
           }
-          newestChildByParent.set(p.id as string, {
-            id: (child?.id as string | undefined) ?? "",
-            startAt: (child?.start_at as string | null | undefined) ?? null,
-            assistantId: (child?.vapi_assistant_id as string | null | undefined) ?? null,
-            slotId: (child?.vapi_pool_slot_id as string | null | undefined) ?? null,
-          });
+          newestPreTodayChildStartAt.set(
+            p.id as string,
+            (child?.start_at as string | null | undefined) ?? null,
+          );
         }
       }
 
@@ -1066,7 +1088,7 @@ export async function GET(request: NextRequest) {
         probeParentId = selectProbeParent(
           recurringParents.map((p) => ({
             id: p.id as string,
-            newestChildStartAt: newestChildByParent.get(p.id as string)?.startAt ?? null,
+            newestChildStartAt: newestPreTodayChildStartAt.get(p.id as string) ?? null,
           })),
         );
         console.log(
@@ -1113,39 +1135,25 @@ export async function GET(request: NextRequest) {
             parentName: parent.name as string,
             result: "skipped_trunk_refusing",
           });
-          // Release the pinned SIP slot. Skipping means rolloverLeftovers never runs,
-          // and a paused child holds its slot until it does (realtimePoll.ts:267-270 —
-          // observed: 140.8h on slot 1). The child stays 'paused' and is NOT closed, so
-          // it remains the most-recent-prior child and still carries its players forward
-          // on the eventual real spawn. Release is UNCONDITIONAL (not behind
-          // PAUSE_RELEASES_SLOT): that flag governs operator pause/complete semantics;
-          // this leak is the specific harm the gate exists to prevent.
-          const heldChild = newestChildByParent.get(parent.id as string);
-          if (heldChild?.id && (heldChild.assistantId || heldChild.slotId)) {
-            const { error: clearErr } = await supabaseAdmin
-              .from("campaigns_v2")
-              .update({ vapi_assistant_id: null, vapi_pool_slot_id: null, vapi_sip_uri: null })
-              .eq("id", heldChild.id);
-            if (clearErr) {
-              console.error(
-                `[scheduler.trunkGate] could not clear Vapi pointers on child ${heldChild.id}:`,
-                clearErr.message,
-              );
-            } else {
-              const { vapiWarnings } = await performCampaignVapiCleanup(supabaseAdmin, {
-                vapiKey,
-                campaignName: parent.name as string,
-                vapiAssistantId: heldChild.assistantId,
-                vapiPoolSlotId: heldChild.slotId,
-              });
-              if (vapiWarnings.length > 0) {
-                console.warn(
-                  `[scheduler.trunkGate] slot release warnings for ${parent.name as string}: ` +
-                    vapiWarnings.join(" | "),
-                );
-              }
-            }
-          }
+          // NO slot release here — REMOVED 2026-08-12, and deliberately not replaced
+          // with a safer guarded version.
+          //
+          // It was the gate's only WRITE, and it is what turned a skipped spawn into a
+          // dead dialer: it cleared vapi_assistant_id / vapi_pool_slot_id / vapi_sip_uri
+          // on what it believed was a prior day's paused child, but which was the child
+          // that had just spawned. Those four campaigns then sat 'running' with no
+          // assistant, so every originate threw before reaching FreeSWITCH, nothing could
+          // connect, and the gate's own recovery condition (a connect) became
+          // unreachable — a latch that no carrier fix or account top-up could clear.
+          //
+          // With the write gone the gate is a pure read-side decision: its worst failure
+          // is dialling LESS than we could have, never dialling nothing, because the
+          // probe child keeps its pointers and a single connect reopens the gate.
+          // The leak it was chasing is small and already owned elsewhere: paused children
+          // hand their slot back at the next real spawn via rolloverLeftovers, the
+          // stuck-slot-watchdog catches the stragglers, and the pool has 20 slots against
+          // 4 campaigns. A slot held for a few days is worth far less than the risk of
+          // stripping a live child.
           continue;
         }
         const outcome = await spawnChildIfDue(

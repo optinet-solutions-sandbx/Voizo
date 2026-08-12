@@ -53,23 +53,48 @@ export function assessTrunkHealth(
 
 export interface ParentProbeCandidate {
   id: string;
-  /** ISO start_at of this parent's most recent non-'skipped' child, or null if none. */
+  /**
+   * ISO start_at of this parent's most recent non-'skipped' child that started
+   * STRICTLY BEFORE the current spawn day — never a child spawned for today.
+   *
+   * ⚠️ This restriction is the whole correctness argument, and omitting it took
+   * production down on 2026-08-12. Ranking is by this value, so if the caller
+   * includes TODAY's child then a spawn CHANGES ITS OWN SORT KEY: tick 1 picks
+   * parent A (oldest newest-child) and A spawns; tick 2 sees A holding today's
+   * child, ranks it last, and hands the probe slot to B, which spawns; and so on
+   * until every parent has spawned. The gate then does the opposite of its job —
+   * measured 4 spawns and 1,660 dials instead of 1 spawn and ~15-20.
+   *
+   * Excluding today's children makes the key IMMUTABLE for the whole day (a
+   * spawn cannot change any parent's pre-today newest child), so the pick is
+   * stable across ticks while still rotating day to day.
+   */
   newestChildStartAt: string | null;
 }
+
+// NOTE: this module is now READ-ONLY advice. The scheduler's skip path used to also
+// release the prior child's SIP slot; that write was REMOVED 2026-08-12 after it
+// stripped a just-spawned child's assistant and SIP URI and latched the dialer into
+// placing zero calls. See the comment at the skip path in campaign-scheduler/route.ts.
+// Keep it that way: a gate that only decides can slow calling down, but a gate that
+// writes can stop it dead.
 
 /**
  * While the trunk is refusing, exactly ONE parent still spawns so we keep a recovery
  * signal — if nothing dials, "is the trunk refusing?" becomes unanswerable and the gate
  * oscillates with a one-day period.
  *
- * Choice = the parent whose most recent child is oldest. Derived from existing rows, so
- * there is no counter to drift, and it ROTATES by itself: today's prober becomes the
- * newest, so tomorrow a different parent takes the slot. Over four days each of the four
- * AU parents probes once, which also spreads the probe across segments and numbers.
+ * Choice = the parent whose most recent PRE-TODAY child is oldest. Derived from existing
+ * rows, so there is no counter to drift, and it ROTATES by itself: today's prober becomes
+ * the newest, so tomorrow a different parent takes the slot. Over four days each of the
+ * four AU parents probes once, which also spreads the probe across segments and numbers.
  *
- * A parent that has never spawned sorts FIRST (most overdue). Ties break by id so the
- * pick is stable across ticks within the same day — an unstable pick would let two
- * parents both spawn.
+ * A parent that has never spawned sorts FIRST (most overdue). Ties break by id.
+ *
+ * ⚠️ Determinism across ticks requires BOTH halves: the id tiebreak AND the caller
+ * feeding only pre-today children (see `newestChildStartAt`). The id tiebreak alone was
+ * believed sufficient and was not — a stable tiebreak on a key that a spawn mutates
+ * still yields a different winner every tick. That gap is the 2026-08-12 regression.
  */
 export function selectProbeParent(
   candidates: ReadonlyArray<ParentProbeCandidate>,

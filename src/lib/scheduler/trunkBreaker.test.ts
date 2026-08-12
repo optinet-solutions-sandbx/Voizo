@@ -67,6 +67,43 @@ describe("selectProbeParent", () => {
     expect(selectProbeParent([c("z", all), c("a", all), c("m", all)])).toBe("a");
   });
 
+  // ── 2026-08-12 REGRESSION LOCKS ──
+  // The pick ranks by newestChildStartAt. Ranking is only stable if a spawn cannot
+  // change that value, which is why the caller must supply the newest child from
+  // BEFORE today. These two tests pin both halves of that argument.
+  it("STABLE across many ticks in one day: pre-today keys don't move, so the pick doesn't", () => {
+    // Yesterday's children. A spawn today cannot alter any of these values.
+    const preToday = [
+      c("19ea5cb7", "2026-08-11T00:00:00Z"),
+      c("45ff7dd9", "2026-08-11T00:00:00Z"),
+      c("80f19103", "2026-08-11T00:00:00Z"),
+      c("dbcb0f64", "2026-08-11T00:00:00Z"),
+    ];
+    const picks = Array.from({ length: 5 }, () => selectProbeParent(preToday));
+    expect(new Set(picks).size).toBe(1);
+    expect(picks[0]).toBe("19ea5cb7");
+  });
+
+  it("COUNTER-EXAMPLE (why the caller must exclude today): each spawn moves the winner", () => {
+    // Replays prod on 2026-08-12. Feeding today's child back in makes every tick
+    // pick a DIFFERENT parent, so all four spawn: 1,660 dials instead of ~15-20.
+    const newest: Record<string, string | null> = {
+      "19ea5cb7": "2026-08-11T00:00:00Z",
+      "45ff7dd9": "2026-08-11T00:00:00Z",
+      "80f19103": "2026-08-11T00:00:00Z",
+      dbcb0f64: "2026-08-11T00:00:00Z",
+    };
+    const picks: string[] = [];
+    for (let tick = 0; tick < 4; tick++) {
+      const pick = selectProbeParent(Object.entries(newest).map(([id, t]) => c(id, t)));
+      if (!pick) throw new Error("expected a pick");
+      picks.push(pick);
+      newest[pick] = "2026-08-12T00:00:00Z"; // the CONTRACT VIOLATION: today's child
+    }
+    // Observed prod spawn order, to the second: 22:31:20 / 22:31:59 / 22:32:38 / 22:33:23.
+    expect(picks).toEqual(["19ea5cb7", "45ff7dd9", "80f19103", "dbcb0f64"]);
+  });
+
   it("ROTATES: four parents each probe once across four consecutive days", () => {
     const newest: Record<string, string | null> = { a: null, b: null, c: null, d: null };
     const chosen: string[] = [];
@@ -87,3 +124,7 @@ describe("selectProbeParent", () => {
     expect(input.map((x) => x.id)).toEqual(before);
   });
 });
+
+// The slot-release predicate that briefly lived here was DELETED 2026-08-12 along
+// with the write it guarded — removing the mutation beat making it safe. Nothing in
+// this module writes, so there is nothing left to test on that path.
