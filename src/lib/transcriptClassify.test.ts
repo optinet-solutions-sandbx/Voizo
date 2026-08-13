@@ -459,6 +459,16 @@ describe("isVoicemail — screener scripts + STT fragments (2026-08-13 SMS leak)
     expect(isConclusiveVoicemail("Please say who you are and why you're calling.")).toBe(false);
     expect(isConclusiveVoicemail("As an audio message.")).toBe(false);
   });
+
+  // Phase A replay (8,140 prod calls, 07-25..08-13): 39 carrier greetings said
+  // "After LEAVING a message..." — the gerund dodges the 'leave a message' weak
+  // pattern, so the whole "press pound for more options" family read as humans.
+  it("flags the 'after leaving a message ... press pound' carrier family (weak pair)", () => {
+    expect(isVoicemail(`${OPENER}\nUser: After leaving a message, you can hang up, or press pound for more options.\nAI: Goodbye.`)).toBe(true);
+  });
+  it("a lone 'leaving a message' from a live human never trips the >=2 rule", () => {
+    expect(isVoicemail(`${OPENER}\nUser: Sorry I was just leaving a message for my doctor — what's this about?\nAI: It's Victor from Fortune Play.`)).toBe(false);
+  });
 });
 
 // ── SMS dispatch signals (2026-06-11, registered_optin mode) ────────────────

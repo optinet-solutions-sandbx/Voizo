@@ -134,6 +134,10 @@ const VOICEMAIL_GREETING_PATTERNS = [
   // short message" and "just leave a message, and I'll get back to you".
   /\b(?:get|getting) back to you\b/i,
   /\ban? (?:short|brief|quick) message\b/i,
+  // Phase A replay (8,140 calls): "After LEAVING a message, you can hang up, or press
+  // pound for more options" — the gerund dodges the 'leave a message' pattern above,
+  // so the whole carrier family (39 measured) read as humans. Pairs with press-pound.
+  /\bleaving (?:a |your )?message\b/i,
 ];
 
 // #4 (2026-06-08): IVR / answering greeting that asks the caller to leave a callback number.
