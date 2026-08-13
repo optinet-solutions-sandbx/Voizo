@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { getQaCallDetail } from "@/lib/qaPromptData";
 import { numberTranscript } from "@/lib/qaTranscript";
+import { verifyCategory } from "@/lib/qaEscalate";
 
 /**
  * POST /api/qa-prompt-testing/run
@@ -85,7 +86,11 @@ export async function POST(request: NextRequest) {
     if (!analysisText.trim()) {
       return NextResponse.json({ error: "The model returned an empty response" }, { status: 502 });
     }
-    return NextResponse.json({ analysisText, model: MODEL });
+    // Same hybrid as the bulk pipeline: if mini says Early Hang-up / Neutral, double-check
+    // with gpt-5.4 and return its verdict (so testing here matches production scoring).
+    const finalText = await verifyCategory(callId, promptContent, analysisText, process.env.OPENAI_API_KEY as string);
+    const escalated = finalText !== analysisText;
+    return NextResponse.json({ analysisText: finalText, model: escalated ? "gpt-5.4 (double-check)" : MODEL });
   } catch (err) {
     console.error("[qa-prompt-testing/run] OpenAI call failed:", err);
     const msg = err instanceof Error ? err.message : "Analysis failed";
