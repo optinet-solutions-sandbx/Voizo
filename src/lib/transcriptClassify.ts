@@ -91,6 +91,19 @@ const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
   /(?:can'?t|cannot|can not|are not able to|unable to) take your call/i,
   /\brecord your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen)
   /cannot come to the (?:phone|telephone)\b/i, // "the person you called cannot come to the phone"
+  // 2026-08-13: call-screener script + carrier announce. #5's MACHINE_GREETING_PATTERNS
+  // below already knew these shapes but was deliberately eval-only, reasoning that
+  // dispatch was protected by hasGenuineCustomerConsent — TRUE for verbal_yes, but
+  // optin_reached_only (2026-08-07) made deriveAttemptTag (built on THIS label) the
+  // dispatch trigger, so screener pickups tagged 'neutral' were texted: 27 of 53 SMS on
+  // 2026-08-13 went to machines/screeners. These two are verbatim machine scripts no
+  // live caller produces, so plain substring is safe; the human-plausible screener
+  // line ("please stay on the line") gets a turn-shaped rule instead — see
+  // allUserTurnsAreScreenerScript below. In this tier they label only — never kill —
+  // because a live human can sit behind a screener (475 measured 2026-08-07), and the
+  // label's voicemail routing re-dials them later, which is exactly right for a screener.
+  /\bsay who you are and why you(?:'re| are)? calling\b/i, // Google/Samsung call screen script
+  /\bthe number you have (?:dialled|dialed|called)\b/i, // carrier announce ("...has not been recognized")
 ];
 // Post-call labeling keeps the FULL set — isVoicemail behavior is unchanged.
 const VOICEMAIL_STRONG_PATTERNS = [
@@ -115,6 +128,12 @@ const VOICEMAIL_GREETING_PATTERNS = [
   /missed your call\b/i, // "sorry I missed your call"
   /\bleave (?:your |me your |us your )?name(?: and (?:number|phone))?\b/i, // "leave your name and number"
   /\b(?:i'?m|i am) (?:currently )?unavailable\b/i, // "I'm unavailable right now"
+  // 2026-08-13: two more greeting fragments measured on live traffic. Each needs a
+  // pair (>=2 rule), so a live brush-off ("I'll get back to you shortly") never trips
+  // alone — the greetings that leaked both pair up: "leave your name, number, and a
+  // short message" and "just leave a message, and I'll get back to you".
+  /\b(?:get|getting) back to you\b/i,
+  /\ban? (?:short|brief|quick) message\b/i,
 ];
 
 // #4 (2026-06-08): IVR / answering greeting that asks the caller to leave a callback number.
@@ -131,7 +150,16 @@ const DIGIT_RUN = new RegExp(`^${NUMBER_WORD}(?:\\s+${NUMBER_WORD}){1,}$`, "i");
 function isBareMachineFragment(text: string): boolean {
   const t = text.trim().replace(/[.?!]+$/, "").trim();
   if (!t) return false;
-  return /^(?:your |a )?message$/i.test(t) || /^the message is a text$/i.test(t) || DIGIT_RUN.test(t);
+  return (
+    /^(?:your |a )?message$/i.test(t) ||
+    /^the message is a text$/i.test(t) ||
+    // 2026-08-13: the tail of the dominant AU carrier greeting "...will be sent as an
+    // audio message" (already a STRONG pattern in full) as STT actually delivers it —
+    // the fragment alone was the entire user turn on 51 calls on 2026-08-13, which all
+    // surfaced as fake 'early hang-up' humans. Whole-turn only, like every fragment here.
+    /^(?:as )?(?:an )?audio message$/i.test(t) ||
+    DIGIT_RUN.test(t)
+  );
 }
 
 // True only when EVERY substantive user turn is a bare machine fragment. A real human always
@@ -145,12 +173,34 @@ function allUserTurnsAreMachineFragments(transcript: string): boolean {
   return candidates.length > 0 && candidates.every(isBareMachineFragment);
 }
 
+// 2026-08-13: the Telstra/handset screener scripts. "Thanks. Please stay on the line."
+// answered 21 dials on 2026-08-13 (every one texted as a fake 'neutral'), sometimes
+// STT-split into two turns ("Thanks." / "Please stay on the line."). Unlike the two
+// screener patterns in the strong tier, this phrase IS live-human-plausible ("stay on
+// the line while I grab a pen"), so it must not match as a substring — instead the
+// call is a screener only when EVERY user turn is the script or a bare courtesy, i.e.
+// the screener was the entire "conversation". A human who says it while engaging has
+// at least one other genuine turn and never fires this (same architecture as
+// allUserTurnsAreMachineFragments).
+const SCREENER_SCRIPT_TURN = /^(?:thank(?:s| you)?[.,!]?\s+)*please stay on the line[.,!]?$/i;
+const COURTESY_TURN = /^thank(?:s| you)?[.,!]?$/i;
+function allUserTurnsAreScreenerScript(transcript: string): boolean {
+  const turns = parseTranscriptTurns(transcript);
+  const userTurns = turns.filter((t) => t.speaker === "user").map((t) => t.text.trim());
+  const candidates = userTurns.length ? userTurns : [transcript.trim()];
+  return (
+    candidates.some((t) => SCREENER_SCRIPT_TURN.test(t)) &&
+    candidates.every((t) => SCREENER_SCRIPT_TURN.test(t) || COURTESY_TURN.test(t))
+  );
+}
+
 export function isVoicemail(transcript: string): boolean {
   if (!transcript) return false;
   const safe = transcript.slice(0, TRANSCRIPT_CAP);
   if (VOICEMAIL_STRONG_PATTERNS.some((p) => p.test(safe))) return true;
   if (isIvrCallback(safe)) return true;
   if (VOICEMAIL_GREETING_PATTERNS.filter((p) => p.test(safe)).length >= 2) return true;
+  if (allUserTurnsAreScreenerScript(safe)) return true; // 2026-08-13 screener leak
   return allUserTurnsAreMachineFragments(safe);
 }
 
@@ -379,7 +429,12 @@ export function customerRequestedCallback(transcript: string | null | undefined)
 // ── #5 (2026-06-08): machine "hold / leave-a-message / IVR" greetings ───────────
 // Phrases a live customer never utters on a cold sales call, which slipped the voicemail
 // tiers above and surfaced as fake "real conversations" in /reviews (campaign
-// L7_CA_..._05/06) + leaked into golden set v1 (the judge abstained on them). Used ONLY by
+// L7_CA_..._05/06) + leaked into golden set v1 (the judge abstained on them).
+// ⚠️ 2026-08-13: the "dispatch is protected anyway" half of the reasoning below expired
+// when optin_reached_only made the voicemail LABEL the dispatch trigger — the screener
+// scripts measured leaking texts now ALSO live in VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS
+// (substring, so STT turn-splits can't dodge them). This list stays for the broader
+// hold/IVR fragments that are only safe under its every-turn rule. Used ONLY by
 // hasRealConversation (the eval surfaces: /reviews, QA candidate, golden freeze) — deliberately
 // NOT by isVoicemail, so the call-path goal_reached veto + the SMS consent gate stay untouched
 // (the webhook already resolves these to goal_reached=false via hasGenuineCustomerConsent, so it

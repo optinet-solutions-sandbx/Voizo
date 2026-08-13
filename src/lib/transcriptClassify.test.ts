@@ -289,9 +289,22 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
   });
   it("keeps a real customer who uses a hold phrase but also engages (turn-aware FP guard)", () => {
     expect(hasRealConversation(REAL_WITH_HOLD)).toBe(true);
+    // ...and 2026-08-13's screener rule must not label them voicemail either: the
+    // hold phrase is embedded in a genuine turn, so the every-turn rule never fires.
+    expect(isVoicemail(REAL_WITH_HOLD)).toBe(false);
   });
-  it("leaves the call-path isVoicemail unchanged (these stay isVoicemail=false; webhook untouched)", () => {
-    for (const t of Object.values(MISSED_MACHINES_5)) expect(isVoicemail(t)).toBe(false);
+  it("call-path isVoicemail: stay-on-the-line NOW labels voicemail (2026-08-13); the rest stay eval-only", () => {
+    // The 2026-06-08 version of this test pinned ALL of these to isVoicemail=false,
+    // reasoning the SMS gate was protected by hasGenuineCustomerConsent. That became
+    // false on 2026-08-07 when optin_reached_only made the label itself the dispatch
+    // trigger — 21 of these exact screener pickups were texted on 2026-08-13. The
+    // screener script is now conclusive for the LABEL (never the kill path).
+    expect(isVoicemail(MISSED_MACHINES_5.stayOnLine)).toBe(true);
+    // Still eval-only: not measured leaking texts, and each needs its every-turn
+    // guard (press-pound / for-more-options remain too generic for the label tier).
+    expect(isVoicemail(MISSED_MACHINES_5.recordYourMessage)).toBe(false);
+    expect(isVoicemail(MISSED_MACHINES_5.noMoreRoom)).toBe(false);
+    expect(isVoicemail(MISSED_MACHINES_5.hangUpPressPound)).toBe(false);
   });
   it("still keeps the verified real humans + genuine conversation + brush-off visible", () => {
     expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
@@ -373,6 +386,78 @@ describe("isVoicemail — carrier-greeting fix must NOT silence real humans", ()
   });
   it("excludes the carrier voicemails from /reviews", () => {
     for (const t of Object.values(CARRIER_VOICEMAILS)) expect(hasRealConversation(t)).toBe(false);
+  });
+});
+
+// ── 2026-08-13: screener scripts + STT fragments (the 'Neutral' SMS leak) ───
+// Every fixture below is a REAL production transcript from 2026-08-13 (trimmed).
+// 27 of that day's 53 SMS went to these shapes: the voicemail label missed them,
+// so deriveAttemptTag called them 'neutral' and optin_reached_only texted them.
+
+const OPENER =
+  "AI: Hey, Victor here from fortune play dot com. Quick question. Have you had a chance to log in to your account recently?";
+
+const SCREENER_LEAKS = {
+  // Telstra/handset screener — 21 identical pickups on 2026-08-13, all texted.
+  stayOnTheLine: `${OPENER}\nUser: Thanks. Please stay on the line.\nAI: Goodbye.`,
+  // STT split the same script into TWO user turns — defeats every-turn rules,
+  // must still be caught by the substring pattern.
+  stayOnTheLineSplitTurns: `${OPENER}\nUser: Thanks.\nUser: Please stay on the line.\nAI: Goodbye. Goodbye.`,
+  // Google/Samsung call screen (leading words are STT debris of "you've reached...").
+  sayWhoYouAre: `${OPENER}\nUser: To reach Please say who you are and why you're calling.\nAI: It's Victor calling from Fortune Play Casino.`,
+  // Carrier announce — not even a phone that rang.
+  numberNotRecognized: `${OPENER}\nUser: The number you have dialed has not been recognized. Please check and try again.`,
+  // Personal greeting, STT-garbled ("can't come to the phone" -> "can't be cool").
+  // Caught by the weak PAIR: "leave your name" + "a short message".
+  garbledGreeting: `${OPENER}\nUser: Can't be cool right now. Please leave your name, number, and a short message, and I'll get back to you.`,
+  // Weak PAIR: "leave a message" + "get back to you".
+  leaveAMessageGetBack: `${OPENER}\nUser: business that I know. Um, just leave a message, and I'll get back to you.\nAI: Goodbye.`,
+  // The voicemail greeting that faked a goal_reached and was texted as 'positive'.
+  leaveNameGetBack: `${OPENER}\nUser: Please leave your name and number, and I'll get back to you as soon as I can. okay.\nUser: Thanks.\nAI: Goodbye.`,
+};
+
+const FRAGMENT_LEAKS = {
+  // Tail fragment of "...will be sent as an audio message" — the entire user turn
+  // on 51 calls on 2026-08-13, all surfacing as fake 'early hang-up' humans.
+  asAnAudioMessage: `${OPENER}\nUser: As an audio message.\nAI: Goodbye.`,
+  anAudioMessage: `${OPENER}\nUser: An audio message.\nAI: Goodbye.`,
+  bareAudioMessage: `${OPENER}\nUser: audio message.\nAI: Goodbye.`,
+};
+
+// Real humans from the same day who MUST stay human — including the ones that
+// share vocabulary with the new patterns.
+const SCREENER_REAL_HUMANS = {
+  engagedSkeptic: `${OPENER}\nUser: Zero. What?\nAI: Got it. It's Victor calling from Fortune Play Casino.\nUser: I'm rich.\nAI: Have you got a second for me to tell you what it is?\nUser: Yeah. Yeah. No. No. No.`,
+  confusedPickup: `${OPENER}\nUser: Nine.\nAI: Got it. The reason I'm calling is I was just going over your account.\nUser: Hello?\nAI: and there's just a bit more sitting on top of that too.\nUser: Thanks,\nAI: Goodbye.`,
+  // Single weak fragment alone — a live brush-off must NOT trip the >=2 rule.
+  liveBrushOff: `${OPENER}\nUser: Look I'm busy, get back to you later okay?\nAI: No worries.`,
+  quickNo: `${OPENER}\nUser: Hello? No.\nAI: Got it.\nUser: Not interested thanks.`,
+  // "audio message" fragment next to a genuine turn — every-turn guard must hold.
+  audioMessagePlusHuman: `${OPENER}\nUser: An audio message.\nUser: Hello? Sorry, who's this?\nAI: It's Victor from Fortune Play.`,
+};
+
+describe("isVoicemail — screener scripts + STT fragments (2026-08-13 SMS leak)", () => {
+  it("flags every leaked screener/greeting shape from the 2026-08-13 traffic", () => {
+    for (const [name, t] of Object.entries(SCREENER_LEAKS)) {
+      expect(isVoicemail(t), name).toBe(true);
+    }
+  });
+  it("flags the bare 'audio message' STT fragment when it is the whole conversation", () => {
+    for (const [name, t] of Object.entries(FRAGMENT_LEAKS)) {
+      expect(isVoicemail(t), name).toBe(true);
+    }
+  });
+  it("keeps every same-day real human as non-voicemail", () => {
+    for (const [name, t] of Object.entries(SCREENER_REAL_HUMANS)) {
+      expect(isVoicemail(t), name).toBe(false);
+    }
+  });
+  it("NEVER feeds the mid-call kill path: screener lines are label-only", () => {
+    // A live human can sit behind a screener (475 measured 2026-08-07), so the
+    // kill tier must not hang up on these — the label re-dials them instead.
+    expect(isConclusiveVoicemail("Thanks. Please stay on the line.")).toBe(false);
+    expect(isConclusiveVoicemail("Please say who you are and why you're calling.")).toBe(false);
+    expect(isConclusiveVoicemail("As an audio message.")).toBe(false);
   });
 });
 
