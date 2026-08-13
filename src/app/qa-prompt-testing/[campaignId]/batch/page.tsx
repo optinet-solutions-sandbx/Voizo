@@ -55,6 +55,7 @@ export default function CampaignBatchPage() {
   const [prompts, setPrompts] = useState<QaPrompt[]>([]);
   const [promptId, setPromptId] = useState("");
   const [testLimit, setTestLimit] = useState("");
+  const [reanalyze, setReanalyze] = useState(false);
   const [counts, setCounts] = useState<{ reached: number; unanalyzed: number } | null>(null);
 
   const [jobs, setJobs] = useState<BatchJob[]>([]);
@@ -147,6 +148,7 @@ export default function CampaignBatchPage() {
           promptId: selectedPrompt.id,
           promptTitle: selectedPrompt.title,
           promptContent: selectedPrompt.content,
+          reanalyze,
           ...(testLimit ? { testLimit: parseInt(testLimit, 10) } : {}),
         }),
       });
@@ -282,16 +284,22 @@ export default function CampaignBatchPage() {
               </p>
             </div>
 
+            <label className="inline-flex items-center gap-2 text-xs text-[var(--text-2)] cursor-pointer w-fit">
+              <input type="checkbox" checked={reanalyze} onChange={(e) => setReanalyze(e.target.checked)} className="accent-[var(--color-primary)]" />
+              Re-analyze already-analyzed calls
+              <span className="text-[var(--text-3)]">(re-scores all {counts ? counts.reached.toLocaleString() : ""} reached calls, ignoring the freeze)</span>
+            </label>
+
             {submitMsg && <p className={`text-xs rounded-lg px-3 py-2 ${msgCls}`}>{submitMsg.text}</p>}
 
             <button
               onClick={submit}
-              disabled={submitting || !promptId || (counts?.unanalyzed ?? 0) === 0}
+              disabled={submitting || !promptId || (reanalyze ? (counts?.reached ?? 0) === 0 : (counts?.unanalyzed ?? 0) === 0)}
               className="inline-flex w-fit items-center gap-2 bg-primary hover:opacity-90 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg transition"
-              title={(counts?.unanalyzed ?? 0) === 0 ? "Nothing new to analyze with this prompt" : "Submit batch"}
+              title={reanalyze ? "Re-analyze every reached call with this prompt" : (counts?.unanalyzed ?? 0) === 0 ? "Nothing new to analyze with this prompt" : "Submit batch"}
             >
               {submitting && <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-              {submitting ? "Submitting…" : "Submit batch"}
+              {submitting ? "Submitting…" : reanalyze ? "Re-analyze batch" : "Submit batch"}
             </button>
           </>
         )}

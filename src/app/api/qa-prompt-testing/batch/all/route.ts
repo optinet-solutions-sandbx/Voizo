@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
 
-  let body: { promptId?: unknown; fromMs?: unknown; toMs?: unknown };
+  let body: { promptId?: unknown; fromMs?: unknown; toMs?: unknown; reanalyze?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
   const promptId = typeof body.promptId === "string" ? body.promptId : "";
   const fromMs = typeof body.fromMs === "number" && body.fromMs > 0 ? body.fromMs : null;
   const toMs = typeof body.toMs === "number" && body.toMs > 0 ? body.toMs : null;
+  const reanalyze = body.reanalyze === true;
   if (!promptId) return NextResponse.json({ error: "promptId is required" }, { status: 400 });
 
   const prompt = (await listQaPrompts()).find((p) => p.id === promptId);
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
 
   let byCampaign: Map<string, { id: string; transcript: string }[]>;
   try {
-    byCampaign = await selectReachedUnanalyzedAcrossCampaigns({ promptId, fromMs, toMs });
+    byCampaign = await selectReachedUnanalyzedAcrossCampaigns({ promptId, fromMs, toMs, reanalyze });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to select calls" }, { status: 500 });
   }

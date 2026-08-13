@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
 
-  let body: { campaignId?: string; promptId?: string; promptTitle?: string; promptContent?: string; testLimit?: number };
+  let body: { campaignId?: string; promptId?: string; promptTitle?: string; promptContent?: string; testLimit?: number; reanalyze?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
   const promptId = typeof body.promptId === "string" ? body.promptId : null;
   const promptTitle = typeof body.promptTitle === "string" ? body.promptTitle : null;
   const testLimit = typeof body.testLimit === "number" && body.testLimit > 0 ? Math.floor(body.testLimit) : undefined;
+  const reanalyze = body.reanalyze === true;
   if (!campaignId) return NextResponse.json({ error: "campaignId is required" }, { status: 400 });
   if (!promptContent.trim()) return NextResponse.json({ error: "promptContent is required" }, { status: 400 });
 
@@ -142,12 +143,12 @@ export async function POST(request: NextRequest) {
 
   let calls;
   try {
-    calls = await selectReachedUnanalyzedCalls(campaignId, promptId, testLimit);
+    calls = await selectReachedUnanalyzedCalls(campaignId, promptId, testLimit, reanalyze);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to select calls" }, { status: 500 });
   }
   if (calls.length === 0) {
-    return NextResponse.json({ message: "No reached, un-analyzed calls to submit for this prompt.", jobs: [] });
+    return NextResponse.json({ message: reanalyze ? "No reached calls with a transcript to analyze." : "No reached, un-analyzed calls to submit for this prompt.", jobs: [] });
   }
 
   const lines = calls.map((c) => jsonlLine(c.id, c.transcript, promptContent));

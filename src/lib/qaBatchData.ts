@@ -131,13 +131,21 @@ async function analyzedCallIds(campaignId: string, promptId: string | null): Pro
   return ids;
 }
 
-/** Reached calls in a campaign NOT yet analyzed with this prompt (optionally capped). */
+/**
+ * Reached calls in a campaign NOT yet analyzed with this prompt (optionally capped).
+ * `reanalyze` bypasses the freeze/dedup entirely — returns EVERY reached call so a new
+ * or edited prompt can re-score calls that were already analyzed.
+ */
 export async function selectReachedUnanalyzedCalls(
   campaignId: string,
   promptId: string | null,
   limit?: number,
+  reanalyze = false,
 ): Promise<ReachedCall[]> {
-  const [calls, done] = await Promise.all([fetchReachedCalls(campaignId), analyzedCallIds(campaignId, promptId)]);
+  const [calls, done] = await Promise.all([
+    fetchReachedCalls(campaignId),
+    reanalyze ? Promise.resolve(new Set<string>()) : analyzedCallIds(campaignId, promptId),
+  ]);
   let pending = calls.filter((c) => !done.has(c.id));
   if (limit && limit > 0) pending = pending.slice(0, limit);
   return pending;
@@ -618,6 +626,7 @@ export async function selectReachedUnanalyzedAcrossCampaigns(opts: {
   promptId: string;
   fromMs?: number | null;
   toMs?: number | null;
+  reanalyze?: boolean;
 }): Promise<Map<string, ReachedCall[]>> {
   const rows: Array<{ id: string; campaign_id: string; transcript: unknown }> = [];
   for (let from = 0; ; from += 1000) {
@@ -645,21 +654,24 @@ export async function selectReachedUnanalyzedAcrossCampaigns(opts: {
 
   // Frozen = already scored with the CURRENT prompt version (at/after its last edit).
   // Paged fully so >1000 scored calls aren't silently dropped (which would re-score them).
-  const since = await promptUpdatedAt(opts.promptId);
+  // `reanalyze` skips this entirely, so every reached call is (re-)scored.
   const analyzed = new Set<string>();
-  for (let from = 0; ; from += 1000) {
-    let rq = supabaseAdmin
-      .from("listener_qa_analysis_runs")
-      .select("call_id")
-      .eq("prompt_id", opts.promptId)
-      .order("analyzed_at", { ascending: false })
-      .range(from, from + 999);
-    if (since) rq = rq.gte("analyzed_at", since);
-    const { data: runs, error: runsErr } = await rq;
-    if (runsErr) throw runsErr;
-    const page = (runs ?? []) as Array<{ call_id: string }>;
-    for (const r of page) analyzed.add(r.call_id);
-    if (page.length < 1000) break;
+  if (!opts.reanalyze) {
+    const since = await promptUpdatedAt(opts.promptId);
+    for (let from = 0; ; from += 1000) {
+      let rq = supabaseAdmin
+        .from("listener_qa_analysis_runs")
+        .select("call_id")
+        .eq("prompt_id", opts.promptId)
+        .order("analyzed_at", { ascending: false })
+        .range(from, from + 999);
+      if (since) rq = rq.gte("analyzed_at", since);
+      const { data: runs, error: runsErr } = await rq;
+      if (runsErr) throw runsErr;
+      const page = (runs ?? []) as Array<{ call_id: string }>;
+      for (const r of page) analyzed.add(r.call_id);
+      if (page.length < 1000) break;
+    }
   }
 
   const map = new Map<string, ReachedCall[]>();

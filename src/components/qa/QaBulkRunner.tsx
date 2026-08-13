@@ -68,6 +68,7 @@ export default function QaBulkRunner() {
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  const [reanalyze, setReanalyze] = useState(false);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [savingSchedule, setSavingSchedule] = useState(false);
 
@@ -101,7 +102,7 @@ export default function QaBulkRunner() {
       const r = await fetch("/api/qa-prompt-testing/batch/all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ promptId, fromMs, toMs }),
+        body: JSON.stringify({ promptId, fromMs, toMs, reanalyze }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
@@ -119,7 +120,7 @@ export default function QaBulkRunner() {
     } finally {
       setRunning(false);
     }
-  }, [promptId, period]);
+  }, [promptId, period, reanalyze]);
 
   const importNow = useCallback(async () => {
     setImporting(true);
@@ -208,6 +209,11 @@ export default function QaBulkRunner() {
           </div>
         </div>
 
+        <label className="inline-flex items-center gap-2 text-xs text-[var(--text-2)] cursor-pointer w-fit">
+          <input type="checkbox" checked={reanalyze} onChange={(e) => setReanalyze(e.target.checked)} className="accent-[var(--color-primary)]" />
+          Re-analyze calls already analyzed with this prompt <span className="text-[var(--text-3)]">(ignores the freeze — re-scores everything in the window)</span>
+        </label>
+
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={runAll}
@@ -215,7 +221,7 @@ export default function QaBulkRunner() {
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
           >
             {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-            {running ? "Submitting…" : "Analyze all campaigns"}
+            {running ? "Submitting…" : reanalyze ? "Re-analyze all campaigns" : "Analyze all campaigns"}
           </button>
           <button
             onClick={importNow}
