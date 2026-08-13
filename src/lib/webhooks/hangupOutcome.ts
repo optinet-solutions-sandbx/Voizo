@@ -141,6 +141,51 @@ export function completedNumberOutcomeOverride(currentOutcome: string | null): "
   return currentOutcome === "pending_retry" || currentOutcome === "unreached" ? "in_progress" : null;
 }
 
+/**
+ * Which end-of-call classes PARK the number instead of writing a terminal
+ * outcome (2026-08-13)? "Park" = leave outcome at 'in_progress' so the
+ * scheduler's stale-in_progress sweeper resolves it to pending_retry and the
+ * player is re-dialled (bounded by max_attempts) — the mechanism the voicemail
+ * skip (2026-05-11) and the VOZ-127 callback skip already use. Extracted from
+ * processEndOfCall's inline conditions so the routing decision is unit-testable
+ * (same reason smsDispatchDecision and this module exist).
+ *
+ * The new class: `silent_pickup` — the line answered but nobody ever spoke.
+ * Measured 2026-08-13: all 158 dead-air pickups that day were retired as
+ * 'not_interested', a refusal by players who never said a word, while detected
+ * VOICEMAILS correctly rode the retry cycle. A machine got a retry; a possibly
+ * real human got terminated. This parks them like voicemails.
+ *
+ * Guard semantics (each preserved verbatim from the inline originals):
+ *  - goal/opt-out ALWAYS win — those classes write sent_sms / declined_offer.
+ *  - voicemail parks REGARDLESS of dispatch intent: registered_optin texts the
+ *    missed-call followup AND retries the number (2026-06-11 design).
+ *  - callback and silent_pickup park only when NO opt-in text went out
+ *    (registeredDispatchIntent) — a texted player is retired sent_sms, which is
+ *    optin_any_pickup's designed behaviour for its silent pickups.
+ */
+export type OutcomeParkReason = "voicemail" | "callback" | "silent_pickup";
+
+export function decideOutcomePark(args: {
+  voicemailDetected: boolean;
+  goalReached: boolean;
+  optedOut: boolean;
+  /** An opt-in-mode SMS is actually going out for this call (mode ≠ verbal_yes
+   *  && dispatch decided attempt && SMS configured). */
+  registeredDispatchIntent: boolean;
+  /** customerRequestedCallback(transcript) — computed by the caller. */
+  callbackRequested: boolean;
+  /** deriveAttemptTag for this call (the dashboard/dispatch classifier). */
+  attemptTag?: string;
+}): OutcomeParkReason | null {
+  if (args.goalReached || args.optedOut) return null;
+  if (args.voicemailDetected) return "voicemail";
+  if (args.registeredDispatchIntent) return null;
+  if (args.callbackRequested) return "callback";
+  if (args.attemptTag === "silent_pickup") return "silent_pickup";
+  return null;
+}
+
 export function mapHangup(hangupCause: string | null, s: HangupSignals): HangupOutcome {
   const cause = (hangupCause || "").toUpperCase();
   const answered = resolveAnswered(s);

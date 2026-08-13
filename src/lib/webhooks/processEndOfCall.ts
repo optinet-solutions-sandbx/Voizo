@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
 import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { decideOutcomePark } from "@/lib/webhooks/hangupOutcome";
 import { deriveAttemptTag } from "@/lib/dashboardAnalytics";
 import { resolveCallCosts, type VapiCostPayload } from "@/lib/callCost";
 
@@ -516,41 +517,43 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
   // suppresses fake goalReached from voicemail-contaminated transcripts)
   // still gets sent_sms and an SMS dispatched.
   //
-  // `voicemailDetected` was computed earlier in this function so it's reused here.
-  const skipOutcomeForVoicemail = voicemailDetected && !goalReached && !optedOut;
+  // Park-for-retry routing, now a PURE tested function (hangupOutcome.decideOutcomePark,
+  // 2026-08-13) that owns all three park classes and their guard semantics verbatim:
+  //  - voicemail (2026-05-11): parks regardless of dispatch intent — registered_optin
+  //    texts the missed-call followup AND retries the number.
+  //  - callback (VOZ-127): a reached human who asked to be called back later would
+  //    otherwise fall to the terminal `not_interested` below and be dropped.
+  //  - silent_pickup (2026-08-13): the line answered but NOBODY ever spoke. Measured
+  //    that day: all 158 dead-air pickups were retired as 'not_interested' — a refusal
+  //    by players who never said a word — while detected voicemails correctly rode the
+  //    retry cycle. Parks them like voicemails; optin_any_pickup's texted silent
+  //    pickups still retire as sent_sms (the registeredDispatchIntent guard).
+  const park = decideOutcomePark({
+    voicemailDetected,
+    goalReached,
+    optedOut,
+    registeredDispatchIntent,
+    callbackRequested: Boolean(transcript) && customerRequestedCallback(transcript),
+    attemptTag,
+  });
 
-  // Callback-request routing (VOZ-127): a reached human who asked to be called
-  // back later ("call me tomorrow", "ring me this afternoon", "busy, call
-  // later") would otherwise fall to the terminal `not_interested` below and be
-  // dropped. Gated to EXACTLY that class — `!voicemailDetected` (voicemail has
-  // its own skip), `!goalReached`/`!optedOut`/`!registeredDispatchIntent` (those
-  // produce sent_sms/declined_offer, never not_interested) — so this only ever
-  // converts a would-be not_interested into a retry. Same mechanism as the
-  // voicemail skip: park at in_progress, let the sweeper resolve to
-  // pending_retry under the campaign's max_attempts cap. No SMS is dispatched
-  // for this class (decision.attempt is false whenever registeredDispatchIntent
-  // is false and goalReached is false — see the SMS block below).
-  // [Ported from main's end-of-call/route.ts during the VOZ-157-extraction
-  //  rebase — main landed VOZ-127 on the pre-extraction file.]
-  const callbackRequested =
-    !skipOutcomeForVoicemail &&
-    !goalReached &&
-    !optedOut &&
-    !registeredDispatchIntent &&
-    Boolean(transcript) &&
-    customerRequestedCallback(transcript);
-
-  if (skipOutcomeForVoicemail) {
+  if (park === "voicemail") {
     console.log(
       `[vapi end-of-call] voicemail detected — skipping outcome update so the ` +
       `scheduler stale-in_progress sweeper resolves to pending_retry. ` +
       `vapiCallId=${vapiCallId}`,
     );
-  } else if (callbackRequested) {
+  } else if (park === "callback") {
     console.log(
       `[vapi end-of-call] callback requested (VOZ-127) — skipping outcome update so ` +
       `the scheduler stale-in_progress sweeper resolves to pending_retry (capped by ` +
       `max_attempts). vapiCallId=${vapiCallId}`,
+    );
+  } else if (park === "silent_pickup") {
+    console.log(
+      `[vapi end-of-call] silent pickup (zero user turns) — skipping outcome update so ` +
+      `the scheduler stale-in_progress sweeper resolves to pending_retry instead of ` +
+      `retiring the player as not_interested. vapiCallId=${vapiCallId}`,
     );
   } else {
     // Mode-aware label (2026-06-11): in registered_optin, an announced+configured

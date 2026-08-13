@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyAttempt,
   completedNumberOutcomeOverride,
+  decideOutcomePark,
   mapHangup,
   resolveAnswered,
   resolveAttemptCount,
@@ -200,5 +201,53 @@ describe("resolveAnswered", () => {
   it("billsec decides when there is no stamp", () => {
     expect(resolveAnswered(modern(10, 0))).toBe(false);
     expect(resolveAnswered(modern(10, 1))).toBe(true);
+  });
+});
+
+// ── decideOutcomePark (2026-08-13): which end-of-call classes PARK the number ──
+// at in_progress (sweeper → pending_retry → re-dial) instead of writing a
+// terminal outcome. Measured motivation: on 2026-08-13 all 158 dead-air pickups
+// were retired as 'not_interested' — a refusal by players who never said a word —
+// while detected voicemails correctly rode the retry cycle.
+describe("decideOutcomePark — silent pickups ride the retry cycle", () => {
+  const base = {
+    voicemailDetected: false,
+    goalReached: false,
+    optedOut: false,
+    registeredDispatchIntent: false,
+    callbackRequested: false,
+    attemptTag: "neutral" as const,
+  };
+
+  it("parks a silent pickup for retry (was: terminal not_interested)", () => {
+    expect(decideOutcomePark({ ...base, attemptTag: "silent_pickup" })).toBe("silent_pickup");
+  });
+  it("does NOT park a silent pickup an opt-in mode actually texted (sent_sms retirement stands)", () => {
+    // optin_any_pickup texts every answered line by design — its silent pickups
+    // are retired as sent_sms, exactly as before.
+    expect(decideOutcomePark({ ...base, attemptTag: "silent_pickup", registeredDispatchIntent: true })).toBeNull();
+  });
+  it("goal and opt-out always win over the silent park", () => {
+    expect(decideOutcomePark({ ...base, attemptTag: "silent_pickup", goalReached: true })).toBeNull();
+    expect(decideOutcomePark({ ...base, attemptTag: "silent_pickup", optedOut: true })).toBeNull();
+  });
+  it("pins the existing voicemail park — INCLUDING when a followup text goes out", () => {
+    // registered_optin voicemail: text the missed-call followup AND retry the number
+    // (2026-05-11 + 06-11 design) — the voicemail park deliberately ignores dispatch intent.
+    expect(decideOutcomePark({ ...base, voicemailDetected: true })).toBe("voicemail");
+    expect(decideOutcomePark({ ...base, voicemailDetected: true, registeredDispatchIntent: true })).toBe("voicemail");
+    expect(decideOutcomePark({ ...base, voicemailDetected: true, goalReached: true })).toBeNull();
+    expect(decideOutcomePark({ ...base, voicemailDetected: true, optedOut: true })).toBeNull();
+  });
+  it("pins the existing callback park (VOZ-127) and its dispatch-intent guard", () => {
+    expect(decideOutcomePark({ ...base, callbackRequested: true })).toBe("callback");
+    expect(decideOutcomePark({ ...base, callbackRequested: true, registeredDispatchIntent: true })).toBeNull();
+  });
+  it("voicemail outranks callback and silent when several apply", () => {
+    expect(decideOutcomePark({ ...base, voicemailDetected: true, callbackRequested: true, attemptTag: "silent_pickup" }))
+      .toBe("voicemail");
+  });
+  it("an ordinary reached call parks nothing (terminal outcome writes as before)", () => {
+    expect(decideOutcomePark(base)).toBeNull();
   });
 });
