@@ -12,7 +12,12 @@ import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
-import { isRejectStreak, REJECT_BREAKER_STREAK, REJECT_BREAKER_WINDOW_MINUTES } from "@/lib/scheduler/rejectBreaker";
+import {
+  isFailureStreak,
+  REJECT_BREAKER_STREAK,
+  REJECT_BREAKER_WINDOW_MINUTES,
+  TERMINAL_CALL_STATUSES,
+} from "@/lib/scheduler/rejectBreaker";
 import {
   assessTrunkHealth,
   selectProbeParent,
@@ -429,10 +434,11 @@ export async function GET(request: NextRequest) {
 
     if ((inFlight ?? 0) >= perCampaignK) continue;
 
-    // ── VOZ-278 circuit breaker: consecutive-CALL_REJECTED → pause + alert ──
-    // A campaign whose recent calls are ALL rejects is dialing a dead/blocked
-    // caller ID; every further dial burns ANI reputation for zero value
-    // (08-02/03: 31k rejects). Checked once per running campaign per tick,
+    // ── VOZ-278 circuit breaker: consecutive failed calls → pause + alert ──
+    // A campaign whose recent calls ALL fail is either dialing a dead/blocked
+    // caller ID or not reaching the carrier at all; every further dial burns ANI
+    // reputation for zero value (08-02/03: 31k rejects; 08-12: 2,027 dials that
+    // never reached FreeSWITCH). Checked once per running campaign per tick,
     // BEFORE any dial budget is spent. Time-boxed to the last 30 minutes so a
     // fixed-and-resumed campaign isn't re-tripped by pre-fix history (a still-
     // blocked CID re-accumulates the streak within minutes — correctly).
@@ -440,16 +446,29 @@ export async function GET(request: NextRequest) {
     // stamp below: only the winning tick alerts, so no dedup table is needed
     // (paused campaigns leave the `idleRunning` set entirely).
     const breakerSince = new Date(Date.now() - REJECT_BREAKER_WINDOW_MINUTES * 60 * 1000).toISOString();
-    const { data: recentCauses } = await supabaseAdmin
+    const { data: recentCalls } = await supabaseAdmin
       .from("calls_v2")
-      .select("hangup_cause")
+      .select("status,hangup_cause")
       .eq("campaign_id", campaignId)
       .gte("created_at", breakerSince)
-      .not("hangup_cause", "is", null)
+      // VOZ-369: TERMINAL rows, keyed on status — was `.not("hangup_cause","is",null)`,
+      // which silently excluded every dial that failed before reaching the carrier,
+      // because fireCall's provider-failure catch leaves hangup_cause NULL on purpose
+      // (VOZ-248 ghost recovery needs that). 2026-08-12: 2,027 such failures, 0 trips.
+      // The status allowlist also keeps in-flight rows out of the streak, which the
+      // old `hangup_cause IS NOT NULL` filter did implicitly.
+      .in("status", TERMINAL_CALL_STATUSES)
       .order("created_at", { ascending: false })
       .limit(REJECT_BREAKER_STREAK);
 
-    if (isRejectStreak((recentCauses ?? []).map((r) => r.hangup_cause as string | null))) {
+    const breakerRows = recentCalls ?? [];
+    if (isFailureStreak(breakerRows.map((r) => r.status as string | null))) {
+      // Which failure is it? Only the provider-failure catch leaves hangup_cause NULL,
+      // so all-null means these calls never reached FreeSWITCH and the caller ID is not
+      // the suspect. On 2026-08-12 the real cause was a child left with no assistant or
+      // SIP URI; an alert reading "caller ID appears blocked" would have sent the
+      // operator to SquareTalk for a day.
+      const preTrunk = breakerRows.every((r) => r.hangup_cause === null);
       // last_paused_at: every pause writer stamps it (parity with /stop and the
       // window-close paths). Breaker pauses left it NULL — Fortune Play 08-05
       // showed as paused with no timestamp, hiding WHEN the breaker fired.
@@ -461,15 +480,27 @@ export async function GET(request: NextRequest) {
         .select("id");
       if (breakerPaused && breakerPaused.length > 0) {
         console.error(
-          `[scheduler.breaker] ${campaignName}: ${REJECT_BREAKER_STREAK} consecutive CALL_REJECTED ` +
-            `within ${REJECT_BREAKER_WINDOW_MINUTES}min — auto-paused (VOZ-278). Caller ID likely blocked.`,
+          `[scheduler.breaker] ${campaignName}: ${REJECT_BREAKER_STREAK} consecutive failed calls ` +
+            `within ${REJECT_BREAKER_WINDOW_MINUTES}min — auto-paused (VOZ-278). ` +
+            (preTrunk
+              ? "None of them reached the carrier (originate-layer failure)."
+              : "Caller ID likely blocked."),
         );
-        await postSlackAlert("ALERT", "Circuit breaker: caller ID appears blocked", [
-          `Campaign: ${campaignName} (${campaignId})`,
-          `${REJECT_BREAKER_STREAK} consecutive CALL_REJECTED in the last ${REJECT_BREAKER_WINDOW_MINUTES} minutes`,
-          "Auto-paused to stop ANI reputation burn and player-attempt waste.",
-          "Verify the caller ID with the carrier/SquareTalk before un-pausing.",
-        ]);
+        await postSlackAlert(
+          "ALERT",
+          preTrunk
+            ? "Circuit breaker: calls are failing before the carrier"
+            : "Circuit breaker: caller ID appears blocked",
+          [
+            `Campaign: ${campaignName} (${campaignId})`,
+            `${REJECT_BREAKER_STREAK} consecutive failed calls in the last ${REJECT_BREAKER_WINDOW_MINUTES} minutes`,
+            "Auto-paused to stop ANI reputation burn and player-attempt waste.",
+            preTrunk
+              ? "No hangup cause on any of them — they never reached FreeSWITCH/SquareTalk. " +
+                "Check this child's assistant + SIP pointers and the originate shim, NOT the caller ID."
+              : "Verify the caller ID with the carrier/SquareTalk before un-pausing.",
+          ],
+        );
       }
       resumeResults.push({ id: campaignId, name: campaignName, result: "breaker_paused" });
       continue;
@@ -1000,7 +1031,17 @@ export async function GET(request: NextRequest) {
         supabaseAdmin
           .from("calls_v2")
           .select("id", { count: "exact", head: true })
-          .gte("created_at", trunkSince),
+          .gte("created_at", trunkSince)
+          // VOZ-372: only dials that REACHED the trunk are evidence about the trunk.
+          // fireCall sets provider_call_id only after originateCall resolves, so NULL
+          // means the call never got as far as FreeSWITCH — it says nothing about
+          // SquareTalk. On 2026-08-12 all 2,027 dials failed before FreeSWITCH and
+          // every one still counted here, which held `dials >= TRUNK_MIN_DIALS` and
+          // pinned the verdict at REFUSING instead of letting it fall back to UNKNOWN
+          // (fail-open). Measured: 0/2027 had a provider_call_id that day, while
+          // 107/107 of 08-11's genuine carrier refusals did — so this filter removes
+          // the junk without blinding the gate to a real refusal.
+          .not("provider_call_id", "is", null),
         supabaseAdmin
           .from("calls_v2")
           .select("id", { count: "exact", head: true })
