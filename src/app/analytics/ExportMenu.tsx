@@ -26,6 +26,7 @@ const CATEGORY_OPTS: { label: string; type: ExportType }[] = [
   { label: ATTEMPT_TAG_LABELS.neutral, type: "neutral" },
   { label: ATTEMPT_TAG_LABELS.declined, type: "declined" },
   { label: ATTEMPT_TAG_LABELS.early_hangup, type: "early_hangup" },
+  { label: ATTEMPT_TAG_LABELS.silent_pickup, type: "silent_pickup" },
   { label: ATTEMPT_TAG_LABELS.voicemail, type: "voicemail" },
   { label: ATTEMPT_TAG_LABELS.unreachable, type: "unreachable" },
 ];

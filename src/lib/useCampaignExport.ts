@@ -25,6 +25,7 @@ export type ExportType =
   | "neutral"
   | "declined"
   | "early_hangup"
+  | "silent_pickup"
   | "voicemail"
   | "unreachable";
 

@@ -374,6 +374,14 @@ function computeOne(id: string, acc: Acc, now: number): CampaignAnalytics {
   // deriveAttemptTag puts goal_reached above the connection check (Val 2026-07-03/07-06), so the
   // same call reads "positive" on the dashboard. ≤4 prod records historically. If sign-off says
   // align: hoist the goal_reached check above the CONNECTED_STATUSES continue below.
+  //
+  // SECOND DIVERGENCE (2026-08-13): deriveAttemptTag gained `silent_pickup` (zero substantive
+  // user turns = not a reached human) and its early-hangup rule became engagement-first. This
+  // inline copy keeps the PRE-v2 rules, so this page still counts dead-air pickups inside
+  // reach/earlyHangup/neutral where the Campaign Performance dashboard now shows Silent pickup.
+  // Deliberate: this page's `reach` (connected − voicemail) and its partition contract would
+  // both need reworking, and it is EST-labeled legacy — align it (or retire it) under the
+  // silent-pickup follow-up ticket rather than as a drive-by here.
   const declinedContactIds = new Set(
     numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id),
   );

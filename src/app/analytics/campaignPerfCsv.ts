@@ -40,10 +40,10 @@ const smsSub = (m: PerfMetric, key: string): number =>
 const HEADER = [
   "campaign", "brand", "country", "agent", "script", "segmentId", "status", "scheduleType",
   "players", "startAt", "lastCallAt",
-  "callAttempts", "reached", "voicemail", "unreachable",
+  "callAttempts", "reached", "voicemail", "silentPickup", "unreachable",
   "positive", "neutral", "declined", "earlyHangup", "agentTimeout",
   "smsSent", "smsToReached", "smsPositive", "smsNeutral", "smsDeclined",
-  "smsEarlyHangup", "smsAgentTimeout", "smsToVoicemail", "smsToUnreachable",
+  "smsEarlyHangup", "smsAgentTimeout", "smsToVoicemail", "smsToSilentPickup", "smsToUnreachable",
 ];
 
 function metricCells(perf: TodayPerfDay): Array<string | number> {
@@ -51,12 +51,12 @@ function metricCells(perf: TodayPerfDay): Array<string | number> {
   const re = perf.reached;
   const sm = perf.sms;
   return [
-    ca.total, bucket(ca, "reached"), bucket(ca, "voicemail"), bucket(ca, "unreachable"),
+    ca.total, bucket(ca, "reached"), bucket(ca, "voicemail"), bucket(ca, "silent_pickup"), bucket(ca, "unreachable"),
     bucket(re, "positive"), bucket(re, "neutral"), bucket(re, "declined"),
     bucket(re, "early_hangup"), bucket(re, "agent_timeout"),
     sm.total, bucket(sm, "reached"), smsSub(sm, "positive"), smsSub(sm, "neutral"),
     smsSub(sm, "declined"), smsSub(sm, "early_hangup"), smsSub(sm, "agent_timeout"),
-    bucket(sm, "voicemail"), bucket(sm, "unreachable"),
+    bucket(sm, "voicemail"), bucket(sm, "silent_pickup"), bucket(sm, "unreachable"),
   ];
 }
 

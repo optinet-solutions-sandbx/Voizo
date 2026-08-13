@@ -129,6 +129,9 @@ export interface SmsDispatchDecision {
      *  dashboard bucket so logs show exactly WHICH bucket blocked the text. */
     | "early_hangup"
     | "agent_timeout"
+    /** silent_pickup (2026-08-13): the line answered but nobody ever spoke — zero
+     *  substantive user turns. Zero human evidence never gets a text. */
+    | "silent_pickup"
     | "not_reached"
     | "reached_engaged";
 }
@@ -205,6 +208,11 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
         return { attempt: false, reason: "agent_timeout" };
       case "early_hangup":
         return { attempt: false, reason: "early_hangup" };
+      // silent_pickup (2026-08-13, Phase A): connected, but zero substantive user
+      // turns — dead air or an undetected machine. 316 such calls read 'neutral'
+      // (= texted) across the measured window. Zero human evidence, no text.
+      case "silent_pickup":
+        return { attempt: false, reason: "silent_pickup" };
       default:
         // unreachable — or no tag supplied. A caller that can't say which
         // bucket the call landed in doesn't get to text (fail-safe).

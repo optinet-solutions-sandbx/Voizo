@@ -939,7 +939,10 @@ export function computeCampaignTableFromRollup(
   for (const r of smsRollup) {
     let s = smsAgg.get(r.campaign_id);
     if (!s) {
-      s = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
+      // silentPickup stays 0 on the rollup path: the SQL rollup has no turn counts
+      // (same lean limitation as early_hangup_lean; the rollup DDL needs a
+      // silent_pickup column before any cutover — see VOZ-283 parity gate).
+      s = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
       smsAgg.set(r.campaign_id, s);
     }
     s.total += r.sent;
@@ -955,7 +958,7 @@ export function computeCampaignTableFromRollup(
     s.earlyHangup = Math.max(0, s.reached - s.positive - s.neutral - s.declined);
   }
 
-  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
+  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
@@ -974,6 +977,7 @@ export function computeCampaignTableFromRollup(
         inFlight: (a?.attempts ?? 0) - terminal,
         reach: a?.reach ?? 0,
         voicemail: a?.voicemail ?? 0,
+        silentPickup: 0, // rollup rows have no turn counts (see callBreakdownFromRollup note)
         unreachable: terminal - connected,
         positive: a?.positive ?? 0,
         neutral: a?.neutral ?? 0,
@@ -1071,7 +1075,7 @@ export function deriveRecordStatus(outcome: string | null, anyGoal: boolean): Re
 // mirror campaignAnalytics.computeOne's outcomeBreakdown (+ ANALYTICS_CONFIG.EARLY_HANGUP_SEC);
 // the contact tag is the funnel-furthest attempt tag (positive > declined > neutral >
 // early_hangup > voicemail > unreachable), or an outcome-derived tag when there are no calls.
-export type AttemptTag = "unreachable" | "voicemail" | "positive" | "declined" | "agent_timeout" | "early_hangup" | "neutral";
+export type AttemptTag = "unreachable" | "voicemail" | "positive" | "declined" | "agent_timeout" | "early_hangup" | "silent_pickup" | "neutral";
 export type ContactTag = AttemptTag | "awaiting_retry" | "wrong_number";
 
 export interface CallAttempt {
@@ -1097,6 +1101,7 @@ export const ATTEMPT_TAG_LABELS: Record<ContactTag, string> = {
   declined: "Declined",
   agent_timeout: "Agent timeout",
   early_hangup: "Early hangup",
+  silent_pickup: "Silent pickup",
   neutral: "Neutral",
   awaiting_retry: "Awaiting retry",
   wrong_number: "Wrong number",
@@ -1112,6 +1117,9 @@ export const ATTEMPT_TAG_DESC: Record<ContactTag, string> = {
   declined: "Contact declined the offer — applied to the whole contact, so it can show on earlier attempts too.",
   agent_timeout: "Reached a person, but the agent failed to respond (AI pipeline error/timeout) — a missed live pickup.",
   early_hangup: "Connected but ended with little or no real conversation — a quick hangup or no engagement.",
+  silent_pickup:
+    "The line answered but nobody ever spoke — dead air, a pocket answer, or an undetected machine. " +
+    "Not counted as a reached human (2026-08-13: was 158 of 338 'reached' on a measured day).",
   voicemail: "Best-effort automated voicemail detection; may misclassify.",
   unreachable: "Call didn't connect (no answer, busy, or failed).",
   awaiting_retry: "Not yet resolved — still scheduled for another attempt.",
@@ -1126,6 +1134,7 @@ export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
   declined: "#e46664",
   agent_timeout: "#c264d6",
   early_hangup: "#e0814a",
+  silent_pickup: "#a8814f", // muted ochre — "unknown pickup", between early-hangup orange and the greys
   voicemail: "#8f86e6",
   unreachable: "#e0a53c",
   awaiting_retry: "#7d828c",
@@ -1133,7 +1142,9 @@ export const ATTEMPT_TAG_COLOR: Record<ContactTag, string> = {
 };
 
 // Contact-tag priority: funnel-furthest among a contact's attempt tags wins.
-const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "agent_timeout", "voicemail", "unreachable"];
+// silent_pickup sits ABOVE voicemail (an unknown pickup carries more signal than a
+// detected machine) and BELOW every human tag (2026-08-13, Phase A).
+const CONTACT_TAG_PRIORITY: AttemptTag[] = ["positive", "declined", "neutral", "early_hangup", "agent_timeout", "silent_pickup", "voicemail", "unreachable"];
 
 /** calls_v2.transcript is jsonb `{ text }` from the DB, but a plain string in unit tests. */
 function transcriptText(t: DashCallRow["transcript"]): string {
@@ -1141,25 +1152,46 @@ function transcriptText(t: DashCallRow["transcript"]): string {
   return typeof t === "string" ? t : (t.text ?? "");
 }
 
+/** Endings that mean the call was deliberately ENDED (by either side) — the bail rule
+ *  below only fires on these, so a pipeline-death or unknown ending never silently
+ *  reads as "the customer hung up". assistant-* endings joined 2026-08-13 (Phase A):
+ *  when the agent recognises a dud pickup and says "Goodbye", ended_reason is
+ *  assistant-ended-call — the customer-ended-only rule tagged those 'neutral', which
+ *  is a TEXTABLE bucket under optin_reached_only. */
+const BAIL_ENDINGS = new Set([
+  "customer-ended-call",
+  "assistant-ended-call",
+  "assistant-said-end-call-phrase",
+  "assistant-ended-call-after-message-spoken",
+]);
+
 /** Definitive "no real conversation" signal for a connected, non-voicemail, non-goal call.
  *  Engagement (2026-06-26): a connected call where no real conversation happened is an early
- *  hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?"). Validated
- *  against 14d of prod (connected, non-voicemail): 0-turn calls are NEVER < 15s and split across
- *  silence-timed-out (no one spoke), customer-ended-call (bailed), and null (ambiguous — stays
- *  neutral). `opts.useTranscript:false` (lean/ranged path, spec §5.1) drops the transcript-only
- *  "customer hung up with <=1 substantive turn" branch — passing transcript:null is NOT equivalent
- *  (userTurns=0 would make it over-fire). Default true preserves today/per-campaign behaviour. */
+ *  hangup, not "neutral". Duration alone misses bails (a 30s clock with one "Hello?").
+ *
+ *  v2 (2026-08-13, Phase A replay over 8,140 prod calls): callers now route ZERO-turn calls
+ *  to `silent_pickup` BEFORE this check, so this function decides bails for calls with at
+ *  least one real utterance:
+ *    - silence-timed-out: spoke, then went silent — early hangup (unchanged).
+ *    - a BAIL_ENDINGS end with <=1 substantive turn — early hangup, regardless of duration
+ *      (June's rule, extended to agent-ended goodbyes).
+ *    - duration < EARLY_HANGUP_SEC only counts with <=1 turn: a rapid multi-turn exchange
+ *      is a real conversation, not a hang-up (was: any short call).
+ *  `opts.useTranscript:false` (lean/ranged path, spec §5.1) keeps the ORIGINAL lean rules
+ *  verbatim (silence-timed-out OR bare duration) — it cannot count turns, and passing
+ *  transcript:null is NOT equivalent (userTurns=0 would make it over-fire). */
 export function isEarlyHangup(call: DashCallRow, opts: { useTranscript?: boolean } = {}): boolean {
   const useTranscript = opts.useTranscript !== false;
-  if (call.ended_reason === "silence-timed-out") return true; // connected, customer never spoke
-  if (
-    useTranscript &&
-    call.ended_reason === "customer-ended-call" &&
-    substantiveUserTurnCount(transcriptText(call.transcript)) <= 1
-  )
-    return true; // pickup-and-bail (transcript-derived)
+  if (call.ended_reason === "silence-timed-out") return true; // connected, then silence
+  if (!useTranscript) {
+    // lean path: unchanged pre-v2 behaviour (no transcript available to do better)
+    return typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC;
+  }
+  const turns = substantiveUserTurnCount(transcriptText(call.transcript));
+  if (turns > 1) return false; // real back-and-forth — never a bail, however short
+  if (BAIL_ENDINGS.has(call.ended_reason ?? "")) return true; // pickup-and-bail
   if (typeof call.duration_seconds === "number" && call.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
-    return true;
+    return true; // short one-utterance call with an ambiguous ending
   return false;
 }
 
@@ -1184,6 +1216,17 @@ export function deriveAttemptTag(
   // quota death). Its own category under Reached, ahead of early_hangup (a 3s 429 call
   // would otherwise read as a duration-based early hangup).
   if (isAgentTimeout(call.ended_reason)) return "agent_timeout";
+  // silent_pickup (2026-08-13, Phase A over 8,140 prod calls): the line answered but
+  // NOBODY EVER SPOKE — zero substantive user turns, which includes a transcript that
+  // was never captured. Zero human evidence is not "reached": on a measured day 158 of
+  // 338 "reached" calls were dead air, and 316 zero-turn calls across the window read
+  // 'neutral' (a TEXTABLE bucket) because an agent-ended call dodged every early-hangup
+  // branch. Sits ABOVE declined on purpose — a call with no human on it must not
+  // inherit the contact's decline (declined is also textable under optin_reached_only).
+  // The lean path can't count turns and therefore never emits this tag (spec §5.1 —
+  // same EST divergence as the lean early-hangup rule).
+  if (opts.useTranscript !== false && substantiveUserTurnCount(transcriptText(call.transcript)) === 0)
+    return "silent_pickup";
   if (declinedContact) return "declined";
   return isEarlyHangup(call, opts) ? "early_hangup" : "neutral";
 }
@@ -1288,8 +1331,13 @@ export interface CallBreakdown {
   terminal: number; // connected + terminal-nonconnect (excludes in-flight)
   connected: number; // CONNECTED_STATUSES (incl. voicemail)
   inFlight: number; // total − terminal (still dialing/ringing)
-  reach: number; // connected − voicemail (live humans)
+  reach: number; // connected − voicemail − silentPickup (live humans)
   voicemail: number; // connected & voicemail===true
+  /** 2026-08-13 (Phase A): connected, but zero substantive user turns — dead air,
+   *  pocket answer, or an undetected machine. Deliberately OUTSIDE `reach`, which
+   *  changes the reach denominator (and every rate on it) for history too, since
+   *  tags compute at read time. Partition: connected = reach + voicemail + silentPickup. */
+  silentPickup: number;
   unreachable: number; // terminal − connected
   // Reached split — partitions `reach` (sums to reach).
   positive: number;
@@ -1312,7 +1360,7 @@ export function callWindowBreakdown(
   opts: { useTranscript?: boolean } = {},
 ): CallBreakdown {
   const b: CallBreakdown = {
-    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
+    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, silentPickup: 0, unreachable: 0,
     positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0,
   };
   for (const c of calls) {
@@ -1323,10 +1371,16 @@ export function callWindowBreakdown(
     if (!isConnected(c.status)) continue;
     b.connected += 1;
     if (c.voicemail === true && c.goal_reached !== true) { b.voicemail += 1; continue; } // goal_reached overrides voicemail (Val 2026-07-03)
-    // Reached human → outcome split (mirror deriveAttemptTag priority verbatim via the shared seam).
+    // Outcome split — mirrors deriveAttemptTag priority verbatim (the shared seam).
+    if (c.goal_reached === true) { b.reach += 1; b.positive += 1; continue; }
+    if (isAgentTimeout(c.ended_reason)) { b.reach += 1; b.agentTimeout += 1; continue; } // ahead of declined/early — same slot as deriveAttemptTag
+    // silent_pickup (2026-08-13): zero substantive turns → NOT a reached human. Same
+    // slot as deriveAttemptTag (above declined). Lean path can't count turns → skips.
+    if (opts.useTranscript !== false && substantiveUserTurnCount(transcriptText(c.transcript)) === 0) {
+      b.silentPickup += 1;
+      continue;
+    }
     b.reach += 1;
-    if (c.goal_reached === true) { b.positive += 1; continue; }
-    if (isAgentTimeout(c.ended_reason)) { b.agentTimeout += 1; continue; } // ahead of declined/early — same slot as deriveAttemptTag
     if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) { b.declined += 1; continue; }
     if (isEarlyHangup(c, opts)) b.earlyHangup += 1; else b.neutral += 1;
   }
@@ -1339,6 +1393,10 @@ export interface SmsBreakdown {
   total: number; // sent|delivered SMS in the window
   reached: number; // SMS to a reached human (positive|neutral|declined|early_hangup|agent_timeout)
   voicemail: number; // SMS to a voicemail pickup (registered_optin follow-up)
+  /** SMS whose call had zero substantive user turns (2026-08-13). optin_reached_only
+   *  refuses this bucket at dispatch, so a non-zero count here is either an older
+   *  consent mode or a leak worth investigating — that visibility is the point. */
+  silentPickup: number;
   unreachable: number; // SMS whose call didn't connect
   // by-response of the reached SMS. Every reached text is NAMED — the partition
   // positive+neutral+declined+earlyHangup+agentTimeout === reached. early_hangup
@@ -1365,7 +1423,7 @@ export function smsWindowBreakdown(
 ): SmsBreakdown {
   const callById = new Map<string, DashCallRow>();
   for (const c of calls) if (c.id) callById.set(c.id, c);
-  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   for (const m of sms) {
     if (!isSmsSent(m.status)) continue;
     const t = m.created_at ? Date.parse(m.created_at) : NaN;
@@ -1375,6 +1433,7 @@ export function smsWindowBreakdown(
     if (!call) continue; // unmatched → counted in total only
     const tag = deriveAttemptTag(call, !!(call.campaign_number_id && declinedIds.has(call.campaign_number_id)), opts);
     if (tag === "voicemail") { b.voicemail += 1; continue; }
+    if (tag === "silent_pickup") { b.silentPickup += 1; continue; } // never "reached" (2026-08-13)
     if (tag === "unreachable") { b.unreachable += 1; continue; }
     b.reached += 1; // positive | neutral | declined | early_hangup | agent_timeout
     if (tag === "positive") b.positive += 1;
@@ -1467,6 +1526,9 @@ function assembleTodayPerf(
   const callAttempts = mkMetric(cb.total, cbP.total, cb7.total, [
     mkRow("reached", "Reached", cb.reach, cb.total, cbP.reach, cbP.total, cb7.reach, cb7.total),
     mkRow("voicemail", "Voicemail", cb.voicemail, cb.total, cbP.voicemail, cbP.total, cb7.voicemail, cb7.total),
+    // 2026-08-13 (Phase A): answered but nobody spoke — deliberately OUTSIDE Reached.
+    // 0 on the rollup path until its DDL gains the column (see callBreakdownFromRollup).
+    mkRow("silent_pickup", "Silent pickup", cb.silentPickup, cb.total, cbP.silentPickup, cbP.total, cb7.silentPickup, cb7.total),
     mkRow("unreachable", "Unreachable", cb.unreachable, cb.total, cbP.unreachable, cbP.total, cb7.unreachable, cb7.total),
   ]);
 
@@ -1491,6 +1553,9 @@ function assembleTodayPerf(
   const sms = mkMetric(sb.total, sbP.total, sb7.total, [
     mkRow("reached", "Reached", sb.reached, sb.total, sbP.reached, sbP.total, sb7.reached, sb7.total, { subRows: smsReachedSub }),
     mkRow("voicemail", "Voicemail", sb.voicemail, sb.total, sbP.voicemail, sbP.total, sb7.voicemail, sb7.total),
+    // 2026-08-13: reached_only refuses this bucket at dispatch — non-zero here means
+    // an older consent mode or a leak worth investigating (that visibility is the point).
+    mkRow("silent_pickup", "Silent pickup", sb.silentPickup, sb.total, sbP.silentPickup, sbP.total, sb7.silentPickup, sb7.total),
     mkRow("unreachable", "Unreachable", sb.unreachable, sb.total, sbP.unreachable, sbP.total, sb7.unreachable, sb7.total),
   ]);
 
@@ -1549,6 +1614,8 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
   const callAttempts = mkMetricNoDelta(cb.total, [
     mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
     mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
+    // 2026-08-13 (Phase A): answered but nobody spoke — outside Reached (0 on rollup path).
+    mkRowNoDelta("silent_pickup", "Silent pickup", cb.silentPickup, cb.total),
     mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
   ]);
 
@@ -1572,6 +1639,7 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
   const smsMetric = mkMetricNoDelta(sb.total, [
     mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
     mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
+    mkRowNoDelta("silent_pickup", "Silent pickup", sb.silentPickup, sb.total), // 2026-08-13
     mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),
   ]);
 
@@ -1846,7 +1914,9 @@ function callBreakdownFromRollup(
   candidateDelta: number,
 ): CallBreakdown {
   const b: CallBreakdown = {
-    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, unreachable: 0,
+    // silentPickup stays 0 on the rollup path too (2026-08-13): the SQL rollup has
+    // no turn counts. The rollup DDL needs a silent_pickup column before cutover.
+    total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, silentPickup: 0, unreachable: 0,
     // agentTimeout stays 0 on the rollup path: the SQL rollup predates the
     // agent_timeout tag (VOZ-330) and its rows can't split it out — those calls
     // remain inside early_hangup_lean/neutral_lean here. The VOZ-283 parity gate
@@ -1882,7 +1952,7 @@ function smsBreakdownFromRollup(
   endMs: number,
   candidateDelta: number,
 ): SmsBreakdown {
-  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
+  const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   for (const r of rows) {
     const t = dayUtcToMs(r.day_utc);
     if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;

@@ -1250,6 +1250,7 @@ export default function CampaignV2DetailPage() {
                       ["neutral", "Neutral"],
                       ["declined", "Declined"],
                       ["early_hangup", "Early hangup"],
+                      ["silent_pickup", "Silent pickup"],
                       ["voicemail", "Voicemail detected"],
                       ["unreachable", "Unreachable"],
                     ] as [ExportType, string][]).map(([type, label]) => (
@@ -1275,6 +1276,7 @@ export default function CampaignV2DetailPage() {
                       ["neutral", "Neutral"],
                       ["declined", "Declined"],
                       ["early_hangup", "Early hangup"],
+                      ["silent_pickup", "Silent pickup"],
                       ["voicemail", "Voicemail detected"],
                       ["unreachable", "Unreachable"],
                     ] as [ExportType, string][]).map(([type, label]) => (

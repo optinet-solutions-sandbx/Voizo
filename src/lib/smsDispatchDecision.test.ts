@@ -282,6 +282,14 @@ describe("decideSmsDispatch — optin_reached_only (Val 2026-08-07)", () => {
       .toEqual({ attempt: true, reason: "reached_engaged" });
   });
 
+  it("refuses a silent pickup — zero human evidence never gets a text (2026-08-13)", () => {
+    // Phase A measured 316 zero-turn calls tagged 'neutral' (= texted) across 12 days
+    // because the agent-ended path dodged every early-hangup branch. silent_pickup is
+    // its own refused bucket with its own reason, so logs show WHY the text was held.
+    expect(decideSmsDispatch({ ...reached, attemptTag: "silent_pickup" }))
+      .toEqual({ attempt: false, reason: "silent_pickup" });
+  });
+
   it('an on-call SMS refusal ("don\'t text me") does NOT veto in this mode', () => {
     expect(decideSmsDispatch({ ...reached, customerDeclinedSms: true }))
       .toEqual({ attempt: true, reason: "reached_engaged" });

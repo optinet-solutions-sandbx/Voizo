@@ -43,17 +43,24 @@ const VALID_TYPES: readonly ExportType[] = [
   "neutral",
   "declined",
   "early_hangup",
+  "silent_pickup",
   "voicemail",
   "unreachable",
 ];
 
 // Contact-tag priority: funnel-furthest among a lead's attempt tags wins.
 // MUST match computeCallRecords' CONTACT_TAG_PRIORITY in dashboardAnalytics.ts.
+// 2026-08-13: this copy had DRIFTED — it was missing agent_timeout (VOZ-330 added it
+// to the canonical list but not here), so an agent-timeout-only contact fell through
+// the priority scan. Re-synced while adding silent_pickup; if these diverge again,
+// consider importing the canonical list instead of copying it.
 const CONTACT_TAG_PRIORITY: AttemptTag[] = [
   "positive",
   "declined",
   "neutral",
   "early_hangup",
+  "agent_timeout",
+  "silent_pickup",
   "voicemail",
   "unreachable",
 ];

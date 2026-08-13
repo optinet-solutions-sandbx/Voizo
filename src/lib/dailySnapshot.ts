@@ -68,6 +68,7 @@ export function buildSnapshotEmail(
       lines: [
         { label: "Reached", value: countPct(ca, "reached") },
         { label: "Voicemail", value: countPct(ca, "voicemail") },
+        { label: "Silent pickup", value: countPct(ca, "silent_pickup") }, // 2026-08-13: answered, nobody spoke
         { label: "Unreachable", value: countPct(ca, "unreachable") },
         // Only surface in-progress when there is any — a completed prior day is normally all-terminal.
         ...(perf.inFlight > 0 ? [{ label: "In progress", value: String(perf.inFlight) }] : []),

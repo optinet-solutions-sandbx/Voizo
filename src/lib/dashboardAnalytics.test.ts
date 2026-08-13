@@ -41,6 +41,7 @@ import {
   type RateRow,
   type CallRecord,
   type AttemptTag,
+  HUMAN_TAGS,
 } from "./dashboardAnalytics";
 
 function call(
@@ -73,11 +74,13 @@ describe("callWindowBreakdown — per-window call partition (Today cards)", () =
   const inW = new Date(T + 3_600_000).toISOString();
   const outW = new Date(T - 3_600_000).toISOString();
   it("partitions attempts into reach/voicemail/unreachable + in-flight, and reach into outcomes", () => {
+    // v2 (2026-08-13): human-intent fixtures carry a minimal user turn — a transcript-less
+    // connect is now silent_pickup by definition, not a reached human.
     const calls: DashCallRow[] = [
-      call("c", "completed", true, inW), // positive (reach)
-      call("c", "completed", false, inW, "d"), // declined contact (reach)
-      call("c", "completed", false, inW, undefined, false, 5), // early hangup (<15s, reach)
-      call("c", "completed", false, inW, undefined, false, 60), // neutral (reach)
+      call("c", "completed", true, inW), // positive (reach — goal wins, turns irrelevant)
+      call("c", "completed", false, inW, "d", false, 30, "customer-ended-call", "AI: hi\nUser: no thanks"), // declined contact (reach)
+      call("c", "completed", false, inW, undefined, false, 5, null, "AI: hi\nUser: Hello?"), // early hangup (1 turn, <15s, reach)
+      call("c", "completed", false, inW, undefined, false, 60, null, "AI: hi\nUser: what\nAI: offer\nUser: go on"), // neutral (reach)
       call("c", "completed", false, inW, undefined, true), // voicemail (connected)
       call("c", "no_answer", false, inW), // unreachable (terminal non-connect)
       call("c", "initiated", null, inW), // in-flight (not terminal)
@@ -121,7 +124,8 @@ describe("smsWindowBreakdown — SMS bucketed by recipient call outcome", () => 
     created_at: new Date(T + 2000).toISOString(),
   });
   it("buckets sent/delivered SMS by call outcome; unmatched counted in total only", () => {
-    const calls = [c("p", { goal_reached: true }), c("v", { voicemail: true }), c("u", { status: "no_answer" }), c("d")];
+    // v2 (2026-08-13): the declined call carries a user turn — transcript-less = silent_pickup now.
+    const calls = [c("p", { goal_reached: true }), c("v", { voicemail: true }), c("u", { status: "no_answer" }), c("d", { duration_seconds: 30, ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: not interested" })];
     const messages = [s("p"), s("v"), s("u"), s("d"), s(null), s("p", "failed")];
     const b = smsWindowBreakdown(messages, calls, new Set(["d"]), T, T + 86_400_000);
     expect(b.total).toBe(5); // failed excluded; null-call_id included in total only
@@ -158,13 +162,14 @@ describe("smsWindowBreakdown + callWindowBreakdown — no hidden reached buckets
     status: "delivered",
     created_at: new Date(T + 2000).toISOString(),
   });
-  // one call per bucket
+  // one call per bucket. v2 (2026-08-13): human-intent fixtures carry a user turn —
+  // a transcript-less connect is silent_pickup now, not a reached human.
   const calls = [
     c("p", { goal_reached: true }),
     c("n", { duration_seconds: 40, ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: tell me more\nUser: okay sounds good" }), // 2 turns → neutral
-    c("d"), // declined contact (via declinedIds)
-    c("e", { duration_seconds: 5 }), // <15s → early hang-up
-    c("a", { duration_seconds: 3, ended_reason: "pipeline-error-openai-429-exceeded-quota" }), // agent timeout — ranks ABOVE early hang-up
+    c("d", { duration_seconds: 30, ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: nah mate" }), // declined contact (via declinedIds)
+    c("e", { duration_seconds: 5, transcript: "AI: hi\nUser: Hello?" }), // 1 turn, <15s → early hang-up
+    c("a", { duration_seconds: 3, ended_reason: "pipeline-error-openai-429-exceeded-quota" }), // agent timeout — ranks ABOVE early hang-up AND silent
     c("v", { voicemail: true }),
   ];
 
@@ -235,7 +240,7 @@ describe("computeToday — today/yesterday performance blocks (3-card redesign)"
       // today (June 27)
       { id: "t1", campaign_id: "c", campaign_number_id: "a", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-27T10:00:00Z" },
       { id: "t2", campaign_id: "c", campaign_number_id: "b", status: "completed", goal_reached: false, voicemail: true, created_at: "2026-06-27T10:05:00Z" },
-      { id: "t3", campaign_id: "c", campaign_number_id: "d", status: "completed", goal_reached: false, voicemail: false, created_at: "2026-06-27T10:10:00Z" }, // declined contact
+      { id: "t3", campaign_id: "c", campaign_number_id: "d", status: "completed", goal_reached: false, voicemail: false, created_at: "2026-06-27T10:10:00Z", ended_reason: "customer-ended-call", transcript: "AI: hi\nUser: no thanks" }, // declined contact (v2: needs a user turn)
       // yesterday (June 26)
       { id: "y1", campaign_id: "c", campaign_number_id: "e", status: "completed", goal_reached: true, voicemail: false, created_at: "2026-06-26T10:00:00Z" },
       { id: "y2", campaign_id: "c", campaign_number_id: "f", status: "no_answer", goal_reached: false, created_at: "2026-06-26T11:00:00Z" },
@@ -728,9 +733,10 @@ describe("call records", () => {
       call("x", "no_answer", false, "2026-06-09T10:00:00Z", "n1"),
       call("x", "completed", true, "2026-06-11T10:00:00Z", "n1"),
       // n2: completed call, no goal, contact outcome declined_offer → declined
-      call("x", "completed", false, "2026-06-10T10:00:00Z", "n2"),
-      // n3: completed, short duration, no goal/decline → early_hangup
-      call("x", "completed", false, "2026-06-10T10:00:00Z", "n3", null, 8),
+      // (v2 2026-08-13: needs a user turn — a transcript-less connect is silent_pickup)
+      call("x", "completed", false, "2026-06-10T10:00:00Z", "n2", null, 30, "customer-ended-call", "AI: hi\nUser: nah not for me"),
+      // n3: completed, one turn, short duration, no goal/decline → early_hangup
+      call("x", "completed", false, "2026-06-10T10:00:00Z", "n3", null, 8, null, "AI: hi\nUser: Hello?"),
       // n4: completed, voicemail true → voicemail
       call("x", "completed", false, "2026-06-10T10:00:00Z", "n4", true),
     ];
@@ -800,10 +806,12 @@ describe("deriveAttemptTag — engagement rules (validated against 14d of prod)"
   it("still tags a non-goal voicemail as voicemail (unchanged)", () => {
     expect(deriveAttemptTag(call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", true), false)).toBe("voicemail");
   });
-  // silence-timed-out: connected but the customer never spoke → early hangup
-  it("tags silence-timed-out as early_hangup", () => {
+  // v2 FLIP (2026-08-13): "connected but the customer never spoke" is now silent_pickup —
+  // that is the definition. silence-timed-out stays early_hangup only when the customer
+  // DID speak first (spoke-then-silence; pinned in the v2 suite below).
+  it("tags a zero-turn silence-timed-out as silent_pickup (was early_hangup pre-v2)", () => {
     const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n0", false, 32, "silence-timed-out", "");
-    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
   });
   // attempt 2 (prod +61474932636): customer "Hello?" then customer-ended-call, dur 30s → pickup-and-bail
   it("tags a customer-ended-call with <=1 customer turn as early_hangup regardless of duration", () => {
@@ -815,15 +823,16 @@ describe("deriveAttemptTag — engagement rules (validated against 14d of prod)"
     const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "n3", false, 40, "customer-ended-call", "AI: Hi\nUser: yeah what is this\nAI: an offer\nUser: not right now thanks");
     expect(deriveAttemptTag(c, false)).toBe("neutral");
   });
-  // attempt 1 (prod): completed, null transcript, null ended_reason, dur 23 → AMBIGUOUS → stays neutral
-  // (conservative: don't reclassify a connect whose transcript merely wasn't captured)
-  it("leaves an ambiguous null/null connect (>=15s) as neutral", () => {
+  // v2 FLIP (2026-08-13): the 2026-06 rule kept a transcript-less connect 'neutral'
+  // ("conservative"). But neutral is a TEXTABLE bucket under optin_reached_only, and a
+  // missing transcript is zero evidence of a human — silent_pickup is the honest tag.
+  it("tags an ambiguous null/null connect silent_pickup (was 'conservative neutral' pre-v2)", () => {
     const c = call("x", "completed", null, "2026-06-26T08:39:07Z", "n1", null, 23, null, "");
-    expect(deriveAttemptTag(c, false)).toBe("neutral");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
   });
-  // existing duration rule preserved: a genuinely short call → early hangup
-  it("keeps the duration<15s early_hangup rule", () => {
-    const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "nS", false, 8);
+  // duration rule survives for ONE-utterance calls: short + <=1 turn + ambiguous ending → bail
+  it("keeps the duration<15s early_hangup rule when the customer spoke once", () => {
+    const c = call("x", "completed", false, "2026-06-26T10:00:00Z", "nS", false, 8, null, "AI: hi\nUser: Hello?");
     expect(deriveAttemptTag(c, false)).toBe("early_hangup");
   });
   // voicemail still wins over the engagement rules
@@ -831,10 +840,15 @@ describe("deriveAttemptTag — engagement rules (validated against 14d of prod)"
     const c = call("x", "completed", false, "2026-06-26T10:15:21Z", "n4", true, 20, "assistant-ended-call", "User: You have reached the message bank of...");
     expect(deriveAttemptTag(c, false)).toBe("voicemail");
   });
-  // accepts the jsonb {text} shape straight from the DB (customer-ended-call + empty {text} → bail)
+  // accepts the jsonb {text} shape straight from the DB (customer-ended-call + one turn → bail)
   it("normalizes the jsonb {text} transcript shape", () => {
-    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", ended_reason: "customer-ended-call", transcript: { text: "" } };
+    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", ended_reason: "customer-ended-call", transcript: { text: "AI: hi\nUser: Hello?" } };
     expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  // ...and an EMPTY jsonb {text} is zero evidence → silent_pickup (v2 2026-08-13)
+  it("normalizes the jsonb {text} shape for the silent case too", () => {
+    const c: DashCallRow = { campaign_id: "x", status: "completed", goal_reached: false, created_at: "2026-06-26T08:00:00Z", ended_reason: "customer-ended-call", transcript: { text: "" } };
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
   });
   // a goal-reached call stays positive even with a thin transcript (rule order)
   it("keeps goal_reached as positive ahead of engagement", () => {
@@ -848,6 +862,124 @@ describe("deriveAttemptTag — engagement rules (validated against 14d of prod)"
   it("tags a goal-reached call Positive even when status is non-connected (goal overrides connection)", () => {
     const c = call("x", "failed", true, "2026-06-26T10:15:21Z", "n6", false, null, "assistant-said-end-call-phrase");
     expect(deriveAttemptTag(c, false)).toBe("positive");
+  });
+});
+
+// ── silent_pickup + engagement v2 (2026-08-13, Phase A replay over 8,140 prod calls) ──
+// A connected call with ZERO substantive user turns is not evidence of reaching a human:
+// on 2026-08-13, 158 of 338 "reached" calls were dead air, and 316 zero-turn calls across
+// the window read 'neutral' (= texted under optin_reached_only) because the agent-ended
+// path dodged every early-hangup branch. These supersede parts of the 2026-06 policy
+// above — each flip is measured and deliberate.
+describe("deriveAttemptTag — silent_pickup (zero human evidence)", () => {
+  it("tags a zero-turn agent-ended call silent_pickup (the texting hole: was neutral)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s1", false, 45, "assistant-ended-call",
+      "AI: Hey, Victor here from fortune play dot com.\nAI: Are you still with me?\nAI: Goodbye.");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
+  });
+  it("tags a zero-turn silence-timed-out call silent_pickup (was early_hangup)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s2", false, 62, "silence-timed-out", "");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
+  });
+  it("tags a zero-turn customer-ended call silent_pickup (was early_hangup)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s3", false, 6, "customer-ended-call", "AI: Hey, Victor here.");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
+  });
+  it("tags a connect with NO transcript captured silent_pickup (was 'ambiguous stays neutral')", () => {
+    // Supersedes the 2026-06 'conservative neutral' rule: a missing transcript is zero
+    // evidence of a human, and neutral is a TEXTABLE bucket under optin_reached_only.
+    const c = call("x", "completed", null, "2026-08-13T02:00:00Z", "s4", null, 23, null, "");
+    expect(deriveAttemptTag(c, false)).toBe("silent_pickup");
+  });
+  it("silent_pickup beats the contact-level declined tag (zero evidence inherits nothing)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s5", false, 30, "assistant-ended-call", "AI: Hello?");
+    expect(deriveAttemptTag(c, true)).toBe("silent_pickup");
+  });
+  it("goal_reached still wins over silent (order)", () => {
+    const c = call("x", "completed", true, "2026-08-13T02:00:00Z", "s6", false, 30, "assistant-ended-call", "");
+    expect(deriveAttemptTag(c, false)).toBe("positive");
+  });
+  it("voicemail still wins over silent (order)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s7", true, 20, "assistant-ended-call", "");
+    expect(deriveAttemptTag(c, false)).toBe("voicemail");
+  });
+  it("agent_timeout still wins over silent (order)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s8", false, 9, "pipeline-error-openai-llm-failed", "");
+    expect(deriveAttemptTag(c, false)).toBe("agent_timeout");
+  });
+  it("the lean (transcript-less) path NEVER emits silent_pickup — it cannot count turns", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "s9", false, 45, "assistant-ended-call", "");
+    expect(deriveAttemptTag(c, false, { useTranscript: false })).toBe("neutral");
+  });
+});
+
+describe("deriveAttemptTag — early-hangup v2 (engagement-first)", () => {
+  it("tags an agent-ended 1-turn bail early_hangup (the 'Goodbye' hole: was neutral = texted)", () => {
+    // Prod 2026-08-13: agent recognizes a dud pickup, says Goodbye at 17s -> ended_reason
+    // assistant-ended-call dodged the customer-ended-only branch and read neutral.
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "e1", false, 17, "assistant-ended-call", "AI: Hey Victor here.\nUser: Thanks mate.\nAI: Goodbye.");
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  it("keeps the June rule: customer-ended <=1 turn is a bail regardless of duration", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "e2", false, 60, "customer-ended-call", "AI: Hey.\nUser: Yes. Hi. No.\nAI: The reason I'm calling...");
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  it("silence-timed-out WITH a real utterance stays early_hangup (spoke, then went silent)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "e3", false, 90, "silence-timed-out", "AI: Hey.\nUser: Hello?\nAI: Take your time. I'm still here.");
+    expect(deriveAttemptTag(c, false)).toBe("early_hangup");
+  });
+  it("a rapid multi-turn exchange under 15s is a real conversation, not a hang-up (duration rule demoted)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "e4", false, 10, "customer-ended-call", "AI: Hey.\nUser: yeah?\nAI: an offer\nUser: not now thanks\nUser: bye");
+    expect(deriveAttemptTag(c, false)).toBe("neutral");
+  });
+  it("the lean path keeps the bare duration<15s rule (it has nothing better)", () => {
+    const c = call("x", "completed", false, "2026-08-13T02:00:00Z", "e5", false, 8, null, null);
+    expect(deriveAttemptTag(c, false, { useTranscript: false })).toBe("early_hangup");
+  });
+});
+
+describe("silent_pickup — breakdowns, reach accounting, contact rollup", () => {
+  const T = Date.UTC(2026, 7, 13);
+  const at = new Date(T + 3_600_000).toISOString();
+  it("callWindowBreakdown counts silentPickup OUTSIDE reach (reach = humans only)", () => {
+    const calls = [
+      call("x", "completed", true, at, "b1", false, 60, "customer-ended-call", "AI: Hi\nUser: yes"), // positive
+      call("x", "completed", false, at, "b2", false, 45, "assistant-ended-call", ""), // silent
+      call("x", "completed", false, at, "b3", false, 62, "silence-timed-out", ""), // silent
+      call("x", "completed", false, at, "b4", true, 20, null, "User: leave a message after the tone"), // voicemail
+      call("x", "completed", false, at, "b5", false, 40, "customer-ended-call", "AI: Hi\nUser: what\nAI: offer\nUser: no thanks"), // neutral
+      call("x", "failed", false, at, "b6", false, 0, null, ""), // unreachable
+    ];
+    const b = callWindowBreakdown(calls, new Set(), T, T + 86_400_000);
+    expect(b.silentPickup).toBe(2);
+    expect(b.reach).toBe(2); // positive + neutral ONLY — silent pickups are not reached humans
+    expect(b.voicemail).toBe(1);
+    expect(b.connected).toBe(5);
+    // partition invariant: connected = reach + voicemail + silentPickup
+    expect(b.reach + b.voicemail + b.silentPickup).toBe(b.connected);
+  });
+  it("smsWindowBreakdown buckets an SMS on a silent call as silentPickup, not reached", () => {
+    const c = { ...call("x", "completed", false, at, "b7", false, 45, "assistant-ended-call", ""), id: "c-silent" };
+    const sms = [{ campaign_id: "x", call_id: "c-silent", status: "delivered", created_at: at }];
+    const b = smsWindowBreakdown(sms as DashSmsRow[], [c], new Set(), T, T + 86_400_000);
+    expect(b.silentPickup).toBe(1);
+    expect(b.reached).toBe(0);
+  });
+  it("contact rollup: silent_pickup outranks voicemail, stays below agent_timeout", () => {
+    const numbers = [{ id: "n1", phone_e164: "+61400000001", outcome: "pending" }];
+    const calls = [
+      { ...call("x", "completed", false, at, "n1", true, 20, null, "User: voice mail"), id: "a1" }, // voicemail attempt
+      { ...call("x", "completed", false, at, "n1", false, 45, "assistant-ended-call", ""), id: "a2" }, // silent attempt
+    ];
+    const [rec] = computeCallRecords(numbers as never, calls);
+    expect(rec.tag).toBe("silent_pickup");
+  });
+  it("HUMAN_TAGS excludes silent_pickup, and a silent-only record is not 'reached'", () => {
+    expect(HUMAN_TAGS.has("silent_pickup" as AttemptTag)).toBe(false);
+    const numbers = [{ id: "n2", phone_e164: "+61400000002", outcome: "pending" }];
+    const calls = [{ ...call("x", "completed", false, at, "n2", false, 45, "assistant-ended-call", ""), id: "a3" }];
+    const [rec] = computeCallRecords(numbers as never, calls);
+    expect(recordIsReached(rec)).toBe(false);
   });
 });
 
