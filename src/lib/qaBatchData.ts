@@ -399,10 +399,11 @@ export async function listAnalysisRuns(opts: {
   callAttempt?: string;
   reachedCategory?: string;
   latestPerCall?: boolean;
+  promptId?: string | null;
 } = {}): Promise<AnalysisRunListItem[]> {
   // Only the filtered drill-down needs a full page-through; the plain history list
   // (newest-first, no window/category filter) can stop after it has `limit` rows.
-  const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || opts.latestPerCall === true || !!opts.callAttempt || !!opts.reachedCategory;
+  const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || opts.latestPerCall === true || !!opts.callAttempt || !!opts.reachedCategory || !!opts.promptId;
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     let q = supabaseAdmin
@@ -415,6 +416,7 @@ export async function listAnalysisRuns(opts: {
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
     if (opts.campaignId) q = q.eq("campaign_id", opts.campaignId);
+    if (opts.promptId) q = q.eq("prompt_id", opts.promptId);
     const { data, error } = await q;
     if (error) throw error;
     const page = (data ?? []) as unknown as Array<Record<string, unknown>>;
@@ -542,17 +544,23 @@ export interface QaDashboardData {
  * ONCE using its LATEST run (rows come newest-first, so first-seen per call_id wins).
  * "Latest prompt takes precedence" — otherwise near-identical re-runs double-count and
  * confuse the totals. `lastAnalyzedAt` per campaign is that latest run's time.
+ *
+ * `promptId` restricts to a single prompt's results (for prompt-vs-prompt comparison);
+ * the call is then counted once using its latest run FOR THAT PROMPT. Omit for the
+ * combined view (latest run per call across all prompts).
  */
 export async function getQaAnalysisDashboard(
-  opts: { fromMs?: number | null; toMs?: number | null; day?: string | null } = {},
+  opts: { fromMs?: number | null; toMs?: number | null; day?: string | null; promptId?: string | null } = {},
 ): Promise<QaDashboardData> {
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
-    const { data, error } = await supabaseAdmin
+    let q = supabaseAdmin
       .from("listener_qa_analysis_runs")
       .select("call_id, campaign_id, summary, analyzed_at, calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
+    if (opts.promptId) q = q.eq("prompt_id", opts.promptId);
+    const { data, error } = await q;
     if (error) throw error;
     const page = (data ?? []) as unknown as Array<Record<string, unknown>>;
     rows.push(...page);

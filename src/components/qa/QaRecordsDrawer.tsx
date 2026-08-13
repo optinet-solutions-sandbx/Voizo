@@ -55,12 +55,14 @@ export default function QaRecordsDrawer({
   day,
   fromMs,
   toMs,
+  promptId,
   onClose,
 }: {
   slice: DrawerSlice;
   day: string | null;
   fromMs: number | null;
   toMs: number | null;
+  promptId?: string | null;
   onClose: () => void;
 }) {
   const [runs, setRuns] = useState<RunItem[] | null>(null);
@@ -79,13 +81,14 @@ export default function QaRecordsDrawer({
       if (slice.campaignId) p.set("campaignId", slice.campaignId);
       if (slice.callAttempt) p.set("callAttempt", slice.callAttempt);
       if (slice.reachedCategory) p.set("reachedCategory", slice.reachedCategory);
+      if (promptId) p.set("promptId", promptId);
       const r = await fetch(`/api/qa-prompt-testing/runs?${p.toString()}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setRuns(((await r.json()) as { runs: RunItem[] }).runs);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load records");
     }
-  }, [slice, day, fromMs, toMs]);
+  }, [slice, day, fromMs, toMs, promptId]);
 
   useEffect(() => {
     load();

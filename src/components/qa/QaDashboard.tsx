@@ -145,6 +145,8 @@ function KpiCard({ label, value, accent, sub, onClick }: { label: string; value:
 export default function QaDashboard() {
   const [period, setPeriod] = useState<Period>("today");
   const [customDate, setCustomDate] = useState<string>(localDateStr());
+  const [prompts, setPrompts] = useState<{ id: string; title: string; isActive: boolean }[]>([]);
+  const [promptId, setPromptId] = useState<string | "all">("all"); // "all" = latest run per call across prompts
   const [data, setData] = useState<DashData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -164,6 +166,19 @@ export default function QaDashboard() {
     ? `${scope.day} · each campaign's local day`
     : period === "7d" ? "Last 7 days" : period === "30d" ? "Last 30 days" : "All time";
 
+  // Load the prompt list once; default the filter to the active (default) prompt.
+  useEffect(() => {
+    fetch("/api/qa-prompt-testing/prompts", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const list = (d?.prompts ?? []) as { id: string; title: string; isActive: boolean }[];
+        setPrompts(list);
+        const active = list.find((x) => x.isActive);
+        if (active) setPromptId(active.id);
+      })
+      .catch(() => { /* filter just stays on "all" */ });
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -173,6 +188,7 @@ export default function QaDashboard() {
         if (scope.fromMs != null) p.set("fromMs", String(scope.fromMs));
         if (scope.toMs != null) p.set("toMs", String(scope.toMs));
       }
+      if (promptId !== "all") p.set("promptId", promptId);
       const qs = p.toString();
       const r = await fetch(`/api/qa-prompt-testing/dashboard${qs ? `?${qs}` : ""}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -183,7 +199,7 @@ export default function QaDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [scope]);
+  }, [scope, promptId]);
 
   // ── CSV exports ───────────────────────────────────────────────────────────────
   const exportSummary = useCallback(() => {
@@ -211,6 +227,7 @@ export default function QaDashboard() {
         if (scope.fromMs != null) p.set("fromMs", String(scope.fromMs));
         if (scope.toMs != null) p.set("toMs", String(scope.toMs));
       }
+      if (promptId !== "all") p.set("promptId", promptId);
       const r = await fetch(`/api/qa-prompt-testing/runs?${p.toString()}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const runs = ((await r.json()) as { runs: RawRun[] }).runs ?? [];
@@ -237,7 +254,7 @@ export default function QaDashboard() {
     } finally {
       setExporting(false);
     }
-  }, [scope, period]);
+  }, [scope, period, promptId]);
 
   useEffect(() => {
     load();
@@ -279,10 +296,21 @@ export default function QaDashboard() {
           </div>
           <p className="mt-1 text-xs text-[var(--text-3)]">
             From your prompt analyses (temporary) — separate from the campaigns Dashboard. Click any total to see the calls behind it.
-            <span className="text-[var(--text-2)]"> Showing {scopeLabel}.</span>
+            <span className="text-[var(--text-2)]"> Showing {scopeLabel} · {promptId === "all" ? "all prompts (latest per call)" : (prompts.find((p) => p.id === promptId)?.title ?? "one prompt")}.</span>
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={promptId}
+            onChange={(e) => { setPromptId(e.target.value); setPage(1); }}
+            title="Filter results by the prompt they were scored with (for prompt-vs-prompt comparison)"
+            className="text-xs rounded-lg px-2 py-1.5 border bg-[var(--bg-card)] border-[var(--border)] text-[var(--text-1)] focus:outline-none focus:border-primary/50 max-w-[200px]"
+          >
+            <option value="all">All prompts (latest per call)</option>
+            {prompts.map((p) => (
+              <option key={p.id} value={p.id}>{p.title}{p.isActive ? " (default)" : ""}</option>
+            ))}
+          </select>
           <div className="inline-flex gap-1 p-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
             {PERIODS.map((p) => (
               <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1); }} className={dayCls(period === p.key)}>{p.label}</button>
@@ -443,7 +471,7 @@ export default function QaDashboard() {
         </>
       )}
 
-      {slice && <QaRecordsDrawer slice={slice} day={scope.day} fromMs={scope.fromMs} toMs={scope.toMs} onClose={() => setSlice(null)} />}
+      {slice && <QaRecordsDrawer slice={slice} day={scope.day} fromMs={scope.fromMs} toMs={scope.toMs} promptId={promptId === "all" ? null : promptId} onClose={() => setSlice(null)} />}
     </div>
   );
 }
