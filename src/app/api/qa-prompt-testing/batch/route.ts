@@ -10,6 +10,7 @@ import {
   type AnalysisRunInsert,
 } from "@/lib/qaBatchData";
 import { numberTranscript } from "@/lib/qaTranscript";
+import { verifyCategory } from "@/lib/qaEscalate";
 
 /**
  * /api/qa-prompt-testing/batch — per-campaign bulk analysis via the OpenAI Batch API.
@@ -271,13 +272,15 @@ export async function PATCH(request: NextRequest) {
         failed++;
         continue;
       }
+      // Double-check Early-Hangup/Neutral with the stronger model; store its verdict.
+      const finalContent = await verifyCategory(callId, job.promptContent, content, apiKey);
       buf.push({
         callId,
         campaignId: job.campaignId,
         promptId: job.promptId,
         promptTitle: job.promptTitle,
         promptContent: job.promptContent,
-        summary: content,
+        summary: finalContent,
         batchJobId: job.id,
         analyzedAt: now,
       });
