@@ -23,17 +23,65 @@ const SYD = "Australia/Sydney";
 interface Op { method: string; args: unknown[] }
 interface Chain { table: string; ops: Op[] }
 
+/** A child row the interpreting fake can filter. */
+interface ChildRow { start_at: string; status: string }
+
 /** Chainable, recording, read-only Supabase stand-in. Routes the two count
  *  queries by the filter that distinguishes them (an eq on hangup_cause = the
  *  connected count), so a MISSING provider_call_id filter still lands in the
  *  dials slot and is caught by an explicit shape assertion rather than by a
- *  confusing mis-route. */
+ *  confusing mis-route.
+ *
+ *  campaigns_v2 lookups come in two flavours:
+ *  · cfg.child — a canned callback, for error-injection tests;
+ *  · cfg.childRows — REAL rows that maybeSingle() filters by INTERPRETING the
+ *    recorded ops (eq/neq/lt/order/limit). This is what lets the outage-named
+ *    behaviour tests actually fail when a filter is dropped or its bound is
+ *    wrong — a canned callback that ignores the ops passes by construction
+ *    (review 2026-08-14). An op the interpreter doesn't know throws, so a new
+ *    filter in the gate forces the fake to learn it rather than silently
+ *    ignoring it. */
 function makeDb(cfg: {
   dials?: GateCountResult;
   connected?: GateCountResult;
   child?: (parentId: string) => GateRowResult;
+  childRows?: Record<string, ChildRow[]>;
 }): { db: GateDb; chains: Chain[] } {
   const chains: Chain[] = [];
+  const interpret = (ops: Op[]): GateRowResult => {
+    let rows: ChildRow[] = [];
+    let limit = Infinity;
+    for (const o of ops) {
+      const [col, val] = o.args as [string, unknown];
+      switch (o.method) {
+        case "select":
+          break;
+        case "eq":
+          if (col !== "parent_campaign_id") throw new Error(`interpreter: eq(${col})?`);
+          rows = [...(cfg.childRows?.[String(val)] ?? [])];
+          break;
+        case "neq":
+          if (col !== "status") throw new Error(`interpreter: neq(${col})?`);
+          rows = rows.filter((r) => r.status !== val);
+          break;
+        case "lt":
+          if (col !== "start_at") throw new Error(`interpreter: lt(${col})?`);
+          rows = rows.filter((r) => r.start_at < String(val)); // ISO compares lexically
+          break;
+        case "order":
+          if (col !== "start_at") throw new Error(`interpreter: order(${col})?`);
+          rows.sort((a, b) => ((o.args[1] as { ascending: boolean }).ascending ? 1 : -1) * a.start_at.localeCompare(b.start_at));
+          break;
+        case "limit":
+          limit = Number(o.args[0]);
+          break;
+        default:
+          throw new Error(`interpreter: unknown op ${o.method} — teach the fake`);
+      }
+    }
+    const kept = rows.slice(0, limit === Infinity ? undefined : limit);
+    return { data: kept[0] ? { start_at: kept[0].start_at } : null, error: null };
+  };
   const from = (table: string): GateBuilder => {
     const chain: Chain = { table, ops: [] };
     chains.push(chain);
@@ -41,10 +89,13 @@ function makeDb(cfg: {
       chain.ops.some((o) => o.method === method && o.args[0] === col);
     const builder = {
       maybeSingle: () => {
-        const pid = String(
-          chain.ops.find((o) => o.method === "eq" && o.args[0] === "parent_campaign_id")?.args[1] ?? "",
-        );
-        return Promise.resolve(cfg.child ? cfg.child(pid) : { data: null, error: null });
+        if (cfg.child) {
+          const pid = String(
+            chain.ops.find((o) => o.method === "eq" && o.args[0] === "parent_campaign_id")?.args[1] ?? "",
+          );
+          return Promise.resolve(cfg.child(pid));
+        }
+        return Promise.resolve(interpret(chain.ops));
       },
       then: (onFulfilled?: (v: GateCountResult) => unknown, onRejected?: (e: unknown) => unknown) => {
         const res = has("eq", "hangup_cause")
@@ -104,42 +155,56 @@ describe("resolveTrunkGate — verdict", () => {
 });
 
 describe("resolveTrunkGate — the 2026-08-12 defect class", () => {
-  // Pre-today children, oldest-first: D is the most overdue prober.
-  const KEYS: Record<string, string> = {
-    A: "2026-08-10T22:30:00Z",
-    B: "2026-08-11T22:30:00Z",
-    C: "2026-08-12T22:30:00Z",
-    D: "2026-08-09T22:30:00Z",
+  // Every parent's REAL child history as rows the fake FILTERS via the recorded
+  // ops. Pre-today children, oldest-first: D (08-09) is the most overdue prober.
+  const running = (start_at: string): ChildRow => ({ start_at, status: "running" });
+  const ROWS: Record<string, ChildRow[]> = {
+    A: [running("2026-08-10T22:30:00Z"), running("2026-08-09T22:30:00Z")],
+    B: [running("2026-08-11T22:30:00Z")],
+    C: [running("2026-08-12T22:30:00Z")],
+    D: [running("2026-08-09T22:35:00Z"), { start_at: "2026-08-12T22:30:00Z", status: "skipped" }],
   };
-  const childFrom = (keys: Record<string, string>) => (pid: string) =>
-    ({ data: keys[pid] ? { start_at: keys[pid] } : null, error: null });
 
   it("probe pick is STABLE across many ticks of the same day", async () => {
     const picks = new Set<string | null>();
-    // Ticks a minute apart — the 08-12 bug produced a DIFFERENT winner each tick,
-    // so every parent spawned in turn (4 spawns, 2,027 dials, none connecting).
     for (const min of ["31", "32", "33", "45", "59"]) {
-      const { db } = makeDb({ ...REFUSING, child: childFrom(KEYS) });
+      const { db } = makeDb({ ...REFUSING, childRows: ROWS });
       const r = await resolveTrunkGate(db, FOUR, new Date(`2026-08-13T22:${min}:00Z`), quietLog());
       picks.add(r.probeParentId);
     }
     expect(picks.size).toBe(1);
-    expect([...picks][0]).toBe("D");
+    expect([...picks][0]).toBe("D"); // D's skipped 08-12 child must not count
+  });
+
+  it("a spawn cannot change its own ranking key — the exact 08-12 dynamics", async () => {
+    const tick = new Date("2026-08-13T22:31:00Z"); // Sydney day start = 08-13T14:00Z
+    const { db } = makeDb({ ...REFUSING, childRows: ROWS });
+    const first = await resolveTrunkGate(db, FOUR, tick, quietLog());
+    expect(first.probeParentId).toBe("D");
+
+    // D probes and its child row APPEARS — this is what every tick after a spawn
+    // sees. Under the 08-12 bug the new row became D's ranking key, D ranked
+    // newest, the slot moved to the next parent, and every parent spawned in
+    // turn (4 spawns, 2,027 dials, none connecting). With the day bound the new
+    // row is invisible until tomorrow, so the pick must not move.
+    const withSpawn = { ...ROWS, D: [...ROWS.D, running("2026-08-13T22:31:30Z")] };
+    const { db: db2 } = makeDb({ ...REFUSING, childRows: withSpawn });
+    const after = await resolveTrunkGate(db2, FOUR, new Date("2026-08-13T22:32:00Z"), quietLog());
+    expect(after.probeParentId).toBe("D");
   });
 
   it("…and ROTATES the next day, once the prober owns the newest child", async () => {
-    // D probed on 08-13, so on 08-14 its newest PRE-TODAY child is that spawn —
-    // no longer the most overdue. A (08-10) inherits the slot.
-    const { db } = makeDb({
-      ...REFUSING,
-      child: childFrom({ ...KEYS, D: "2026-08-13T22:30:00Z" }),
-    });
+    // On 08-14 (day start 08-14T14:00Z... for a 22:31Z tick, 08-13T14:00Z has
+    // passed and the bound is 08-14T14:00Z) D's 08-13 spawn now counts — no
+    // longer most overdue. A's newest pre-today child (08-10) inherits the slot.
+    const withSpawn = { ...ROWS, D: [...ROWS.D, running("2026-08-13T22:31:30Z")] };
+    const { db } = makeDb({ ...REFUSING, childRows: withSpawn });
     const r = await resolveTrunkGate(db, FOUR, new Date("2026-08-14T22:31:00Z"), quietLog());
     expect(r.probeParentId).toBe("A");
   });
 
   it("GUARD (VOZ-368): the newest-child query EXCLUDES today, in the parent's own timezone", async () => {
-    const { db, chains } = makeDb({ ...REFUSING, child: childFrom(KEYS) });
+    const { db, chains } = makeDb({ ...REFUSING, childRows: ROWS });
     // 2026-08-13T22:31Z = 2026-08-14 08:31 Sydney ⇒ that day began 2026-08-13T14:00Z.
     await resolveTrunkGate(db, FOUR, new Date("2026-08-13T22:31:00Z"), quietLog());
     const kids = chainOn(chains, "campaigns_v2");
@@ -159,7 +224,7 @@ describe("resolveTrunkGate — the 2026-08-12 defect class", () => {
   });
 
   it("GUARD (VOZ-372): only trunk-REACHED dials count as trunk evidence", async () => {
-    const { db, chains } = makeDb({ ...REFUSING, child: childFrom(KEYS) });
+    const { db, chains } = makeDb({ ...REFUSING, childRows: ROWS });
     const now = new Date("2026-08-13T22:31:00Z");
     await resolveTrunkGate(db, FOUR, now, quietLog());
     const calls = chainOn(chains, "calls_v2");
@@ -200,6 +265,43 @@ describe("resolveTrunkGate — fails OPEN on every error path", () => {
     const r = await resolveTrunkGate(db, [P("A"), P("B", null), P("C")], new Date("2026-08-13T22:31:00Z"), log);
     expect(r).toEqual({ health: "UNKNOWN", probeParentId: null });
     expect(log.lines.join("\n")).toContain("parent B has no timezone");
+  });
+
+  it("a parent with an INVALID timezone string ⇒ UNKNOWN, not a tick-killing throw", async () => {
+    // "Australia/Sidney" is truthy, so the null-guard passes it; Intl then throws
+    // a RangeError inside startOfDayIsoInTz. Uncaught, the cron GET 500s every
+    // minute — no spawns, no heartbeat, no last-resort sweep — until the row is
+    // fixed. Hardened 2026-08-14 (was inherited from the inline code).
+    const { db } = makeDb({ ...REFUSING, child: () => ({ data: null, error: null }) });
+    const log = quietLog();
+    const r = await resolveTrunkGate(
+      db,
+      [P("A"), P("B", "Australia/Sidney"), P("C")],
+      new Date("2026-08-13T22:31:00Z"),
+      log,
+    );
+    expect(r).toEqual({ health: "UNKNOWN", probeParentId: null });
+    expect(log.lines.join("\n")).toContain('invalid timezone "Australia/Sidney"');
+  });
+
+  it("a null count WITHOUT an error ⇒ UNKNOWN — never a false REFUSING", async () => {
+    // {count: null, error: null} (Content-Range absent/stripped) must not coerce
+    // to 0. The connected slot is the dangerous one: connected=0 with healthy
+    // dials reads REFUSING — the one direction this gate must never fail.
+    const { db, chains } = makeDb({
+      dials: { count: 800, error: null },
+      connected: { count: null, error: null },
+    });
+    const r = await resolveTrunkGate(db, FOUR, new Date("2026-08-13T22:31:00Z"), quietLog());
+    expect(r).toEqual({ health: "UNKNOWN", probeParentId: null });
+    expect(chainOn(chains, "campaigns_v2")).toHaveLength(0);
+
+    const { db: db2 } = makeDb({
+      dials: { count: null, error: null },
+      connected: { count: 5, error: null },
+    });
+    const r2 = await resolveTrunkGate(db2, FOUR, new Date("2026-08-13T22:31:00Z"), quietLog());
+    expect(r2).toEqual({ health: "UNKNOWN", probeParentId: null });
   });
 
   it("child lookup error ⇒ UNKNOWN", async () => {

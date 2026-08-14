@@ -1054,24 +1054,18 @@ export async function GET(request: NextRequest) {
           });
           break;
         }
-        // Refresh leased count per-iteration so we don't over-spawn this tick.
-        const { count: nowLeased } = await supabaseAdmin
-          .from("vapi_sip_pool")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "leased");
-        const budget = limit - (nowLeased ?? 0);
-        if (budget <= 0) {
-          recurringResults.push({
-            parentId: parent.id as string,
-            parentName: parent.name as string,
-            result: "budget_full",
-          });
-          break;
-        }
         // Trunk is refusing and this parent is not today's probe → do not spawn.
         // Deliberately creates NO child: rolloverLeftovers reads only the MOST
         // RECENT prior child, so an intervening child would permanently strand
         // this parent's queued players (realtimePoll.ts:156-178).
+        //
+        // Checked BEFORE the leased-slot count (review 2026-08-14, was after):
+        // a skip needs no budget, so a held parent must not pay a count query —
+        // and, worse, must not trigger the budget_full BREAK below before the
+        // loop ever reaches the probe parent. With rotation the probe is late in
+        // the list ~3 days in 4; on a fully-leased pool the old order lost the
+        // gate's only recovery signal for the day AND left skippedByTrunkGate
+        // empty, so the trunk-gate alert never fired either.
         if (trunkHealth === "REFUSING" && (parent.id as string) !== probeParentId) {
           skippedByTrunkGate.push(parent.name as string);
           recurringResults.push({
@@ -1099,6 +1093,20 @@ export async function GET(request: NextRequest) {
           // 4 campaigns. A slot held for a few days is worth far less than the risk of
           // stripping a live child.
           continue;
+        }
+        // Refresh leased count per-iteration so we don't over-spawn this tick.
+        const { count: nowLeased } = await supabaseAdmin
+          .from("vapi_sip_pool")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "leased");
+        const budget = limit - (nowLeased ?? 0);
+        if (budget <= 0) {
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "budget_full",
+          });
+          break;
         }
         const outcome = await spawnChildIfDue(
           supabaseAdmin,

@@ -16,8 +16,15 @@
 // A pure-function suite cannot see either. The queries had to move somewhere a
 // test can watch them being built — that is the whole point of the seam.
 //
-// Behaviour is a VERBATIM move of route.ts lines ~1029-1138 (2026-08-14): same
-// queries, same filters, same fail-open branches, same log strings. The route's
+// Behaviour is a verbatim move of route.ts lines ~1029-1138 (2026-08-14) — same
+// queries, same filters, same fail-open branches, same log strings — with ONE
+// deliberate deviation: a single injected clock. The old code captured a second
+// `new Date()` AFTER the count queries resolved and fed it to the day boundary,
+// so near a parent's local midnight the count window and the day boundary could
+// derive from different days; here one `now` feeds both, which is what makes the
+// function testable and keeps each tick internally coherent. Two later commits
+// harden inherited gaps the review exposed (null counts and invalid-timezone
+// throws fail OPEN instead of failing closed / killing the tick). The route's
 // skip list stays in the route (it needs parent names and the spawn loop), so
 // the seam is exactly `{ health, probeParentId }` — the two values the spawn
 // loop reads.
@@ -150,9 +157,20 @@ export async function resolveTrunkGate(
     );
     return { health, probeParentId: null };
   }
+  if (dialsRes.count === null || connectedRes.count === null) {
+    // A null count WITHOUT an error (Content-Range header absent or stripped by
+    // a proxy) must not coerce to 0: dials→0 would fail open anyway, but
+    // connected→0 fails CLOSED — a false REFUSING on a healthy trunk, the one
+    // direction this gate must never fail (review 2026-08-14). Treat it as the
+    // error it is.
+    log.error(
+      "[scheduler.trunkGate] count query returned null count — FAILING OPEN (all parents spawn)",
+    );
+    return { health, probeParentId: null };
+  }
   health = assessTrunkHealth({
-    dials: dialsRes.count ?? 0,
-    connected: connectedRes.count ?? 0,
+    dials: dialsRes.count,
+    connected: connectedRes.count,
   });
   log.log(
     `[scheduler.trunkGate] ${health} — ${connectedRes.count ?? 0} connected of ` +
@@ -169,8 +187,10 @@ export async function resolveTrunkGate(
   // ranks by this start_at, so including today's child lets a spawn change its
   // OWN sort key — the winner then moves every tick and each parent spawns in
   // turn. Excluding today makes the key immutable for the whole day, so the pick
-  // holds across ticks and still rotates day to day. Same day definition as
-  // spawnChildIfDue's idempotency check, so "today" cannot drift between them.
+  // holds across ticks and still rotates day to day. Same day DEFINITION as
+  // spawnChildIfDue's idempotency check (startOfDayIsoInTz), though the two are
+  // evaluated on clocks captured moments apart — a tick straddling a parent's
+  // local midnight can disagree with spawnChildIfDue for that one tick.
   const newestPreTodayChildStartAt = new Map<string, string | null>();
   for (const p of parents) {
     // FAIL OPEN on a missing timezone. startOfDayIsoInTz throws a RangeError on
@@ -182,12 +202,28 @@ export async function resolveTrunkGate(
       log.error(`[scheduler.trunkGate] parent ${p.id} has no timezone — FAILING OPEN`);
       return { health: "UNKNOWN", probeParentId: null };
     }
+    // A truthy-but-INVALID IANA name ("Australia/Sidney", "AEST") makes Intl
+    // throw a RangeError inside startOfDayIsoInTz. Uncaught, that 500s the whole
+    // tick every minute — no spawns, no heartbeat, no last-resort sweep — until
+    // the row is fixed; the null-guard above only covers a MISSING timezone.
+    // Fail open like every other error path (review 2026-08-14; the old inline
+    // code inherited this throw — hardened here, deliberately, as its own commit).
+    let dayStart: string;
+    try {
+      dayStart = startOfDayIsoInTz(now, p.timezone);
+    } catch (e) {
+      log.error(
+        `[scheduler.trunkGate] parent ${p.id} has invalid timezone ${JSON.stringify(p.timezone)} — FAILING OPEN:`,
+        e instanceof Error ? e.message : e,
+      );
+      return { health: "UNKNOWN", probeParentId: null };
+    }
     const { data: child, error: childErr } = await db
       .from("campaigns_v2")
       .select("start_at")
       .eq("parent_campaign_id", p.id)
       .neq("status", "skipped")
-      .lt("start_at", startOfDayIsoInTz(now, p.timezone))
+      .lt("start_at", dayStart)
       .order("start_at", { ascending: false })
       .limit(1)
       .maybeSingle();
