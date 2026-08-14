@@ -4,7 +4,6 @@ import { findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow } from "@
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
 import {
   spawnChildIfDue,
-  startOfDayIsoInTz,
   type RecurringParent,
   type SpawnOutcome,
 } from "@/lib/scheduler/recurringSpawn";
@@ -18,12 +17,8 @@ import {
   REJECT_BREAKER_WINDOW_MINUTES,
   TERMINAL_CALL_STATUSES,
 } from "@/lib/scheduler/rejectBreaker";
-import {
-  assessTrunkHealth,
-  selectProbeParent,
-  TRUNK_WINDOW_HOURS,
-  type TrunkHealth,
-} from "@/lib/scheduler/trunkBreaker";
+import { TRUNK_WINDOW_HOURS } from "@/lib/scheduler/trunkBreaker";
+import { resolveTrunkGate, type GateDb } from "@/lib/scheduler/trunkGateData";
 import { runAnomalySweep } from "@/lib/alerts/anomalySweep";
 import { shouldRetireForSmsDelivery } from "@/lib/scheduler/retireOnSmsDelivery";
 import { runLastResortSweep } from "@/lib/scheduler/lastResortSweep";
@@ -1025,117 +1020,25 @@ export async function GET(request: NextRequest) {
       // REFUSING verdict would stop all calling, which is far worse than the ~90
       // free rejected dials it saves. Any error ⇒ UNKNOWN ⇒ everyone spawns.
       //
-      // Counts, not rows: PostgREST clamps reads at 1000 and 08-01 was 2,828 dials.
-      const trunkSince = new Date(Date.now() - TRUNK_WINDOW_HOURS * 3_600_000).toISOString();
-      const [dialsRes, connectedRes] = await Promise.all([
-        supabaseAdmin
-          .from("calls_v2")
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", trunkSince)
-          // VOZ-372: only dials that REACHED the trunk are evidence about the trunk.
-          // fireCall sets provider_call_id only after originateCall resolves, so NULL
-          // means the call never got as far as FreeSWITCH — it says nothing about
-          // SquareTalk. On 2026-08-12 all 2,027 dials failed before FreeSWITCH and
-          // every one still counted here, which held `dials >= TRUNK_MIN_DIALS` and
-          // pinned the verdict at REFUSING instead of letting it fall back to UNKNOWN
-          // (fail-open). Measured: 0/2027 had a provider_call_id that day, while
-          // 107/107 of 08-11's genuine carrier refusals did — so this filter removes
-          // the junk without blinding the gate to a real refusal.
-          .not("provider_call_id", "is", null),
-        supabaseAdmin
-          .from("calls_v2")
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", trunkSince)
-          // Same definition as detectConnectCollapse. duration_seconds > 0 is
-          // load-bearing: 2026-08-06 had 147 NORMAL_CLEARING rows but only 88 with
-          // audio, so hangup_cause alone reads a dead trunk as healthy.
-          .eq("hangup_cause", "NORMAL_CLEARING")
-          .gt("duration_seconds", 0),
-      ]);
-
-      let trunkHealth: TrunkHealth = "UNKNOWN";
-      if (dialsRes.error || connectedRes.error) {
-        console.error(
-          "[scheduler.trunkGate] count query failed — FAILING OPEN (all parents spawn):",
-          dialsRes.error?.message ?? connectedRes.error?.message,
-        );
-      } else {
-        trunkHealth = assessTrunkHealth({
-          dials: dialsRes.count ?? 0,
-          connected: connectedRes.count ?? 0,
-        });
-        console.log(
-          `[scheduler.trunkGate] ${trunkHealth} — ${connectedRes.count ?? 0} connected of ` +
-            `${dialsRes.count ?? 0} dials in the last ${TRUNK_WINDOW_HOURS}h`,
-        );
-      }
-
-      // Newest PRE-TODAY child per parent — the probe pick's ranking key. Queried
-      // per parent with limit(1) rather than one big .in() — children accumulate
-      // daily and a pooled read would hit the 1000-row clamp within months.
+      // VOZ-371 (2026-08-14): the queries + fail-open branches moved VERBATIM into
+      // lib/scheduler/trunkGateData.resolveTrunkGate so a test can watch them being
+      // BUILT. Both 08-12 defects (a mutable ranking key, and dials that never
+      // reached the trunk counted as trunk evidence) lived in these queries, not in
+      // the pure functions they feed — and each now has a named regression guard.
+      // The gate is read-only by contract: re-adding a WRITE here is what latched
+      // the dialer at zero calls on 08-12.
       //
-      // `.lt("start_at", dayStart)` is load-bearing, and omitting it IS the
-      // 2026-08-12 regression (4 spawns, 1,660 dials, all calling dead): the pick
-      // ranks by this start_at, so including today's child lets a spawn change its
-      // OWN sort key — the winner then moves every tick and each parent spawns in
-      // turn. Excluding today makes the key immutable for the whole day, so the pick
-      // holds across ticks and still rotates day to day. Same day definition as
-      // spawnChildIfDue's idempotency check, so "today" cannot drift between them.
-      const newestPreTodayChildStartAt = new Map<string, string | null>();
-      let probeParentId: string | null = null;
-
-      if (trunkHealth === "REFUSING") {
-        const gateNow = new Date();
-        for (const p of recurringParents) {
-          // FAIL OPEN on a missing timezone. startOfDayIsoInTz throws a RangeError
-          // on a null tz (Intl rejects it), and an uncaught throw HERE would kill the
-          // whole tick — no spawns, no heartbeat, no last-resort sweep — for every
-          // parent, not just the broken one. Today such a parent merely returns
-          // spawn_failed, so throwing would be strictly worse.
-          const tz = p.timezone as string | null;
-          if (!tz) {
-            console.error(
-              `[scheduler.trunkGate] parent ${p.id as string} has no timezone — FAILING OPEN`,
-            );
-            trunkHealth = "UNKNOWN";
-            break;
-          }
-          const { data: child, error: childErr } = await supabaseAdmin
-            .from("campaigns_v2")
-            .select("start_at")
-            .eq("parent_campaign_id", p.id as string)
-            .neq("status", "skipped")
-            .lt("start_at", startOfDayIsoInTz(gateNow, tz))
-            .order("start_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          if (childErr) {
-            // FAIL OPEN: without a reliable probe pick we must not hold spawns.
-            console.error(
-              `[scheduler.trunkGate] newest-child lookup failed for ${p.id as string} — FAILING OPEN:`,
-              childErr.message,
-            );
-            trunkHealth = "UNKNOWN";
-            break;
-          }
-          newestPreTodayChildStartAt.set(
-            p.id as string,
-            (child?.start_at as string | null | undefined) ?? null,
-          );
-        }
-      }
-
-      if (trunkHealth === "REFUSING") {
-        probeParentId = selectProbeParent(
-          recurringParents.map((p) => ({
-            id: p.id as string,
-            newestChildStartAt: newestPreTodayChildStartAt.get(p.id as string) ?? null,
-          })),
-        );
-        console.log(
-          `[scheduler.trunkGate] holding daily spawns; probe parent = ${probeParentId ?? "(none)"}`,
-        );
-      }
+      // The `as unknown as GateDb` narrows the PostgREST client to the read-verb
+      // slice the gate uses; that surface is what the harness fakes. One cast, one
+      // place, and the live-prod behaviour was diffed against the real client.
+      const { health: trunkHealth, probeParentId } = await resolveTrunkGate(
+        supabaseAdmin as unknown as GateDb,
+        recurringParents.map((p) => ({
+          id: p.id as string,
+          timezone: (p.timezone as string | null) ?? null,
+        })),
+        new Date(),
+      );
 
       const skippedByTrunkGate: string[] = [];
 
