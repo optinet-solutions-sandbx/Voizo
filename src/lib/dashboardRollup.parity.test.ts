@@ -26,7 +26,6 @@ import {
   type DashSmsRow,
   type SmsRollupRow,
 } from "./dashboardAnalytics";
-import { substantiveUserTurnCount } from "./transcriptClassify";
 
 // LIVE-PROD gate: pages the full calls_v2/sms_messages_v2 lifetime against the
 // one prod DB and needs .env.local — deliberately NOT part of `npm test`. Run:
@@ -230,6 +229,7 @@ describe.skipIf(!RUN_PARITY)("dashboard rollup parity — campaigns table (VOZ-2
       if (smsRollupRes.error) throw new Error(`sms rollup: ${smsRollupRes.error.message}`);
 
       // Candidate predicate — MUST stay in lockstep with today/route.ts's SQL.
+      // VOZ-387: every connected, non-voicemail, non-goal call (declined stays IN).
       const campIndex = new Map(campaigns.map((c) => [c.id, c]));
       const declinedIds = new Set(numbers.filter((n) => (n.outcome ?? "") === "declined_offer").map((n) => n.id));
       const candidates = calls.filter((c) => {
@@ -239,16 +239,13 @@ describe.skipIf(!RUN_PARITY)("dashboard rollup parity — campaigns table (VOZ-2
         if (c.status !== "completed" && c.status !== "answered") return false;
         if (c.voicemail === true) return false;
         if (c.goal_reached === true) return false;
-        if (c.ended_reason !== "customer-ended-call") return false;
-        if (typeof c.duration_seconds === "number" && c.duration_seconds < 15) return false;
-        if (c.campaign_number_id && declinedIds.has(c.campaign_number_id)) return false;
         return true;
       });
       const candidateIds = new Set(candidates.map((c) => c.id));
       const smsAttachments = (sms as unknown as DashSmsRow[]).filter(
         (m) => (m.status === "sent" || m.status === "delivered") && m.call_id && candidateIds.has(m.call_id),
       );
-      const delta = buildCandidateDelta(candidates, smsAttachments, todayStartMs, substantiveUserTurnCount);
+      const delta = buildCandidateDelta(candidates, smsAttachments, todayStartMs, declinedIds);
 
       const snapNew = computeTodayFromRollup(
         callRollupRes.data as CallRollupRow[],

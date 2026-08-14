@@ -1527,7 +1527,7 @@ function assembleTodayPerf(
     mkRow("reached", "Reached", cb.reach, cb.total, cbP.reach, cbP.total, cb7.reach, cb7.total),
     mkRow("voicemail", "Voicemail", cb.voicemail, cb.total, cbP.voicemail, cbP.total, cb7.voicemail, cb7.total),
     // 2026-08-13 (Phase A): answered but nobody spoke — deliberately OUTSIDE Reached.
-    // 0 on the rollup path until its DDL gains the column (see callBreakdownFromRollup).
+    // Rollup path populates it via the VOZ-387 move map (transcript candidates).
     mkRow("silent_pickup", "Silent pickup", cb.silentPickup, cb.total, cbP.silentPickup, cbP.total, cb7.silentPickup, cb7.total),
     mkRow("unreachable", "Unreachable", cb.unreachable, cb.total, cbP.unreachable, cbP.total, cb7.unreachable, cb7.total),
   ]);
@@ -1614,7 +1614,9 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
   const callAttempts = mkMetricNoDelta(cb.total, [
     mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
     mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
-    // 2026-08-13 (Phase A): answered but nobody spoke — outside Reached (0 on rollup path).
+    // 2026-08-13 (Phase A): answered but nobody spoke — outside Reached. Lean-only
+    // callers (summarizeRollupWindow, ranged path) still show 0 here; /today gets
+    // the honest count via the VOZ-387 move map.
     mkRowNoDelta("silent_pickup", "Silent pickup", cb.silentPickup, cb.total),
     mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
   ]);
@@ -1818,77 +1820,120 @@ export function computeToday(
   };
 }
 
-// ── /today from the SQL rollups (VOZ-283 Task 3) ─────────────────────────────
-// The rollups are lean (transcript-less); the ONE transcript-dependent bucket
-// is isEarlyHangup's "customer-ended-call with ≤1 substantive turn" branch,
-// which the lean rule files under neutral. The route fetches ONLY those
-// candidate calls (+ their attached SMS) and passes per-day/per-campaign
-// counts here; each breakdown then shifts neutral → earlyHangup by the
-// window's candidate count. Byte-parity with computeToday is enforced by
-// dashboardRollup.parity.test.ts.
+// ── /today from the SQL rollups (VOZ-283 Task 3, generalized VOZ-387) ────────
+// The rollups are lean (transcript-less). Everything the transcript changes is
+// carried as (sqlLeanBucket → fullTag) MOVE COUNTS: the route fetches every
+// connected, non-voicemail, non-goal call in the window (+ attached SMS),
+// classifies each with the REAL deriveAttemptTag, and records a move wherever
+// the transcript verdict differs from the bucket the SQL counted it under.
+// Byte-parity with computeToday is enforced by dashboardRollup.parity.test.ts.
+// History: until 2026-08-14 this delta was ONE scalar (lean-neutral → early for
+// customer-ended ≤1-turn calls), so silent_pickup — shipped 08-13 — was
+// invisible on the deployed card: the operator saw Reached 376 where the
+// classifier said 110. The durable fix is still VOZ-380 (persist user_turns).
+
+/** The SQL rollup bucket a connected, non-voicemail, non-goal call was counted
+ *  under (2026-08-04_dashboard_rollup_rpc.sql CASE, mirrored verbatim):
+ *  declined → early_hangup (silence-timed-out OR duration<15) → neutral.
+ *  goal/voicemail/unreachable rows classify identically on both paths and can
+ *  never move, so they are unrepresentable here on purpose. */
+export type LeanReachBucket = "declined" | "early_hangup" | "neutral";
+/** One transcript-path reclassification against the SQL bucket, e.g. "neutral>silent_pickup". */
+export type TagMoveKey = `${LeanReachBucket}>${AttemptTag}`;
+export type TagMoves = Map<TagMoveKey, number>;
 
 export interface TodayCandidateDelta {
-  /** UTC day → count of connected customer-ended-call ≤1-turn candidates (lean-neutral → early). */
-  callByDay: Map<string, number>;
-  /** UTC day (of the SMS created_at) → sent|delivered SMS attached to candidate calls. */
-  smsByDay: Map<string, number>;
+  /** UTC day (of the call) → that day's transcript reclassifications. */
+  callByDay: Map<string, TagMoves>;
+  /** UTC day (of the SMS created_at) → reclassifications of the texts' trigger calls. */
+  smsByDay: Map<string, TagMoves>;
   /** Per campaign, TODAY only — feeds the running-campaign perf cards. */
-  todayByCampaign: Map<string, { call: number; sms: number }>;
+  todayByCampaign: Map<string, { call: TagMoves; sms: TagMoves }>;
 }
 
 export function emptyCandidateDelta(): TodayCandidateDelta {
   return { callByDay: new Map(), smsByDay: new Map(), todayByCampaign: new Map() };
 }
 
-/** A candidate row: connected, non-voicemail, non-goal, contact NOT declined,
- *  ended_reason='customer-ended-call', duration NULL or ≥ EARLY_HANGUP_SEC —
- *  i.e. lean-neutral, transcript-decides. Callers pre-apply that predicate
- *  (SQL in the route; JS in the parity test) — keep the two in lockstep. */
+/** A candidate row: connected (completed|answered), voicemail NOT TRUE,
+ *  goal_reached NOT TRUE — i.e. every call whose bucket the transcript can
+ *  change. Callers pre-apply that predicate (SQL in the route; JS in the
+ *  parity test) — keep the two in lockstep. Carries the full deriveAttemptTag
+ *  input so the ONE shared classifier decides — never a reimplementation. */
 export interface CandidateCallRow {
   id?: string | null;
   campaign_id: string;
+  campaign_number_id?: string | null;
   created_at?: string | null;
+  status?: string | null;
+  voicemail?: boolean | null;
+  goal_reached?: boolean | null;
+  ended_reason?: string | null;
+  duration_seconds?: number | null;
   transcript?: unknown;
 }
 
+/** The SQL rollup's bucket for a candidate (rpc CASE order, after the
+ *  voicemail/positive arms the candidate predicate already excludes). */
+function sqlLeanBucket(c: CandidateCallRow, declined: boolean): LeanReachBucket {
+  if (declined) return "declined";
+  return c.ended_reason === "silence-timed-out" ||
+    (typeof c.duration_seconds === "number" && c.duration_seconds < ANALYTICS_CONFIG.EARLY_HANGUP_SEC)
+    ? "early_hangup"
+    : "neutral";
+}
+
 /**
- * Turn candidate calls (+ their attached sent|delivered SMS) into the delta
- * maps computeTodayFromRollup consumes. Only candidates whose transcript shows
- * ≤1 substantive customer turn qualify (isEarlyHangup's transcript branch —
- * the ONE bucket the lean SQL rollup cannot classify).
+ * Turn candidate calls (+ their attached sent|delivered SMS) into the move maps
+ * computeTodayFromRollup consumes. A candidate contributes iff the transcript
+ * path (deriveAttemptTag — the shared contract) disagrees with the SQL bucket.
  */
 export function buildCandidateDelta(
   candidates: CandidateCallRow[],
   smsAttachments: Array<{ call_id?: string | null; created_at?: string | null }>,
   todayStartMs: number,
-  turnCounter: (transcript: string) => number,
+  declinedIds: ReadonlySet<string> = new Set(),
 ): TodayCandidateDelta {
   const delta = emptyCandidateDelta();
-  const qualifying = new Map<string, CandidateCallRow>();
+  const bump = (byDay: Map<string, TagMoves>, day: string, key: TagMoveKey) => {
+    let m = byDay.get(day);
+    if (!m) { m = new Map(); byDay.set(day, m); }
+    m.set(key, (m.get(key) ?? 0) + 1);
+  };
+  const campaignEntry = (id: string) => {
+    let g = delta.todayByCampaign.get(id);
+    if (!g) { g = { call: new Map(), sms: new Map() }; delta.todayByCampaign.set(id, g); }
+    return g;
+  };
+  const moveByCallId = new Map<string, { key: TagMoveKey; campaign_id: string }>();
   for (const c of candidates) {
-    if (turnCounter(transcriptText(c.transcript as DashCallRow["transcript"])) > 1) continue;
-    if (c.id) qualifying.set(c.id, c); // no id → still day-counted; just can't match an SMS
+    const declined = !!(c.campaign_number_id && declinedIds.has(c.campaign_number_id));
+    const full = deriveAttemptTag(c as DashCallRow, declined);
+    // A predicate violation (caller fed a voicemail/goal/non-connected row, or
+    // dropped `status` from the select) surfaces as one of these tags — skip it
+    // rather than corrupt a bucket the SQL counted correctly.
+    if (full === "voicemail" || full === "positive" || full === "unreachable") continue;
+    const lean = sqlLeanBucket(c, declined);
+    if (full === lean) continue; // SQL already counted it right — no move
+    const key: TagMoveKey = `${lean}>${full}`;
+    if (c.id) moveByCallId.set(c.id, { key, campaign_id: c.campaign_id });
     const t = c.created_at ? Date.parse(c.created_at) : NaN;
     if (!Number.isFinite(t)) continue;
-    const day = utcDayString(t);
-    delta.callByDay.set(day, (delta.callByDay.get(day) ?? 0) + 1);
+    bump(delta.callByDay, utcDayString(t), key);
     if (t >= todayStartMs) {
-      const g = delta.todayByCampaign.get(c.campaign_id) ?? { call: 0, sms: 0 };
-      g.call += 1;
-      delta.todayByCampaign.set(c.campaign_id, g);
+      const g = campaignEntry(c.campaign_id);
+      g.call.set(key, (g.call.get(key) ?? 0) + 1);
     }
   }
   for (const m of smsAttachments) {
-    const call = m.call_id ? qualifying.get(m.call_id) : undefined;
-    if (!call) continue;
+    const mv = m.call_id ? moveByCallId.get(m.call_id) : undefined;
+    if (!mv) continue; // trigger call didn't move (or unmatched) — SQL bucket already right
     const t = m.created_at ? Date.parse(m.created_at) : NaN;
     if (!Number.isFinite(t)) continue;
-    const day = utcDayString(t);
-    delta.smsByDay.set(day, (delta.smsByDay.get(day) ?? 0) + 1);
+    bump(delta.smsByDay, utcDayString(t), mv.key);
     if (t >= todayStartMs) {
-      const g = delta.todayByCampaign.get(call.campaign_id) ?? { call: 0, sms: 0 };
-      g.sms += 1;
-      delta.todayByCampaign.set(call.campaign_id, g);
+      const g = campaignEntry(mv.campaign_id);
+      g.sms.set(mv.key, (g.sms.get(mv.key) ?? 0) + 1);
     }
   }
   return delta;
@@ -1898,30 +1943,61 @@ function dayUtcToMs(dayUtc: string): number {
   return Date.parse(`${dayUtc}T00:00:00Z`);
 }
 
-function sumDeltaInWindow(byDay: Map<string, number>, startMs: number, endMs: number): number {
-  let k = 0;
-  for (const [day, n] of byDay) {
+function sumMovesInWindow(byDay: Map<string, TagMoves>, startMs: number, endMs: number): TagMoves {
+  const out: TagMoves = new Map();
+  for (const [day, moves] of byDay) {
     const t = dayUtcToMs(day);
-    if (Number.isFinite(t) && t >= startMs && t < endMs) k += n;
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    for (const [k, n] of moves) out.set(k, (out.get(k) ?? 0) + n);
   }
-  return k;
+  return out;
+}
+
+/** Apply transcript reclassifications to the lean buckets — ONE body for the
+ *  call card and the SMS card so a new AttemptTag can never be wired into one
+ *  card and forgotten in the other. Returns how much the caller must subtract
+ *  from its reach field (reach / reached): a move targeting silent_pickup
+ *  leaves Reached (the tag sits OUTSIDE it, 2026-08-13); every other target
+ *  stays inside. Sources are always the three lean reach buckets
+ *  (see LeanReachBucket).
+ *
+ *  Subtractions clamp at 0 (race hardening, VOZ-387 review): the candidate
+ *  rows and declinedIds are read AFTER the rollup RPC, so a contact flipping
+ *  to declined_offer (or a call landing) in between can emit a move from a
+ *  bucket the RPC never counted. Without the clamp that paints a NEGATIVE
+ *  count on the card for one load; with it, the artifact is a transient
+ *  off-by-one that self-heals on the next load. The SMS remainder reconcile
+ *  is clamp-compatible: for early_hangup the reconcile re-adds the folded
+ *  remainder, so a clamped subtraction yields the same final count whenever
+ *  the SQL actually counted the call (traced per move type). */
+function applyTagMoves(
+  b: { declined: number; earlyHangup: number; neutral: number; silentPickup: number; agentTimeout: number },
+  moves: TagMoves,
+): number {
+  let reachDrop = 0; // callers subtract this from their reach field (reach / reached)
+  for (const [key, n] of moves) {
+    const [from, to] = key.split(">") as [LeanReachBucket, AttemptTag];
+    if (from === "declined") b.declined = Math.max(0, b.declined - n);
+    else if (from === "early_hangup") b.earlyHangup = Math.max(0, b.earlyHangup - n);
+    else b.neutral = Math.max(0, b.neutral - n);
+    if (to === "silent_pickup") { b.silentPickup += n; reachDrop += n; }
+    else if (to === "agent_timeout") b.agentTimeout += n;
+    else if (to === "early_hangup") b.earlyHangup += n;
+    else if (to === "neutral") b.neutral += n;
+    else if (to === "declined") b.declined += n;
+    // voicemail/positive/unreachable are unreachable here (buildCandidateDelta guard)
+  }
+  return reachDrop;
 }
 
 function callBreakdownFromRollup(
   rows: CallRollupRow[],
   startMs: number,
   endMs: number,
-  candidateDelta: number,
+  moves: TagMoves = new Map(),
 ): CallBreakdown {
   const b: CallBreakdown = {
-    // silentPickup stays 0 on the rollup path too (2026-08-13): the SQL rollup has
-    // no turn counts. The rollup DDL needs a silent_pickup column before cutover.
     total: 0, terminal: 0, connected: 0, inFlight: 0, reach: 0, voicemail: 0, silentPickup: 0, unreachable: 0,
-    // agentTimeout stays 0 on the rollup path: the SQL rollup predates the
-    // agent_timeout tag (VOZ-330) and its rows can't split it out — those calls
-    // remain inside early_hangup_lean/neutral_lean here. The VOZ-283 parity gate
-    // will surface this the moment the rollup cutover is attempted; the rollup
-    // DDL needs an agent_timeout column before this path can go live.
     positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0,
   };
   for (const r of rows) {
@@ -1939,10 +2015,10 @@ function callBreakdownFromRollup(
   }
   b.unreachable = b.terminal - b.connected;
   b.inFlight = b.total - b.terminal;
-  // Transcript delta: lean-neutral candidates are early hang-ups on the
-  // transcript path (isEarlyHangup's customer-ended ≤1-turn branch).
-  b.neutral -= candidateDelta;
-  b.earlyHangup += candidateDelta;
+  // Transcript reclassifications (VOZ-387): silent_pickup, agent_timeout and the
+  // early↔neutral corrections all ride the same move map. Callers with no
+  // transcript source (summarizeRollupWindow) pass nothing → lean numbers stand.
+  b.reach = Math.max(0, b.reach - applyTagMoves(b, moves));
   return b;
 }
 
@@ -1950,7 +2026,7 @@ function smsBreakdownFromRollup(
   rows: SmsRollupRow[],
   startMs: number,
   endMs: number,
-  candidateDelta: number,
+  moves: TagMoves = new Map(),
 ): SmsBreakdown {
   const b: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   for (const r of rows) {
@@ -1964,16 +2040,13 @@ function smsBreakdownFromRollup(
     b.neutral += r.neutral;
     b.declined += r.declined;
   }
-  // Transcript delta: the attached call flips neutral → early_hangup (now a
-  // NAMED sub-row, Val 2026-08-07), so the count moves between buckets.
-  b.neutral -= candidateDelta;
-  b.earlyHangup += candidateDelta;
-  // The lean SQL rollup can't split early-hangup vs agent-timeout texts (no
-  // ended_reason in its SMS rows) — reconcile the remainder into earlyHangup so
-  // the named partition still sums to `reached`; agentTimeout stays 0 on this
-  // path until the rollup DDL learns the tag (same VOZ-283 parity note as
-  // callBreakdownFromRollup above).
-  b.earlyHangup += Math.max(0, b.reached - b.positive - b.neutral - b.declined - b.earlyHangup);
+  // Transcript reclassifications (VOZ-387) — applied before the remainder
+  // reconcile below, whose formula self-adjusts (see applyTagMoves).
+  b.reached = Math.max(0, b.reached - applyTagMoves(b, moves));
+  // The lean SQL rollup folds early-hangup texts into `reached` with no column
+  // (rpc: tag IN (...early_hangup...) counts as reached only) — reconcile the
+  // remainder into earlyHangup so the named partition still sums to `reached`.
+  b.earlyHangup += Math.max(0, b.reached - b.positive - b.neutral - b.declined - b.earlyHangup - b.agentTimeout);
   return b;
 }
 
@@ -1997,8 +2070,8 @@ export function summarizeRollupWindow(
   const lo = fromMs ?? Number.NEGATIVE_INFINITY;
   const hi = toMs === null ? Number.POSITIVE_INFINITY : toMs + 1; // breakdown fns treat the end as exclusive
   return assembleWindowPerf(
-    callBreakdownFromRollup(callRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi, 0),
-    smsBreakdownFromRollup(smsRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi, 0),
+    callBreakdownFromRollup(callRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi),
+    smsBreakdownFromRollup(smsRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi),
   );
 }
 
@@ -2061,12 +2134,12 @@ export function computeTodayFromRollup(
   // Day blocks (delta-ful) — windows mirror computeTodayPerf exactly.
   const perfDay = (dayStartMs: number): TodayPerfDay => {
     const dEnd = dayStartMs + MS_PER_DAY;
-    const cb = callBreakdownFromRollup(callRollup, dayStartMs, dEnd, sumDeltaInWindow(delta.callByDay, dayStartMs, dEnd));
-    const sb = smsBreakdownFromRollup(smsRollup, dayStartMs, dEnd, sumDeltaInWindow(delta.smsByDay, dayStartMs, dEnd));
-    const cbP = callBreakdownFromRollup(callRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.callByDay, dayStartMs - MS_PER_DAY, dayStartMs));
-    const sbP = smsBreakdownFromRollup(smsRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.smsByDay, dayStartMs - MS_PER_DAY, dayStartMs));
-    const cb7 = callBreakdownFromRollup(callRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.callByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
-    const sb7 = smsBreakdownFromRollup(smsRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumDeltaInWindow(delta.smsByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
+    const cb = callBreakdownFromRollup(callRollup, dayStartMs, dEnd, sumMovesInWindow(delta.callByDay, dayStartMs, dEnd));
+    const sb = smsBreakdownFromRollup(smsRollup, dayStartMs, dEnd, sumMovesInWindow(delta.smsByDay, dayStartMs, dEnd));
+    const cbP = callBreakdownFromRollup(callRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumMovesInWindow(delta.callByDay, dayStartMs - MS_PER_DAY, dayStartMs));
+    const sbP = smsBreakdownFromRollup(smsRollup, dayStartMs - MS_PER_DAY, dayStartMs, sumMovesInWindow(delta.smsByDay, dayStartMs - MS_PER_DAY, dayStartMs));
+    const cb7 = callBreakdownFromRollup(callRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumMovesInWindow(delta.callByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
+    const sb7 = smsBreakdownFromRollup(smsRollup, dayStartMs - 7 * MS_PER_DAY, dayStartMs, sumMovesInWindow(delta.smsByDay, dayStartMs - 7 * MS_PER_DAY, dayStartMs));
     return assembleTodayPerf(cb, sb, cbP, sbP, cb7, sb7);
   };
 
@@ -2085,7 +2158,7 @@ export function computeTodayFromRollup(
   const runningCampaigns: RunningCampaignCard[] = liveCampaigns
     .filter((c) => c.status === "running")
     .map((c) => {
-      const campDelta = delta.todayByCampaign.get(c.id) ?? { call: 0, sms: 0 };
+      const campDelta = delta.todayByCampaign.get(c.id) ?? { call: new Map<TagMoveKey, number>(), sms: new Map<TagMoveKey, number>() };
       const cRoll = callByCampaign.get(c.id) ?? [];
       const cb = callBreakdownFromRollup(cRoll, todayStartMs, farFutureMs, campDelta.call);
       const sb = smsBreakdownFromRollup(smsByCampaign.get(c.id) ?? [], todayStartMs, farFutureMs, campDelta.sms);

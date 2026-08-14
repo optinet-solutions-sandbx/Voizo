@@ -16,6 +16,8 @@ import {
   recordIsReached,
   attachSmsSent,
   deriveAttemptTag,
+  buildCandidateDelta,
+  computeTodayFromRollup,
   bestByPositiveResponse,
   promptLabel,
   operatorPromptText,
@@ -41,6 +43,7 @@ import {
   type RateRow,
   type CallRecord,
   type AttemptTag,
+  type CandidateCallRow,
   HUMAN_TAGS,
 } from "./dashboardAnalytics";
 
@@ -1380,5 +1383,136 @@ describe("filterCalls — base-agent dimension (Slice E)", () => {
     expect(only1.length).toBe(1);
     expect(only1[0].campaign_id).toBe("A");
     expect(filterCalls(calls, { ...win }, index).length).toBe(2); // no constraint
+  });
+});
+
+// ── VOZ-387 (2026-08-14): transcript tag moves on the rollup path ────────────
+// The SQL rollup is transcript-blind, so the Today card showed Reached 376 where
+// the shipped classifier said 110 (266 silent pickups counted as humans). The
+// delta now carries (sqlLeanBucket → fullTag) MOVE COUNTS instead of one scalar
+// neutral→early shift; these tests pin the move mechanics offline. The live
+// acceptance is the RUN_PARITY=1 gate (computeTodayFromRollup === computeToday).
+
+describe("buildCandidateDelta — lean/full tag moves (VOZ-387)", () => {
+  type Cand = CandidateCallRow;
+
+  const D = "2026-08-14";
+  const NOON = Date.parse(D + "T12:00:00Z");
+  const cand = (id: string, over: Partial<Cand> = {}): Cand => ({
+    id, campaign_id: "c", campaign_number_id: "n" + id, created_at: D + "T01:00:00Z",
+    status: "completed", ended_reason: "customer-ended-call", duration_seconds: 30,
+    voicemail: false, goal_reached: false,
+    transcript: "AI: hi\nUser: ok sure\nUser: tell me more", // 2 turns → full neutral
+    ...over,
+  });
+
+  it("emits exactly one move per lean/full disagreement, none on agreement", () => {
+    const candidates: Cand[] = [
+      // zero turns, dur≥15, agent-ended → SQL neutral, full silent_pickup
+      cand("s1", { transcript: "", ended_reason: "assistant-ended-call", duration_seconds: 40 }),
+      // zero turns, dur<15 → SQL early_hangup, full silent_pickup
+      cand("s2", { transcript: "", duration_seconds: 5 }),
+      // TWO turns but dur<15 → SQL early_hangup, full neutral (a real rapid exchange)
+      cand("m1", { duration_seconds: 10 }),
+      // ONE turn, customer-ended, dur≥15 → SQL neutral, full early_hangup (June rule — the old scalar delta)
+      cand("e1", { transcript: "AI: hi\nUser: Hello?", duration_seconds: 30 }),
+      // agrees on both paths (2 turns, dur≥15) → no move
+      cand("a1", {}),
+      // declined contact, zero turns → SQL declined, full silent_pickup (silent beats declined)
+      cand("d1", { transcript: "", campaign_number_id: "DECL" }),
+      // agent-timeout ending, dur≥15 → SQL neutral, full agent_timeout (SQL cannot see the tag)
+      cand("t1", { ended_reason: "pipeline-error-openai-429-exceeded-quota", duration_seconds: 20, transcript: "" }),
+    ];
+    const sms = [
+      { call_id: "s1", created_at: D + "T02:00:00Z" }, // its text moves neutral→silent on the SMS card
+      { call_id: "e1", created_at: D + "T02:10:00Z" }, // its text moves neutral→early
+      { call_id: "a1", created_at: D + "T02:20:00Z" }, // no move → untouched
+    ];
+    const delta = buildCandidateDelta(candidates, sms, Date.parse(D + "T00:00:00Z"), new Set(["DECL"]));
+
+    const day = delta.callByDay.get(D)!;
+    expect(Object.fromEntries(day)).toEqual({
+      "neutral>silent_pickup": 1,
+      "early_hangup>silent_pickup": 1,
+      "early_hangup>neutral": 1,
+      "neutral>early_hangup": 1,
+      "declined>silent_pickup": 1,
+      "neutral>agent_timeout": 1,
+    });
+    expect(Object.fromEntries(delta.smsByDay.get(D)!)).toEqual({
+      "neutral>silent_pickup": 1,
+      "neutral>early_hangup": 1,
+    });
+    // today-by-campaign mirrors the same moves (all created today)
+    expect(Object.fromEntries(delta.todayByCampaign.get("c")!.call)).toEqual(Object.fromEntries(day));
+  });
+
+  it("computeTodayFromRollup applies moves: silent pickups leave Reached, partitions still sum", () => {
+    // SQL counted for today: 8 attempts, 6 connected, 1 voicemail, reach 5 =
+    // positive 1 + declined 1 + early 1 + neutral 2.
+    const callRows = [{
+      campaign_id: "c", day_utc: D, attempts: 8, terminal: 8, connected: 6,
+      voicemail: 1, voicemail_evaluated: 6, reach: 5,
+      positive: 1, declined: 1, early_hangup_lean: 1, neutral_lean: 2,
+      successful: 1, last_call_at: null,
+    }];
+    // SQL sms: 3 sent, all reached: positive 1 + neutral 2 (early folded into reached).
+    const smsRows = [{
+      campaign_id: "c", day_utc: D, sent: 3, reached: 3, voicemail: 0, unreachable: 0,
+      positive: 1, neutral: 2, declined: 0,
+    }];
+    // Transcript truth: one neutral call was dead air (s1, texted!), one lean-early
+    // call was a rapid real exchange (m1).
+    const candidates: Cand[] = [
+      cand("s1", { transcript: "", ended_reason: "assistant-ended-call", duration_seconds: 40 }),
+      cand("m1", { duration_seconds: 10 }),
+    ];
+    const sms = [{ call_id: "s1", created_at: D + "T02:00:00Z" }];
+    const delta = buildCandidateDelta(candidates, sms, Date.parse(D + "T00:00:00Z"), new Set());
+
+    const snap = computeTodayFromRollup(callRows, smsRows, [camp("c", { status: "running" })], NOON, delta);
+
+    const att = snap.today.callAttempts;
+    const row = (k: string) => att.rows.find((r) => r.key === k)!;
+    expect(row("silent_pickup").count).toBe(1); // s1 — visible on the card at last
+    expect(row("reached").count).toBe(4);       // 5 − s1
+    expect(row("voicemail").count).toBe(1);
+    expect(row("unreachable").count).toBe(2);   // terminal 8 − connected 6
+    const reached = snap.today.reached;
+    const rrow = (k: string) => reached.rows.find((r) => r.key === k)!;
+    expect(reached.total).toBe(4);
+    expect(rrow("neutral").count).toBe(2);      // 2 − s1 + m1
+    expect(rrow("early_hangup").count).toBe(0); // 1 − m1
+    expect(rrow("positive").count + rrow("neutral").count + rrow("declined").count + rrow("early_hangup").count + rrow("agent_timeout").count).toBe(4);
+
+    const smsCard = snap.today.sms;
+    const srow = (k: string) => smsCard.rows.find((r) => r.key === k)!;
+    expect(srow("silent_pickup").count).toBe(1); // the leak class is now VISIBLE
+    expect(srow("reached").count).toBe(2);
+    // per-campaign card applies the same moves
+    const rc = snap.runningCampaigns.find((r) => r.id === "c")!;
+    expect(rc.perf.callAttempts.rows.find((r) => r.key === "silent_pickup")!.count).toBe(1);
+  });
+
+  it("clamps a race-skewed move instead of painting a negative bucket", () => {
+    // Race shape (review 2026-08-14): the contact flipped to declined_offer AFTER
+    // the RPC counted its call under neutral — the delta then emits
+    // declined>silent_pickup against a declined bucket of 0. The clamp turns a
+    // negative on-screen count into a transient off-by-one that self-heals.
+    const callRows = [{
+      campaign_id: "c", day_utc: D, attempts: 2, terminal: 2, connected: 2,
+      voicemail: 0, voicemail_evaluated: 2, reach: 2,
+      positive: 0, declined: 0, early_hangup_lean: 0, neutral_lean: 2,
+      successful: 0, last_call_at: null,
+    }];
+    const candidates: Cand[] = [
+      cand("r1", { transcript: "", ended_reason: "assistant-ended-call", duration_seconds: 40, campaign_number_id: "DECL" }),
+    ];
+    const delta = buildCandidateDelta(candidates, [], Date.parse(D + "T00:00:00Z"), new Set(["DECL"]));
+    const snap = computeTodayFromRollup(callRows, [], [camp("c", { status: "running" })], NOON, delta);
+    for (const r of [...snap.today.callAttempts.rows, ...snap.today.reached.rows]) {
+      expect(r.count, r.key).toBeGreaterThanOrEqual(0);
+    }
+    expect(snap.today.callAttempts.rows.find((r) => r.key === "silent_pickup")!.count).toBe(1);
   });
 });
