@@ -471,6 +471,46 @@ describe("isVoicemail — screener scripts + STT fragments (2026-08-13 SMS leak)
   });
 });
 
+// ── 2026-08-14 (VOZ-388): the screener script TRUNCATED mid-phrase ──────────
+// Real production shape: the agent talks over the screener, so STT cuts the
+// script at "Please stay on" — the whole-phrase rule missed it and +61430221843
+// was TEXTED on 08-14 (08-13 twin +61434168825, caught in audit, not texted).
+// The complete phrase caught 42 screeners the same day; this is the ~1/day tail.
+
+const TRUNCATED_SCREENERS = {
+  // +61430221843, 2026-08-14 (texted). Trailing AI turn was STT debris of "Goodbye".
+  stayOnSplit: `${OPENER}\nUser: Thanks.\nUser: Please stay on\nAI: Goodbye.`,
+  // +61434168825, 2026-08-13 — same truncation, lowercase.
+  stayOnLower: `${OPENER}\nUser: Thanks.\nUser: please stay on\nAI: Goodbye.`,
+  // Cut one word later — same family, same rule.
+  stayOnThe: `${OPENER}\nUser: Thanks. Please stay on the\nAI: Goodbye.`,
+};
+
+const TRUNCATED_GUARDS = {
+  // A human continuing past the phrase must stay human — the rule is whole-turn
+  // anchored, so ANY tail defeats it.
+  stayOnThePhone: `${OPENER}\nUser: Please stay on the phone, I'll get him.\nAI: Sure.`,
+  // The June guard re-pinned against the widened regex: hold phrase embedded in
+  // a genuine multi-part turn.
+  grabAPen: `${OPENER}\nUser: Yes, but please stay on the line while I grab a pen.\nUser: Okay, go ahead.`,
+};
+
+describe("isVoicemail — truncated screener script (2026-08-14, VOZ-388)", () => {
+  it("catches STT-truncated 'Please stay on' when it is the whole conversation", () => {
+    for (const [name, t] of Object.entries(TRUNCATED_SCREENERS)) {
+      expect(isVoicemail(t), name).toBe(true);
+    }
+  });
+  it("keeps humans who continue past the phrase", () => {
+    for (const [name, t] of Object.entries(TRUNCATED_GUARDS)) {
+      expect(isVoicemail(t), name).toBe(false);
+    }
+  });
+  it("stays label-only — never the kill path", () => {
+    expect(isConclusiveVoicemail("Thanks. Please stay on")).toBe(false);
+  });
+});
+
 // ── SMS dispatch signals (2026-06-11, registered_optin mode) ────────────────
 
 describe("agentMentionedSms (AI announce detector)", () => {

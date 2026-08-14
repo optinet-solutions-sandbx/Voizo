@@ -186,7 +186,13 @@ function allUserTurnsAreMachineFragments(transcript: string): boolean {
 // the screener was the entire "conversation". A human who says it while engaging has
 // at least one other genuine turn and never fires this (same architecture as
 // allUserTurnsAreMachineFragments).
-const SCREENER_SCRIPT_TURN = /^(?:thank(?:s| you)?[.,!]?\s+)*please stay on the line[.,!]?$/i;
+// 2026-08-14 (VOZ-388): accept the phrase TRUNCATED mid-script ("Please stay on" /
+// "...on the") — when the agent talks over the screener, STT cuts the line short and
+// the whole-phrase form missed it (+61430221843 texted 08-14; twin on 08-13). Still
+// whole-turn anchored: a human continuing past the phrase ("...the phone, I'll get
+// him") never matches. Replayed over 9,060 prod calls: only the two measured
+// truncated screeners flip, zero real humans.
+const SCREENER_SCRIPT_TURN = /^(?:thank(?:s| you)?[.,!]?\s+)*please stay on(?: the(?: line)?)?[.,!]?$/i;
 const COURTESY_TURN = /^thank(?:s| you)?[.,!]?$/i;
 function allUserTurnsAreScreenerScript(transcript: string): boolean {
   const turns = parseTranscriptTurns(transcript);
