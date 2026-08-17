@@ -8,7 +8,7 @@
 // dashboard (never reads calls_v2 / the SQL rollups).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, BarChart3, ClipboardList, Download } from "lucide-react";
+import { AlertCircle, BarChart3, ClipboardList, Download, PhoneOff } from "lucide-react";
 import { SectionTick } from "../../app/analytics/SectionIsland";
 import WidgetCard from "../../app/analytics/WidgetCard";
 import Pagination from "@/components/Pagination";
@@ -48,9 +48,10 @@ const RC_COLOR: Record<string, string> = {
 const n = (o: Record<string, number>, k: string) => o[k] ?? 0;
 
 // CSV + per-campaign-table column vocabulary (matches the on-screen breakdown).
-const CA_COLS = ["Reached", "Voicemail", "Unreachable"]; // call_attempt
-const RC_COLS = ["Positive", "Neutral", "Declined", "Early Hang-up", "Agent Timeout"]; // reached_category
-const CA_COL_CLS: Record<string, string> = { Reached: "text-emerald-400", Voicemail: "text-[var(--text-2)]", Unreachable: "text-[var(--text-2)]" };
+// Early Hang-up is now a top-level call_attempt (its own category), not a reached sub-outcome.
+const CA_COLS = ["Reached", "Voicemail", "Early Hang-up", "Unreachable"]; // call_attempt
+const RC_COLS = ["Positive", "Neutral", "Declined", "Agent Timeout"]; // reached_category
+const CA_COL_CLS: Record<string, string> = { Reached: "text-emerald-400", Voicemail: "text-[var(--text-2)]", "Early Hang-up": "text-[#e0814a]", Unreachable: "text-[var(--text-2)]" };
 
 // A viewer-local YYYY-MM-DD, offset by `deltaDays` — the reference for the Today/Yesterday buttons.
 function localDateStr(deltaDays = 0): string {
@@ -270,6 +271,9 @@ export default function QaDashboard() {
     const extra = Object.keys(data.byReachedCategory).filter((k) => !RC_ORDER.includes(k));
     return [...RC_ORDER.filter((k) => k in data.byReachedCategory), ...extra];
   }, [data]);
+  // Early Hang-up is its own top-level call_attempt now (surfaced as a KPI + its own card).
+  const earlyHangup = useMemo(() => (data ? n(data.byCallAttempt, "Early Hang-up") : 0), [data]);
+  const earlyHangupPct = data && data.total ? Math.round((earlyHangup / data.total) * 100) : 0;
 
   const totalPages = Math.max(1, Math.ceil((data?.campaigns.length ?? 0) / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -360,10 +364,11 @@ export default function QaDashboard() {
       ) : (
         <>
           {/* KPI band — clickable */}
-          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(5,minmax(0,1fr))" }}>
+          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(6,minmax(0,1fr))" }}>
             <KpiCard label="Analyzed" value={data.total} onClick={() => open({ title: "All analyzed calls" })} />
             <KpiCard label="Reached" value={n(data.byCallAttempt, "Reached")} accent="#3ec08a" onClick={() => open({ title: "Reached", callAttempt: "Reached" })} />
             <KpiCard label="Voicemail" value={n(data.byCallAttempt, "Voicemail")} accent="#8f86e6" onClick={() => open({ title: "Voicemail", callAttempt: "Voicemail" })} />
+            <KpiCard label="Early Hang-up" value={n(data.byCallAttempt, "Early Hang-up")} accent="#e0814a" onClick={() => open({ title: "Early Hang-up", callAttempt: "Early Hang-up" })} />
             <KpiCard label="Unreachable" value={n(data.byCallAttempt, "Unreachable")} accent="#e0a53c" onClick={() => open({ title: "Unreachable", callAttempt: "Unreachable" })} />
             <KpiCard label="Agent Timeout" value={n(data.byReachedCategory, "Agent Timeout")} accent="#c264d6" sub="of reached" onClick={() => open({ title: "Agent Timeout", reachedCategory: "Agent Timeout" })} />
           </div>
@@ -393,8 +398,28 @@ export default function QaDashboard() {
             )}
           </WidgetCard>
 
-          {/* Per-campaign table — clickable cells. Call-attempt totals + the full
-              reached-outcome breakdown (Positive … Agent Timeout), each cell drills down. */}
+          {/* Early Hang-up — its own top-level category now; clickable → the list, like a reached row. */}
+          <WidgetCard title="Early Hang-up — outcome breakdown" icon={<PhoneOff size={14} className="text-[#e0814a]" />} context={`${earlyHangup.toLocaleString()} of ${data.total.toLocaleString()} analyzed`}>
+            {earlyHangup === 0 ? (
+              <p className="text-xs text-[var(--text-3)]">No early hang-ups in this period.</p>
+            ) : (
+              <button
+                onClick={() => open({ title: "Early Hang-up", callAttempt: "Early Hang-up" })}
+                className="flex w-full items-center gap-3 text-left hover:bg-[var(--bg-hover)] rounded-md px-1 py-0.5 transition"
+              >
+                <span className="w-28 shrink-0 text-xs text-[var(--text-2)]">Early Hang-up</span>
+                <div className="flex-1 h-2.5 rounded-full bg-[var(--bg-elevated)] overflow-hidden">
+                  <div className="h-full rounded-full" style={{ width: `${earlyHangupPct}%`, background: "#e0814a" }} />
+                </div>
+                <span className="w-24 shrink-0 text-right text-xs font-mono text-[var(--text-1)]">
+                  {earlyHangup.toLocaleString()} <span className="text-[var(--text-3)]">· {earlyHangupPct}%</span>
+                </span>
+              </button>
+            )}
+          </WidgetCard>
+
+          {/* Per-campaign table — clickable cells. Call-attempt totals (incl. Early Hang-up)
+              + the reached-outcome breakdown (Positive … Agent Timeout), each cell drills down. */}
           <WidgetCard title="By campaign" icon={<ClipboardList size={14} className="text-blue-400" />} context={`${data.campaigns.length} campaign${data.campaigns.length === 1 ? "" : "s"}`} bodyClassName="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
