@@ -298,24 +298,33 @@ export interface AnalysisRunInsert {
   summary: string;
   batchJobId: string;
   analyzedAt: string;
+  scoredBy?: string | null; // model that produced `summary` (gpt-5.4-mini | gpt-5.4)
 }
 
 /** Idempotent per (call_id, batch_job_id) — re-importing a job overwrites in place. */
 export async function upsertAnalysisRuns(rows: AnalysisRunInsert[]): Promise<void> {
   if (rows.length === 0) return;
-  const { error } = await supabaseAdmin.from("listener_qa_analysis_runs").upsert(
-    rows.map((r) => ({
-      call_id: r.callId,
-      campaign_id: r.campaignId,
-      prompt_id: r.promptId,
-      prompt_title: r.promptTitle,
-      prompt_content: r.promptContent,
-      summary: r.summary,
-      batch_job_id: r.batchJobId,
-      analyzed_at: r.analyzedAt,
-    })),
-    { onConflict: "call_id,batch_job_id" },
-  );
+  const full: Record<string, unknown>[] = rows.map((r) => ({
+    call_id: r.callId,
+    campaign_id: r.campaignId,
+    prompt_id: r.promptId,
+    prompt_title: r.promptTitle,
+    prompt_content: r.promptContent,
+    summary: r.summary,
+    batch_job_id: r.batchJobId,
+    analyzed_at: r.analyzedAt,
+    scored_by: r.scoredBy ?? null,
+  }));
+  let { error } = await supabaseAdmin.from("listener_qa_analysis_runs").upsert(full, { onConflict: "call_id,batch_job_id" });
+  if (error && (error.code === "PGRST204" || /scored_by/i.test(error.message || ""))) {
+    // supabase-migration-qa-scored-by.sql not applied yet — retry without the column.
+    const stripped = full.map((row) => {
+      const copy = { ...row };
+      delete copy.scored_by;
+      return copy;
+    });
+    ({ error } = await supabaseAdmin.from("listener_qa_analysis_runs").upsert(stripped, { onConflict: "call_id,batch_job_id" }));
+  }
   if (error) throw error;
 }
 
@@ -328,6 +337,7 @@ export interface AnalysisRunListItem {
   promptTitle: string | null;
   analyzedAt: string;
   summary: string | null;
+  scoredBy: string | null;
   customerPhone: string | null;
   customerName: string | null;
   callCreatedAt: string | null;
@@ -338,6 +348,16 @@ export interface AnalysisRunListItem {
 function one(v: unknown): Record<string, unknown> | null {
   if (Array.isArray(v)) return (v[0] as Record<string, unknown>) ?? null;
   return (v as Record<string, unknown>) ?? null;
+}
+
+/**
+ * Whether listener_qa_analysis_runs.scored_by exists yet (supabase-migration-qa-scored-by.sql).
+ * Probed fresh per call (no cache) so reads self-heal the moment the migration is applied,
+ * and never 500 in the gap between deploy and migration.
+ */
+async function hasScoredBy(): Promise<boolean> {
+  const { error } = await supabaseAdmin.from("listener_qa_analysis_runs").select("scored_by").limit(1);
+  return !error;
 }
 
 /** Strip ```json fences before JSON.parse of a stored result. */
@@ -404,12 +424,13 @@ export async function listAnalysisRuns(opts: {
   // Only the filtered drill-down needs a full page-through; the plain history list
   // (newest-first, no window/category filter) can stop after it has `limit` rows.
   const wantAll = opts.fromMs != null || opts.toMs != null || opts.day != null || opts.latestPerCall === true || !!opts.callAttempt || !!opts.reachedCategory || !!opts.promptId;
+  const scoredByCol = (await hasScoredBy()) ? ", scored_by" : "";
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     let q = supabaseAdmin
       .from("listener_qa_analysis_runs")
       .select(
-        "id, call_id, campaign_id, prompt_title, summary, analyzed_at, " +
+        "id, call_id, campaign_id, prompt_title, summary, analyzed_at" + scoredByCol + ", " +
           "campaigns_v2!campaign_id(name, timezone), " +
           "calls_v2!call_id(created_at, duration_seconds, goal_reached, campaign_numbers_v2!campaign_number_id(phone_e164, display_name))",
       )
@@ -437,6 +458,7 @@ export async function listAnalysisRuns(opts: {
       promptTitle: (r.prompt_title as string | null) ?? null,
       analyzedAt: r.analyzed_at as string,
       summary: (r.summary as string | null) ?? null,
+      scoredBy: (r.scored_by as string | null) ?? null,
       customerPhone: (cust?.phone_e164 as string) ?? null,
       customerName: (cust?.display_name as string) ?? null,
       callCreatedAt: (call?.created_at as string) ?? null,
@@ -485,19 +507,21 @@ export interface AnalysisRunRow {
   promptTitle: string | null;
   promptContent: string;
   summary: string | null;
+  scoredBy: string | null;
   analyzedAt: string;
 }
 
 /** One run's stored prompt + result (for the run-detail replay). */
 export async function getAnalysisRun(id: string): Promise<AnalysisRunRow | null> {
+  const scoredByCol = (await hasScoredBy()) ? ", scored_by" : "";
   const { data, error } = await supabaseAdmin
     .from("listener_qa_analysis_runs")
-    .select("id, call_id, campaign_id, prompt_id, prompt_title, prompt_content, summary, analyzed_at")
+    .select("id, call_id, campaign_id, prompt_id, prompt_title, prompt_content, summary, analyzed_at" + scoredByCol)
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  const r = data as Record<string, unknown>;
+  const r = data as unknown as Record<string, unknown>;
   return {
     id: r.id as string,
     callId: r.call_id as string,
@@ -506,6 +530,7 @@ export async function getAnalysisRun(id: string): Promise<AnalysisRunRow | null>
     promptTitle: (r.prompt_title as string | null) ?? null,
     promptContent: (r.prompt_content as string) ?? "",
     summary: (r.summary as string | null) ?? null,
+    scoredBy: (r.scored_by as string | null) ?? null,
     analyzedAt: r.analyzed_at as string,
   };
 }
@@ -529,6 +554,7 @@ export interface QaDashboardCampaign {
 export interface QaDashboardData {
   total: number;
   unparseable: number;
+  doubleChecked: number; // calls whose stored verdict came from the gpt-5.4 double-check
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: QaDashboardCampaign[];
@@ -552,11 +578,12 @@ export interface QaDashboardData {
 export async function getQaAnalysisDashboard(
   opts: { fromMs?: number | null; toMs?: number | null; day?: string | null; promptId?: string | null } = {},
 ): Promise<QaDashboardData> {
+  const scoredByCol = (await hasScoredBy()) ? ", scored_by" : "";
   const rows: Array<Record<string, unknown>> = [];
   for (let from = 0; from < 12000; from += 1000) {
     let q = supabaseAdmin
       .from("listener_qa_analysis_runs")
-      .select("call_id, campaign_id, summary, analyzed_at, calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
+      .select("call_id, campaign_id, summary, analyzed_at" + scoredByCol + ", calls_v2!call_id(created_at), campaigns_v2!campaign_id(name, timezone)")
       .order("analyzed_at", { ascending: false })
       .range(from, from + 999);
     if (opts.promptId) q = q.eq("prompt_id", opts.promptId);
@@ -586,6 +613,7 @@ export async function getQaAnalysisDashboard(
   const seenCalls = new Set<string>();
   let unparseable = 0;
   let total = 0;
+  let doubleChecked = 0;
 
   for (const r of rows) {
     const callId = r.call_id as string;
@@ -596,6 +624,7 @@ export async function getQaAnalysisDashboard(
     if (!matches(createdAt, tz)) continue; // window is call-level, identical for every run of this call
     seenCalls.add(callId);
     total += 1;
+    if (r.scored_by === "gpt-5.4") doubleChecked += 1;
     const p = parseCategories(r.summary as string | null);
     if (!p.parsed) unparseable += 1;
     const attempt = p.callAttempt || (p.parsed ? "Unclassified" : "Unparseable");
@@ -618,6 +647,7 @@ export async function getQaAnalysisDashboard(
   return {
     total,
     unparseable,
+    doubleChecked,
     byCallAttempt,
     byReachedCategory,
     campaigns: [...perC.values()].sort((a, b) => b.total - a.total),

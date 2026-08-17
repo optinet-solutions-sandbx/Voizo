@@ -88,9 +88,9 @@ export async function POST(request: NextRequest) {
     }
     // Same hybrid as the bulk pipeline: if mini says Early Hang-up / Neutral, double-check
     // with gpt-5.4 and return its verdict (so testing here matches production scoring).
-    const finalText = await verifyCategory(callId, promptContent, analysisText, process.env.OPENAI_API_KEY as string);
-    const escalated = finalText !== analysisText;
-    return NextResponse.json({ analysisText: finalText, model: escalated ? "gpt-5.4 (double-check)" : MODEL });
+    const checked = await verifyCategory(callId, promptContent, analysisText, process.env.OPENAI_API_KEY as string);
+    const modelLabel = checked.model === "gpt-5.4" ? "gpt-5.4 (double-check)" : MODEL;
+    return NextResponse.json({ analysisText: checked.content, model: modelLabel });
   } catch (err) {
     console.error("[qa-prompt-testing/run] OpenAI call failed:", err);
     const msg = err instanceof Error ? err.message : "Analysis failed";

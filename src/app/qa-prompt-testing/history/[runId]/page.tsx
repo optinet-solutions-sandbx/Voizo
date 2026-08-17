@@ -24,6 +24,7 @@ interface RunRow {
   promptTitle: string | null;
   promptContent: string;
   summary: string | null;
+  scoredBy: string | null;
   analyzedAt: string;
 }
 
@@ -132,6 +133,12 @@ function AnalysisRunPageInner() {
           <>
             <span className="text-[var(--text-3)]">·</span>
             <span>Prompt: <span className="font-medium text-[var(--text-1)]">{run.promptTitle}</span></span>
+          </>
+        )}
+        {run.scoredBy && (
+          <>
+            <span className="text-[var(--text-3)]">·</span>
+            <span>Scored by <span className="font-medium text-[var(--text-1)]">{run.scoredBy}</span>{run.scoredBy === "gpt-5.4" ? " (double-check)" : ""}</span>
           </>
         )}
         <Link href={back.href} className="ml-auto inline-flex items-center gap-1 text-primary hover:opacity-80 font-medium transition">

@@ -18,6 +18,7 @@ interface RunItem {
   promptTitle: string | null;
   analyzedAt: string;
   summary: string | null;
+  scoredBy: string | null;
   customerPhone: string | null;
   customerName: string | null;
   callCreatedAt: string | null;
@@ -300,6 +301,11 @@ export default function AnalysisHistory({
                         {d.chip && (
                           <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-[var(--bg-elevated)] text-[var(--text-2)] border border-[var(--border)]">
                             {d.chip}
+                          </span>
+                        )}
+                        {r.scoredBy === "gpt-5.4" && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30" title="Double-checked by gpt-5.4">
+                            5.4&nbsp;✓
                           </span>
                         )}
                       </div>

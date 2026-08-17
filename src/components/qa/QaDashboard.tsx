@@ -26,6 +26,7 @@ interface Campaign {
 interface DashData {
   total: number;
   unparseable: number;
+  doubleChecked: number;
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: Campaign[];
@@ -465,9 +466,12 @@ export default function QaDashboard() {
 
           <Pagination currentPage={safePage} totalPages={totalPages} totalItems={data.campaigns.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
 
-          {data.unparseable > 0 && (
-            <p className="text-[10px] text-[var(--text-3)]">{data.unparseable} result{data.unparseable === 1 ? "" : "s"} couldn&rsquo;t be parsed as JSON (excluded).</p>
-          )}
+          <p className="text-[10px] text-[var(--text-3)]">
+            {data.doubleChecked > 0
+              ? <><span className="text-[var(--text-2)]">{data.doubleChecked.toLocaleString()}</span> of {data.total.toLocaleString()} verdicts were double-checked by gpt-5.4 (the Early-Hangup/Neutral cases).</>
+              : "No calls have been double-checked by gpt-5.4 yet (re-analyze to apply the hybrid scorer)."}
+            {data.unparseable > 0 && ` · ${data.unparseable} result${data.unparseable === 1 ? "" : "s"} couldn't be parsed as JSON (excluded).`}
+          </p>
         </>
       )}
 

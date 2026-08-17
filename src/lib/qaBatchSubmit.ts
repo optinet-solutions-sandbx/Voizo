@@ -128,9 +128,9 @@ export async function importCompletedBatches(apiKey: string): Promise<{ imported
           const callId = (r.custom_id || "").startsWith("call-") ? r.custom_id.slice(5) : null;
           const content = r.response?.body?.choices?.[0]?.message?.content ?? null;
           if (!callId || !content) { failed++; continue; }
-          // Double-check Early-Hangup/Neutral with the stronger model; store its verdict.
-          const finalContent = await verifyCategory(callId, j.promptContent, content, apiKey);
-          buf.push({ callId, campaignId: j.campaignId, promptId: j.promptId, promptTitle: j.promptTitle, promptContent: j.promptContent, summary: finalContent, batchJobId: j.id, analyzedAt: now });
+          // Double-check Early-Hangup/Neutral with the stronger model; store its verdict + which model produced it.
+          const checked = await verifyCategory(callId, j.promptContent, content, apiKey);
+          buf.push({ callId, campaignId: j.campaignId, promptId: j.promptId, promptTitle: j.promptTitle, promptContent: j.promptContent, summary: checked.content, scoredBy: checked.model, batchJobId: j.id, analyzedAt: now });
           done++;
         } catch { failed++; }
         if (buf.length >= 100) { await flush(); await updateBatchJob(j.id, { imported_count: done }); }

@@ -272,15 +272,16 @@ export async function PATCH(request: NextRequest) {
         failed++;
         continue;
       }
-      // Double-check Early-Hangup/Neutral with the stronger model; store its verdict.
-      const finalContent = await verifyCategory(callId, job.promptContent, content, apiKey);
+      // Double-check Early-Hangup/Neutral with the stronger model; store its verdict + which model produced it.
+      const checked = await verifyCategory(callId, job.promptContent, content, apiKey);
       buf.push({
         callId,
         campaignId: job.campaignId,
         promptId: job.promptId,
         promptTitle: job.promptTitle,
         promptContent: job.promptContent,
-        summary: finalContent,
+        summary: checked.content,
+        scoredBy: checked.model,
         batchJobId: job.id,
         analyzedAt: now,
       });
