@@ -20,9 +20,24 @@ describe("isWithinCallWindowAt", () => {
   it("false when no window for today's weekday", () => {
     expect(isWithinCallWindowAt(tue, tz, Date.parse("2026-06-03T22:30:00Z"))).toBe(false); // Wed
   });
-  it("true when windows empty (always open)", () => {
-    expect(isWithinCallWindowAt([], tz, Date.parse("2026-06-02T03:00:00Z"))).toBe(true);
+  it("false when windows empty (VOZ-364: fail closed, never dial on an unconfigured window)", () => {
+    expect(isWithinCallWindowAt([], tz, Date.parse("2026-06-02T03:00:00Z"))).toBe(false);
   });
+  it("false when windows is null/missing (VOZ-364: same fail-closed treatment as empty)", () => {
+    expect(isWithinCallWindowAt(null as unknown as never, tz, Date.parse("2026-06-02T03:00:00Z"))).toBe(false);
+  });
+  // VOZ-364 / f174e9a class: an invalid-but-truthy tz makes Intl throw RangeError.
+  // Uncaught it 500s the whole scheduler tick every minute (the outage f174e9a fixed
+  // in the sibling trunk gate). Must DENY and must NOT throw — assert both, because
+  // `.toBe(false)` alone would also "pass" a throw if the throw were what we wanted.
+  const badTimezones = ["Manila", "", "Australia/Sydneyy", "UTC+10", "not a tz"];
+  for (const badTz of badTimezones) {
+    it(`false and NO THROW on unusable timezone ${JSON.stringify(badTz)} (one bad row must not take the fleet down)`, () => {
+      const call = () => isWithinCallWindowAt(tue, badTz, Date.parse("2026-06-02T22:30:00Z"));
+      expect(call).not.toThrow();
+      expect(call()).toBe(false);
+    });
+  }
   // Boundary locks — Option A's no-false-block on aligned campaigns rides on the
   // OPEN edge being inclusive and the CLOSE edge exclusive (matches dialer's < end).
   it("true at the OPEN edge (start == window.start) — aligned campaigns never false-block", () =>

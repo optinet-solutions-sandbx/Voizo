@@ -548,7 +548,11 @@ export async function GET(request: NextRequest) {
     // longer pin a worker).
     const cw = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
     const tz = campaign.timezone as string;
-    if (cw && cw.length > 0 && !isWithinCallWindow(cw, tz)) {
+    // VOZ-364: route EVERY campaign through the shared gate, including a null/empty
+    // cw — the old `cw && cw.length > 0 &&` pre-guard skipped the check entirely on
+    // an unconfigured window, which is a second, caller-local fail-open independent
+    // of isWithinCallWindow's own (now-fixed) empty-windows default.
+    if (!isWithinCallWindow(cw ?? [], tz)) {
       const releaseOnPause = pauseReleasesSlot();
       const capturedAssistantId = campaign.vapi_assistant_id as string | null;
       const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
@@ -824,7 +828,9 @@ export async function GET(request: NextRequest) {
     // ── Call window check ──
     const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
     const timezone = campaign.timezone as string;
-    if (callWindows && callWindows.length > 0 && !isWithinCallWindow(callWindows, timezone)) {
+    // VOZ-364: see the comment on the sibling check above — no caller-local
+    // "skip if empty" pre-guard, always route through the shared gate.
+    if (!isWithinCallWindow(callWindows ?? [], timezone)) {
       console.log(`[campaign-scheduler] ${campaignName}: inside start_at window but outside call window — skipping`);
       // Surface the silent defer to operators. This branch fires on EVERY ~60s
       // tick for a campaign stuck outside its window (e.g. a day/window mismatch
@@ -832,7 +838,10 @@ export async function GET(request: NextRequest) {
       // is the real backstop for a "scheduled but never dials" campaign. Dedup
       // via scheduler_alert_state (mirrors the recurring spawn_failed dedup) so
       // a stuck campaign posts at most once per ~6h, not ~1,440x/day.
-      const winCompact = callWindows.map((w) => `${w.day} ${w.start}-${w.end}`).join("|");
+      // VOZ-364: `?? []` here too — removing the caller-local `callWindows &&`
+      // pre-guard above made this branch reachable with a NULL window, which
+      // would have thrown on .map and taken the whole draft-start tick down.
+      const winCompact = (callWindows ?? []).map((w) => `${w.day} ${w.start}-${w.end}`).join("|");
       const reason =
         `due (start_at has passed) but the current time is outside the call window — deferring. ` +
         `tz=${timezone}, windows=[${winCompact}]. Will not dial until the window opens; ` +

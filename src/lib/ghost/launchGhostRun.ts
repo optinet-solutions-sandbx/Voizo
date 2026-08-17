@@ -21,7 +21,7 @@ export interface GhostLaunchInput {
   run: { id: string; name: string; tier: "test" | "live"; base_assistant_id: string; operator: string };
   systemPrompt: string;
   timezone: string;
-  callWindows: CallWindow[]; // [] for test (always-open); non-empty for live (validated upstream)
+  callWindows: CallWindow[]; // all-day literal for test (VOZ-364: [] now means CLOSED, not open); non-empty+validated for live
   numbers: string[]; // already DNC-scrubbed
   smsEnabled: boolean;
   smsTemplate: string | null;

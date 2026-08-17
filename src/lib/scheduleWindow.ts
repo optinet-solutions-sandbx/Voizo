@@ -27,10 +27,19 @@ function hhmmToMinutes(hhmm: string): number {
 }
 
 /** True if `atMs` falls within ANY enabled call window for that weekday, evaluated
- *  in `timezone`. Empty windows = always open (matches dialer.ts).
+ *  in `timezone`. Empty or missing windows = NEVER open (VOZ-364: an unconfigured
+ *  or malformed call_windows must mean "dial nothing", not "dial anytime" — the
+ *  previous `return true` here was one of two fail-open compliance gates). The
+ *  one sanctioned exception is Ghost Portal's test-tier launch, which now passes
+ *  an explicit all-day window instead of `[]` (see launch/route.ts ALL_DAY_TEST_WINDOWS)
+ *  rather than relying on this function defaulting open.
  *
  *  Boundary semantics (locked by tests): OPEN edge inclusive, CLOSE edge exclusive
- *  (`>= start`, `< end`) — aligned campaigns must never false-block.
+ *  (`>= start`, `< end`) — aligned campaigns must never false-block. Because the
+ *  close edge is exclusive and `nowMinutes` maxes at 1439 ("23:59"), an end of
+ *  "23:59" is CLOSED for that final minute; a genuinely all-day window needs "24:00".
+ *
+ *  An unusable timezone also denies (see the catch below) — never throws to callers.
  *
  *  VOZ-360: this used `windows.find(w => w.day === weekday)`, which honoured only
  *  the FIRST window on a day and silently ignored the rest. A split window such as
@@ -39,14 +48,34 @@ function hhmmToMinutes(hhmm: string): number {
  *  "no window for today → false" branch. A malformed window where start >= end
  *  simply never matches, which is the safe direction. */
 export function isWithinCallWindowAt(windows: CallWindowLite[], timezone: string, atMs: number): boolean {
-  if (!windows || windows.length === 0) return true;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(atMs));
+  if (!windows || windows.length === 0) return false;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date(atMs));
+  } catch {
+    // An invalid-but-truthy tz ("Manila", "") makes Intl throw RangeError. Nothing
+    // validates campaigns_v2.timezone on write (text not null, no CHECK) and ghost
+    // launch forwards a client-supplied value, so this is reachable from user input.
+    // Uncaught, it escapes into the scheduler's GET and 500s the ENTIRE tick every
+    // minute — no spawns, no heartbeat, no last-resort sweep — and a draft row keeps
+    // re-throwing forever because it never leaves the draft loop. That is precisely
+    // the outage f174e9a fixed in the sibling TRUNK gate; this gate never got it.
+    // Direction differs on purpose: the trunk gate fails OPEN by contract and returned
+    // UNKNOWN; this gate fails CLOSED, so an unusable timezone must DENY. One bad row
+    // must not be able to take the fleet down, and must not silently dial either.
+    console.error(
+      `[scheduleWindow] UNUSABLE timezone ${JSON.stringify(timezone)} — cannot evaluate the call ` +
+        `window, DENYING the dial (fail-closed). Fix campaigns_v2.timezone to an IANA zone ` +
+        `(e.g. "Australia/Sydney"); this row will never dial until it is corrected.`,
+    );
+    return false;
+  }
   const weekday = parts.find((p) => p.type === "weekday")?.value?.toLowerCase().slice(0, 3) || "";
   let hour = parts.find((p) => p.type === "hour")?.value || "00";
   if (hour === "24") hour = "00"; // V8 hour12:false midnight edge
@@ -100,8 +129,18 @@ function windowLengthMinutes(start: string, end: string): number {
 }
 
 /** Shortest enabled call-window length in minutes, or null when there are NO
- *  windows (no windows = always open, so "shortest" is undefined). Malformed or
- *  non-positive windows are ignored. */
+ *  windows ("shortest" is undefined over an empty set). Malformed or non-positive
+ *  windows are ignored.
+ *
+ *  ⚠️ VOZ-364: do NOT read this null as "no windows = always open" — that used to be
+ *  this file's contract and it is now the OPPOSITE of it. isWithinCallWindowAt fails
+ *  CLOSED on an empty window set (a compliance gate), so an empty set can never dial.
+ *  The null here means only "undefined", and retryFitsShortestWindow below still maps
+ *  it to `true`, which reads as "the retry fits" for a set that cannot dial at all.
+ *  That is stale-but-inert today (its only caller gates on enabledRows.length > 0
+ *  first — StepSchedule.tsx:413). Changing these return values touches the wizard's
+ *  retry-fit logic and needs its own ticket; the comments are corrected here so
+ *  nobody re-derives "empty = open" from the same file that now denies it. */
 export function minWindowMinutes(windows: CallWindowLite[]): number | null {
   if (!windows || windows.length === 0) return null;
   let min = Infinity;
@@ -114,9 +153,15 @@ export function minWindowMinutes(windows: CallWindowLite[]): number | null {
 
 /** True if a retry scheduled `retryMinutes` after a first attempt can still land
  *  INSIDE the shortest window — i.e. the shortest window is strictly longer than
- *  the retry gap. No windows = always open = fits. When false, a no-answer's retry
- *  is scheduled after the window closes and never dials that day; the create-time
- *  guard warns the operator. */
+ *  the retry gap. When false, a no-answer's retry is scheduled after the window
+ *  closes and never dials that day; the create-time guard warns the operator.
+ *
+ *  ⚠️ VOZ-364: the `min == null` → `true` branch below is inherited from the old
+ *  "no windows = always open = fits" contract, which no longer holds — an empty
+ *  window set now DENIES every dial (isWithinCallWindowAt). So for an empty set this
+ *  answers "the retry fits" about a campaign that cannot dial at all. Inert today
+ *  (StepSchedule.tsx:413 gates on enabledRows.length > 0 before calling), left
+ *  behaviourally unchanged on purpose — see minWindowMinutes above. */
 export function retryFitsShortestWindow(windows: CallWindowLite[], retryMinutes: number): boolean {
   const min = minWindowMinutes(windows);
   if (min == null) return true;

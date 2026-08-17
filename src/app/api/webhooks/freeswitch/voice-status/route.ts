@@ -330,7 +330,18 @@ export async function POST(request: NextRequest) {
 
   const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
   const timezone = campaign.timezone as string | null;
-  if (callWindows && timezone && !isWithinCallWindow(callWindows, timezone)) {
+  // VOZ-364: no caller-local "skip if empty" pre-guard on callWindows — always
+  // route through the shared gate, which fails CLOSED on a null/empty window.
+  //
+  // The old `timezone &&` was the SAME fail-open class: nothing validates
+  // campaigns_v2.timezone on write (text not null, no CHECK — POST /api/campaigns-v2
+  // accepts ""), and '' is legal in a not-null column, so a campaign with a blank
+  // timezone skipped this gate entirely. This is the chain-next path where MOST dials
+  // originate, so that campaign dialled around the clock regardless of its windows.
+  // A missing timezone now DENIES, same as an unconfigured window: the gate itself
+  // also fails closed on an unusable-but-truthy tz (scheduleWindow.ts), so the two
+  // halves are consistent — no config value can buy a dial by being absent.
+  if (!timezone || !isWithinCallWindow(callWindows ?? [], timezone)) {
     // When PAUSE_RELEASES_SLOT is on (Phase 1+), clear Vapi pointers + run
     // the shared cleanup helper. Flag off → today's behavior preserved.
     //

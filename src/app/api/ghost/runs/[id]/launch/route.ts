@@ -25,6 +25,22 @@ import type { CallWindow } from "../../../../../../lib/campaignV2Shared";
 // could mean wrong-hours dialing. Reject anything that isn't day(sun–sat)+HH:MM.
 const VALID_DAYS = new Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+// VOZ-364: isWithinCallWindowAt now fails CLOSED on an empty/missing window (a
+// second fail-open compliance gate). Test-tier ghost runs used to pass `[]` to
+// deliberately exploit the old "empty = always open" default so an operator's
+// manual verification call could fire at any hour — that must keep working, but
+// it can no longer ride on the gate's default. Explicit all-day window instead.
+// end is "24:00", NOT "23:59": the gate's close edge is EXCLUSIVE (`nowMinutes < end`)
+// and nowMinutes maxes at 1439 == "23:59", so an end of "23:59" would leave the tier
+// CLOSED for 23:59:00–23:59:59 — a silent one-minute dead zone in a window whose whole
+// purpose is "fire at any hour". hhmmToMinutes("24:00") = 1440 > 1439 always. This
+// value skips callWindowsAreValid's stricter HH:MM regex by design: that check runs
+// only for the LIVE tier (see below), never for this test-tier constant.
+const ALL_DAY_TEST_WINDOWS: CallWindow[] = [...VALID_DAYS].map((day) => ({
+  day: day as CallWindow["day"],
+  start: "00:00",
+  end: "24:00",
+}));
 function callWindowsAreValid(windows: CallWindow[]): boolean {
   return windows.every(
     (w) =>
@@ -115,7 +131,7 @@ export async function POST(
     },
     systemPrompt: "", // ghost clones inherit the base assistant's prompt
     timezone: typeof body.timezone === "string" && body.timezone ? body.timezone : "UTC",
-    callWindows: run.tier === "test" ? [] : callWindows,
+    callWindows: run.tier === "test" ? ALL_DAY_TEST_WINDOWS : callWindows,
     numbers: scrub.net,
     smsEnabled: body.smsEnabled === true,
     smsTemplate: typeof body.smsTemplate === "string" ? body.smsTemplate : null,

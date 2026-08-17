@@ -64,9 +64,34 @@ export async function POST(
 
   // ── Call window check (Manifesto §6: check before every dial) ──
   const callWindows = campaign.call_windows as Array<{ day: string; start: string; end: string }> | null;
-  if (callWindows && callWindows.length > 0 && !isWithinCallWindow(callWindows, campaign.timezone)) {
+  // VOZ-364: no caller-local "skip if empty" pre-guard — always route through the
+  // shared gate, which now fails CLOSED (blocks the start) on a null/empty window.
+  //
+  // SCOPE EXCLUSION (not a fail-open): a recurring PARENT never dials. It spawns
+  // children, and each child carries its own call_windows and is gated individually
+  // in the scheduler (route.ts:555). So gating a parent on a *dial* window is
+  // meaningless — and with the gate now failing closed it would 400 forever on the
+  // 9 parents that legitimately hold call_windows=[]. Same convention the queue gate
+  // below and the scheduler's own query already use: .neq("campaign_type",
+  // "recurring") — recurring parents are excluded from dial-oriented gates.
+  //
+  // ⚠️ The parent's own "doesn't dial" early return lives BELOW, after the atomic
+  // status transition, and CANNOT be moved up here to do this job: it answers
+  // {status: "running"} precisely because the UPDATE ... SET status='running' has
+  // already run. Hoisting it would return "started successfully" while the row
+  // stayed paused — a silent lie in place of a loud 400. Exclude at the gate instead.
+  const isRecurringParent = (campaign.campaign_type as string) === "recurring";
+  if (!isRecurringParent && !isWithinCallWindow(callWindows ?? [], campaign.timezone)) {
+    // Distinguish "wait for the window" from "there is no window" — otherwise the
+    // fail-closed gate tells an operator to wait for a window that will never open,
+    // and they retry forever. Unconfigured is a fixable state; say so.
+    const unconfigured = !callWindows || callWindows.length === 0;
     return NextResponse.json(
-      { error: "Outside call window. Campaign cannot start dialing right now." },
+      {
+        error: unconfigured
+          ? "This campaign has no call window configured, so it cannot dial at all. Set at least one day and time range in the campaign schedule, then start it."
+          : "Outside call window. Campaign cannot start dialing right now.",
+      },
       { status: 400 },
     );
   }

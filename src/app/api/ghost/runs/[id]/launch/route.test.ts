@@ -89,7 +89,7 @@ describe("POST /api/ghost/runs/[id]/launch", () => {
     expect(launchGhostRun).not.toHaveBeenCalled();
   });
 
-  it("re-scrubs server-side and launches with the NET list (test tier → empty windows)", async () => {
+  it("re-scrubs server-side and launches with the NET list (VOZ-364: test tier → explicit all-day window, NOT [])", async () => {
     const res = await POST(req({ phones: ["+15551110000", "+15552220000", "+15553330000"], timezone: "Asia/Manila" }), ctx());
     expect(res.status).toBe(200);
     // never trusts the client: scrub runs on the submitted phones
@@ -97,7 +97,19 @@ describe("POST /api/ghost/runs/[id]/launch", () => {
     expect(launchGhostRun).toHaveBeenCalledWith(
       expect.objectContaining({
         numbers: ["+15551110000", "+15552220000"], // the scrubbed net, not the raw input
-        callWindows: [],
+        // VOZ-364: the test tier used to ride the gate's old "empty = always open"
+        // default so a manual verification call could fire at any hour. The gate now
+        // fails CLOSED on [], so the same always-open intent must be stated explicitly.
+        // If this ever reverts to [], test-tier ghost runs silently stop dialing.
+        callWindows: [
+          { day: "sun", start: "00:00", end: "24:00" },
+          { day: "mon", start: "00:00", end: "24:00" },
+          { day: "tue", start: "00:00", end: "24:00" },
+          { day: "wed", start: "00:00", end: "24:00" },
+          { day: "thu", start: "00:00", end: "24:00" },
+          { day: "fri", start: "00:00", end: "24:00" },
+          { day: "sat", start: "00:00", end: "24:00" },
+        ],
         run: expect.objectContaining({ id: "r1", tier: "test", base_assistant_id: "base_1", operator: "op@x.com" }),
       }),
     );
