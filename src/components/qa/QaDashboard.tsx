@@ -7,7 +7,7 @@
 // records drawer (the runs behind that number). Fully isolated from the campaigns
 // dashboard (never reads calls_v2 / the SQL rollups).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, BarChart3, ClipboardList, Download, PhoneOff } from "lucide-react";
 import { SectionTick } from "../../app/analytics/SectionIsland";
 import WidgetCard from "../../app/analytics/WidgetCard";
@@ -181,7 +181,13 @@ export default function QaDashboard() {
       .catch(() => { /* filter just stays on "all" */ });
   }, []);
 
+  // Staleness guard: each load gets a sequence number; a response is applied only
+  // if it's still the latest request. Without this, a slow earlier fetch (e.g. the
+  // default "all prompts" scan) can resolve AFTER a newer one and clobber it —
+  // which made clicking "7 days" snap back to Today.
+  const reqSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     try {
       const p = new URLSearchParams();
@@ -194,12 +200,15 @@ export default function QaDashboard() {
       const qs = p.toString();
       const r = await fetch(`/api/qa-prompt-testing/dashboard${qs ? `?${qs}` : ""}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData((await r.json()) as DashData);
+      const json = (await r.json()) as DashData;
+      if (seq !== reqSeq.current) return; // a newer load started — drop this stale response
+      setData(json);
       setError(null);
     } catch (e) {
+      if (seq !== reqSeq.current) return;
       setError(e instanceof Error ? e.message : "Failed to load QA dashboard");
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [scope, promptId]);
 
