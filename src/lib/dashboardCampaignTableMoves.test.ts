@@ -4,6 +4,7 @@ import {
   callWindowBreakdown,
   smsWindowBreakdown,
   computeCampaignTableFromRollup,
+  deriveAttemptTag,
   summarizeRollupWindow,
   type CallRollupRow,
   type SmsRollupRow,
@@ -237,6 +238,24 @@ describe("campaigns table must carry the transcript move map (VOZ-387 follow-thr
     expect(perf.reached.rows.reduce((s, r) => s + r.count, 0)).toBe(perf.reached.total);
     expect(perf.callAttempts.rows.reduce((s, r) => s + r.count, 0)).toBe(perf.callAttempts.total);
     expect(perf.sms.rows.reduce((s, r) => s + r.count, 0)).toBe(perf.sms.total);
+  });
+
+  // Justifies CampaignTable's `summaryNoDrillHint`: the section-summary drawer
+  // (/api/dashboard/records) classifies LEAN, and the lean classifier gates the
+  // silent_pickup branch on useTranscript — so it can never emit that tag, and a
+  // drill-down would open an empty list under a non-zero card count. If this test
+  // ever fails, lean CAN emit silent_pickup and the suppression should be removed.
+  it("the lean classifier can never emit silent_pickup (the reason the summary row does not drill)", () => {
+    const dead = CALLS.filter((c) => c.id === "dead" || c.id === "dead2");
+    expect(dead).toHaveLength(2);
+    for (const c of dead) {
+      expect(deriveAttemptTag(c, false)).toBe("silent_pickup"); // rich sees it
+      expect(deriveAttemptTag(c, false, { useTranscript: false })).not.toBe("silent_pickup"); // lean cannot
+    }
+    // And the lean breakdown puts them back inside reach, which is the inflation.
+    const lean = callWindowBreakdown(CALLS, DECLINED, DAY_START, DAY_START + DAY_MS, { useTranscript: false });
+    expect(lean.silentPickup).toBe(0);
+    expect(lean.reach).toBe(truth.reach + truth.silentPickup);
   });
 
   it("move rows are JSON-safe — they cross the wire to CampaignTable / campaignPerfCsv", () => {

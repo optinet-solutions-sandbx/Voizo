@@ -83,14 +83,14 @@ export function SegBar({ rows, height = 6 }: { rows: PerfRow[]; height?: number 
 // One breakdown row: dot · label · [EST] · count · % · [one pp-delta] — clickable → drawer.
 // Exported for the campaign-row expand panels (drill mode, pattern brief §7).
 // `indent` renders the SMS by-response sub-rows (smaller dot, no delta column).
-export function MetricRow({ row, onOpen, showDelta, indent = false }: { row: PerfRow; onOpen: () => void; showDelta: boolean; indent?: boolean }) {
+export function MetricRow({ row, onOpen, showDelta, indent = false, noDrillHint }: { row: PerfRow; onOpen: () => void; showDelta: boolean; indent?: boolean; noDrillHint?: string }) {
   const color = ROW_COLOR[row.key] ?? "#7d828c";
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={`w-full flex items-center gap-2 text-left rounded-md px-1.5 py-[5px] -mx-1.5 hover:bg-[var(--bg-hover)] transition-colors ${indent ? "pl-[18px]" : ""}`}
-    >
+  // `noDrillHint` = this row has a real count but the drawer behind it CANNOT
+  // reproduce it, so drilling would open an empty list under a non-zero number
+  // (Val 2026-08-07: card said Reached 12, sub-rows summed to 2). Render the
+  // count, drop the click, and say why on hover — never a dead button.
+  const inner = (
+    <>
       <span className={`rounded-full shrink-0 ${indent ? "h-[5px] w-[5px] opacity-80" : "h-2 w-2"}`} style={{ background: color }} />
       <span className={`flex items-center gap-1.5 ${indent ? "text-xs text-[var(--text-3)]" : "text-[13px] text-[var(--text-2)]"}`}>
         {row.label}
@@ -109,6 +109,19 @@ export function MetricRow({ row, onOpen, showDelta, indent = false }: { row: Per
         </Hint>
       )}
       {showDelta && indent && <span className="w-[56px]" />}
+    </>
+  );
+  const cls = `w-full flex items-center gap-2 text-left rounded-md px-1.5 py-[5px] -mx-1.5 ${indent ? "pl-[18px]" : ""}`;
+  if (noDrillHint) {
+    return (
+      <Hint content={noDrillHint}>
+        <div className={`${cls} cursor-help opacity-70`}>{inner}</div>
+      </Hint>
+    );
+  }
+  return (
+    <button type="button" onClick={onOpen} className={`${cls} hover:bg-[var(--bg-hover)] transition-colors`}>
+      {inner}
     </button>
   );
 }
@@ -121,6 +134,7 @@ function MetricCard({
   showDeltas,
   onOpenTotal,
   onOpenRow,
+  noDrillHintFor,
 }: {
   label: string;
   metric: PerfMetric;
@@ -129,6 +143,7 @@ function MetricCard({
   showDeltas: boolean;
   onOpenTotal: () => void;
   onOpenRow: (row: PerfRow, parentKey?: string) => void;
+  noDrillHintFor?: (row: PerfRow) => string | undefined;
 }) {
   const delta = metric.deltaPctVsSevenDayAvg;
   return (
@@ -158,11 +173,11 @@ function MetricCard({
       <div className="flex flex-col">
         {metric.rows.map((row) => (
           <div key={row.key} className="flex flex-col">
-            <MetricRow row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} />
+            <MetricRow row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} noDrillHint={noDrillHintFor?.(row)} />
             {/* SMS "by response" sub-rows live under the Reached row. */}
             {isSms &&
               row.subRows?.map((sub) => (
-                <MetricRow key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} />
+                <MetricRow key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} noDrillHint={noDrillHintFor?.(sub)} />
               ))}
           </div>
         ))}
@@ -176,11 +191,18 @@ export default function PerformanceCards({
   showDeltas,
   onOpenTotal,
   onOpenRow,
+  noDrillHintFor,
 }: {
   perf: TodayPerfDay;
   showDeltas: boolean;
   onOpenTotal: (card: "callAttempts" | "reached" | "sms") => void;
   onOpenRow: (card: "callAttempts" | "reached" | "sms", row: PerfRow, parentKey?: string) => void;
+  /** Per-row opt-OUT of drilling: return a reason and the row renders as a
+   *  non-interactive count with that reason on hover. For surfaces whose drawer
+   *  cannot reproduce a row (the Campaign Performance summary block, whose
+   *  ranged drawer is transcript-less and so can never list silent pickups).
+   *  Omitted everywhere else, so /today and the ranged cards are unchanged. */
+  noDrillHintFor?: (row: PerfRow) => string | undefined;
 }) {
   // "In progress" (inFlight) is a LIVE concept — only meaningful on the always-live Today view.
   const callInFlight = showDeltas ? perf.inFlight : undefined;
@@ -200,6 +222,7 @@ export default function PerformanceCards({
           showDeltas={showDeltas}
           onOpenTotal={() => onOpenTotal("callAttempts")}
           onOpenRow={(row) => onOpenRow("callAttempts", row)}
+          noDrillHintFor={noDrillHintFor}
         />
       </motion.div>
       <motion.div {...entrance(1)} className="flex-1 min-w-[260px]">
@@ -209,6 +232,7 @@ export default function PerformanceCards({
           showDeltas={showDeltas}
           onOpenTotal={() => onOpenTotal("reached")}
           onOpenRow={(row) => onOpenRow("reached", row)}
+          noDrillHintFor={noDrillHintFor}
         />
       </motion.div>
       <motion.div {...entrance(2)} className="flex-1 min-w-[260px]">
@@ -219,6 +243,7 @@ export default function PerformanceCards({
           showDeltas={showDeltas}
           onOpenTotal={() => onOpenTotal("sms")}
           onOpenRow={(row, parentKey) => onOpenRow("sms", row, parentKey)}
+          noDrillHintFor={noDrillHintFor}
         />
       </motion.div>
     </div>

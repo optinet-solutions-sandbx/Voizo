@@ -395,6 +395,20 @@ export default function CampaignTable() {
     if (guardScope()) return;
     setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
   };
+  // The cards above are transcript-classified (the move map); this summary's drawer
+  // is /api/dashboard/records, which fetches WITHOUT transcripts and classifies lean
+  // — and the lean classifier can never emit silent_pickup at all (deriveAttemptTag
+  // gates that branch on useTranscript). So drilling "Silent pickup 601" would open
+  // an empty list under a non-zero count. Show the honest number, refuse the click,
+  // say why. The per-ROW expand below is unaffected: it drills through
+  // /api/dashboard/campaigns/[id]/records, which IS transcript-classified.
+  // Removing this needs the ranged drawer to carry transcripts — a separate ticket,
+  // because that route defaults to 30d with a selectable lifetime preset and is
+  // shared with the ranged Global Performance cards.
+  const summaryNoDrillHint = (row: PerfRow) =>
+    row.key === "silent_pickup"
+      ? "No drill-down yet: these are calls where nobody ever spoke, and the records drawer behind this section reads call data without transcripts, so it cannot list them. The count is correct. Open a single campaign's row to see them."
+      : undefined;
 
   const exportCsv = () => {
     if (!rollup || visible.length === 0) return;
@@ -613,7 +627,13 @@ export default function CampaignTable() {
       </div>
       {showSummary && summaryPerf && (
         <div className="px-3.5 pb-2">
-          <PerformanceCards perf={summaryPerf} showDeltas={false} onOpenTotal={openTotal} onOpenRow={openRow} />
+          <PerformanceCards
+            perf={summaryPerf}
+            showDeltas={false}
+            onOpenTotal={openTotal}
+            onOpenRow={openRow}
+            noDrillHintFor={summaryNoDrillHint}
+          />
           <RangedRecordsDrawer filters={drawerFilters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
         </div>
       )}
