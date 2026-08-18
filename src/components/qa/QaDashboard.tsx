@@ -22,11 +22,13 @@ interface Campaign {
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
+  smsSent: number;
 }
 interface DashData {
   total: number;
   unparseable: number;
   doubleChecked: number;
+  smsSent: number;
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: Campaign[];
@@ -132,14 +134,21 @@ interface RawRun {
   summary: string | null;
 }
 
-function KpiCard({ label, value, accent, sub, onClick }: { label: string; value: number; accent?: string; sub?: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="text-left bg-[#12141a] px-[18px] py-[15px] min-w-0 hover:bg-[var(--bg-hover)] transition" title="Click to see these calls">
+function KpiCard({ label, value, accent, sub, onClick }: { label: string; value: number; accent?: string; sub?: string; onClick?: () => void }) {
+  const inner = (
+    <>
       <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] whitespace-nowrap truncate">{label}</div>
       <div className="text-[27px] leading-[1.1] font-semibold font-mono tracking-[-0.02em] mt-1.5" style={{ color: accent ?? "var(--text-1)" }}>
         {value.toLocaleString()}
       </div>
       <div className="text-[11px] text-[var(--text-4)] mt-0.5 h-[14px] whitespace-nowrap truncate">{sub ?? ""}</div>
+    </>
+  );
+  // No drill-down for some metrics (e.g. SMS) — render a plain, non-interactive tile.
+  if (!onClick) return <div className="text-left bg-[#12141a] px-[18px] py-[15px] min-w-0">{inner}</div>;
+  return (
+    <button onClick={onClick} className="text-left bg-[#12141a] px-[18px] py-[15px] min-w-0 hover:bg-[var(--bg-hover)] transition" title="Click to see these calls">
+      {inner}
     </button>
   );
 }
@@ -215,7 +224,7 @@ export default function QaDashboard() {
   // ── CSV exports ───────────────────────────────────────────────────────────────
   const exportSummary = useCallback(() => {
     if (!data) return;
-    const header = ["Campaign", "Timezone", "Scope", "Last analyzed", "Analyzed", ...CA_COLS, ...RC_COLS];
+    const header = ["Campaign", "Timezone", "Scope", "Last analyzed", "Analyzed", ...CA_COLS, ...RC_COLS, "SMS Sent"];
     const rows: (string | number)[][] = data.campaigns.map((c) => [
       c.campaignName ?? c.campaignId,
       c.timezone,
@@ -224,6 +233,7 @@ export default function QaDashboard() {
       c.total,
       ...CA_COLS.map((k) => c.callAttempt[k] ?? 0),
       ...RC_COLS.map((k) => c.reachedCategory[k] ?? 0),
+      c.smsSent,
     ]);
     downloadCsv(`qa-daily-summary-${scope.day ?? period}.csv`, [header, ...rows]);
   }, [data, scope, scopeLabel, period]);
@@ -372,14 +382,15 @@ export default function QaDashboard() {
         <div className="text-center py-16 text-sm text-[var(--text-3)]">No analysis results in this period.</div>
       ) : (
         <>
-          {/* KPI band — clickable */}
-          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(6,minmax(0,1fr))" }}>
+          {/* KPI band — clickable (SMS is a non-drill-down tile) */}
+          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(7,minmax(0,1fr))" }}>
             <KpiCard label="Analyzed" value={data.total} onClick={() => open({ title: "All analyzed calls" })} />
             <KpiCard label="Reached" value={n(data.byCallAttempt, "Reached")} accent="#3ec08a" onClick={() => open({ title: "Reached", callAttempt: "Reached" })} />
             <KpiCard label="Voicemail" value={n(data.byCallAttempt, "Voicemail")} accent="#8f86e6" onClick={() => open({ title: "Voicemail", callAttempt: "Voicemail" })} />
             <KpiCard label="Early Hang-up" value={n(data.byCallAttempt, "Early Hang-up")} accent="#e0814a" onClick={() => open({ title: "Early Hang-up", callAttempt: "Early Hang-up" })} />
             <KpiCard label="Unreachable" value={n(data.byCallAttempt, "Unreachable")} accent="#e0a53c" onClick={() => open({ title: "Unreachable", callAttempt: "Unreachable" })} />
             <KpiCard label="Agent Timeout" value={n(data.byReachedCategory, "Agent Timeout")} accent="#c264d6" sub="of reached" onClick={() => open({ title: "Agent Timeout", reachedCategory: "Agent Timeout" })} />
+            <KpiCard label="SMS Sent" value={data.smsSent} accent="#2ec4b6" sub="sent/delivered" />
           </div>
 
           {/* Reached outcome breakdown — clickable rows */}
@@ -443,6 +454,8 @@ export default function QaDashboard() {
                     {RC_COLS.map((k) => (
                       <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap" style={{ color: RC_COLOR[k] }}>{k}</th>
                     ))}
+                    <th className="px-1 py-2 text-[var(--text-4)]">·</th>
+                    <th className="text-right font-semibold px-3 py-2 whitespace-nowrap" style={{ color: "#2ec4b6" }}>SMS</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border)]">
@@ -490,6 +503,10 @@ export default function QaDashboard() {
                             </td>
                           );
                         })}
+                        <td className="px-1 text-[var(--border-2)]">·</td>
+                        <td className="px-3 py-2 text-right font-mono" style={{ color: c.smsSent > 0 ? "#2ec4b6" : "var(--text-3)" }}>
+                          {c.smsSent.toLocaleString()}
+                        </td>
                       </tr>
                     );
                   })}

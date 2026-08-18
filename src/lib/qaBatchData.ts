@@ -550,11 +550,13 @@ export interface QaDashboardCampaign {
   total: number;
   callAttempt: Record<string, number>;
   reachedCategory: Record<string, number>;
+  smsSent: number; // SMS follow-ups (status sent/delivered) sent for this campaign's in-scope calls
 }
 export interface QaDashboardData {
   total: number;
   unparseable: number;
   doubleChecked: number; // calls whose stored verdict came from the gpt-5.4 double-check
+  smsSent: number; // total SMS follow-ups (sent/delivered) for the in-scope calls
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: QaDashboardCampaign[];
@@ -636,7 +638,7 @@ export async function getQaAnalysisDashboard(
     let c = perC.get(cid);
     if (!c) {
       // First row for this campaign (newest-first) → its latest analyzed_at.
-      c = { campaignId: cid, campaignName: (camp?.name as string) ?? null, timezone: tz, lastAnalyzedAt: (r.analyzed_at as string) ?? null, total: 0, callAttempt: {}, reachedCategory: {} };
+      c = { campaignId: cid, campaignName: (camp?.name as string) ?? null, timezone: tz, lastAnalyzedAt: (r.analyzed_at as string) ?? null, total: 0, callAttempt: {}, reachedCategory: {}, smsSent: 0 };
       perC.set(cid, c);
     }
     c.total += 1;
@@ -644,10 +646,36 @@ export async function getQaAnalysisDashboard(
     if (category) c.reachedCategory[category] = (c.reachedCategory[category] ?? 0) + 1;
   }
 
+  // SMS follow-ups sent for exactly these in-scope calls (same window/timezone logic —
+  // we scope by the call ids we counted, not by SMS date, so it can't drift out of the
+  // period). Count messages that reached the provider (sent) or the handset (delivered);
+  // undelivered/failed don't count. Non-fatal: a failure here leaves smsSent at 0.
+  let smsSent = 0;
+  const inScopeCallIds = [...seenCalls];
+  try {
+    for (let i = 0; i < inScopeCallIds.length; i += 300) {
+      const slice = inScopeCallIds.slice(i, i + 300);
+      const { data: smsRows, error: smsErr } = await supabaseAdmin
+        .from("sms_messages_v2")
+        .select("call_id, campaign_id")
+        .in("call_id", slice)
+        .in("status", ["sent", "delivered"]);
+      if (smsErr) throw smsErr;
+      for (const s of smsRows ?? []) {
+        smsSent += 1;
+        const c = perC.get(s.campaign_id as string);
+        if (c) c.smsSent += 1;
+      }
+    }
+  } catch (e) {
+    console.error("[getQaAnalysisDashboard] SMS count failed (non-fatal):", e);
+  }
+
   return {
     total,
     unparseable,
     doubleChecked,
+    smsSent,
     byCallAttempt,
     byReachedCategory,
     campaigns: [...perC.values()].sort((a, b) => b.total - a.total),
