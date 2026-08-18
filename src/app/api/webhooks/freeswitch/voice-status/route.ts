@@ -20,7 +20,16 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { validateFreeSwitchSignature } from "@/lib/freeswitch/validateWebhook";
 import { exceededDialCeiling, findNextNumber, fireCall, hasPendingRetry, isWithinCallWindow, TOTAL_DIAL_CEILING } from "@/lib/dialer";
 import { shouldStayAwakeRealtime } from "@/lib/scheduleWindow";
-import { classifyAttempt, completedNumberOutcomeOverride, mapHangup, resolveAttemptCount } from "@/lib/webhooks/hangupOutcome";
+import {
+  classifyAttempt,
+  completedNumberOutcomeOverride,
+  hasRouteRefusalStreak,
+  mapHangup,
+  nextRetryDelayMs,
+  resolveAttemptCount,
+  ROUTE_REFUSAL_DEFER_HOURS,
+  ROUTE_REFUSAL_STREAK_LIMIT,
+} from "@/lib/webhooks/hangupOutcome";
 import { performCampaignVapiCleanup } from "@/lib/vapi/campaignVapiCleanup";
 import { pauseReleasesSlot } from "@/lib/featureFlags";
 
@@ -311,7 +320,56 @@ export async function POST(request: NextRequest) {
       .eq("id", numberId);
   } else {
     const retryMinutes = campaign?.retry_interval_minutes ?? 90;
-    const nextAttempt = new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
+
+    // Route-refusal streak (2026-08-18 SquareTalk AU-landline SIP-500). The
+    // no-burn rule above is deliberate, but its cost is that a number the carrier
+    // has stopped routing to is re-queued every retry_interval_minutes for free:
+    // 150 AU landlines took 456 of that day's dials while the mobiles in the same
+    // rosters, connecting at 86%, never got a turn. So after
+    // ROUTE_REFUSAL_STREAK_LIMIT consecutive carrier 5xx refusals on THIS number,
+    // push its next dial past today's window.
+    //
+    // This changes only WHEN we dial next. attempt_count is still whatever the
+    // no-burn rule decided, the outcome is still pending_retry, and nothing
+    // terminal, suppressed or DNC is written — the row lands in exactly the state
+    // a number is in when the window closes on it. It then expires twice over,
+    // with no human action: next_attempt_at falls due, and rolloverLeftovers
+    // re-inserts the player into tomorrow's child as 'pending' with no
+    // next_attempt_at at all. The streak resets for free the same way, because
+    // rollover gives them a NEW campaign_numbers_v2 id and this lookup is
+    // per-number. Nothing to revert when SquareTalk fixes the route.
+    //
+    // This call's own row is already terminalized with its sip_term_status by the
+    // claim above, so it IS the newest row here.
+    const { data: recentDials, error: recentErr } = await supabaseAdmin
+      .from("calls_v2")
+      .select("sip_term_status")
+      .eq("campaign_number_id", numberId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(ROUTE_REFUSAL_STREAK_LIMIT);
+    if (recentErr) {
+      // Fail OPEN, matching exceededDialCeiling: a broken lookup must never
+      // suppress a dial. Worst case is today's behaviour, which is never a new
+      // reach loss.
+      console.error(
+        `[freeswitch.voice-status] refusal-streak lookup failed for number ${numberId} ` +
+          `(treating as no streak):`,
+        recentErr.message,
+      );
+    }
+    const routeRefusalStreak = !recentErr && hasRouteRefusalStreak(recentDials ?? []);
+    if (routeRefusalStreak) {
+      console.warn(
+        `[freeswitch.voice-status] number ${numberId} refused by the carrier ` +
+          `${ROUTE_REFUSAL_STREAK_LIMIT}x in a row (latest sip ${sipTermStatus ?? "n/a"}) — ` +
+          `deferring its next dial ${ROUTE_REFUSAL_DEFER_HOURS}h, past today's window. ` +
+          `Attempt budget untouched (${newAttemptCount}); still pending_retry.`,
+      );
+    }
+    const nextAttempt = new Date(
+      Date.now() + nextRetryDelayMs({ retryMinutes, routeRefusalStreak }),
+    ).toISOString();
     await supabaseAdmin
       .from("campaign_numbers_v2")
       .update({

@@ -104,6 +104,92 @@ export function classifyAttempt(hangupCause: string | null, status: CallStatus):
 }
 
 /**
+ * Route-refusal streak — 2026-08-18 SquareTalk AU-landline SIP-500 outage.
+ *
+ * A trunk refusal is a `transient_failure` above, so it burns no attempt. That
+ * rule is right and stays: the 08-02/05 incidents retired 3,823 players whose
+ * phone never rang once by counting exactly these. Its cost is that a number the
+ * carrier has stopped routing to is re-queued every retry_interval_minutes for
+ * free — on 08-18, 150 AU landlines took 456 dials while the mobiles in the same
+ * rosters, connecting at 86%, waited for a turn that never came.
+ *
+ * So the lever that moves here is DIAL SUPPRESSION, never attempt accounting:
+ * after ROUTE_REFUSAL_STREAK_LIMIT consecutive carrier 5xx refusals on one
+ * number, its next dial is pushed past today's window. The row stays
+ * pending_retry — not terminal, not suppressed, not DNC — and recovers with no
+ * human action when the carrier fixes the route.
+ *
+ * Threshold picked from the measured streak distribution, not intuition. Of the
+ * 175 numbers dialled on 08-18, 75 were refused on EVERY dial, 90 on none, and
+ * only 10 were mixed — the failure is sticky, so two in a row is already a
+ * strong per-number signal. Replaying limits over 08-13..08-18:
+ *
+ *   limit 2 — frees 110 of today's 523 dials; forgoes 24 later connects across
+ *             the six days, of which 16 are voicemail and only 5 are plausible
+ *             human conversations (and those defer to the next window, because
+ *             rolloverLeftovers carries pending_retry into tomorrow's child)
+ *   limit 3 — frees 30 dials; forgoes 10 connects (7 voicemail)
+ *   limit 4 — frees 0 dials today: numbers average ~3 dials/day, so a limit of 4
+ *             never binds inside a window
+ *
+ * 5xx only, and only from the carrier's own reply. Measured 08-13..08-18: every
+ * 5xx (423 of them, all 500) was `recv_refuse` + NORMAL_TEMPORARY_FAILURE with
+ * zero answered and zero connected, while 480/486/404/403/484/487 also arrive as
+ * recv_refuse but map to no_answer — they describe the PHONE, not a broken route,
+ * and they burn attempts. 6xx (603, the 08-05 out-of-funds outage) is a GLOBAL
+ * refusal that hits every number, so per-number suppression is the wrong lever
+ * and the reject breaker owns it.
+ *
+ * Keying on the observed refusal rather than on "is this a landline" is what
+ * makes this self-healing: no prefix list to revert, and the next route failure
+ * on any destination type is contained the same way.
+ */
+export const ROUTE_REFUSAL_STREAK_LIMIT = 2;
+
+/**
+ * How far past a refusal the next dial is pushed. Call windows are one per day
+ * (VOZ-360) and ~4.5h long — the AU window runs 05:00-09:30Z — so 12h from any
+ * moment inside one lands after today's close and before tomorrow's open. It
+ * clears exactly one window, never two.
+ */
+export const ROUTE_REFUSAL_DEFER_HOURS = 12;
+
+/** The carrier answered our INVITE with a 5xx: this destination is unroutable right now. */
+export function isRouteRefusal(sipTermStatus: string | null | undefined): boolean {
+  return /^5\d\d$/.test((sipTermStatus ?? "").trim());
+}
+
+/**
+ * Have the most recent dials on ONE number all been carrier refusals?
+ *
+ * `recentNewestFirst` is that number's dial history, newest first. A single
+ * non-refusal at the head resets the streak — the route came back for this
+ * destination and we go straight back to the normal retry cadence. An absent
+ * SIP status counts as "not a refusal", so a shim that stops sending the field
+ * fails OPEN to today's behaviour and never suppresses on a guess.
+ */
+export function hasRouteRefusalStreak(
+  recentNewestFirst: ReadonlyArray<{ sip_term_status: string | null }>,
+): boolean {
+  const head = recentNewestFirst.slice(0, ROUTE_REFUSAL_STREAK_LIMIT);
+  return (
+    head.length === ROUTE_REFUSAL_STREAK_LIMIT &&
+    head.every((call) => isRouteRefusal(call.sip_term_status))
+  );
+}
+
+/**
+ * How long until this number's next dial. The streak can only push it LATER —
+ * Math.max, so a campaign whose own retry interval already exceeds the deferral
+ * keeps its slower cadence instead of being sped up by a refusal.
+ */
+export function nextRetryDelayMs(args: { retryMinutes: number; routeRefusalStreak: boolean }): number {
+  const normalMs = args.retryMinutes * 60 * 1000;
+  const deferredMs = ROUTE_REFUSAL_DEFER_HOURS * 60 * 60 * 1000;
+  return args.routeRefusalStreak ? Math.max(normalMs, deferredMs) : normalMs;
+}
+
+/**
  * How many attempts the player has used once THIS hangup is accounted for.
  *
  * 2026-08-05 rework: `burns` (delivered-ness via classifyAttempt) is the single
