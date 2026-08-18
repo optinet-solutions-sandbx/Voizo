@@ -38,7 +38,7 @@ const STATUS_DROPDOWN: DropdownOption[] = [
 ];
 const OUTCOME_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All attempt outcomes" },
-  { value: "reached", label: "Reached (human)" },
+  { value: "reached", label: "Conversations established" },
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
 

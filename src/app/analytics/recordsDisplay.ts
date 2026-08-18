@@ -62,8 +62,9 @@ export type RecordSlice =
   | { kind: "reached" }
   | { kind: "texted"; refine?: "reached" | AttemptTag };
 
-// "Reached" = a live human answered — any attempt that connected to a person (not voicemail / no-connect).
-const REACHED_TAGS = new Set<AttemptTag>(["positive", "neutral", "declined", "early_hangup", "agent_timeout"]);
+// "Conversations established" (formerly "Reached") = a live two-way exchange. Early hang-up
+// is its own top-level category now (VOZ-396), so it's NOT in this set.
+const REACHED_TAGS = new Set<AttemptTag>(["positive", "neutral", "declined", "agent_timeout"]);
 const isReached = (r: CallRecord) => r.attempts.some((a) => REACHED_TAGS.has(a.tag));
 
 export function sliceMatches(r: CallRecord, s: RecordSlice): boolean {
@@ -101,7 +102,7 @@ export function metricPickSlice(
   rowLabel?: string,
 ): { slice: RecordSlice; label: string } {
   if (rowKey === undefined) {
-    if (metric === "reached") return { slice: { kind: "reached" }, label: "Reached" };
+    if (metric === "reached") return { slice: { kind: "reached" }, label: "Conversations Established" };
     if (metric === "sms") return { slice: { kind: "texted" }, label: "SMS sent" };
     return { slice: { kind: "all" }, label: "All call records" };
   }

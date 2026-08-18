@@ -55,7 +55,7 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
               <div>Today&apos;s campaigns</div>
               <div>Status</div>
               <div>Call attempts</div>
-              <div>Reached</div>
+              <div>Conversations est.</div>
               <div>SMS sent</div>
             </div>
 

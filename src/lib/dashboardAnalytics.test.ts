@@ -1294,8 +1294,12 @@ describe("computeCampaignTodayPerf — per-campaign today breakdown (no deltas, 
     const perf = computeCampaignTodayPerf(calls, [], new Set(), T, T + 86_400_000);
     const b = callWindowBreakdown(calls, new Set(), T, T + 86_400_000); // default = transcript
     expect(perf.callAttempts.total).toBe(b.total);
-    expect(perf.callAttempts.rows.find((r) => r.key === "reached")?.count).toBe(b.reach);
-    expect(perf.reached.rows.find((r) => r.key === "early_hangup")?.count).toBe(b.earlyHangup); // 1 (transcript)
+    // VOZ-396: early hang-up moved OUT of Reached ("Conversations established") to its own
+    // top-level Call-attempts row; Conversations established = reach − early hangups.
+    expect(perf.callAttempts.rows.find((r) => r.key === "reached")?.count).toBe(b.reach - b.earlyHangup);
+    expect(perf.callAttempts.rows.find((r) => r.key === "early_hangup")?.count).toBe(b.earlyHangup); // top-level now
+    expect(perf.reached.rows.find((r) => r.key === "early_hangup")).toBeUndefined(); // no longer under Reached
+    expect(perf.reached.total).toBe(b.reach - b.earlyHangup);
     expect(perf.callAttempts.deltaPctVsYesterday).toBeNull();
     expect(perf.reached.rows.every((r) => r.deltaPpVsYesterday === null)).toBe(true);
   });

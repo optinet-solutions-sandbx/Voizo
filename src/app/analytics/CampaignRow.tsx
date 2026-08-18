@@ -69,7 +69,7 @@ export interface CampaignRowData {
 export const CAMPAIGN_ROW_GRID = "grid grid-cols-[minmax(220px,1.6fr)_minmax(110px,auto)_repeat(3,minmax(150px,1fr))] gap-4";
 
 type MetricKey = "callAttempts" | "reached" | "sms";
-const METRIC_TITLE: Record<MetricKey, string> = { callAttempts: "Call attempts", reached: "Reached", sms: "SMS sent" };
+const METRIC_TITLE: Record<MetricKey, string> = { callAttempts: "Call attempts", reached: "Conversations established", sms: "SMS sent" };
 
 // Collapsed metric cell (scan mode, pattern brief §7): 21px tabular total + 5px proportion
 // bar — the split shown once. Clickable when the parent wires slices (drill pre-filtered).

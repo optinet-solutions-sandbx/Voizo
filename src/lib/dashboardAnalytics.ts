@@ -1611,8 +1611,14 @@ export function computeWindowPerf(
  *  (computeWindowPerf) and the SQL-rollup path (computeCampaignTableFromRollup)
  *  — one code body, so the two paths cannot drift (VOZ-283 parity). */
 function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
+  // Early hang-up is its own top-level attempt category now (VOZ-396) — pulled OUT of
+  // "Reached", which is renamed "Conversations established". Conversations established =
+  // reach − early hangups (a live two-way exchange), and early hang-up sits alongside
+  // Reached/Voicemail/Silent-pickup/Unreachable under Call attempts.
+  const convReach = cb.reach - cb.earlyHangup;
   const callAttempts = mkMetricNoDelta(cb.total, [
-    mkRowNoDelta("reached", "Reached", cb.reach, cb.total),
+    mkRowNoDelta("reached", "Conversations established", convReach, cb.total),
+    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.total),
     mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
     // 2026-08-13 (Phase A): answered but nobody spoke — outside Reached. Lean-only
     // callers (summarizeRollupWindow, ranged path) still show 0 here; /today gets
@@ -1622,24 +1628,25 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
   ]);
 
   const est = { isEstimated: true };
-  const reached = mkMetricNoDelta(cb.reach, [
-    mkRowNoDelta("positive", "Positive", cb.positive, cb.reach, est),
-    mkRowNoDelta("neutral", "Neutral", cb.neutral, cb.reach, est),
-    mkRowNoDelta("declined", "Declined", cb.declined, cb.reach, est),
-    mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.reach, est),
-    mkRowNoDelta("agent_timeout", "Agent timeout", cb.agentTimeout, cb.reach, est),
+  const reached = mkMetricNoDelta(convReach, [
+    mkRowNoDelta("positive", "Positive", cb.positive, convReach, est),
+    mkRowNoDelta("neutral", "Neutral", cb.neutral, convReach, est),
+    mkRowNoDelta("declined", "Declined", cb.declined, convReach, est),
+    mkRowNoDelta("agent_timeout", "Agent timeout", cb.agentTimeout, convReach, est),
   ]);
 
-  // Same named partition as the Today assembly (Val 2026-08-07) — no hidden reached texts.
+  // SMS card mirrors the call-side split: early-hang-up texts are their own top-level row,
+  // not inside the "Conversations established" (reached) group.
+  const smsConvReached = sb.reached - sb.earlyHangup;
   const smsReachedSub = [
-    mkRowNoDelta("positive", "Positive", sb.positive, sb.reached),
-    mkRowNoDelta("neutral", "Neutral", sb.neutral, sb.reached),
-    mkRowNoDelta("declined", "Declined", sb.declined, sb.reached),
-    mkRowNoDelta("early_hangup", "Early hang-up", sb.earlyHangup, sb.reached),
-    mkRowNoDelta("agent_timeout", "Agent timeout", sb.agentTimeout, sb.reached),
+    mkRowNoDelta("positive", "Positive", sb.positive, smsConvReached),
+    mkRowNoDelta("neutral", "Neutral", sb.neutral, smsConvReached),
+    mkRowNoDelta("declined", "Declined", sb.declined, smsConvReached),
+    mkRowNoDelta("agent_timeout", "Agent timeout", sb.agentTimeout, smsConvReached),
   ];
   const smsMetric = mkMetricNoDelta(sb.total, [
-    mkRowNoDelta("reached", "Reached", sb.reached, sb.total, { subRows: smsReachedSub }),
+    mkRowNoDelta("reached", "Conversations established", smsConvReached, sb.total, { subRows: smsReachedSub }),
+    mkRowNoDelta("early_hangup", "Early hang-up", sb.earlyHangup, sb.total),
     mkRowNoDelta("voicemail", "Voicemail", sb.voicemail, sb.total),
     mkRowNoDelta("silent_pickup", "Silent pickup", sb.silentPickup, sb.total), // 2026-08-13
     mkRowNoDelta("unreachable", "Unreachable", sb.unreachable, sb.total),

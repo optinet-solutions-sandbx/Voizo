@@ -16,7 +16,7 @@ import { CardGridSkeleton } from "./loadingSkeletons";
 
 // Map a clicked total/row to the semantic drawer filter (spec §6 — NOT the mockup's loose args).
 function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
-  if (card === "reached") return { status: "all", outcome: "reached", smsOnly: false, title: "Reached contacts" };
+  if (card === "reached") return { status: "all", outcome: "reached", smsOnly: false, title: "Conversations established" };
   if (card === "sms") return { status: "all", outcome: "all", smsOnly: true, title: "SMS sent" };
   return { status: "all", outcome: "all", smsOnly: false, title: "All call records" };
 }

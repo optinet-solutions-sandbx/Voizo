@@ -204,7 +204,7 @@ export default function PerformanceCards({
       </motion.div>
       <motion.div {...entrance(1)} className="flex-1 min-w-[260px]">
         <MetricCard
-          label="Reached"
+          label="Conversations Established"
           metric={perf.reached}
           showDeltas={showDeltas}
           onOpenTotal={() => onOpenTotal("reached")}

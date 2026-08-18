@@ -441,7 +441,7 @@ export default function CampaignTable() {
             sort={sort}
             setSort={(s) => { setSort(s); setPage(1); }}
             keys={["newest", "calls", "reached", "sms"]}
-            labels={{ newest: "Newest", calls: "Call Attempts", reached: "Reached", sms: "SMS" }}
+            labels={{ newest: "Newest", calls: "Call Attempts", reached: "Conversations", sms: "SMS" }}
           />
         </div>
       }
@@ -622,7 +622,7 @@ export default function CampaignTable() {
               <div>Campaign</div>
               <div>Status</div>
               <div>Call attempts</div>
-              <div>Reached</div>
+              <div>Conversations est.</div>
               <div>SMS sent</div>
             </div>
 

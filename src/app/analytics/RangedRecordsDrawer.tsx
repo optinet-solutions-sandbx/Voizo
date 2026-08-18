@@ -45,7 +45,7 @@ export interface DrawerScope {
 // Map a clicked total/row to the semantic drawer filter (copied verbatim from the Today mapping so the
 // two views classify identically). `card`/`rowKey` come from PerformanceCards.
 export function totalFilter(card: "callAttempts" | "reached" | "sms"): DrawerFilter {
-  if (card === "reached") return { status: "all", outcome: "reached", smsOnly: false, title: "Reached contacts" };
+  if (card === "reached") return { status: "all", outcome: "reached", smsOnly: false, title: "Conversations established" };
   if (card === "sms") return { status: "all", outcome: "all", smsOnly: true, title: "SMS sent" };
   return { status: "all", outcome: "all", smsOnly: false, title: "All call records" };
 }
@@ -64,7 +64,7 @@ const STATUS_DROPDOWN: DropdownOption[] = [
 ];
 const OUTCOME_DROPDOWN: DropdownOption[] = [
   { value: "all", label: "All attempt outcomes" },
-  { value: "reached", label: "Reached (human)" },
+  { value: "reached", label: "Conversations established" },
   ...OUTCOME_ORDER.map((t) => ({ value: t, label: ATTEMPT_TAG_LABELS[t] })),
 ];
 

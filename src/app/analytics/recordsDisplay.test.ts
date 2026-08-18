@@ -62,9 +62,10 @@ describe("sliceMatches — records slice filter (campaign expand click-to-filter
     expect(sliceMatches(rec({ attempts: [att("voicemail")] }), { kind: "outcome", tag: "voicemail" })).toBe(true);
     expect(sliceMatches(rec({ attempts: [att("unreachable")] }), { kind: "outcome", tag: "voicemail" })).toBe(false);
   });
-  it("reached → true iff a human-answered attempt (positive/neutral/declined/early_hangup)", () => {
-    expect(sliceMatches(rec({ attempts: [att("early_hangup")] }), { kind: "reached" })).toBe(true);
+  it("reached → true iff a two-way conversation (positive/neutral/declined/agent_timeout); early_hangup is NOT reached (VOZ-396)", () => {
+    expect(sliceMatches(rec({ attempts: [att("early_hangup")] }), { kind: "reached" })).toBe(false); // moved out of Reached
     expect(sliceMatches(rec({ attempts: [att("positive")] }), { kind: "reached" })).toBe(true);
+    expect(sliceMatches(rec({ attempts: [att("agent_timeout")] }), { kind: "reached" })).toBe(true);
     expect(sliceMatches(rec({ attempts: [att("voicemail")] }), { kind: "reached" })).toBe(false);
     expect(sliceMatches(rec({ attempts: [att("unreachable")] }), { kind: "reached" })).toBe(false);
   });
@@ -110,7 +111,7 @@ describe("sliceEq — slice equality (highlight + toggle-close)", () => {
 describe("metricPickSlice — camp-row metric click → slice + badge label (mockup handleRowClick parity)", () => {
   it("column totals: attempts→all, reached→reached, sms→texted", () => {
     expect(metricPickSlice("callAttempts")).toEqual({ slice: { kind: "all" }, label: "All call records" });
-    expect(metricPickSlice("reached")).toEqual({ slice: { kind: "reached" }, label: "Reached" });
+    expect(metricPickSlice("reached")).toEqual({ slice: { kind: "reached" }, label: "Conversations Established" });
     expect(metricPickSlice("sms")).toEqual({ slice: { kind: "texted" }, label: "SMS sent" });
   });
   it("call-attempts rows: Reached→reached slice (honest, not the mockup's outcome=positive); voicemail/unreachable→outcome", () => {
