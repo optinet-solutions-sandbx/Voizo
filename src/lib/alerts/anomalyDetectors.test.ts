@@ -77,7 +77,28 @@ describe("detectConnectCollapse — VOZ-279 detector B (trunk/CID-level, platfor
     expect(r.connected).toBe(0);
     expect(r.trip).toBe(true);
   });
-  it(`threshold sanity: rate ${CONNECT_COLLAPSE_RATE_THRESHOLD} is far below the 0.82 healthy baseline`, () => {
-    expect(CONNECT_COLLAPSE_RATE_THRESHOLD).toBeLessThan(0.5);
+  // 2026-08-18 SIP-500 AU landline outage. The shipped 0.20 floor tripped in
+  // exactly ONE 30-min bucket (07:00Z, 46 dials, 4.3%) — hours after the damage.
+  // Replaying this same predicate over real 30-min buckets since 08-13 measured
+  // the healthy baseline at min 57.5% / p10 73.4% / median 90.6% (18 buckets of
+  // >=20 dials, 08-13..08-14), and the outage day at 32.1% platform-wide. 0.50
+  // therefore sits below every healthy bucket observed AND above the outage rate.
+  it("trips on the 08-18 outage rate (32% connect) — the 0.20 floor did not", () => {
+    const rows = [
+      ...Array(32).fill(call("NORMAL_CLEARING", 20)),
+      ...Array(68).fill(call("NORMAL_TEMPORARY_FAILURE", 0)),
+    ];
+    expect(detectConnectCollapse(rows).trip).toBe(true);
+  });
+  it("does not trip at the measured healthy MINIMUM bucket (23/40 = 57.5%)", () => {
+    const rows = [
+      ...Array(23).fill(call("NORMAL_CLEARING", 20)),
+      ...Array(17).fill(call("NO_ANSWER", 0)),
+    ];
+    expect(detectConnectCollapse(rows).trip).toBe(false);
+  });
+  it(`threshold ${CONNECT_COLLAPSE_RATE_THRESHOLD} sits between the outage rate and the healthy minimum`, () => {
+    expect(CONNECT_COLLAPSE_RATE_THRESHOLD).toBeGreaterThan(0.321); // 08-18 platform day rate
+    expect(CONNECT_COLLAPSE_RATE_THRESHOLD).toBeLessThan(0.575); // lowest healthy bucket measured
   });
 });
