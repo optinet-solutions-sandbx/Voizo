@@ -14,6 +14,7 @@ import { csvCell, CSV_BOM } from "../../lib/download";
 import {
   summarizeRollupWindow,
   type CallRollupRow,
+  type CampaignMoveRow,
   type SmsRollupRow,
   type PerfMetric,
   type TodayPerfDay,
@@ -64,17 +65,21 @@ export function buildCampaignPerfCsv(args: {
   rows: ExportableCampaignRow[];
   callRollup: CallRollupRow[];
   smsRollup: SmsRollupRow[];
+  /** Transcript reclassifications at (campaign, day) grain — the export must
+   *  carry the same map the summary block does, or the CSV disagrees with the
+   *  screen it was exported from. */
+  moves: readonly CampaignMoveRow[];
   fromMs: number | null;
   toMs: number | null;
   /** Display resolvers injected from the component (they use hooks/catalogs). */
   brandLabelOf: (workspace: string | null) => string;
   agentLabelOf: (row: ExportableCampaignRow) => string;
 }): string {
-  const { rows, callRollup, smsRollup, fromMs, toMs, brandLabelOf, agentLabelOf } = args;
+  const { rows, callRollup, smsRollup, moves, fromMs, toMs, brandLabelOf, agentLabelOf } = args;
   const lines: string[] = [HEADER.map(csvCell).join(",")];
 
   for (const r of rows) {
-    const perf = summarizeRollupWindow(callRollup, smsRollup, new Set([r.id]), fromMs, toMs);
+    const perf = summarizeRollupWindow(callRollup, smsRollup, new Set([r.id]), fromMs, toMs, moves);
     lines.push(
       [
         r.name, brandLabelOf(r.cioWorkspace), r.country, agentLabelOf(r),
@@ -86,7 +91,7 @@ export function buildCampaignPerfCsv(args: {
   }
 
   // TOTAL row — the same computation the summary block renders.
-  const total = summarizeRollupWindow(callRollup, smsRollup, new Set(rows.map((r) => r.id)), fromMs, toMs);
+  const total = summarizeRollupWindow(callRollup, smsRollup, new Set(rows.map((r) => r.id)), fromMs, toMs, moves);
   const totalPlayers = rows.reduce((s, r) => s + r.players, 0);
   lines.push(
     [

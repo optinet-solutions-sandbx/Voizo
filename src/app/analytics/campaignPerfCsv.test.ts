@@ -28,6 +28,10 @@ describe("buildCampaignPerfCsv — mass export (Val 2026-08-07)", () => {
   const argsBase = {
     callRollup: [call("a", D1), call("a", D2), call("b", D1)],
     smsRollup: [sms("a", D1), sms("b", D1)],
+    // No transcript reclassifications in these fixtures — these tests cover the
+    // CSV shape/windowing/escaping. The move map is covered by
+    // dashboardCampaignTableMoves.test.ts against the classifier.
+    moves: [],
     brandLabelOf: () => "Fortune Play",
     agentLabelOf: () => "Val - Voice Agent",
   };

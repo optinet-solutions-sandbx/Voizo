@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import Link from "next/link";
 import { ArrowRight, Download, Eye, EyeOff, Search, X } from "lucide-react";
-import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type SmsRollupRow, type PerfRow } from "@/lib/dashboardAnalytics";
+import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type CampaignMoveRow, type SmsRollupRow, type PerfRow } from "@/lib/dashboardAnalytics";
 import { MAX_CAMPAIGNS } from "@/lib/rangedRecords";
 import { formatCampaign, distinctBrandLabels, brandLabel } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
@@ -72,8 +72,11 @@ interface Resp {
   to: string;
   rows: Row[];
   /** Day-grain rollup rows (2026-08-07) — the summary block + mass export sum
-   *  these client-side per the active filters. Optional: pre-deploy snapshots. */
-  rollup?: { calls: CallRollupRow[]; sms: SmsRollupRow[] };
+   *  these client-side per the active filters. Optional: pre-deploy snapshots.
+   *  `moves` carries the transcript reclassifications at the same (campaign, day)
+   *  grain: without it the summary block would read the LEAN numbers while the
+   *  rows above it read the corrected ones. Optional for the same reason. */
+  rollup?: { calls: CallRollupRow[]; sms: SmsRollupRow[]; moves?: CampaignMoveRow[] };
 }
 
 /** One phone-lookup match from /api/dashboard/campaigns/phone-lookup. */
@@ -352,7 +355,7 @@ export default function CampaignTable() {
   // always equals the sum of the listed rows (Val 2026-08-07).
   const rollup = data?.rollup ?? null;
   const summaryPerf = useMemo(
-    () => (rollup ? summarizeRollupWindow(rollup.calls, rollup.sms, new Set(visible.map((r) => r.id)), fromMs, toMs) : null),
+    () => (rollup ? summarizeRollupWindow(rollup.calls, rollup.sms, new Set(visible.map((r) => r.id)), fromMs, toMs, rollup.moves ?? []) : null),
     // visible is derived (not state) — key the memo on its identity inputs instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rollup, rows, hidden, fromMs, toMs, filters, phoneCampaignIds],
@@ -399,6 +402,7 @@ export default function CampaignTable() {
       rows: visible,
       callRollup: rollup.calls,
       smsRollup: rollup.sms,
+      moves: rollup.moves ?? [],
       fromMs,
       toMs,
       brandLabelOf: (ws) => brandLabel(ws),

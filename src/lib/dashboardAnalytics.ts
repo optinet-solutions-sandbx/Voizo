@@ -908,84 +908,58 @@ export function computeCampaignTableFromRollup(
   nowMs: number,
   idleDays = FINISHED_IDLE_DAYS,
   playersByCampaign: Map<string, number> = new Map(),
+  moves: readonly CampaignMoveRow[] = [],
 ): CampaignTableRow[] {
-  // Per-campaign sums over the day-grain rollup rows.
-  interface CallAgg {
-    attempts: number; terminal: number; connected: number; voicemail: number; reach: number;
-    positive: number; declined: number; earlyHangup: number; neutral: number; successful: number;
-    lastCallMs: number | null;
-  }
-  const callAgg = new Map<string, CallAgg>();
+  // Group the day-grain rollup rows by campaign, then let the SHARED
+  // callBreakdownFromRollup / smsBreakdownFromRollup build each row's counts.
+  // Until 2026-08-18 this function hand-rolled its own CallBreakdown with
+  // `silentPickup: 0` and `agentTimeout: 0` as literals and an SMS earlyHangup
+  // that was a subtraction remainder — so VOZ-387's move map never reached the
+  // one surface Val reads: it showed Reached 980 where the classifier said 379
+  // over 4 complete UTC days (61% of "Conversations established" never spoke).
+  // Delegating means a new AttemptTag can only ever be wired in ONE place.
+  const callRows = new Map<string, CallRollupRow[]>();
+  const successfulByCampaign = new Map<string, number>();
+  const lastCallByCampaign = new Map<string, number>();
   for (const r of callRollup) {
-    let a = callAgg.get(r.campaign_id);
-    if (!a) {
-      a = { attempts: 0, terminal: 0, connected: 0, voicemail: 0, reach: 0, positive: 0, declined: 0, earlyHangup: 0, neutral: 0, successful: 0, lastCallMs: null };
-      callAgg.set(r.campaign_id, a);
-    }
-    a.attempts += r.attempts;
-    a.terminal += r.terminal;
-    a.connected += r.connected;
-    a.voicemail += r.voicemail;
-    a.reach += r.reach;
-    a.positive += r.positive;
-    a.declined += r.declined;
-    a.earlyHangup += r.early_hangup_lean;
-    a.neutral += r.neutral_lean;
-    a.successful += r.successful;
+    const g = callRows.get(r.campaign_id);
+    if (g) g.push(r); else callRows.set(r.campaign_id, [r]);
+    // Row `successful` = ungated goal count (mirrors accumulate()) and
+    // last_call_at are not part of CallBreakdown — summed here.
+    successfulByCampaign.set(r.campaign_id, (successfulByCampaign.get(r.campaign_id) ?? 0) + r.successful);
     const t = r.last_call_at ? Date.parse(r.last_call_at) : NaN;
-    if (Number.isFinite(t) && (a.lastCallMs === null || t > a.lastCallMs)) a.lastCallMs = t;
+    const prev = lastCallByCampaign.get(r.campaign_id);
+    if (Number.isFinite(t) && (prev === undefined || t > prev)) lastCallByCampaign.set(r.campaign_id, t);
   }
-  const smsAgg = new Map<string, SmsBreakdown>();
+  const smsRows = new Map<string, SmsRollupRow[]>();
   for (const r of smsRollup) {
-    let s = smsAgg.get(r.campaign_id);
-    if (!s) {
-      // silentPickup stays 0 on the rollup path: the SQL rollup has no turn counts
-      // (same lean limitation as early_hangup_lean; the rollup DDL needs a
-      // silent_pickup column before any cutover — see VOZ-283 parity gate).
-      s = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
-      smsAgg.set(r.campaign_id, s);
-    }
-    s.total += r.sent;
-    s.reached += r.reached;
-    s.voicemail += r.voicemail;
-    s.unreachable += r.unreachable;
-    s.positive += r.positive;
-    s.neutral += r.neutral;
-    s.declined += r.declined;
-    // Lean SQL rollup can't split early-hangup vs agent-timeout texts — the
-    // named remainder lands in earlyHangup so the partition still sums to
-    // reached (same VOZ-283 note as smsBreakdownFromRollup).
-    s.earlyHangup = Math.max(0, s.reached - s.positive - s.neutral - s.declined);
+    const g = smsRows.get(r.campaign_id);
+    if (g) g.push(r); else smsRows.set(r.campaign_id, [r]);
   }
+  // Campaign LIFETIME — the route calls the RPCs with p_start=epoch and the
+  // date picker filters WHICH campaigns list, not the numbers.
+  const ALL = Number.NEGATIVE_INFINITY;
+  const FOREVER = Number.POSITIVE_INFINITY;
 
-  const emptySms: SmsBreakdown = { total: 0, reached: 0, voicemail: 0, silentPickup: 0, unreachable: 0, positive: 0, neutral: 0, declined: 0, earlyHangup: 0, agentTimeout: 0 };
   return campaigns
     .filter((c) => c.source !== "ghost_portal" && c.is_test !== true)
     .map((c) => {
-      const a = callAgg.get(c.id);
-      const connected = a?.connected ?? 0;
-      const terminal = a?.terminal ?? 0;
+      const ids = new Set([c.id]);
+      const cb = callBreakdownFromRollup(
+        callRows.get(c.id) ?? [], ALL, FOREVER,
+        foldCampaignMoves(moves, "call", ids, ALL, FOREVER),
+      );
+      const sb = smsBreakdownFromRollup(
+        smsRows.get(c.id) ?? [], ALL, FOREVER,
+        foldCampaignMoves(moves, "sms", ids, ALL, FOREVER),
+      );
+      const connected = cb.connected;
+      const terminal = cb.terminal;
       // Row `successful` = ungated goal count (mirrors accumulate()); the perf
       // reached-split uses the connected-gated `positive` bucket — they differ
       // on the rare goal-on-non-connected rows (5 in prod as of 08-04).
-      const successful = a?.successful ?? 0;
-      const lastCallMs = a?.lastCallMs ?? null;
-      const cb: CallBreakdown = {
-        total: a?.attempts ?? 0,
-        terminal,
-        connected,
-        inFlight: (a?.attempts ?? 0) - terminal,
-        reach: a?.reach ?? 0,
-        voicemail: a?.voicemail ?? 0,
-        silentPickup: 0, // rollup rows have no turn counts (see callBreakdownFromRollup note)
-        unreachable: terminal - connected,
-        positive: a?.positive ?? 0,
-        neutral: a?.neutral ?? 0,
-        declined: a?.declined ?? 0,
-        earlyHangup: a?.earlyHangup ?? 0,
-        agentTimeout: 0, // rollup rows predate the agent_timeout tag (see callBreakdownFromRollup note)
-      };
-      const sb = smsAgg.get(c.id) ?? emptySms;
+      const successful = successfulByCampaign.get(c.id) ?? 0;
+      const lastCallMs = lastCallByCampaign.get(c.id) ?? null;
       return {
         id: c.id,
         name: c.name,
@@ -1006,14 +980,16 @@ export function computeCampaignTableFromRollup(
         scriptId: c.script_id ?? null,
         scriptName: c.script_name ?? null,
         segmentId: c.segment_id ?? null,
-        calls: a?.attempts ?? 0,
+        calls: cb.total,
         connected,
         terminal,
         successful,
         connectRate: safeDiv(connected, terminal),
         successRate: safeDiv(successful, connected),
         players: playersByCampaign.get(c.id) ?? 0,
-        reach: a?.reach ?? 0,
+        // Reached now excludes silent pickups (dead air is not a human) — the
+        // same `reach` the Reached card and the records drawer's HUMAN_TAGS use.
+        reach: cb.reach,
         smsSent: sb.total,
         startAt: (c.start_at ?? c.created_at) ?? null,
         endAt: c.end_at ?? null,
@@ -1621,8 +1597,8 @@ function assembleWindowPerf(cb: CallBreakdown, sb: SmsBreakdown): TodayPerfDay {
     mkRowNoDelta("early_hangup", "Early hang-up", cb.earlyHangup, cb.total),
     mkRowNoDelta("voicemail", "Voicemail", cb.voicemail, cb.total),
     // 2026-08-13 (Phase A): answered but nobody spoke — outside Reached. Lean-only
-    // callers (summarizeRollupWindow, ranged path) still show 0 here; /today gets
-    // the honest count via the VOZ-387 move map.
+    // callers (the ranged /analytics path) still show 0 here; /today and the
+    // Campaign Performance table get the honest count via the move map.
     mkRowNoDelta("silent_pickup", "Silent pickup", cb.silentPickup, cb.total),
     mkRowNoDelta("unreachable", "Unreachable", cb.unreachable, cb.total),
   ]);
@@ -1849,6 +1825,19 @@ export type LeanReachBucket = "declined" | "early_hangup" | "neutral";
 export type TagMoveKey = `${LeanReachBucket}>${AttemptTag}`;
 export type TagMoves = Map<TagMoveKey, number>;
 
+/** ONE reclassification count at (campaign, UTC day) grain — the same grain as
+ *  the rollup rows, so the Campaign Performance table sums a campaign's whole
+ *  lifetime and its section summary windows the same rows by the active filter.
+ *  Flat and JSON-safe on purpose: unlike the Maps above this crosses the wire,
+ *  because summarizeRollupWindow runs CLIENT-side (CampaignTable, campaignPerfCsv). */
+export interface CampaignMoveRow {
+  campaign_id: string;
+  day_utc: string;
+  kind: "call" | "sms";
+  key: TagMoveKey;
+  n: number;
+}
+
 export interface TodayCandidateDelta {
   /** UTC day (of the call) → that day's transcript reclassifications. */
   callByDay: Map<string, TagMoves>;
@@ -1856,10 +1845,36 @@ export interface TodayCandidateDelta {
   smsByDay: Map<string, TagMoves>;
   /** Per campaign, TODAY only — feeds the running-campaign perf cards. */
   todayByCampaign: Map<string, { call: TagMoves; sms: TagMoves }>;
+  /** The same moves at (campaign, day) grain, wire-safe — feeds the Campaign
+   *  Performance table and its summary block, which are lifetime/windowed
+   *  rather than day-scoped and are computed on the client. */
+  campaignMoveRows: CampaignMoveRow[];
 }
 
 export function emptyCandidateDelta(): TodayCandidateDelta {
-  return { callByDay: new Map(), smsByDay: new Map(), todayByCampaign: new Map() };
+  return { callByDay: new Map(), smsByDay: new Map(), todayByCampaign: new Map(), campaignMoveRows: [] };
+}
+
+/** Sum CampaignMoveRows into the TagMoves the breakdown fns consume. `ids` null =
+ *  every campaign. Window is [startMs, endMs) on the row's UTC day start, matching
+ *  callBreakdownFromRollup. ONE folder for the table and the summary so the two
+ *  can never window the same moves differently. */
+function foldCampaignMoves(
+  rows: readonly CampaignMoveRow[],
+  kind: "call" | "sms",
+  ids: ReadonlySet<string> | null,
+  startMs: number,
+  endMs: number,
+): TagMoves {
+  const out: TagMoves = new Map();
+  for (const r of rows) {
+    if (r.kind !== kind) continue;
+    if (ids && !ids.has(r.campaign_id)) continue;
+    const t = dayUtcToMs(r.day_utc);
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    out.set(r.key, (out.get(r.key) ?? 0) + r.n);
+  }
+  return out;
 }
 
 /** A candidate row: connected (completed|answered), voicemail NOT TRUE,
@@ -1912,6 +1927,19 @@ export function buildCandidateDelta(
     if (!g) { g = { call: new Map(), sms: new Map() }; delta.todayByCampaign.set(id, g); }
     return g;
   };
+  // (campaign|day|kind|key) → index into campaignMoveRows, so repeats increment
+  // instead of appending a row per call.
+  const rowIndex = new Map<string, number>();
+  const bumpCampaignDay = (kind: "call" | "sms", campaign_id: string, day_utc: string, key: TagMoveKey) => {
+    const k = `${kind}|${campaign_id}|${day_utc}|${key}`;
+    const at = rowIndex.get(k);
+    if (at === undefined) {
+      rowIndex.set(k, delta.campaignMoveRows.length);
+      delta.campaignMoveRows.push({ campaign_id, day_utc, kind, key, n: 1 });
+    } else {
+      delta.campaignMoveRows[at].n += 1;
+    }
+  };
   const moveByCallId = new Map<string, { key: TagMoveKey; campaign_id: string }>();
   for (const c of candidates) {
     const declined = !!(c.campaign_number_id && declinedIds.has(c.campaign_number_id));
@@ -1927,6 +1955,7 @@ export function buildCandidateDelta(
     const t = c.created_at ? Date.parse(c.created_at) : NaN;
     if (!Number.isFinite(t)) continue;
     bump(delta.callByDay, utcDayString(t), key);
+    bumpCampaignDay("call", c.campaign_id, utcDayString(t), key);
     if (t >= todayStartMs) {
       const g = campaignEntry(c.campaign_id);
       g.call.set(key, (g.call.get(key) ?? 0) + 1);
@@ -1938,6 +1967,7 @@ export function buildCandidateDelta(
     const t = m.created_at ? Date.parse(m.created_at) : NaN;
     if (!Number.isFinite(t)) continue;
     bump(delta.smsByDay, utcDayString(t), mv.key);
+    bumpCampaignDay("sms", mv.campaign_id, utcDayString(t), mv.key);
     if (t >= todayStartMs) {
       const g = campaignEntry(mv.campaign_id);
       g.sms.set(mv.key, (g.sms.get(mv.key) ?? 0) + 1);
@@ -2073,12 +2103,19 @@ export function summarizeRollupWindow(
   campaignIds: ReadonlySet<string>,
   fromMs: number | null,
   toMs: number | null,
+  moves: readonly CampaignMoveRow[] = [],
 ): TodayPerfDay {
   const lo = fromMs ?? Number.NEGATIVE_INFINITY;
   const hi = toMs === null ? Number.POSITIVE_INFINITY : toMs + 1; // breakdown fns treat the end as exclusive
   return assembleWindowPerf(
-    callBreakdownFromRollup(callRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi),
-    smsBreakdownFromRollup(smsRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi),
+    callBreakdownFromRollup(
+      callRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi,
+      foldCampaignMoves(moves, "call", campaignIds, lo, hi),
+    ),
+    smsBreakdownFromRollup(
+      smsRollup.filter((r) => campaignIds.has(r.campaign_id)), lo, hi,
+      foldCampaignMoves(moves, "sms", campaignIds, lo, hi),
+    ),
   );
 }
 
