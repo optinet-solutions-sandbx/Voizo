@@ -557,6 +557,7 @@ export interface QaDashboardData {
   unparseable: number;
   doubleChecked: number; // calls whose stored verdict came from the gpt-5.4 double-check
   smsSent: number; // total SMS follow-ups (sent/delivered) for the in-scope calls
+  callAttempts: number; // every dial in-window (metadata, excl ghost/test) — matches the MAIN dashboard
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: QaDashboardCampaign[];
@@ -671,11 +672,61 @@ export async function getQaAnalysisDashboard(
     console.error("[getQaAnalysisDashboard] SMS count failed (non-fatal):", e);
   }
 
+  // Call attempts for the SAME window, sourced like the MAIN dashboard (every dial,
+  // excluding ghost + test campaigns) so the Call Attempts number tallies with the
+  // campaigns dashboard. Metadata only — independent of the AI analysis above.
+  let callAttempts = 0;
+  try {
+    const { data: campMeta } = await supabaseAdmin.from("campaigns_v2").select("id, timezone, source, is_test");
+    const excludedIds: string[] = [];
+    const tzById = new Map<string, string>();
+    for (const c of (campMeta ?? []) as Array<Record<string, unknown>>) {
+      tzById.set(c.id as string, (c.timezone as string) || DEFAULT_QA_TZ);
+      if (c.source === "ghost_portal" || c.is_test === true) excludedIds.push(c.id as string);
+    }
+    if (opts.day == null) {
+      // Range / all-time: pure created_at window → count queries (no row scan).
+      const rangeCount = async (onlyExcluded: boolean): Promise<number> => {
+        let q = supabaseAdmin.from("calls_v2").select("*", { count: "exact", head: true });
+        if (opts.fromMs != null) q = q.gte("created_at", new Date(opts.fromMs).toISOString());
+        if (opts.toMs != null) q = q.lt("created_at", new Date(opts.toMs).toISOString());
+        if (onlyExcluded) q = q.in("campaign_id", excludedIds);
+        const { count } = await q;
+        return count ?? 0;
+      };
+      const totalAttempts = await rangeCount(false);
+      const excludedAttempts = excludedIds.length ? await rangeCount(true) : 0;
+      callAttempts = totalAttempts - excludedAttempts;
+    } else {
+      // Single campaign-local day → coarse +/-1-day fetch, then exact timezone bucketing.
+      const dayStart = new Date(opts.day + "T00:00:00Z").getTime();
+      const lo = new Date(dayStart - 86_400_000).toISOString();
+      const hi = new Date(dayStart + 2 * 86_400_000).toISOString();
+      const excludedSet = new Set(excludedIds);
+      for (let f = 0; ; f += 1000) {
+        const { data, error } = await supabaseAdmin
+          .from("calls_v2").select("campaign_id, created_at")
+          .gte("created_at", lo).lt("created_at", hi).range(f, f + 999);
+        if (error) throw error;
+        const pg = (data ?? []) as Array<Record<string, unknown>>;
+        for (const c of pg) {
+          const cid = c.campaign_id as string;
+          if (excludedSet.has(cid)) continue;
+          if (localDateInTz(c.created_at as string, tzById.get(cid) || DEFAULT_QA_TZ) === opts.day) callAttempts += 1;
+        }
+        if (pg.length < 1000) break;
+      }
+    }
+  } catch (e) {
+    console.error("[getQaAnalysisDashboard] callAttempts failed (non-fatal):", e);
+  }
+
   return {
     total,
     unparseable,
     doubleChecked,
     smsSent,
+    callAttempts,
     byCallAttempt,
     byReachedCategory,
     campaigns: [...perC.values()].sort((a, b) => b.total - a.total),

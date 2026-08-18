@@ -29,6 +29,7 @@ interface DashData {
   unparseable: number;
   doubleChecked: number;
   smsSent: number;
+  callAttempts: number;
   byCallAttempt: Record<string, number>;
   byReachedCategory: Record<string, number>;
   campaigns: Campaign[];
@@ -51,7 +52,9 @@ const n = (o: Record<string, number>, k: string) => o[k] ?? 0;
 
 // CSV + per-campaign-table column vocabulary (matches the on-screen breakdown).
 // Early Hang-up is now a top-level call_attempt (its own category), not a reached sub-outcome.
-const CA_COLS = ["Reached", "Voicemail", "Early Hang-up", "Unreachable"]; // call_attempt
+const CA_COLS = ["Reached", "Voicemail", "Early Hang-up", "Unreachable"]; // call_attempt (keys, not labels)
+// "Reached" (AI: a live two-way conversation) is shown as "Conversations Established".
+const CA_LABEL: Record<string, string> = { Reached: "Conversations Est." };
 const RC_COLS = ["Positive", "Neutral", "Declined", "Agent Timeout"]; // reached_category
 const CA_COL_CLS: Record<string, string> = { Reached: "text-emerald-400", Voicemail: "text-[var(--text-2)]", "Early Hang-up": "text-[#e0814a]", Unreachable: "text-[var(--text-2)]" };
 
@@ -224,7 +227,7 @@ export default function QaDashboard() {
   // ── CSV exports ───────────────────────────────────────────────────────────────
   const exportSummary = useCallback(() => {
     if (!data) return;
-    const header = ["Campaign", "Timezone", "Scope", "Last analyzed", "Analyzed", ...CA_COLS, ...RC_COLS, "SMS Sent"];
+    const header = ["Campaign", "Timezone", "Scope", "Last analyzed", "Analyzed", ...CA_COLS.map((k) => CA_LABEL[k] ?? k), ...RC_COLS, "SMS Sent"];
     const rows: (string | number)[][] = data.campaigns.map((c) => [
       c.campaignName ?? c.campaignId,
       c.timezone,
@@ -382,21 +385,23 @@ export default function QaDashboard() {
         <div className="text-center py-16 text-sm text-[var(--text-3)]">No analysis results in this period.</div>
       ) : (
         <>
-          {/* KPI band — clickable (SMS is a non-drill-down tile) */}
-          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(7,minmax(0,1fr))" }}>
-            <KpiCard label="Analyzed" value={data.total} onClick={() => open({ title: "All analyzed calls" })} />
-            <KpiCard label="Reached" value={n(data.byCallAttempt, "Reached")} accent="#3ec08a" onClick={() => open({ title: "Reached", callAttempt: "Reached" })} />
+          {/* KPI band — clickable (Call Attempts & SMS are non-drill-down metadata tiles).
+              Call Attempts is sourced like the MAIN dashboard so it tallies there. */}
+          <div className="grid gap-px bg-[var(--border)] border border-[var(--border)] rounded-[14px] overflow-hidden" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))" }}>
+            <KpiCard label="Call Attempts" value={data.callAttempts} sub="all dials · matches main" />
+            <KpiCard label="Analyzed" value={data.total} sub="connected + transcript" onClick={() => open({ title: "All analyzed calls" })} />
+            <KpiCard label="Conversations Established" value={n(data.byCallAttempt, "Reached")} accent="#3ec08a" onClick={() => open({ title: "Conversations Established", callAttempt: "Reached" })} />
             <KpiCard label="Voicemail" value={n(data.byCallAttempt, "Voicemail")} accent="#8f86e6" onClick={() => open({ title: "Voicemail", callAttempt: "Voicemail" })} />
             <KpiCard label="Early Hang-up" value={n(data.byCallAttempt, "Early Hang-up")} accent="#e0814a" onClick={() => open({ title: "Early Hang-up", callAttempt: "Early Hang-up" })} />
             <KpiCard label="Unreachable" value={n(data.byCallAttempt, "Unreachable")} accent="#e0a53c" onClick={() => open({ title: "Unreachable", callAttempt: "Unreachable" })} />
-            <KpiCard label="Agent Timeout" value={n(data.byReachedCategory, "Agent Timeout")} accent="#c264d6" sub="of reached" onClick={() => open({ title: "Agent Timeout", reachedCategory: "Agent Timeout" })} />
+            <KpiCard label="Agent Timeout" value={n(data.byReachedCategory, "Agent Timeout")} accent="#c264d6" sub="of conversations" onClick={() => open({ title: "Agent Timeout", reachedCategory: "Agent Timeout" })} />
             <KpiCard label="SMS Sent" value={data.smsSent} accent="#2ec4b6" sub="sent/delivered" />
           </div>
 
-          {/* Reached outcome breakdown — clickable rows */}
-          <WidgetCard title="Reached — outcome breakdown" icon={<BarChart3 size={14} className="text-primary" />} context={`${reachedTotal.toLocaleString()} reached`}>
+          {/* Conversations Established (AI-reached) outcome breakdown — clickable rows */}
+          <WidgetCard title="Conversations Established — outcome breakdown" icon={<BarChart3 size={14} className="text-primary" />} context={`${reachedTotal.toLocaleString()} conversations`}>
             {rcKeys.length === 0 ? (
-              <p className="text-xs text-[var(--text-3)]">No reached calls in this period.</p>
+              <p className="text-xs text-[var(--text-3)]">No conversations in this period.</p>
             ) : (
               <div className="grid gap-2">
                 {rcKeys.map((k) => {
@@ -448,7 +453,7 @@ export default function QaDashboard() {
                     <th className="text-left font-semibold px-4 py-2 sticky left-0 bg-[var(--bg-card)]">Campaign</th>
                     <th className="text-right font-semibold px-3 py-2">Analyzed</th>
                     {CA_COLS.map((k) => (
-                      <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap">{k}</th>
+                      <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap">{CA_LABEL[k] ?? k}</th>
                     ))}
                     <th className="px-1 py-2 text-[var(--text-4)]">·</th>
                     {RC_COLS.map((k) => (
