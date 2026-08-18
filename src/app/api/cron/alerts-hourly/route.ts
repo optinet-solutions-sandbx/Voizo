@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseServer";
+import { supabaseAdmin } from "../../../../lib/supabaseServer";
 import {
   CRON_NAMES,
   CRON_STALENESS_THRESHOLD_SECONDS,
   postSlackAlert,
   recordHeartbeat,
   type CronName,
-} from "@/lib/alerts/slack";
+} from "../../../../lib/alerts/slack";
 import crypto from "crypto";
 
 // Read-only SELECT + at most one Slack POST + one heartbeat UPSERT. Well
@@ -30,9 +30,11 @@ export const maxDuration = 30;
  *     (Condition #3 + reconciliation events)
  *
  * Failure-mode design:
- *   - Missing row in cron_heartbeats (e.g., immediately after migration):
- *     treated as INFO, NOT stale. Avoids first-deploy false-positive when
- *     the table is empty. Logged for visibility; no Slack post.
+ *   - Missing row in cron_heartbeats (cron has never once run to completion):
+ *     WARN, same as stale. It used to be INFO-only to dodge a first-deploy
+ *     false positive, which made a born-broken cron invisible forever
+ *     (VOZ-358 Part 2). One transient first-deploy message is the cheaper
+ *     failure mode; it self-clears within one cadence.
  *   - Slack post failures: logged + swallowed by the dispatcher; alerter
  *     still returns its JSON status and records its own heartbeat.
  *   - DB error: 500 response; next tick retries. Self-recovers.
@@ -154,28 +156,34 @@ export async function GET(request: NextRequest) {
   const healthy = statuses.filter((s) => s.state === "healthy");
 
   // ── Slack alert (only when there's something operator-actionable) ──
-  if (stale.length > 0) {
-    const details = stale.map(
-      (s) =>
-        `${s.name}: ${s.seconds_since}s since last success (threshold ${s.threshold_seconds}s)`,
+  // `missing` was INFO-only (console.log, no Slack post) to avoid a
+  // first-deploy false positive — a guard with NO EXPIRY. A cron that fails on
+  // its very first run therefore never gets a row, never becomes "stale", and
+  // stays invisible forever: daily-snapshot burned 40 days and ~40 undelivered
+  // stakeholder emails that way (VOZ-358 Part 2, measured 2026-08-18). The
+  // guard traded a permanent blind spot on the WORST failure class (born
+  // broken) for one transient message on first deploy that self-clears within
+  // one cadence. Both buckets now WARN, in ONE post, so a stale cron can no
+  // longer mask a never-succeeded one. [[loud-over-silent-skips]]
+  const unhealthy = [...stale, ...missing];
+  if (unhealthy.length > 0) {
+    const details = unhealthy.map((s) =>
+      s.state === "stale"
+        ? `${s.name}: ${s.seconds_since}s since last success (threshold ${s.threshold_seconds}s)`
+        : s.last_success_at === null
+          ? `${s.name}: NEVER succeeded — no heartbeat row (threshold ${s.threshold_seconds}s)`
+          : `${s.name}: unusable last_success_at="${s.last_success_at}" (threshold ${s.threshold_seconds}s)`,
     );
     await postSlackAlert(
       "WARN",
-      `${stale.length} cron${stale.length === 1 ? "" : "s"} stale`,
+      `${unhealthy.length} cron${unhealthy.length === 1 ? "" : "s"} unhealthy`,
       details,
-    );
-  } else if (missing.length > 0) {
-    // INFO-level: don't escalate to WARN until the operator has had a chance
-    // to confirm the missing cron is genuinely failing vs just-deployed.
-    // Surfaced in Vercel logs + the JSON response; no Slack post.
-    console.log(
-      `[alerts-hourly] ${missing.length} crons missing heartbeat rows (first-deploy expected): ${missing.map((s) => s.name).join(", ")}`,
     );
   }
 
   // Structured summary log for grep / dashboards.
   const summaryLog = `[alerts-hourly] healthy=${healthy.length} stale=${stale.length} missing=${missing.length}`;
-  if (stale.length > 0) {
+  if (unhealthy.length > 0) {
     console.warn(summaryLog);
   } else {
     console.log(summaryLog);
@@ -184,7 +192,7 @@ export async function GET(request: NextRequest) {
   await recordHeartbeat(supabaseAdmin, CRON_NAMES.alertsHourly);
 
   return NextResponse.json({
-    severity: stale.length > 0 ? "WARN" : missing.length > 0 ? "INFO" : "OK",
+    severity: unhealthy.length > 0 ? "WARN" : "OK",
     statuses,
     summary: {
       healthy: healthy.length,
