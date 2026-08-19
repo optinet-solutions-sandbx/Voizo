@@ -11,7 +11,7 @@
  *
  *   +1 (NA bucket, US+CA) → FREESWITCH_CALLER_ID_CA   (+16472436283, Toronto)
  *   +61 Australia         → FREESWITCH_CALLER_ID_AU   (+61272680150, Sydney)
- *   +64 New Zealand       → FREESWITCH_CALLER_ID_NZ   (pending provisioning)
+ *   +64 New Zealand       → FREESWITCH_CALLER_ID_NZ   (+6498026124, Auckland)
  *
  * Anything else — or a mapped country whose env var is absent — falls back to
  * the default FREESWITCH_CALLER_ID (an owned number). Fallback beats refusing

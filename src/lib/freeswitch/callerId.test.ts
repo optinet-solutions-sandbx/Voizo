@@ -40,10 +40,13 @@ describe("resolveFreeswitchCallerId (per-country caller ID)", () => {
     expect(resolveFreeswitchCallerId("+14165551234")).toBe("+16472436283");
   });
 
-  it("NZ destination uses the NZ caller ID once provisioned", () => {
+  // Provisioned 2026-08-19 (Maria): +6498026124, Auckland. Live-tested with
+  // Gisela the same day. Uses the real DID like the AU/CA cases above so the
+  // three mappings document the numbers we actually own.
+  it("NZ destination uses the NZ caller ID", () => {
     process.env.FREESWITCH_CALLER_ID = "+15550000000";
-    process.env.FREESWITCH_CALLER_ID_NZ = "+6490000000";
-    expect(resolveFreeswitchCallerId("+6421555123")).toBe("+6490000000");
+    process.env.FREESWITCH_CALLER_ID_NZ = "+6498026124";
+    expect(resolveFreeswitchCallerId("+6421555123")).toBe("+6498026124");
   });
 
   it("a country with no mapping (e.g. Spain +34) falls back to the default", () => {
@@ -80,12 +83,14 @@ describe("callerIdForCountry (country core)", () => {
   beforeEach(() => { for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
   afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 
-  it("NA→CA, AU→AU; unmapped country and null fall back to the default", () => {
+  it("NA→CA, AU→AU, NZ→NZ; unmapped country and null fall back to the default", () => {
     process.env.FREESWITCH_CALLER_ID = "+15550000000";
     process.env.FREESWITCH_CALLER_ID_CA = "+16472436283";
     process.env.FREESWITCH_CALLER_ID_AU = "+61272680150";
+    process.env.FREESWITCH_CALLER_ID_NZ = "+6498026124";
     expect(callerIdForCountry("NA")).toEqual({ callerId: "+16472436283", error: null });
     expect(callerIdForCountry("AU")).toEqual({ callerId: "+61272680150", error: null });
+    expect(callerIdForCountry("NZ")).toEqual({ callerId: "+6498026124", error: null });
     expect(callerIdForCountry("ES")).toEqual({ callerId: "+15550000000", error: null });
     expect(callerIdForCountry(null)).toEqual({ callerId: "+15550000000", error: null });
   });
@@ -107,11 +112,29 @@ describe("buildCallerIdMap (wizard identity preview)", () => {
     process.env.FREESWITCH_CALLER_ID = "+16472436283";
     process.env.FREESWITCH_CALLER_ID_CA = "+16472436283";
     process.env.FREESWITCH_CALLER_ID_AU = "+61272680150";
-    // NZ number not provisioned yet
+    // NZ deliberately left unset: proves an unprovisioned country reports null
+    // so the wizard says "shared number" instead of implying a local DID.
     const m = buildCallerIdMap();
     expect(m.byCountry.NA).toBe("+16472436283");
     expect(m.byCountry.AU).toBe("+61272680150");
     expect(m.byCountry.NZ).toBeNull();
     expect(m.fallback).toBe("+16472436283");
+  });
+
+  // Our actual configuration since 2026-08-19: all three markets own a local
+  // DID, so the wizard shows "local number" for every one of them and never the
+  // amber shared-number warning. Fails if a country is dropped from the env map.
+  it("every market we own a number for reports it — no country silently falls back", () => {
+    process.env.FREESWITCH_CALLER_ID = "+16472436283";
+    process.env.FREESWITCH_CALLER_ID_CA = "+16472436283";
+    process.env.FREESWITCH_CALLER_ID_AU = "+61272680150";
+    process.env.FREESWITCH_CALLER_ID_NZ = "+6498026124";
+    const m = buildCallerIdMap();
+    expect(m.byCountry).toEqual({
+      NA: "+16472436283",
+      AU: "+61272680150",
+      NZ: "+6498026124",
+    });
+    expect(Object.values(m.byCountry).some((v) => v === null)).toBe(false);
   });
 });
