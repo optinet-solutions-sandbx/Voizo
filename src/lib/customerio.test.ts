@@ -1,10 +1,62 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CIO_DEFAULT_WORKSPACE,
+  CIO_FETCH_TIMEOUT_MS,
   listConfiguredWorkspaces,
+  listSegments,
   lookupLadder,
   resolveAppApiKey,
 } from "./customerio";
+
+// 2026-08-20: every Customer.io request must carry an abort signal. Node's fetch
+// has no default timeout, so dropping it re-introduces an indefinite hang that
+// stalls the scheduler tick (spawnChildIfDue's segment refresh, realtime poll)
+// as well as the campaign edit page. Asserted through listSegments because
+// customerioFetch is module-private.
+describe("customerioFetch timeout (no-hang guard)", () => {
+  const realFetch = globalThis.fetch;
+  const savedKey = process.env.CUSTOMERIO_APP_API_KEY;
+
+  beforeEach(() => {
+    // A key must resolve or customerioFetch returns a config error before fetch.
+    process.env.CUSTOMERIO_APP_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (savedKey === undefined) delete process.env.CUSTOMERIO_APP_API_KEY;
+    else process.env.CUSTOMERIO_APP_API_KEY = savedKey;
+  });
+
+  it("passes an AbortSignal on every request", async () => {
+    let seen: RequestInit | undefined;
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      seen = init;
+      return new Response(JSON.stringify({ segments: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await listSegments();
+    expect(seen?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("a hung request fails closed rather than hanging (abort → error result)", async () => {
+    globalThis.fetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        // Never settles on its own — only the caller's signal can end it.
+        init?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
+        );
+        setTimeout(() => (init as { signal?: AbortSignal }).signal?.dispatchEvent(new Event("abort")), 0);
+      })) as unknown as typeof fetch;
+
+    const result = await listSegments();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Network error");
+  });
+
+  it("the ceiling is generous vs real latency (slowest measured call 1237ms)", () => {
+    expect(CIO_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(15_000);
+  });
+});
 
 // VOZ-185: identifier forms empirically verified against the live EU App API
 // (2026-07-22): the legacy `cio_<cio_id>` prefix form and raw-email form 404;

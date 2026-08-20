@@ -139,6 +139,31 @@ export type CustomerIOResult<T> =
 
 // ── Internal helper ──────────────────────────────────────────────────────────
 
+/**
+ * Per-call ceiling on a Customer.io request (2026-08-20).
+ *
+ * Node's fetch has NO default timeout, so a stalled connection hung this helper
+ * forever — and with it whatever was awaiting it: the campaign edit page (found
+ * that way), but also `spawnChildIfDue`'s segment refresh and the realtime
+ * admission poll, where an indefinite hang means the tick never finishes and
+ * dialling silently stops until Vercel kills the function.
+ *
+ * 30s is deliberately generous, NOT tuned close to observed latency: the point
+ * is to separate "working" from "hung", never to fail a slow-but-fine call.
+ * Measured against the live EU workspace 2026-08-20 — /v1/segments (393
+ * segments, 225KB) 605ms, a 1000-identifier membership page 1237ms, one
+ * customer-attributes call 348ms. So this is ~24x the slowest real call.
+ *
+ * Note the ceiling is PER REQUEST, not per operation: fetchSegmentPhones makes
+ * hundreds of these in a rate-limited loop and is expected to take minutes in
+ * total. Bounding the whole loop is a separate concern and not what this does.
+ *
+ * A timeout surfaces as the `Network error: …` failure below — the same
+ * fail-closed result every caller already handles (spawnChildIfDue returns
+ * 'spawn_failed' and retries next tick; it does not spawn an empty child).
+ */
+export const CIO_FETCH_TIMEOUT_MS = 30_000;
+
 async function customerioFetch<T>(
   path: string,
   workspace?: string | null,
@@ -163,6 +188,8 @@ async function customerioFetch<T>(
       },
       // Don't cache — segments can change between calls
       cache: "no-store",
+      // See CIO_FETCH_TIMEOUT_MS: without this a stalled connection hangs forever.
+      signal: AbortSignal.timeout(CIO_FETCH_TIMEOUT_MS),
     });
 
     if (!response.ok) {

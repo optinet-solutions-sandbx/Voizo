@@ -6,6 +6,7 @@ import {
   formatDefaultCallWindowsJson,
   normalizeOperatorControls,
   resolveCallDelay,
+  buildSmsConsentPatch,
   CALL_DELAY_MAX_MINUTES,
 } from "./campaignV2Shared";
 
@@ -173,5 +174,103 @@ describe("resolveCallDelay", () => {
     for (const bad of ["", "0", "-5", "2.5", "1441", "abc"]) {
       expect(resolveCallDelay("custom", bad)).toEqual({ minutes: null, invalid: true });
     }
+  });
+});
+
+describe("buildSmsConsentPatch — edit-page SMS keys (2026-08-20 settings consolidation)", () => {
+  it("no-op save sends neither key (VOZ-245: can't rewrite the column)", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "optin_reached_only",
+        storedLastResortTemplate: null,
+        draftMode: "optin_reached_only",
+        lastResortEnabled: false,
+        lastResortText: "",
+      }),
+    ).toEqual({});
+  });
+
+  it("legacy NULL stored mode reads as verbal_yes — a verbal_yes draft is unchanged, no 400 risk", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: null,
+        storedLastResortTemplate: null,
+        draftMode: "verbal_yes",
+        lastResortEnabled: false,
+        lastResortText: "",
+      }),
+    ).toEqual({});
+  });
+
+  it("switching a legacy mode to optin_reached_only sends the mode AND clears the stale template", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "optin_any_pickup",
+        storedLastResortTemplate: "Sorry we missed you! ...",
+        draftMode: "optin_reached_only",
+        lastResortEnabled: true,
+        lastResortText: "Sorry we missed you! ...",
+      }),
+    ).toEqual({ smsConsentMode: "optin_reached_only", smsLastResortTemplate: null });
+  });
+
+  it("switching to optin_reached_only with no stored template sends only the mode", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "optin_any_pickup",
+        storedLastResortTemplate: null,
+        draftMode: "optin_reached_only",
+        lastResortEnabled: false,
+        lastResortText: "",
+      }),
+    ).toEqual({ smsConsentMode: "optin_reached_only" });
+  });
+
+  it("staying on a legacy mode: toggle ON writes the trimmed text (VOZ-249)", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "optin_any_pickup",
+        storedLastResortTemplate: "old",
+        draftMode: "optin_any_pickup",
+        lastResortEnabled: true,
+        lastResortText: "  new text  ",
+      }),
+    ).toEqual({ smsLastResortTemplate: "new text" });
+  });
+
+  it("staying on a legacy mode: toggle OFF writes an explicit null, never an omitted key", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "registered_optin",
+        storedLastResortTemplate: "old",
+        draftMode: "registered_optin",
+        lastResortEnabled: false,
+        lastResortText: "old",
+      }),
+    ).toEqual({ smsLastResortTemplate: null });
+  });
+
+  it("toggle ON with a blank message fails safe to null (UI validation blocks this upstream)", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "optin_any_pickup",
+        storedLastResortTemplate: null,
+        draftMode: "optin_any_pickup",
+        lastResortEnabled: true,
+        lastResortText: "   ",
+      }),
+    ).toEqual({ smsLastResortTemplate: null });
+  });
+
+  it("a verbal_yes campaign with a stale stored template gets it cleared", () => {
+    expect(
+      buildSmsConsentPatch({
+        storedMode: "verbal_yes",
+        storedLastResortTemplate: "stale sorry-we-missed-you",
+        draftMode: "verbal_yes",
+        lastResortEnabled: true,
+        lastResortText: "stale sorry-we-missed-you",
+      }),
+    ).toEqual({ smsLastResortTemplate: null });
   });
 });

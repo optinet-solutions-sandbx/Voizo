@@ -23,11 +23,12 @@ import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/Recurre
 import SegmentImporter, { DEFAULT_WS } from "@/components/SegmentImporter";
 import StyledSelect from "@/components/StyledSelect";
 import { patchCampaignSettings } from "@/lib/campaignV2Client";
-import { resolveCallDelay } from "@/lib/campaignV2Shared";
+import { buildSmsConsentPatch, resolveCallDelay } from "@/lib/campaignV2Shared";
 import { resolveSegmentPresence } from "@/lib/segmentPresence";
 import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
 import { TIMEZONE_OPTIONS } from "../../new/wizardState";
-import { modeHasLastResort, resolveSmsConsentMode } from "@/lib/smsDispatchDecision";
+import { modeHasLastResort, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import Toggle from "@/components/ui/Toggle";
 
 type Row = Record<string, unknown>;
 
@@ -54,6 +55,12 @@ interface Draft {
   callDelayCustomText: string;
   smsTemplateText: string;
   smsTemplateUnlocked: boolean;
+  /** VOZ-245 (ported from the always-on drawer, 2026-08-20): dispatch policy is
+   *  editable here instead of rebuilding the campaign. Applies from tomorrow's child. */
+  smsConsentMode: SmsConsentMode;
+  /** VOZ-249: explicit on/off — the column is "non-empty template = on", but the
+   *  operator shouldn't have to infer a setting from an empty box. */
+  lastResortEnabled: boolean;
   lastResortText: string;
 }
 
@@ -75,6 +82,10 @@ function draftFromRow(row: Row): Draft {
     callDelayCustomText: delay != null && ![5, 30, 60].includes(delay) ? String(delay) : "",
     smsTemplateText: (row.sms_template as string) ?? "",
     smsTemplateUnlocked: false,
+    smsConsentMode: resolveSmsConsentMode(row.sms_consent_mode),
+    // Seeded from the column's own semantics: a stored template MEANS the
+    // feature is on (drawer parity, VOZ-249).
+    lastResortEnabled: ((row.sms_last_resort_template as string) ?? "").trim().length > 0,
     lastResortText: (row.sms_last_resort_template as string) ?? "",
   };
 }
@@ -91,27 +102,52 @@ export default function EditAlwaysOnCampaignPage() {
    *  own brand; an existing campaign is never repointed at another workspace. */
   const [campaignWs, setCampaignWs] = useState<string | null>(null);
   const [segmentMissing, setSegmentMissing] = useState(false);
+  /** The segment-name lookup runs AFTER first paint (see the effect below), so the
+   *  Audience section must distinguish "still loading" from "not in Customer.io" —
+   *  otherwise a slow list false-flags a healthy segment as deleted. */
+  const [segmentsLoading, setSegmentsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // ── Leg 1: the campaign row. Everything editable comes from here, so the
+      //    form paints as soon as this lands (~0.2s). A failure here IS fatal.
+      let data: Row;
+      let ws: string | null;
       try {
-        // Campaign row FIRST, then the segment list — the list must come from
-        // the campaign's OWN workspace (VOZ-201: a Fortune Play campaign's
-        // segments live in the fortuneplay CIO workspace; browsing the default
-        // one would false-flag its segment as deleted). Sequential on purpose.
         const campRes = await fetch(`/api/campaigns-v2/${id}`);
         if (!campRes.ok) throw new Error(`Campaign not found (${campRes.status})`);
-        const data = (await campRes.json()) as Row;
-        const campaignWs =
-          ((data as Record<string, unknown>).cio_workspace as string | null) ?? null;
+        data = (await campRes.json()) as Row;
+        ws = ((data as Record<string, unknown>).cio_workspace as string | null) ?? null;
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load campaign.");
+        return;
+      }
+      if (cancelled) return;
+      setRow(data);
+      setCampaignWs(ws);
+      setDraft(draftFromRow(data));
 
+      // ── Leg 2: resolve the segment's display NAME. Deliberately AFTER the
+      //    paint above rather than before it (2026-08-20): this hits the
+      //    Customer.io App API — measured ~2.5s through our route — and the
+      //    page used to withhold the whole form until it returned, which read
+      //    as "Settings is slow to open".
+      //
+      //    It cannot be parallelised with leg 1: the list must come from the
+      //    campaign's OWN workspace (VOZ-201 — a Fortune Play campaign's
+      //    segments live in the fortuneplay workspace, and browsing the default
+      //    one would false-flag its segment as deleted), and the workspace is
+      //    only known once leg 1 has answered.
+      //
+      //    A failure here is SOFT: the form is already usable and the name is
+      //    cosmetic, so it must not set loadError and blank the page.
+      try {
         const segRes = await fetch(
-          `/api/customerio/segments${campaignWs ? `?workspace=${encodeURIComponent(campaignWs)}` : ""}`,
+          `/api/customerio/segments${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`,
         );
-
         let segList: { id: number; name: string }[] = [];
         if (segRes.ok) {
           const segBody = (await segRes.json()) as { segments?: { id: number; name: string }[] };
@@ -122,14 +158,15 @@ export default function EditAlwaysOnCampaignPage() {
           segRes.ok,
           segList,
         );
-
         if (cancelled) return;
-        setRow(data);
-        setCampaignWs(campaignWs);
-        setDraft({ ...draftFromRow(data), segmentName: presence.name });
+        // MERGE, never replace: the operator may already have edited the draft
+        // (or picked a different segment) during the seconds this took.
+        setDraft((d) => (d ? { ...d, segmentName: d.segmentName ?? presence.name } : d));
         if (presence.missing) setSegmentMissing(true);
-      } catch (err) {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load campaign.");
+      } catch {
+        // Leave the name unresolved — nothing else depends on it.
+      } finally {
+        if (!cancelled) setSegmentsLoading(false);
       }
     })();
     return () => {
@@ -199,6 +236,17 @@ export default function EditAlwaysOnCampaignPage() {
       setSaveError("Campaign goal must be a whole number above 0, or empty.");
       return;
     }
+    // VOZ-249 (drawer parity): with the toggle ON and no message, the save would
+    // write null and silently turn the feature back OFF — exactly the invisible
+    // state the toggle was added to remove.
+    if (
+      modeHasLastResort(draft.smsConsentMode) &&
+      draft.lastResortEnabled &&
+      draft.lastResortText.trim().length === 0
+    ) {
+      setSaveError("Last-resort text is on but the message is empty.");
+      return;
+    }
 
     // ── Confirm gates on the heavy changes ──
     const timezoneChanged = draft.timezone !== ((row.timezone as string) ?? "UTC");
@@ -228,11 +276,17 @@ export default function EditAlwaysOnCampaignPage() {
       dailyCap: capNumber,
       goalTarget: goalNumber,
       ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
-      // LAST_RESORT_MODES own a last-resort template (VOZ-245); verbal_yes and
-      // optin_reached_only (never texts unreached — Val 2026-08-07) never write it.
-      ...(modeHasLastResort(resolveSmsConsentMode(row.sms_consent_mode))
-        ? { smsLastResortTemplate: draft.lastResortText.trim() || null }
-        : {}),
+      // SMS consent mode + last-resort template — pure tested helper
+      // (campaignV2Shared.buildSmsConsentPatch): mode only when changed
+      // (VOZ-245), toggle-off writes explicit null (VOZ-249), leaving a
+      // last-resort mode clears the stored template.
+      ...buildSmsConsentPatch({
+        storedMode: row.sms_consent_mode,
+        storedLastResortTemplate: row.sms_last_resort_template,
+        draftMode: draft.smsConsentMode,
+        lastResortEnabled: draft.lastResortEnabled,
+        lastResortText: draft.lastResortText,
+      }),
       ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
       ...(timezoneChanged ? { timezone: draft.timezone } : {}),
       ...(segmentChanged && draft.segmentId != null ? { segmentId: draft.segmentId } : {}),
@@ -295,7 +349,13 @@ export default function EditAlwaysOnCampaignPage() {
             <span className="text-[var(--text-1)] font-medium">
               {draft.segmentName ? `${draft.segmentName} (#${draft.segmentId})` : `#${draft.segmentId ?? "none"}`}
             </span>
-            {segmentMissing ? (
+            {segmentsLoading ? (
+              // Never claim "missing" before the list has answered (2026-08-20):
+              // the name lookup now resolves after first paint.
+              <span className="text-[var(--text-3)] inline-flex items-center gap-1">
+                <Loader2 size={11} className="animate-spin" /> checking Customer.io…
+              </span>
+            ) : segmentMissing ? (
               <span className="text-amber-400 font-medium inline-flex items-center gap-1">
                 <AlertTriangle size={12} /> no longer exists in Customer.io. Pick a new one below.
               </span>
@@ -409,6 +469,41 @@ export default function EditAlwaysOnCampaignPage() {
         {/* ── SMS ── */}
         <Section title="Follow-up text">
           <div className="flex flex-col gap-4">
+            {/* Who gets the text (VOZ-245, ported from the always-on drawer 2026-08-20).
+                Narrowed to two choices 2026-08-07 (Val): the dropped modes
+                (registered_optin, optin_any_pickup) both text detected voicemail.
+                A campaign already saved on one still shows it as a third row —
+                otherwise the group would render with nothing selected and a Save
+                would look like a no-op while silently keeping the old policy. */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-[var(--text-2)]">Who gets the follow-up text</span>
+              <div className="flex flex-col gap-1">
+                {(
+                  [
+                    ["optin_reached_only", "Everyone we talk to"],
+                    ["verbal_yes", "Only if they say yes on the call"],
+                    ...(draft.smsConsentMode === "optin_reached_only" || draft.smsConsentMode === "verbal_yes"
+                      ? []
+                      : [[draft.smsConsentMode, "Old setting: also texts answering machines. Pick one above to replace it."] as const]),
+                  ] as ReadonlyArray<readonly [SmsConsentMode, string]>
+                ).map(([value, label]) => (
+                  <label key={value} className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="edit-consent-mode"
+                      checked={draft.smsConsentMode === value}
+                      onChange={() => setDraft({ ...draft, smsConsentMode: value })}
+                      className="mt-0.5 accent-blue-500"
+                    />
+                    <span className="text-xs text-[var(--text-1)] leading-relaxed">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-[var(--text-3)]">
+                &quot;Stop calling&quot; and the Do-Not-Call list always win. One text per player.
+              </p>
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
                 <label htmlFor="edit-sms" className="text-xs font-medium text-[var(--text-2)]">
@@ -448,22 +543,50 @@ export default function EditAlwaysOnCampaignPage() {
               />
             </div>
 
-            {modeHasLastResort(resolveSmsConsentMode(row.sms_consent_mode)) && (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-lr" className="text-xs font-medium text-[var(--text-2)]">
-                  Last-resort text
-                  <span className="text-[11px] text-[var(--text-3)] font-normal">
-                    {" "}(sent after the last failed try; empty = off)
-                  </span>
-                </label>
-                <textarea
-                  id="edit-lr"
-                  rows={2}
-                  value={draft.lastResortText}
-                  onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
-                  placeholder="Empty = off"
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
-                />
+            {/* Last-resort controls (VOZ-249 toggle, ported from the drawer). Gated on
+                the DRAFT's mode so switching mode + text works in one Save; the block
+                only renders on the legacy modes, so under Val's 2026-08-07 policy
+                (optin_reached_only everywhere) it stays invisible. Copy states the
+                consequence, not just the mechanics (VOZ-420): OFF here does NOT stop
+                texting unreached players — it makes the text instant. */}
+            {modeHasLastResort(draft.smsConsentMode) && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-[var(--text-2)]">
+                      Text only as a last resort
+                    </div>
+                    <p className="text-[11px] text-[var(--text-3)] leading-relaxed">
+                      Off: an answering machine gets the offer text immediately. On: we call again
+                      instead, and one &quot;sorry we missed you&quot; text goes out after the last
+                      failed try. Either way this old setting texts players we never reached —
+                      pick &quot;Everyone we talk to&quot; above to stop that.
+                    </p>
+                  </div>
+                  <Toggle
+                    on={draft.lastResortEnabled}
+                    label="Text only as a last resort"
+                    onChange={(v) => setDraft({ ...draft, lastResortEnabled: v })}
+                  />
+                </div>
+                {draft.lastResortEnabled && (
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="edit-lr" className="text-xs font-medium text-[var(--text-2)]">
+                      Last-resort message
+                      <span className="text-[11px] text-[var(--text-3)] font-normal">
+                        {" "}(full text, including the link and opt-out line)
+                      </span>
+                    </label>
+                    <textarea
+                      id="edit-lr"
+                      rows={2}
+                      value={draft.lastResortText}
+                      onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
+                      placeholder="Sorry we missed you! …"
+                      className="w-full px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

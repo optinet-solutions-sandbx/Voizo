@@ -10,26 +10,20 @@
 //      auto-start later unless flipped too).
 //   2. Resume schedule — parent status flip (parents hold no clone/slot, so a
 //      soft flip is the blessed path per the /status route).
-//   3. Settings drawer — next-child knobs PATCHed onto the parent row;
-//      children copy the parent at every spawn, so edits apply from
-//      tomorrow's campaign with no deploy.
+//   3. Settings link — opens /campaigns/v2/[id]/edit, the single edit surface
+//      (settings consolidation 2026-08-20; the inline drawer this section used
+//      to carry duplicated that page and the two had drifted). Children copy
+//      the parent at every spawn, so edits apply from tomorrow's campaign.
 //
 // Renders null when no running/paused recurring parents exist — the section
 // is invisible in today's prod until the first one is created.
 
 import { useState } from "react";
 import Link from "next/link";
-import { Building2, ChevronDown, Globe2, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
+import { Building2, Loader2, Pause, Play, Repeat, Settings, Zap } from "lucide-react";
 import { deriveAlwaysOnRows, type AlwaysOnRow } from "@/lib/alwaysOn";
 import { brandLabel } from "@/lib/campaignDisplay";
-import { patchCampaignSettings, updateCampaignV2Status } from "@/lib/campaignV2Client";
-import { resolveCallDelay } from "@/lib/campaignV2Shared";
-import { RecurrenceEditor, defaultRecurrencePattern } from "@/components/RecurrenceEditor";
-import StyledSelect from "@/components/StyledSelect";
-import { validateRecurrencePattern, type RecurrencePattern } from "@/lib/types/recurrence";
-import { TIMEZONE_OPTIONS } from "./v2/new/wizardState";
-import { modeHasLastResort, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
-import Toggle from "@/components/ui/Toggle";
+import { updateCampaignV2Status } from "@/lib/campaignV2Client";
 
 type CampaignRow = Record<string, unknown>;
 
@@ -42,42 +36,9 @@ interface Props {
   analytics?: Record<string, { reach: number; targeted: number }>;
 }
 
-const RETRY_GAP_PRESETS = [30, 60, 90] as const;
-const MAX_TRIES_PRESETS = [2, 3, 4, 5] as const;
-const CALL_DELAY_PRESETS: ReadonlyArray<{ choice: "now" | "5" | "30" | "60" | "custom"; label: string }> = [
-  { choice: "now", label: "Right away" },
-  { choice: "5", label: "After 5 min" },
-  { choice: "30", label: "After 30 min" },
-  { choice: "60", label: "After 1 hour" },
-  { choice: "custom", label: "Custom" },
-];
-
-interface SettingsDraft {
-  retryGap: number;
-  maxTries: number;
-  dailyCapText: string;
-  /** VOZ-245: operators can switch dispatch policy here instead of rebuilding the
-   *  campaign. Applies from tomorrow's child, like every other field in this drawer. */
-  smsConsentMode: SmsConsentMode;
-  /** VOZ-245: the full text as stored (message + link + opt-out), same single-blob
-   *  treatment the edit page uses — the 3-field composition only exists at create. */
-  smsTemplateText: string;
-  /** VOZ-249: explicit on/off. The column is "non-empty template = feature on", but
-   *  making the operator infer that from an empty box read as a missing value rather
-   *  than a setting (Jasiel, 2026-07-28). The toggle states it; the text follows. */
-  lastResortEnabled: boolean;
-  lastResortText: string;
-  callDelayChoice: "now" | "5" | "30" | "60" | "custom";
-  callDelayCustomText: string;
-  recurrencePattern: RecurrencePattern;
-  timezone: string;
-}
-
 export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }: Props) {
   const rows = deriveAlwaysOnRows(campaigns);
   const [actionId, setActionId] = useState<string | null>(null);
-  const [openSettingsId, setOpenSettingsId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
 
   if (rows.length === 0) return null;
@@ -146,138 +107,6 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
     }
   }
 
-  function toggleSettings(parent: CampaignRow) {
-    const id = parent.id as string;
-    if (openSettingsId === id) {
-      setOpenSettingsId(null);
-      setDraft(null);
-      return;
-    }
-    setOpenSettingsId(id);
-    setRowError(null);
-    const delay = (parent.call_delay_minutes as number | null) ?? null;
-    setDraft({
-      retryGap: (parent.retry_interval_minutes as number) ?? 90,
-      maxTries: (parent.max_attempts as number) ?? 3,
-      dailyCapText: parent.daily_cap != null ? String(parent.daily_cap) : "",
-      smsConsentMode: resolveSmsConsentMode(parent.sms_consent_mode),
-      smsTemplateText: (parent.sms_template as string) ?? "",
-      // Seeded from the column's own semantics: a stored template MEANS the
-      // feature is on, so the toggle reflects reality rather than a second flag
-      // that could drift out of sync with it.
-      lastResortEnabled: ((parent.sms_last_resort_template as string) ?? "").trim().length > 0,
-      lastResortText: (parent.sms_last_resort_template as string) ?? "",
-      callDelayChoice:
-        delay == null ? "now" : delay === 5 || delay === 30 || delay === 60 ? (String(delay) as "5" | "30" | "60") : "custom",
-      callDelayCustomText: delay != null && ![5, 30, 60].includes(delay) ? String(delay) : "",
-      recurrencePattern:
-        (parent.recurrence_pattern as RecurrencePattern | null) ??
-        defaultRecurrencePattern(new Date(), (parent.timezone as string) ?? "UTC"),
-      timezone: (parent.timezone as string) ?? "UTC",
-    });
-  }
-
-  async function handleSaveSettings(parent: CampaignRow) {
-    if (!draft) return;
-    const id = parent.id as string;
-    const isRealtime = parent.realtime === true;
-    const capTrimmed = draft.dailyCapText.trim();
-    const capNumber = capTrimmed === "" ? null : Number(capTrimmed);
-    if (capNumber !== null && (!Number.isInteger(capNumber) || capNumber <= 0)) {
-      setRowError({ id, message: "Daily cap must be a whole number above 0, or empty for no cap." });
-      return;
-    }
-    if (isRealtime && capNumber === null) {
-      setRowError({ id, message: "Real-time campaigns need a daily cap." });
-      return;
-    }
-    // VOZ-249: mirrors the wizard's check. With the toggle ON and no message, the
-    // save would have written null and silently turned the feature back OFF —
-    // exactly the invisible state the toggle was added to remove.
-    if (
-      draft.smsConsentMode !== "verbal_yes" &&
-      draft.lastResortEnabled &&
-      draft.lastResortText.trim().length === 0
-    ) {
-      setRowError({ id, message: "Last-resort text is on but the message is empty." });
-      return;
-    }
-    const delay = resolveCallDelay(draft.callDelayChoice, draft.callDelayCustomText);
-    if (isRealtime && delay.invalid) {
-      setRowError({
-        id,
-        message: "Custom call delay must be a whole number of minutes between 1 and 1440 (24 hours).",
-      });
-      return;
-    }
-
-    // Schedule: validate, and gate the timezone change (the server also blocks
-    // it while today's run is still active — that 409 surfaces as rowError).
-    const recErrors = validateRecurrencePattern(draft.recurrencePattern).errors;
-    if (recErrors.length > 0) {
-      setRowError({ id, message: recErrors[0] });
-      return;
-    }
-    const patternChanged =
-      JSON.stringify(draft.recurrencePattern) !== JSON.stringify(parent.recurrence_pattern ?? null);
-    const timezoneChanged = draft.timezone !== ((parent.timezone as string) ?? "UTC");
-    if (
-      timezoneChanged &&
-      !window.confirm(
-        "Change the timezone? Day boundaries and legal calling hours shift with it, from the next run. To call a different country, create a new campaign instead.",
-      )
-    ) {
-      return;
-    }
-
-    setActionId(id);
-    setRowError(null);
-    try {
-      const updated = await patchCampaignSettings(id, {
-        retryIntervalMinutes: draft.retryGap,
-        maxAttempts: draft.maxTries,
-        dailyCap: capNumber,
-        ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
-        // VOZ-245: send the mode only when the operator actually changed it, so a
-        // no-op Save can't rewrite the column (and can't 400 on a legacy NULL).
-        ...(draft.smsConsentMode !== resolveSmsConsentMode(parent.sms_consent_mode)
-          ? { smsConsentMode: draft.smsConsentMode }
-          : {}),
-        // Message body: only when changed, and never blanked by an empty box —
-        // clearing the template silently disables texting for the whole campaign.
-        ...(draft.smsTemplateText.trim().length > 0 &&
-        draft.smsTemplateText.trim() !== ((parent.sms_template as string) ?? "").trim()
-          ? { smsTemplate: draft.smsTemplateText.trim() }
-          : {}),
-        // Both opt-in modes own a last-resort template (VOZ-245). Gated on the
-        // DRAFT's mode, so switching to an opt-in mode and setting the text in the
-        // same Save works instead of needing two round-trips.
-        // VOZ-249: the TOGGLE is now the source of truth — off writes null (feature
-        // off) explicitly rather than relying on the operator clearing the box.
-        ...(draft.smsConsentMode !== "verbal_yes"
-          ? {
-              smsLastResortTemplate: draft.lastResortEnabled
-                ? draft.lastResortText.trim() || null
-                : null,
-            }
-          : {}),
-        ...(patternChanged ? { recurrencePattern: draft.recurrencePattern } : {}),
-        ...(timezoneChanged ? { timezone: draft.timezone } : {}),
-      });
-      localPatch(id, updated);
-      setOpenSettingsId(null);
-      setDraft(null);
-    } catch (err) {
-      console.error("[always-on] settings save failed:", err);
-      setRowError({
-        id,
-        message: err instanceof Error ? err.message : "Saving settings failed.",
-      });
-    } finally {
-      setActionId(null);
-    }
-  }
-
   return (
     <div className="rounded-2xl border-[1.5px] border-[var(--border)] bg-[var(--bg-card)] overflow-hidden">
       <div className="px-4 pt-3.5 pb-2.5">
@@ -296,7 +125,6 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
           const childStatus = (child?.status as string) ?? null;
           const childStats = child ? analytics[child.id as string] : undefined;
           const busy = actionId === parentId;
-          const settingsOpen = openSettingsId === parentId;
 
           return (
             <div key={parentId} className="px-4 py-3">
@@ -359,15 +187,16 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => toggleSettings(parent)}
+                  {/* Settings consolidation (2026-08-20): one edit surface. The inline
+                      drawer duplicated /campaigns/v2/[id]/edit and the two had already
+                      drifted (the drawer had the VOZ-245 mode picker, the page didn't). */}
+                  <Link
+                    href={`/campaigns/v2/${parentId}/edit`}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition"
                   >
                     <Settings size={12} />
                     Settings
-                    <ChevronDown size={12} className={`transition-transform ${settingsOpen ? "rotate-180" : ""}`} />
-                  </button>
+                  </Link>
                   {parentRunning ? (
                     <button
                       type="button"
@@ -396,252 +225,6 @@ export default function AlwaysOnSection({ campaigns, onMutate, analytics = {} }:
                 <p className="text-[11px] text-red-400 mt-2">{rowError.message}</p>
               )}
 
-              {settingsOpen && draft && (
-                <div className="mt-3 p-3.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] flex flex-col gap-3">
-                  {/* Schedule + timezone (inline, 2026-07-13). Applies from
-                      tomorrow's run; the timezone change is confirm-gated and
-                      the server blocks it while today's run is still active. */}
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[11px] font-medium text-[var(--text-2)]">Schedule</span>
-                    <RecurrenceEditor
-                      value={draft.recurrencePattern}
-                      onChange={(pattern) => setDraft({ ...draft, recurrencePattern: pattern })}
-                      campaignTimezone={draft.timezone}
-                      errors={validateRecurrencePattern(draft.recurrencePattern).errors}
-                      timezoneSlot={
-                        <StyledSelect
-                          value={draft.timezone}
-                          onChange={(value) => setDraft({ ...draft, timezone: value })}
-                          options={TIMEZONE_OPTIONS}
-                          icon={<Globe2 size={14} />}
-                          placeholder="Pick a timezone…"
-                        />
-                      }
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5" role="group" aria-label="Retry gap">
-                    <span className="text-[11px] font-medium text-[var(--text-2)]">
-                      Retry gap
-                    </span>
-                    <div className="flex gap-1.5">
-                      {RETRY_GAP_PRESETS.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() => setDraft({ ...draft, retryGap: v })}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
-                            draft.retryGap === v
-                              ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                              : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30"
-                          }`}
-                        >
-                          {v} min
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5" role="group" aria-label="Max tries per player">
-                    <span className="text-[11px] font-medium text-[var(--text-2)]">Max tries per player</span>
-                    <div className="flex gap-1.5">
-                      {MAX_TRIES_PRESETS.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() => setDraft({ ...draft, maxTries: v })}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
-                            draft.maxTries === v
-                              ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                              : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30"
-                          }`}
-                        >
-                          {v}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor={`cap-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
-                      Daily cap
-                      <span className="text-[var(--text-3)] font-normal">
-                        {isRealtime ? " (required for real-time)" : " (empty = no cap)"}
-                      </span>
-                    </label>
-                    <input
-                      id={`cap-${parentId}`}
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      step={1}
-                      value={draft.dailyCapText}
-                      onChange={(e) => setDraft({ ...draft, dailyCapText: e.target.value })}
-                      placeholder={isRealtime ? "e.g. 150" : "no cap"}
-                      className="w-full sm:max-w-[10rem] px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
-                    />
-                  </div>
-
-                  {isRealtime && draft && (
-                    <div className="flex flex-col gap-1.5" role="group" aria-label="Call new sign-ups">
-                      <span className="text-[11px] font-medium text-[var(--text-2)]">Call new sign-ups</span>
-                      <div className="flex gap-1.5 flex-wrap">
-                        {CALL_DELAY_PRESETS.map((p) => (
-                          <button
-                            key={p.choice}
-                            type="button"
-                            onClick={() => setDraft({ ...draft, callDelayChoice: p.choice })}
-                            className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
-                              draft.callDelayChoice === p.choice
-                                ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                                : "bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-2)] hover:border-blue-500/30"
-                            }`}
-                          >
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                      {draft.callDelayChoice === "custom" && (
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={1}
-                          max={1440}
-                          step={1}
-                          value={draft.callDelayCustomText}
-                          onChange={(e) => setDraft({ ...draft, callDelayCustomText: e.target.value })}
-                          placeholder="minutes, e.g. 45"
-                          aria-label="Custom call delay in minutes"
-                          className="w-full sm:max-w-[10rem] px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
-                        />
-                      )}
-                      <p className="text-[11px] text-[var(--text-3)]">Applies from the next check, not tomorrow.</p>
-                    </div>
-                  )}
-
-                  {/* Follow-up text (VOZ-245). Operators previously had to rebuild the
-                      campaign to change either of these. Both live on the PARENT, so
-                      they apply from tomorrow's child.
-                      Narrowed to two choices 2026-08-07 (Val): the dropped modes
-                      (registered_optin, optin_any_pickup) both text detected voicemail.
-                      A campaign already saved on one still shows it as a third,
-                      read-only row — otherwise the group would render with nothing
-                      selected and a Save would look like a no-op while silently
-                      keeping the old policy. */}
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[11px] font-medium text-[var(--text-2)]">Who gets the follow-up text</span>
-                    <div className="flex flex-col gap-1">
-                      {(
-                        [
-                          ["optin_reached_only", "Everyone we talk to"],
-                          ["verbal_yes", "Only if they say yes on the call"],
-                          ...(draft.smsConsentMode === "optin_reached_only" || draft.smsConsentMode === "verbal_yes"
-                            ? []
-                            : [[draft.smsConsentMode, "Old setting: also texts answering machines. Pick one above to replace it."] as const]),
-                        ] as ReadonlyArray<readonly [SmsConsentMode, string]>
-                      ).map(([value, label]) => (
-                        <label key={value} className="flex items-start gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            name={`consent-${parentId}`}
-                            checked={draft.smsConsentMode === value}
-                            onChange={() => setDraft({ ...draft, smsConsentMode: value })}
-                            className="mt-0.5 accent-blue-500"
-                          />
-                          <span className="text-[11px] text-[var(--text-1)] leading-relaxed">{label}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <p className="text-[11px] text-[var(--text-3)]">
-                      &quot;Stop calling&quot; and the Do-Not-Call list always win. One text per player.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor={`tmpl-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
-                      Follow-up text
-                      <span className="text-[var(--text-3)] font-normal">
-                        {" "}(full message, including the link and opt-out line)
-                      </span>
-                    </label>
-                    <textarea
-                      id={`tmpl-${parentId}`}
-                      rows={3}
-                      value={draft.smsTemplateText}
-                      onChange={(e) => setDraft({ ...draft, smsTemplateText: e.target.value })}
-                      placeholder="No message set — texting is off for this campaign."
-                      className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
-                    />
-                    <p className="text-[11px] text-[var(--text-3)]">
-                      Leaving this unchanged is safe; an empty box is ignored rather than clearing the message.
-                    </p>
-                  </div>
-
-                  {modeHasLastResort(draft.smsConsentMode) && (
-                    <div className="flex flex-col gap-2">
-                      {/* VOZ-249: an explicit switch. This used to be "leave the box
-                          empty to turn it off", which reads as a missing value, not a
-                          decision. Same control as the wizard now. Hidden for
-                          optin_reached_only — that mode never texts unreached (Val 2026-08-07). */}
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-medium text-[var(--text-2)]">
-                            Text only as a last resort
-                          </div>
-                          <p className="text-[11px] text-[var(--text-3)] leading-relaxed">
-                            Off: a voicemail gets the offer text right away. On: we call again
-                            instead, and the text goes out only after the last failed try.
-                          </p>
-                        </div>
-                        <Toggle
-                          on={draft.lastResortEnabled}
-                          label="Text only as a last resort"
-                          onChange={(v) => setDraft({ ...draft, lastResortEnabled: v })}
-                        />
-                      </div>
-                      {draft.lastResortEnabled && (
-                        <div className="flex flex-col gap-1.5">
-                          <label htmlFor={`lr-${parentId}`} className="text-[11px] font-medium text-[var(--text-2)]">
-                            Last-resort message
-                            <span className="text-[var(--text-3)] font-normal">
-                              {" "}(full text, including the link and opt-out line)
-                            </span>
-                          </label>
-                          <textarea
-                            id={`lr-${parentId}`}
-                            rows={2}
-                            value={draft.lastResortText}
-                            onChange={(e) => setDraft({ ...draft, lastResortText: e.target.value })}
-                            placeholder="Sorry we missed you! …"
-                            className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 resize-none transition"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2.5">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => handleSaveSettings(parent)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-500 text-white hover:bg-blue-600 transition disabled:opacity-50"
-                    >
-                      {busy && <Loader2 size={12} className="animate-spin" />}
-                      Save
-                    </button>
-                    <p className="text-[11px] text-[var(--text-3)]">
-                      Takes effect from tomorrow&apos;s run.
-                    </p>
-                    <Link
-                      href={`/campaigns/v2/${parentId}/edit`}
-                      className="ml-auto text-[11px] text-blue-400 hover:text-blue-300 transition"
-                    >
-                      Edit campaign (schedule, audience, more)
-                    </Link>
-                  </div>
-                </div>
-              )}
             </div>
           );
         })}

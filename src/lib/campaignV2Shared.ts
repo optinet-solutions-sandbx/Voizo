@@ -9,9 +9,10 @@
 // without dragging the admin client in. Server code imports them from here too.
 
 import type { RecurrencePattern } from "./types/recurrence";
-// Type-only (erased at compile time) and smsDispatchDecision has NO imports of
-// its own, so this cannot drag anything into the client bundle.
-import type { SmsConsentMode } from "./smsDispatchDecision";
+// smsDispatchDecision is pure (its only import is type-only), so the value
+// import stays client-bundle-safe — client components already value-import it
+// directly (modeHasLastResort in the campaign UIs).
+import { modeHasLastResort, resolveSmsConsentMode, type SmsConsentMode } from "./smsDispatchDecision";
 
 export type CallWindow = {
   day: "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
@@ -108,6 +109,42 @@ export function resolveCallDelay(
     return { minutes: Number(choice), invalid: false };
   }
   return { minutes: null, invalid: false };
+}
+
+/**
+ * Edit-page SMS consent keys of the settings PATCH body (2026-08-20 settings
+ * consolidation — the always-on drawer's save semantics, moved here as a pure
+ * tested function when the drawer folded into /campaigns/v2/[id]/edit).
+ *
+ *  - smsConsentMode only when CHANGED (VOZ-245): a no-op Save can't rewrite the
+ *    column, and a legacy NULL (reads as verbal_yes) can't 400 the request.
+ *  - smsLastResortTemplate: the toggle is the source of truth (VOZ-249) — off
+ *    writes an explicit null, never an omitted key. Gated on the DRAFT's mode
+ *    so a mode switch + text edit lands in one Save.
+ *  - Leaving a last-resort mode clears any stored template: a stale "sorry we
+ *    missed you" must not linger behind a mode whose UI can't show it. The
+ *    sweep also mode-checks (decideLastResortSend), so this is hygiene on top
+ *    of the gate, not the gate.
+ */
+export function buildSmsConsentPatch(args: {
+  storedMode: unknown;
+  storedLastResortTemplate: unknown;
+  draftMode: SmsConsentMode;
+  lastResortEnabled: boolean;
+  lastResortText: string;
+}): { smsConsentMode?: SmsConsentMode; smsLastResortTemplate?: string | null } {
+  const patch: { smsConsentMode?: SmsConsentMode; smsLastResortTemplate?: string | null } = {};
+  if (args.draftMode !== resolveSmsConsentMode(args.storedMode)) {
+    patch.smsConsentMode = args.draftMode;
+  }
+  const storedTemplate =
+    typeof args.storedLastResortTemplate === "string" ? args.storedLastResortTemplate.trim() : "";
+  if (modeHasLastResort(args.draftMode)) {
+    patch.smsLastResortTemplate = args.lastResortEnabled ? args.lastResortText.trim() || null : null;
+  } else if (storedTemplate.length > 0) {
+    patch.smsLastResortTemplate = null;
+  }
+  return patch;
 }
 
 /**
