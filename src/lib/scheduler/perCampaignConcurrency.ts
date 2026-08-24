@@ -40,3 +40,41 @@ export function resolvePerCampaignConcurrency(raw: string | undefined | null): n
 export function dialsToFire(inFlight: number, concurrency: number): number {
   return Math.max(0, concurrency - inFlight);
 }
+
+/**
+ * Parse PER_CAMPAIGN_CONCURRENCY_OVERRIDES ("<campaignOrParentId>:K,<id2>:K")
+ * into an id → K map. Malformed pairs are skipped (never throw on env garbage);
+ * K is clamped to [1, 10] exactly like the global resolver. Unknown ids are
+ * harmless — they simply never match a campaign — so a placeholder value like
+ * "<parentId>:3" left in the env is a provable no-op.
+ */
+export function resolveConcurrencyOverrides(raw: string | undefined | null): Record<string, number> {
+  // Null prototype: campaign ids are lookup keys, so an id colliding with an
+  // inherited Object key ("toString") must miss, not return a function.
+  const map: Record<string, number> = Object.create(null);
+  for (const pair of (raw ?? "").split(",")) {
+    const i = pair.indexOf(":");
+    if (i <= 0) continue;
+    // Lowercased: Supabase uuids are lowercase; an uppercase paste in the env
+    // must not become a silent no-op that reads as "the feature doesn't work".
+    const id = pair.slice(0, i).trim().toLowerCase();
+    const parsed = parseInt(pair.slice(i + 1).trim(), 10);
+    if (!id || !Number.isFinite(parsed) || parsed < 1) continue;
+    map[id] = Math.min(parsed, MAX_PER_CAMPAIGN_CONCURRENCY);
+  }
+  return map;
+}
+
+/**
+ * The K for one campaign this tick. Own id beats parent id (more specific),
+ * parent id covers recurring children (they get fresh ids every spawn — the
+ * stable handle is the parent), and everything else keeps the global default.
+ */
+export function concurrencyForCampaign(
+  campaignId: string,
+  parentCampaignId: string | null,
+  overrides: Record<string, number>,
+  defaultK: number,
+): number {
+  return overrides[campaignId] ?? (parentCampaignId ? overrides[parentCampaignId] : undefined) ?? defaultK;
+}

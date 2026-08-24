@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dialsToFire, resolvePerCampaignConcurrency } from "./perCampaignConcurrency";
+import { concurrencyForCampaign, dialsToFire, resolveConcurrencyOverrides, resolvePerCampaignConcurrency } from "./perCampaignConcurrency";
 
 describe("resolvePerCampaignConcurrency — the operator knob (default 1)", () => {
   it("defaults to 1 when unset — so shipping the code is a NO-OP until raised", () => {
@@ -45,5 +45,67 @@ describe("dialsToFire — top up in-flight to the concurrency target", () => {
 
   it("never returns negative when already over target (overlapping-tick race)", () => {
     expect(dialsToFire(5, 3)).toBe(0);
+  });
+});
+
+describe("resolveConcurrencyOverrides — the per-campaign env map", () => {
+  it("unset / blank / garbage → empty map (global default applies everywhere)", () => {
+    expect(resolveConcurrencyOverrides(undefined)).toEqual({});
+    expect(resolveConcurrencyOverrides("")).toEqual({});
+    expect(resolveConcurrencyOverrides("no-colon-here")).toEqual({});
+    expect(resolveConcurrencyOverrides(":3")).toEqual({});
+    expect(resolveConcurrencyOverrides("id:")).toEqual({});
+    expect(resolveConcurrencyOverrides("id:abc")).toEqual({});
+  });
+
+  it("parses one and many pairs, tolerating spaces", () => {
+    expect(resolveConcurrencyOverrides("abc:3")).toEqual({ abc: 3 });
+    expect(resolveConcurrencyOverrides(" abc : 3 , def:2 ")).toEqual({ abc: 3, def: 2 });
+  });
+
+  it("a bad pair never poisons the good ones", () => {
+    expect(resolveConcurrencyOverrides("abc:3,junk,def:2,ghi:0")).toEqual({ abc: 3, def: 2 });
+  });
+
+  it("clamps to [1,10] like the global resolver — a fat-fingered env can't flood the trunk", () => {
+    expect(resolveConcurrencyOverrides("abc:50")).toEqual({ abc: 10 });
+    expect(resolveConcurrencyOverrides("abc:0")).toEqual({});
+    expect(resolveConcurrencyOverrides("abc:-4")).toEqual({});
+    expect(resolveConcurrencyOverrides("abc:2.9")).toEqual({ abc: 2 }); // parseInt truncates
+  });
+
+  it("the literal '<parentId>:3' placeholder is a provable no-op against real uuids", () => {
+    const map = resolveConcurrencyOverrides("<parentId>:3");
+    expect(map).toEqual({ "<parentid>": 3 });
+    expect(concurrencyForCampaign("2a47b66b-9a81-4419-abfb-80d94b34b5b5", null, map, 1)).toBe(1);
+  });
+
+  it("keys lowercase at parse time — an uppercase UUID paste still matches Supabase ids", () => {
+    const map = resolveConcurrencyOverrides("2A47B66B-9A81-4419-ABFB-80D94B34B5B5:3");
+    expect(concurrencyForCampaign("x", "2a47b66b-9a81-4419-abfb-80d94b34b5b5", map, 1)).toBe(3);
+  });
+
+  it("ids colliding with inherited Object keys miss cleanly (null-prototype map)", () => {
+    const map = resolveConcurrencyOverrides("abc:3");
+    expect(concurrencyForCampaign("toString", null, map, 1)).toBe(1);
+    expect(concurrencyForCampaign("x", "constructor", map, 2)).toBe(2);
+  });
+});
+
+describe("concurrencyForCampaign — own id beats parent id beats global default", () => {
+  const map = { parent1: 3, child1: 5 };
+
+  it("recurring children match on their parent id (child ids change every spawn)", () => {
+    expect(concurrencyForCampaign("fresh-child-uuid", "parent1", map, 1)).toBe(3);
+  });
+
+  it("own id wins over parent id (more specific)", () => {
+    expect(concurrencyForCampaign("child1", "parent1", map, 1)).toBe(5);
+  });
+
+  it("no match anywhere → the global default, exactly the pre-override behaviour", () => {
+    expect(concurrencyForCampaign("other", null, map, 1)).toBe(1);
+    expect(concurrencyForCampaign("other", "unknown-parent", map, 2)).toBe(2);
+    expect(concurrencyForCampaign("other", null, {}, 1)).toBe(1);
   });
 });

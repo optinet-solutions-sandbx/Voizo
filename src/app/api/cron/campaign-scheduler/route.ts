@@ -10,7 +10,12 @@ import {
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
-import { dialsToFire, resolvePerCampaignConcurrency } from "@/lib/scheduler/perCampaignConcurrency";
+import {
+  concurrencyForCampaign,
+  dialsToFire,
+  resolveConcurrencyOverrides,
+  resolvePerCampaignConcurrency,
+} from "@/lib/scheduler/perCampaignConcurrency";
 import {
   isFailureStreak,
   REJECT_BREAKER_STREAK,
@@ -412,11 +417,23 @@ export async function GET(request: NextRequest) {
   // Per-campaign dial concurrency (K). Default 1 → the gate + fire loop below
   // behave EXACTLY as the old "one call at a time" code. Raising it lets a campaign
   // keep K calls in flight, K-fold-ing its dials/hour ceiling. Read once per tick.
+  // PER_CAMPAIGN_CONCURRENCY_OVERRIDES ("<parentId>:3") lifts K for SPECIFIC
+  // campaigns (children match on parent_campaign_id — child ids change every
+  // spawn) while everything else keeps the global default. The first target is
+  // the CA-shift reactivation parent: 13:00–24:00Z only ~2 campaigns run, so 8
+  // of the 10 Vapi lines sit idle while its 1.5k book strands at K=1 (2026-08-24).
   const perCampaignK = resolvePerCampaignConcurrency(process.env.PER_CAMPAIGN_CONCURRENCY);
+  const kOverrides = resolveConcurrencyOverrides(process.env.PER_CAMPAIGN_CONCURRENCY_OVERRIDES);
 
   for (const campaign of idleRunning ?? []) {
     const campaignId = campaign.id as string;
     const campaignName = campaign.name as string;
+    const campaignK = concurrencyForCampaign(
+      campaignId,
+      (campaign.parent_campaign_id as string | null) ?? null,
+      kOverrides,
+      perCampaignK,
+    );
 
     // Skip if the campaign is already at its concurrency target — chain-next holds
     // the lanes and re-fires as each call ends. At the default K=1 this is exactly
@@ -427,7 +444,7 @@ export async function GET(request: NextRequest) {
       .eq("campaign_id", campaignId)
       .in("status", ["initiated", "ringing", "in_progress", "answered"]);
 
-    if ((inFlight ?? 0) >= perCampaignK) continue;
+    if ((inFlight ?? 0) >= campaignK) continue;
 
     // ── VOZ-278 circuit breaker: consecutive failed calls → pause + alert ──
     // A campaign whose recent calls ALL fail is either dialing a dead/blocked
@@ -690,7 +707,7 @@ export async function GET(request: NextRequest) {
     // so a re-run of findNextNumber returns a DISTINCT number — no double-claim
     // within the tick. At the default K=1 this loop runs exactly once = the old
     // single fire, so shipping this is a no-op until PER_CAMPAIGN_CONCURRENCY rises.
-    const toFire = dialsToFire(inFlight ?? 0, perCampaignK);
+    const toFire = dialsToFire(inFlight ?? 0, campaignK);
     let firedCount = 0;
     let fireFailed = false;
     for (let i = 0; i < toFire; i++) {
