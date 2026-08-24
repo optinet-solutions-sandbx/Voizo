@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildChildPayload,
   clampCallEndToLegalCap,
+  isDueToday,
   legalCallEndCap,
   resolveBaseAssistantId,
   type RecurringParent,
 } from "./recurringSpawn";
+import type { RecurrencePattern } from "../types/recurrence";
 
 const parent: RecurringParent = {
   id: "p1",
@@ -227,5 +229,62 @@ describe("buildChildPayload operator-control inheritance", () => {
     const p = buildChildPayload({ parent, ...common }) as Record<string, unknown>;
     expect(p.retry_interval_minutes).toBe(90);
     expect(p.max_attempts).toBe(3);
+  });
+});
+
+
+describe("isDueToday window-already-over (campaign ab991eba, 2026-08-21)", () => {
+  const nzPattern: RecurrencePattern = {
+    start_date: "2026-08-01",
+    end_kind: "never",
+    end_date: null,
+    end_after_n: null,
+    repeat_every_weeks: 1,
+    days_of_week: ["fri"],
+    call_hours_by_day: { fri: { start: "11:00", end: "20:00" } },
+    exception_dates: [],
+    skip_if_empty: false,
+    segment_refresh_time: "08:30",
+  };
+
+  it("REPLAYS THE INCIDENT: parent created 21:08 NZ after the 20:00 window close must NOT be due", () => {
+    // 2026-08-21T09:08:58Z = Friday 21:08 Pacific/Auckland — the exact minute
+    // parent 73a2bfe1 was created; the spawner then minted child ab991eba with
+    // end_at 69 minutes in the past (923 players, 0 attempts, all 'unreached').
+    const r = isDueToday(nzPattern, "Pacific/Auckland", new Date("2026-08-21T09:08:58Z"));
+    expect(r).toEqual({ due: false, reason: "window_already_over" });
+  });
+
+  it("still due one minute before the window closes (19:59 local)", () => {
+    const r = isDueToday(nzPattern, "Pacific/Auckland", new Date("2026-08-21T07:59:00Z"));
+    expect(r).toEqual({ due: true, reason: "due" });
+  });
+
+  it("window end is exclusive: exactly 20:00 local is over", () => {
+    const r = isDueToday(nzPattern, "Pacific/Auckland", new Date("2026-08-21T08:00:00Z"));
+    expect(r).toEqual({ due: false, reason: "window_already_over" });
+  });
+
+  it("normal morning spawn (08:31 local, refresh 08:30) is untouched", () => {
+    // 2026-08-20T20:31Z = Friday 08:31 Auckland — the real daily spawn minute.
+    const r = isDueToday(nzPattern, "Pacific/Auckland", new Date("2026-08-20T20:31:00Z"));
+    expect(r).toEqual({ due: true, reason: "due" });
+  });
+
+  it("uses the CLAMPED end: a stored 21:00 in AU (legal cap 20:00) is over at 20:30 local", () => {
+    const auPattern: RecurrencePattern = {
+      ...nzPattern,
+      call_hours_by_day: { fri: { start: "11:00", end: "21:00" } },
+    };
+    // 2026-08-21T10:30Z = Friday 20:30 Australia/Sydney — raw end (21:00) says
+    // open, the legal clamp the spawn applies (20:00) says over. Must not spawn.
+    const r = isDueToday(auPattern, "Australia/Sydney", new Date("2026-08-21T10:30:00Z"));
+    expect(r).toEqual({ due: false, reason: "window_already_over" });
+  });
+
+  it("missing hours for today fall through to the spawn's own no-call-hours guard", () => {
+    const noHours: RecurrencePattern = { ...nzPattern, call_hours_by_day: {} };
+    const r = isDueToday(noHours, "Pacific/Auckland", new Date("2026-08-21T09:08:58Z"));
+    expect(r).toEqual({ due: true, reason: "due" });
   });
 });

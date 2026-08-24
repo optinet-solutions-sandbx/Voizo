@@ -93,7 +93,8 @@ export interface DueCheckResult {
     | "not_an_active_day"
     | "off_week"
     | "in_exception_dates"
-    | "before_spawn_time";
+    | "before_spawn_time"
+    | "window_already_over";
 }
 
 export type SpawnOutcome =
@@ -289,6 +290,22 @@ export function isDueToday(
   if (pattern.exception_dates.includes(today)) return { due: false, reason: "in_exception_dates" };
 
   if (hhmm < pattern.segment_refresh_time) return { due: false, reason: "before_spawn_time" };
+
+  // A parent created (or edited live) AFTER its window closed for the local day
+  // must not spawn a born-expired child. 2026-08-21: child ab991eba was spawned
+  // at 21:09 NZ with end_at 69 minutes in the past — it held a SIP slot + queue
+  // seat overnight, then completed with 923 players, 0 attempts, all mislabeled
+  // 'unreached'. End-exclusive (at 20:00 the 11:00-20:00 window is over), and
+  // compared against the SAME legal-cap clamp the spawn applies, so a stored
+  // 21:00 end in a 20:00 jurisdiction can't sneak an expired child through the
+  // gap. Missing hours for today deliberately fall through — spawnChildIfDue's
+  // own "no call hours configured" guard owns that error and its clearer message.
+  // The daily spawns all fire at ~08:30 LOCAL (morning), so this can only ever
+  // trigger on a parent created/resumed in the local evening.
+  const todaysHours = pattern.call_hours_by_day[dow];
+  if (todaysHours?.end && hhmm >= clampCallEndToLegalCap(todaysHours.end, campaignTimezone)) {
+    return { due: false, reason: "window_already_over" };
+  }
 
   return { due: true, reason: "due" };
 }
