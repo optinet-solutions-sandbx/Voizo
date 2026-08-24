@@ -13,7 +13,9 @@ import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import {
   concurrencyForCampaign,
   dialsToFire,
+  fairShareConcurrency,
   resolveConcurrencyOverrides,
+  resolveFleetLineBudget,
   resolvePerCampaignConcurrency,
 } from "@/lib/scheduler/perCampaignConcurrency";
 import {
@@ -414,16 +416,31 @@ export async function GET(request: NextRequest) {
 
   const resumeResults: Array<{ id: string; name: string; result: string }> = [];
 
-  // Per-campaign dial concurrency (K). Default 1 → the gate + fire loop below
-  // behave EXACTLY as the old "one call at a time" code. Raising it lets a campaign
-  // keep K calls in flight, K-fold-ing its dials/hour ceiling. Read once per tick.
-  // PER_CAMPAIGN_CONCURRENCY_OVERRIDES ("<parentId>:3") lifts K for SPECIFIC
-  // campaigns (children match on parent_campaign_id — child ids change every
-  // spawn) while everything else keeps the global default. The first target is
-  // the CA-shift reactivation parent: 13:00–24:00Z only ~2 campaigns run, so 8
-  // of the 10 Vapi lines sit idle while its 1.5k book strands at K=1 (2026-08-24).
+  // Per-campaign dial concurrency (K), three knobs read once per tick:
+  //   PER_CAMPAIGN_CONCURRENCY — the per-campaign CAP (ANI protection: one DID
+  //     per country, so a single campaign should never burst one caller ID).
+  //     Default 1 → everything below behaves EXACTLY as the old one-call code.
+  //   FLEET_LINE_BUDGET — lines the dialer may target fleet-wide (Vapi lines
+  //     minus a lab/ghost/ring-overhang reserve). When set, each in-window
+  //     campaign gets fairShare = min(cap, max(1, floor(budget / inWindow))):
+  //     8 night-shift campaigns on budget 8 → 1 each (today's saturation), the
+  //     2-campaign CA shift → the cap, and buying Vapi lines lifts the whole
+  //     fleet by editing this ONE number. Unset → fair-share off, cap applies
+  //     directly (the pre-budget behavior). In-window count uses the SAME
+  //     isWithinCallWindow gate that decides who dials below; campaigns idling
+  //     inside their window still count (conservative — undershoots, never
+  //     oversubscribes lines).
+  //   PER_CAMPAIGN_CONCURRENCY_OVERRIDES ("<id>:K") — explicit per-campaign
+  //     target for exceptions; beats fair-share (operator intent wins). Children
+  //     match on parent_campaign_id (child ids change every spawn).
   const perCampaignK = resolvePerCampaignConcurrency(process.env.PER_CAMPAIGN_CONCURRENCY);
   const kOverrides = resolveConcurrencyOverrides(process.env.PER_CAMPAIGN_CONCURRENCY_OVERRIDES);
+  const fleetBudget = resolveFleetLineBudget(process.env.FLEET_LINE_BUDGET);
+  const inWindowCount = (idleRunning ?? []).filter((c) => {
+    const cw = c.call_windows as Array<{ day: string; start: string; end: string }> | null;
+    return isWithinCallWindow(cw ?? [], c.timezone as string);
+  }).length;
+  const fairK = fairShareConcurrency(fleetBudget, inWindowCount, perCampaignK);
 
   for (const campaign of idleRunning ?? []) {
     const campaignId = campaign.id as string;
@@ -432,7 +449,7 @@ export async function GET(request: NextRequest) {
       campaignId,
       (campaign.parent_campaign_id as string | null) ?? null,
       kOverrides,
-      perCampaignK,
+      fairK,
     );
 
     // Skip if the campaign is already at its concurrency target — chain-next holds

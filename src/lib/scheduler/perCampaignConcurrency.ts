@@ -78,3 +78,39 @@ export function concurrencyForCampaign(
 ): number {
   return overrides[campaignId] ?? (parentCampaignId ? overrides[parentCampaignId] : undefined) ?? defaultK;
 }
+
+// Sanity ceiling for the fleet budget env — Vapi concurrency is purchasable well
+// above 10, but three digits is a typo, not a plan.
+const MAX_FLEET_LINE_BUDGET = 100;
+
+/**
+ * Parse FLEET_LINE_BUDGET — how many concurrent lines the dialer may target
+ * fleet-wide (Vapi lines minus a reserve for lab/ghost/ring-overhang).
+ * Unset / blank / garbage / <1 → null = fair-share OFF, campaigns use their cap
+ * directly (exactly the pre-budget behavior, so shipping this is a no-op).
+ */
+export function resolveFleetLineBudget(raw: string | undefined | null): number | null {
+  const parsed = parseInt((raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.min(parsed, MAX_FLEET_LINE_BUDGET);
+}
+
+/**
+ * Fair-share K: divide the fleet line budget across the campaigns currently
+ * inside their call window, clamped to the per-campaign cap (the ANI-protection
+ * limit — one DID per country) and floored at 1 (liveness: a campaign never
+ * fully stalls; when budget < campaigns this deliberately overshoots to exactly
+ * the old one-line-each behavior rather than starving anyone).
+ *
+ * Self-balancing by construction: adding campaigns shrinks everyone's share
+ * next tick, a drained shift frees its share, and buying Vapi lines lifts the
+ * whole fleet by changing ONE env number. No per-campaign config.
+ */
+export function fairShareConcurrency(
+  budget: number | null,
+  inWindowCount: number,
+  cap: number,
+): number {
+  if (budget === null) return cap;
+  return Math.min(cap, Math.max(1, Math.floor(budget / Math.max(1, inWindowCount))));
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { concurrencyForCampaign, dialsToFire, resolveConcurrencyOverrides, resolvePerCampaignConcurrency } from "./perCampaignConcurrency";
+import { concurrencyForCampaign, dialsToFire, fairShareConcurrency, resolveConcurrencyOverrides, resolveFleetLineBudget, resolvePerCampaignConcurrency } from "./perCampaignConcurrency";
 
 describe("resolvePerCampaignConcurrency — the operator knob (default 1)", () => {
   it("defaults to 1 when unset — so shipping the code is a NO-OP until raised", () => {
@@ -107,5 +107,54 @@ describe("concurrencyForCampaign — own id beats parent id beats global default
     expect(concurrencyForCampaign("other", null, map, 1)).toBe(1);
     expect(concurrencyForCampaign("other", "unknown-parent", map, 2)).toBe(2);
     expect(concurrencyForCampaign("other", null, {}, 1)).toBe(1);
+  });
+});
+
+describe("resolveFleetLineBudget — fleet budget env", () => {
+  it("unset / blank / garbage / <1 → null (fair-share off, pre-budget behavior)", () => {
+    expect(resolveFleetLineBudget(undefined)).toBeNull();
+    expect(resolveFleetLineBudget("")).toBeNull();
+    expect(resolveFleetLineBudget("abc")).toBeNull();
+    expect(resolveFleetLineBudget("0")).toBeNull();
+    expect(resolveFleetLineBudget("-8")).toBeNull();
+  });
+
+  it("parses and clamps to the 100 sanity ceiling", () => {
+    expect(resolveFleetLineBudget("8")).toBe(8);
+    expect(resolveFleetLineBudget("28")).toBe(28);
+    expect(resolveFleetLineBudget("9999")).toBe(100);
+  });
+});
+
+describe("fairShareConcurrency — the self-balancing allocator", () => {
+  it("budget off (null) → the cap, byte-identical to the pre-budget code", () => {
+    expect(fairShareConcurrency(null, 8, 1)).toBe(1);
+    expect(fairShareConcurrency(null, 2, 3)).toBe(3);
+  });
+
+  it("night shift today: 8 campaigns share budget 8 → 1 each", () => {
+    expect(fairShareConcurrency(8, 8, 3)).toBe(1);
+  });
+
+  it("CA shift today: 2 campaigns share budget 8 → capped at 3, not 4", () => {
+    expect(fairShareConcurrency(8, 2, 3)).toBe(3);
+  });
+
+  it("liveness floor: more campaigns than budget still gets 1 each, never 0", () => {
+    expect(fairShareConcurrency(8, 13, 3)).toBe(1);
+  });
+
+  it("after buying lines: budget 28 across 8 campaigns → 3 each", () => {
+    expect(fairShareConcurrency(28, 8, 3)).toBe(3);
+  });
+
+  it("zero in-window campaigns never divides by zero", () => {
+    expect(fairShareConcurrency(8, 0, 3)).toBe(3);
+  });
+
+  it("an explicit override still beats fair-share (operator intent wins)", () => {
+    const fairK = fairShareConcurrency(8, 8, 3); // 1
+    expect(concurrencyForCampaign("x", "special-parent", { "special-parent": 5 }, fairK)).toBe(5);
+    expect(concurrencyForCampaign("x", null, {}, fairK)).toBe(1);
   });
 });
