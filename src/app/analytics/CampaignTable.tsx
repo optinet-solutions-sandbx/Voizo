@@ -541,6 +541,25 @@ export default function CampaignTable() {
           </>
         )}
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
+        {/* Campaign-name search (Val 2026-08-25). Token-AND over the name, so "rnd au"
+            finds "…RND REG YESTERDAY AU" and a date finds that day's runs. Purely
+            client-side over rows already loaded — no request, no debounce needed. */}
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
+          <input
+            type="text"
+            value={filters.name}
+            onChange={(e) => setFilter({ name: e.target.value })}
+            placeholder="Campaign name…"
+            aria-label="Search campaigns by name"
+            className="pl-8 pr-7 py-1.5 w-[210px] rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+          />
+          {filters.name && (
+            <button type="button" aria-label="Clear campaign name search" onClick={() => setFilter({ name: "" })} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-1)]">
+              <X size={13} />
+            </button>
+          )}
+        </div>
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
           <input
