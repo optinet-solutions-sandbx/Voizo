@@ -9,6 +9,7 @@ import {
 } from "@/lib/scheduler/recurringSpawn";
 import { recurringBudgetExhausted } from "@/lib/scheduler/spawnBudget";
 import { orderDraftsProdFirst } from "@/lib/scheduler/draftPriority";
+import { countDialingCampaigns } from "@/lib/scheduler/dialingCampaigns";
 import { decideStuckResolution } from "@/lib/scheduler/stuckSweep";
 import {
   concurrencyForCampaign,
@@ -773,38 +774,37 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // ── Queue gate: pool-aware concurrency limit ──
-  // Phase 1 of the dashboard rebuild (design doc §9.1) lifted the original
-  // any-running-defers gate to a pool-aware limit. The SIP pool itself becomes
-  // the rate-limiter: we count vapi_sip_pool rows with status='leased' and
-  // defer if at or above CAMPAIGN_CONCURRENCY_LIMIT (default 3).
+  // ── Queue gate: concurrency limit on campaigns actually dialling ──
+  // Caps how many campaigns are running-with-a-slot at once
+  // (CAMPAIGN_CONCURRENCY_LIMIT, default 3; prod 10 = the Vapi line count).
+  // This originally counted vapi_sip_pool rows with status='leased' (design doc
+  // §9.1 "pool-aware" gate) — the same number until recurring spawn began leasing
+  // a slot for each child AT SPAWN, while the child is still 'draft' waiting on
+  // this very gate. 2026-08-24/25: 8 overnight drafts + 2 breaker-paused CA
+  // children (a breaker pause keeps its slot) = 10 = limit → this early return
+  // fired before the draft→running promotion below on every tick → zero dials
+  // fleet-wide for 16.5h; the same arithmetic had cost NZ its first hour nightly
+  // since 2026-08-21. Counting dialling campaigns means drafts and paused
+  // children holding a slot can no longer block themselves.
   //
-  // Phased rollout per design doc §5.8:
-  //   Phase 1: limit=3  — after originate-shim 5-concurrent load test passes
-  //   Phase 2: limit=5  — after ~2 weeks of clean Phase 1 ops
-  //
-  // Per-campaign concurrency stays at 1 (sequential dialing within a campaign
-  // keeps retry/chain-next state clean). The lift is at the scheduler level only.
+  // Per-campaign concurrency is a separate knob (fair-share K, perCampaignConcurrency).
   //
   // Note: this gate fires AFTER the resume sweep above so already-running
   // campaigns can still advance their retries on this tick.
   const limit = parseInt(process.env.CAMPAIGN_CONCURRENCY_LIMIT ?? "3", 10);
   // H1 (audit 2026-06-01): destructure `error` so a transient Supabase blip
-  // can't silently set leasedCount=undefined → (undefined ?? 0) >= limit = false
-  // → cron bypasses the pool-aware concurrency gate. Fail-closed: on count error,
+  // can't silently set dialingCount=undefined → (undefined ?? 0) >= limit = false
+  // → cron bypasses the concurrency gate. Fail-closed: on count error,
   // defer this tick (200 not 500) and let the next minute retry.
-  const { count: leasedCount, error: poolCountErr } = await supabaseAdmin
-    .from("vapi_sip_pool")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "leased");
+  const { count: dialingCount, error: dialingCountErr } = await countDialingCampaigns(supabaseAdmin);
 
-  if (poolCountErr) {
-    console.error("[campaign-scheduler] pool count query failed — deferring tick:", poolCountErr);
+  if (dialingCountErr) {
+    console.error("[campaign-scheduler] dialling-campaign count failed — deferring tick:", dialingCountErr);
     await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
     return NextResponse.json({
       started: 0,
       queued: true,
-      reason: `pool count query failed: ${poolCountErr.message}`,
+      reason: `dialling-campaign count failed: ${dialingCountErr.message}`,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
       sweepResolved: sweeperResults.length,
@@ -812,13 +812,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  if ((leasedCount ?? 0) >= limit) {
+  if ((dialingCount ?? 0) >= limit) {
     await recordHeartbeat(supabaseAdmin, CRON_NAMES.scheduler);
     return NextResponse.json({
       started: 0,
       queued: true,
-      reason: `pool at concurrency limit (${leasedCount}/${limit} leased) — deferring to next tick`,
-      leasedCount: leasedCount ?? 0,
+      reason: `at concurrency limit (${dialingCount}/${limit} campaigns dialling) — deferring to next tick`,
+      dialingCount: dialingCount ?? 0,
       concurrencyLimit: limit,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
