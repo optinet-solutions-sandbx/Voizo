@@ -62,7 +62,12 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         }`}
       >
         {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}
-        <span className={`min-w-0 truncate ${selected ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}`}>
+        {/* The closed trigger is a fixed-width control, so a long value still ellipses
+            here — title exposes it on hover. The OPEN panel below no longer truncates. */}
+        <span
+          title={selected?.label}
+          className={`min-w-0 truncate ${selected ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}`}
+        >
           {selected?.label || placeholder || "Select…"}
         </span>
       </button>
@@ -72,7 +77,12 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         </svg>
       </div>
       {open && (
-        <div className="absolute z-50 mt-1.5 w-full max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
+        // The panel was `w-full` — locked to the trigger's width — so any option longer
+        // than the closed button was cut ("FortunePla…", "Lucky7eve…"; Val 2026-08-25).
+        // Size it to its content instead: never narrower than the trigger, never wider
+        // than the viewport allows. It is absolutely positioned, so growing it cannot
+        // reflow the page behind it.
+        <div className="absolute z-50 mt-1.5 min-w-full w-max max-w-[min(90vw,28rem)] max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
           {groupKeys.map((g) => (
             <div key={g}>
               {g && (
