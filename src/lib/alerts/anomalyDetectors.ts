@@ -87,3 +87,56 @@ export function detectConnectCollapse(
     rate,
   };
 }
+
+// Detector C — dial silence (VOZ-437): a campaign that is inside its call window,
+// has been startable for at least DIAL_SILENCE_MINUTES, holds players who are due
+// a call right now, and yet has minted ZERO calls_v2 rows in that time. Detectors
+// A and B need dials to exist; this one catches their absence. 2026-08-24 22:32Z →
+// 08-25 07:49Z: 8 in-window children sat in 'draft' behind a shut queue gate for
+// 16.5h with every cron heartbeat green (VOZ-434) — nothing could fire. The sweep
+// runs BEFORE that gate, so this detector is not blinded by the failure it reports.
+//
+// 15 minutes: the scheduler promotes one draft per ~60s tick and a busy child at
+// K=1 dials every ~30s, so a quarter hour of silence with work due is never normal.
+// 'paused' children are excluded on purpose — an operator or the reject breaker
+// meant that silence, and the breaker posts its own alert. Pure predicate; the
+// sweep owns the reads (window check, recent calls, due numbers).
+
+export const DIAL_SILENCE_MINUTES = 15;
+
+export interface DialSilenceCandidate {
+  id: string;
+  name: string;
+  status: string;
+  /** Inside its call window both now AND DIAL_SILENCE_MINUTES ago — a child that
+   *  just (re-)entered a window has a legitimate gap behind it. */
+  inWindowThroughout: boolean;
+  /** start_at (today's window open) as epoch ms. */
+  startAtMs: number;
+  /** calls_v2 rows minted in the last DIAL_SILENCE_MINUTES. */
+  recentCalls: number;
+  /** Numbers dialable right now — findNextNumber's own eligibility: pending, or
+   *  pending_retry whose next_attempt_at has passed, under max_attempts. */
+  dueNumbers: number;
+}
+
+export interface DialSilenceResult {
+  trip: boolean;
+  silent: DialSilenceCandidate[];
+}
+
+export function detectDialSilence(
+  candidates: ReadonlyArray<DialSilenceCandidate>,
+  nowMs: number,
+): DialSilenceResult {
+  const startableSince = nowMs - DIAL_SILENCE_MINUTES * 60 * 1000;
+  const silent = candidates.filter(
+    (c) =>
+      (c.status === "draft" || c.status === "running") &&
+      c.inWindowThroughout &&
+      c.startAtMs <= startableSince &&
+      c.recentCalls === 0 &&
+      c.dueNumbers > 0,
+  );
+  return { trip: silent.length > 0, silent };
+}
