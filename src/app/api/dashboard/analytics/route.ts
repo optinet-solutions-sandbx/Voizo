@@ -99,7 +99,9 @@ export async function GET(request: NextRequest) {
     read(
       "campaigns_v2",
       // cio_workspace: the brand scope shown on the Global Performance header (VOZ-216).
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, system_prompt, start_at, created_at, end_at, timezone",
+      // parent_campaign_id: lets the client collapse the daily children under their recurring
+      // parent in the campaigns filter — read-only, no effect on any metric.
+      "id, name, status, source, is_test, campaign_type, parent_campaign_id, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, system_prompt, start_at, created_at, end_at, timezone",
     ),
     // SMS-sent series/columns (Slice 3): windowed, scoped to in-filter campaigns below.
     read(
@@ -194,8 +196,23 @@ export async function GET(request: NextRequest) {
       name: c.name,
       startAt: c.start_at ?? c.created_at ?? null,
       brand: c.cio_workspace ?? null,
+      parentId: c.parent_campaign_id ?? null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  // A recurring PARENT has no calls of its own (it prints 0/0/0/0), so it is never in
+  // inWindowLive — but the client needs its name to head the group its children sit under.
+  // Send only the parents the in-window children actually point at.
+  const referencedParentIds = new Set(
+    inWindowLive.map((c) => c.parent_campaign_id).filter((id): id is string => Boolean(id)),
+  );
+  const campaignParentOptions = live
+    .filter((c) => referencedParentIds.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      startAt: c.start_at ?? c.created_at ?? null,
+      brand: c.cio_workspace ?? null,
+    }));
   // Country filter options (replaces the agent filter, Val 2026-07-07): distinct parsed countries
   // among the in-window campaigns, by the SAME L7_<CC>_ parse used for filter membership. Campaigns
   // with no parseable country contribute nothing (and can't be reached by the country filter).
@@ -288,7 +305,12 @@ export async function GET(request: NextRequest) {
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, endMs),
     heatmap: computeHeatmap(filtered, campaigns),
     perf,
-    options: { campaigns: campaignOptions, countries: countryOptions, prompts: promptOptions },
+    options: {
+      campaigns: campaignOptions,
+      campaignParents: campaignParentOptions,
+      countries: countryOptions,
+      prompts: promptOptions,
+    },
     phone: { query: phone || null, matchedCampaigns },
   });
 }

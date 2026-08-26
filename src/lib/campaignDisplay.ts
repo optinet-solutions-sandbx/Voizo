@@ -163,6 +163,38 @@ export function campaignShortLabel(rawName: string | null | undefined): string {
   return f.display;
 }
 
+/**
+ * Labels for a collapsed GROUP HEADER. Same disambiguation as campaignFilterLabels, plus: when
+ * more than one brand is in scope every header names its own brand, even if nothing collided.
+ *
+ * Why the extra rule — a header is read alone, with no sibling beside it to compare against. The
+ * Fortune Play parents carry "Fortune Play" in their own names, so their Lucky7even twins never
+ * collided and were left anonymous: ten collapsed rows where some named a brand and some did
+ * not (seen on the live page 2026-08-26). One brand in scope adds nothing and stays off.
+ */
+export function campaignGroupHeaderLabels(parents: LabelableCampaign[]): Map<string, string> {
+  const base = campaignFilterLabels(parents);
+  const brandOf = new Map(parents.map((p) => [p.id, brandLabel(p.brand)] as const));
+  if (new Set(brandOf.values()).size < 2) return base;
+  return new Map(
+    [...base].map(([id, label]) => {
+      const b = brandOf.get(id)!;
+      return [id, label.includes(b) ? label : `${label} · ${b}`] as const;
+    }),
+  );
+}
+
+/** WHICH RUN this campaign is, for a row sitting under a parent header that already carries the
+ *  country, name and brand: the date stamped in the name, else the legacy L7_ run tag, else the
+ *  start date. "" when there is nothing real to show — never a guess. */
+export function campaignRunLabel(rawName: string | null | undefined, startAt: string | null): string {
+  const stamp = (rawName ?? "").match(DATE_STAMP)?.[1];
+  if (stamp) return stamp;
+  const tag = formatCampaign(rawName).runTag;
+  if (tag) return tag;
+  return startAt ? new Date(startAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+}
+
 // The fields the filter labels are derived from — structural, so tests need no full row.
 export interface LabelableCampaign {
   id: string;

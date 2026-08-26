@@ -49,6 +49,7 @@ export interface DashCampaignRow {
   source?: string | null; // 'ghost_portal' => hard-excluded
   is_test?: boolean | null;
   campaign_type?: string | null; // 'fixed' | 'recurring'
+  parent_campaign_id?: string | null; // the recurring parent this daily child was spawned from
   voice_id?: string | null; // ElevenLabs voice
   vapi_assistant_name?: string | null; // the CLONE name (== campaign name); not used for display
   base_assistant_id?: string | null; // the BASE agent this clone came from — resolved to a real name in the UI

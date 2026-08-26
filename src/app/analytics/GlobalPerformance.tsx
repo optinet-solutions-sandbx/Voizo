@@ -11,7 +11,8 @@ import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import { Search, X, SlidersHorizontal } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels } from "@/lib/campaignDisplay";
+import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
+import { groupCampaignOptions, type GroupableOption } from "@/lib/campaignGroups";
 import { matchesCampaignName, toggleAllMatching } from "./campaignFilters";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
@@ -64,7 +65,12 @@ interface AnalyticsResponse {
   heatmap: HeatmapResult;
   options: {
     // `brand` = campaigns_v2.cio_workspace (VOZ-216); absent on older API deploys.
-    campaigns: { id: string; name: string; startAt: string | null; brand?: string | null }[];
+    // `parentId` = campaigns_v2.parent_campaign_id — groups the daily children under their
+    // recurring parent in the filter. Absent on older deploys, which just renders flat.
+    campaigns: { id: string; name: string; startAt: string | null; brand?: string | null; parentId?: string | null }[];
+    // The recurring parents those children point at. They never appear in `campaigns` (a parent
+    // has no calls of its own), and they are HEADERS only — never a selectable campaign id.
+    campaignParents?: { id: string; name: string; startAt: string | null; brand?: string | null }[];
     countries: { value: string; label: string }[];
     prompts: { sha: string; label: string; baseAssistantId: string | null }[];
   };
@@ -114,20 +120,45 @@ const CHIP_LIST_MAX = 4;
 const TRIGGER_CLS =
   "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
 
+// The checkbox glyph, shared by the group header (which can be half-selected) and the rows.
+function Tick({ state }: { state: "on" | "off" | "mixed" }) {
+  return (
+    <span
+      className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+        state === "off" ? "border-[var(--border-2)]" : "bg-primary border-primary text-white"
+      }`}
+    >
+      {state === "on" && (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      )}
+      {/* "some of this group" — a dash, not a tick, so it cannot be misread as all of them. */}
+      {state === "mixed" && <span className="block w-2 h-[2px] rounded bg-white" />}
+    </span>
+  );
+}
+
 function MultiSelect({
   label,
   options,
+  parentLabels,
   selected,
   onChange,
 }: {
   label: string;
-  // `search` is what a query is matched against (label + raw campaign name), so a keyword
-  // works whether the operator types what they SEE or what's in the underlying name.
-  options: { value: string; label: string; search: string }[];
+  // `search` is what a query is matched against (label + parent label + raw campaign name), so a
+  // keyword works whether the operator types what they SEE or what's in the underlying name.
+  options: GroupableOption[];
+  // parent campaign id -> group header label. Empty = render flat (older API deploy).
+  parentLabels: Record<string, string>;
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Which parent groups are expanded. Collapsed by default is the whole point: in the default
+  // 7-day window all 63 options are children of just 10 parents (measured 2026-08-26).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Keyword search over the options (Val's CRM team, 2026-08-26): 60+ near-identical
   // campaign names make "reactivation" the only practical way to reach a family of them.
   // Local state, deliberately NOT part of Filters — typing here costs no analytics refetch.
@@ -155,6 +186,9 @@ function MultiSelect({
   const selectedSet = new Set(selected); // hit once per option AND once per match — build it once
   const allShownSelected = shown.length > 0 && shown.every((o) => selectedSet.has(o.value));
   const searching = query.trim().length > 0;
+  // Group AFTER filtering, so a search hides whole groups that have no match — and while a query
+  // is active every surviving group is force-expanded (a collapsed hit reads as "no results").
+  const { groups, loose } = groupCampaignOptions(shown, parentLabels);
   const text = selected.length === 0 ? label : `${selected.length} selected`;
   return (
     <div
@@ -212,28 +246,85 @@ function MultiSelect({
                 {options.length === 0 ? "No campaigns" : `No campaign matches “${query.trim()}”`}
               </div>
             ) : (
-              shown.map((o) => {
-                const on = selectedSet.has(o.value);
-                return (
-                  <button
-                    key={o.value}
-                    type="button"
-                    onClick={() => toggle(o.value)}
-                    aria-pressed={on}
-                    className="w-full flex items-start gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
-                  >
-                    <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-primary border-primary text-white" : "border-[var(--border-2)]"}`}>
-                      {on && (
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M20 6 9 17l-5-5" />
-                        </svg>
-                      )}
-                    </span>
-                    {/* Wraps rather than truncates: the AU/CA/NZ discriminator sits at the END. */}
-                    <span className="whitespace-normal break-words">{o.label}</span>
-                  </button>
-                );
-              })
+              <>
+                {groups.map((g) => {
+                  const ids = g.options.map((o) => o.value);
+                  const on = ids.filter((v) => selectedSet.has(v)).length;
+                  const isOpen = searching || expanded.has(g.key);
+                  return (
+                    <div key={g.key}>
+                      <div className="w-full flex items-center gap-1 pl-1.5 pr-3 hover:bg-[var(--bg-hover)] transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => setExpanded((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(g.key)) next.delete(g.key); else next.add(g.key);
+                            return next;
+                          })}
+                          aria-expanded={isOpen}
+                          aria-label={`${isOpen ? "Collapse" : "Expand"} ${g.label}`}
+                          className="p-1 text-[var(--text-4)] hover:text-[var(--text-2)] shrink-0"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${isOpen ? "rotate-90" : ""}`}>
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                        </button>
+                        {/* A parent is a HEADER, never a campaign id — ticking it selects its
+                            children, which are what actually carry the calls. */}
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={on === ids.length ? "true" : on > 0 ? "mixed" : "false"}
+                          onClick={() => onChange(toggleAllMatching(selected, ids))}
+                          className="flex-1 flex items-start gap-2.5 py-2 text-sm text-left text-[var(--text-1)]"
+                        >
+                          <Tick state={on === ids.length ? "on" : on > 0 ? "mixed" : "off"} />
+                          <span className="whitespace-normal break-words font-medium">{g.label}</span>
+                        </button>
+                        <span className="text-[11px] font-mono text-[var(--text-4)] shrink-0">
+                          {on > 0 && on < ids.length ? `${on}/${ids.length}` : ids.length}
+                        </span>
+                      </div>
+                      {isOpen &&
+                        g.options.map((o) => (
+                          <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => toggle(o.value)}
+                            aria-pressed={selectedSet.has(o.value)}
+                            className="w-full flex items-center gap-2.5 pl-9 pr-3.5 py-1.5 text-[13px] text-left text-[var(--text-2)] hover:bg-[var(--bg-hover)] transition-colors"
+                          >
+                            <Tick state={selectedSet.has(o.value) ? "on" : "off"} />
+                            {/* The header already carries country, name and brand — the child
+                                only has to say which RUN it is. */}
+                            <span className="font-mono">{o.runLabel || o.label}</span>
+                          </button>
+                        ))}
+                    </div>
+                  );
+                })}
+                {groups.length > 0 && loose.length > 0 && (
+                  <div className="px-3.5 pt-2 pb-1 text-[10.5px] uppercase tracking-wide text-[var(--text-4)]">
+                    One-off campaigns
+                  </div>
+                )}
+                {loose.map((o) => {
+                  const on = selectedSet.has(o.value);
+                  return (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => toggle(o.value)}
+                      aria-pressed={on}
+                      className="w-full flex items-start gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
+                    >
+                      <Tick state={on ? "on" : "off"} />
+                      {/* Wraps rather than truncates: the AU/CA/NZ discriminator sits at the END. */}
+                      <span className="whitespace-normal break-words">{o.label}</span>
+                    </button>
+                  );
+                })}
+              </>
             )}
           </div>
         </div>
@@ -331,13 +422,25 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   // 2026-08-26). Shared by the dropdown options AND the active chips, so they always agree.
   const rawCampaigns = data?.options.campaigns ?? [];
   const campaignLabelById = campaignFilterLabels(rawCampaigns);
+  // Group headers get their labels from the PARENTS through the same disambiguator, because the
+  // parent names collide too: the AU REACTIVATION parent exists once per brand under one name.
+  const rawParents = data?.options.campaignParents ?? [];
+  const parentLabels: Record<string, string> = Object.fromEntries(campaignGroupHeaderLabels(rawParents));
   // Searchable text = the visible label PLUS the raw name, so a keyword still finds a campaign by
   // something the short label drops ("voizo", "fortune", a date stamp) as well as by what's shown.
-  const campaignOptions = rawCampaigns.map((c) => ({
-    value: c.id,
-    label: campaignLabelById.get(c.id)!,
-    search: `${campaignLabelById.get(c.id)!} ${c.name}`,
-  }));
+  // A child also matches on its PARENT's label, so searching "reactivation" still reaches the
+  // children of a parent whose group is collapsed.
+  const campaignOptions = rawCampaigns.map((c) => {
+    const label = campaignLabelById.get(c.id)!;
+    const parentLabel = c.parentId ? (parentLabels[c.parentId] ?? "") : "";
+    return {
+      value: c.id,
+      label,
+      search: `${label} ${parentLabel} ${c.name}`,
+      parentId: c.parentId ?? null,
+      runLabel: campaignRunLabel(c.name, c.startAt),
+    };
+  });
   const campaignName = (id: string) => campaignLabelById.get(id) ?? id;
   const promptLabelFor = (sha: string) => {
     const o = data?.options.prompts.find((p) => p.sha === sha);
@@ -472,6 +575,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         <MultiSelect
           label="All campaigns"
           options={campaignOptions}
+          parentLabels={parentLabels}
           selected={filters.campaignIds}
           onChange={(ids) => set({ campaignIds: ids })}
         />

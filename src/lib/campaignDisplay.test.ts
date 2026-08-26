@@ -3,6 +3,8 @@ import {
   formatCampaign,
   campaignShortLabel,
   campaignFilterLabels,
+  campaignRunLabel,
+  campaignGroupHeaderLabels,
   promptAgentLabel,
   campaignIdsForCountry,
   brandLabel,
@@ -231,5 +233,59 @@ describe("campaignFilterLabels", () => {
   it("survives a missing brand and a missing start date", () => {
     const m = campaignFilterLabels([camp("1", AU, null, null)]);
     expect(m.get("1")).toBe("Australia · REACTIVATION (2026-08-20)");
+  });
+});
+
+// Inside a parent group the header already carries country/name/brand, so a child row only has
+// to say WHICH RUN it is (2026-08-26). Grouped dropdown, 2026-08-26.
+describe("campaignRunLabel", () => {
+  it("reads the run date stamped in the name", () => {
+    expect(campaignRunLabel("Daily Automated Conversion | VOIZO REACTIVATION Campaign - AU (2026-08-20)", null))
+      .toBe("2026-08-20");
+    expect(campaignRunLabel("VOIZO REACTIVATION - NZ | Daily Automated (2026-08-26)", null)).toBe("2026-08-26");
+  });
+
+  it("falls back to the L7_ run tag", () => {
+    expect(campaignRunLabel("L7_AU_VOIZO_RND_20NDFS_300%DEPMATCH_05/06/2026", null)).toBe("05/06/2026");
+  });
+
+  it("falls back to the start date when the name carries neither", () => {
+    // Mid-day UTC so the day cannot slip across a timezone.
+    expect(campaignRunLabel("Agent response test - EVA", "2026-05-13T12:00:00+00:00")).toContain("May");
+  });
+
+  it("returns \"\" rather than a misleading date when there is nothing to show", () => {
+    expect(campaignRunLabel("Agent response test - EVA", null)).toBe("");
+    expect(campaignRunLabel(null, null)).toBe("");
+  });
+});
+
+// A GROUP HEADER has to describe itself — an operator reading one of ten collapsed rows has no
+// sibling to compare it against. campaignFilterLabels only names the brand when labels COLLIDE,
+// and the Fortune Play parents carry "Fortune Play" in their own names, so no collision fires
+// and the Lucky7even sibling was left anonymous. Verified on the live page, 2026-08-26.
+describe("campaignGroupHeaderLabels", () => {
+  const p = (id: string, name: string, brand: string | null) => ({ id, name, brand, startAt: null });
+  const L7 = "Daily Automated Conversion | VOIZO RND REG YESTERDAY AU";
+  const FP = "Daily Automated Conversion | VOIZO RND REG YESTERDAY AU | Fortune Play";
+
+  it("THE POINT: both siblings name their brand, and neither says it twice", () => {
+    const m = campaignGroupHeaderLabels([p("1", L7, "lucky7even"), p("2", FP, "fortuneplay")]);
+    expect(m.get("1")).toBe("Australia · RND REG YESTERDAY · Lucky7even");
+    expect(m.get("2")).toBe("Australia · RND REG YESTERDAY · Fortune Play");
+  });
+
+  it("adds no brand at all when only one brand is in scope — that would be noise", () => {
+    const m = campaignGroupHeaderLabels([p("1", L7, "lucky7even")]);
+    expect(m.get("1")).toBe("Australia · RND REG YESTERDAY");
+  });
+
+  it("still disambiguates two parents that share a name AND a brand", () => {
+    const m = campaignGroupHeaderLabels([
+      { id: "1", name: L7, brand: "lucky7even", startAt: "2026-05-13T12:00:00+00:00" },
+      { id: "2", name: L7, brand: "lucky7even", startAt: "2026-05-20T12:00:00+00:00" },
+      p("3", FP, "fortuneplay"),
+    ]);
+    expect(m.get("1")).not.toBe(m.get("2"));
   });
 });
