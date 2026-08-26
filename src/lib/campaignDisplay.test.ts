@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatCampaign,
   campaignShortLabel,
+  campaignFilterLabels,
   promptAgentLabel,
   campaignIdsForCountry,
   brandLabel,
@@ -134,5 +135,101 @@ describe("promptAgentLabel", () => {
       "You are a friendly sales agent… · e573",
     );
     expect(promptAgentLabel("   ", "snippet · 9f1c")).toBe("snippet · 9f1c");
+  });
+});
+
+// The pipe-delimited family (2026-08 naming: "Daily Automated Conversion | VOIZO
+// <THING> <CC> [| Brand]"). formatCampaign only PREPENDS the country to these and
+// keeps the whole raw name, so the filter dropdown read "Daily Automated Conversi…"
+// on every row (Val's CRM team, 2026-08-26).
+describe("campaignShortLabel — pipe-delimited names", () => {
+  it("drops the boilerplate segment and the VOIZO / Campaign noise", () => {
+    expect(campaignShortLabel("Daily Automated Conversion | VOIZO REACTIVATION Campaign - AU"))
+      .toBe("Australia · REACTIVATION");
+    expect(campaignShortLabel("Daily Automated Conversion | VOIZO REACTIVATION Campaign - CA"))
+      .toBe("Canada · REACTIVATION");
+    expect(campaignShortLabel("Daily Automated Conversion | VOIZO RND REG YESTERDAY AU"))
+      .toBe("Australia · RND REG YESTERDAY");
+  });
+
+  it("reads the same however the segments are ordered", () => {
+    expect(campaignShortLabel("VOIZO REACTIVATION - NZ | Daily Automated"))
+      .toBe("New Zealand · REACTIVATION");
+    expect(campaignShortLabel("VOIZO RND REG YESTERDAY NZ | Daily Automated Conversion"))
+      .toBe("New Zealand · RND REG YESTERDAY");
+  });
+
+  it("THE POINT: a trailing brand segment survives, so the two AU runs stay distinct", () => {
+    const plain = campaignShortLabel("Daily Automated Conversion | VOIZO RND REG YESTERDAY AU");
+    const branded = campaignShortLabel("Daily Automated Conversion | VOIZO RND REG YESTERDAY AU | Fortune Play");
+    expect(branded).toBe("Australia · RND REG YESTERDAY · Fortune Play");
+    expect(plain).not.toBe(branded);
+  });
+
+  it("keeps the naming part in front of a long brand + date segment", () => {
+    // The distinctive part is the SHORTER segment here, so "longest wins" reads backwards.
+    expect(campaignShortLabel("Daily Automated Conversion | VOIZO RND REG YESTERDAY AU | Fortune Play (2026-08-25)"))
+      .toBe("Australia · RND REG YESTERDAY · Fortune Play (2026-08-25)");
+  });
+
+  it("leaves the L7_ family exactly as it was", () => {
+    expect(campaignShortLabel("L7_AU_VOIZO_RND_20NDFS_300%DEPMATCH_05/06/2026")).toBe("Australia · 05/06/2026");
+  });
+
+  it("falls back to the full display rather than rendering an empty label", () => {
+    // Every segment is boilerplate — there is no distinctive part to lead with.
+    expect(campaignShortLabel("Daily Automated | Daily Automated Conversion"))
+      .toBe(formatCampaign("Daily Automated | Daily Automated Conversion").display);
+    expect(campaignShortLabel("|")).toBe(formatCampaign("|").display);
+    expect(campaignShortLabel(null)).toBe(formatCampaign(null).display);
+  });
+});
+
+// The campaigns FILTER labels (dropdown options + active chips). Verified 2026-08-26 against
+// the real 234-campaign lifetime payload: 233 of 234 render distinctly.
+describe("campaignFilterLabels", () => {
+  const camp = (id: string, name: string, brand: string | null, startAt: string | null) => ({ id, name, brand, startAt });
+  const AU = "Daily Automated Conversion | VOIZO REACTIVATION Campaign - AU (2026-08-20)";
+
+  it("adds nothing when the short label is already unique", () => {
+    const m = campaignFilterLabels([
+      camp("1", AU, "lucky7even", "2026-08-20T01:00:00+00:00"),
+      camp("2", "Daily Automated Conversion | VOIZO RND REG YESTERDAY AU (2026-08-20)", "fortuneplay", "2026-08-20T01:00:00+00:00"),
+    ]);
+    expect(m.get("1")).toBe("Australia · REACTIVATION (2026-08-20)");
+    expect(m.get("2")).toBe("Australia · RND REG YESTERDAY (2026-08-20)");
+  });
+
+  it("THE POINT: the same campaign run for two brands separates on BRAND, not the date", () => {
+    // Measured: these pairs share the name AND start the same minute, so a date cannot split them.
+    const m = campaignFilterLabels([
+      camp("1", AU, "lucky7even", "2026-08-20T01:00:00+00:00"),
+      camp("2", AU, "fortuneplay", "2026-08-20T01:00:00+00:00"),
+    ]);
+    expect(m.get("1")).toBe("Australia · REACTIVATION (2026-08-20) · Lucky7even");
+    expect(m.get("2")).toBe("Australia · REACTIVATION (2026-08-20) · Fortune Play");
+  });
+
+  it("falls back to the start date when the brand is shared too", () => {
+    // A name carrying no run date of its own, run twice — the date is what's left.
+    const m = campaignFilterLabels([
+      camp("1", "Agent response test - EVA", "lucky7even", "2026-05-13T12:00:00+00:00"),
+      camp("2", "Agent response test - EVA", "lucky7even", "2026-05-20T12:00:00+00:00"),
+    ]);
+    expect(m.get("1")).not.toBe(m.get("2"));
+    expect(m.get("1")).toContain("Lucky7even");
+  });
+
+  it("a genuine twin (same name, brand AND day) still reads the same — as it always did", () => {
+    const m = campaignFilterLabels([
+      camp("1", "Agent response test - EVA", "lucky7even", "2026-05-13T09:23:12+00:00"),
+      camp("2", "Agent response test - EVA", "lucky7even", "2026-05-13T09:27:26+00:00"),
+    ]);
+    expect(m.get("1")).toBe(m.get("2"));
+  });
+
+  it("survives a missing brand and a missing start date", () => {
+    const m = campaignFilterLabels([camp("1", AU, null, null)]);
+    expect(m.get("1")).toBe("Australia · REACTIVATION (2026-08-20)");
   });
 });

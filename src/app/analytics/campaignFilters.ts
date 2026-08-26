@@ -56,6 +56,18 @@ export function matchesCampaignName(name: string | null | undefined, needle: str
   return tokens.every((t) => hay.includes(t));
 }
 
+/** Bulk-toggle the options a search turned up (the campaigns filter's "Select all N").
+ *  All of `shown` already selected -> drop exactly those; otherwise add the missing ones.
+ *  Ids selected under a DIFFERENT query are never touched, and an empty `shown` (a query
+ *  with no hits) is a no-op rather than a silent clear-all. */
+export function toggleAllMatching(selected: string[], shown: string[]): string[] {
+  if (shown.length === 0) return selected;
+  const inShown = new Set(shown);
+  const isSelected = new Set(selected);
+  if (shown.every((v) => isSelected.has(v))) return selected.filter((v) => !inShown.has(v));
+  return [...selected, ...shown.filter((v) => !isSelected.has(v))];
+}
+
 export function matchesCampaignFilters(r: FilterableCampaign, f: CampaignFilterState): boolean {
   if (!matchesCampaignName(r.name, f.name)) return false;
   if (f.country && r.country !== f.country) return false;

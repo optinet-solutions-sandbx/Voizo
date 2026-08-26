@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, matchesCampaignName, scriptKeyOf,
+  toggleAllMatching,
   DEFAULT_BRAND_KEY, NO_CAMPAIGN_FILTERS, NO_SCRIPT, type FilterableCampaign,
 } from "./campaignFilters";
 
@@ -99,5 +100,37 @@ describe("matchesCampaignName — campaign search (Val 2026-08-25)", () => {
   it("narrows, never widens: a matching row still has to pass the other filters", () => {
     const f = { ...NO_CAMPAIGN_FILTERS, name: "fortune", country: "Canada" };
     expect(matchesCampaignFilters(row(), f)).toBe(false);
+  });
+});
+
+describe("toggleAllMatching — select/deselect every option the search turned up", () => {
+  it("selects them all when none of them is selected yet", () => {
+    expect(toggleAllMatching([], ["a", "b", "c"])).toEqual(["a", "b", "c"]);
+  });
+
+  it("a PARTIAL selection selects the rest — it does not deselect", () => {
+    expect(toggleAllMatching(["b"], ["a", "b", "c"])).toEqual(["b", "a", "c"]);
+  });
+
+  it("deselects them all only once every one of them is selected", () => {
+    expect(toggleAllMatching(["a", "b", "c"], ["a", "b", "c"])).toEqual([]);
+  });
+
+  it("THE POINT: selections outside the search are never touched, either way", () => {
+    // "z" was picked under a different query — selecting all of a-c must keep it.
+    expect(toggleAllMatching(["z"], ["a", "b"])).toEqual(["z", "a", "b"]);
+    // ...and so must deselecting all of a-b.
+    expect(toggleAllMatching(["z", "a", "b"], ["a", "b"])).toEqual(["z"]);
+  });
+
+  it("a query with no hits is a no-op — it must not wipe the selection", () => {
+    expect(toggleAllMatching(["z"], [])).toEqual(["z"]);
+    expect(toggleAllMatching([], [])).toEqual([]);
+  });
+
+  it("never duplicates an id", () => {
+    const out = toggleAllMatching(["a"], ["a", "b"]);
+    expect(out).toEqual(["a", "b"]);
+    expect(new Set(out).size).toBe(out.length);
   });
 });

@@ -104,11 +104,106 @@ export function distinctBrandLabels(workspaces: (string | null | undefined)[]): 
 // offer ("20 NDFS + 300% DepMatch" is constant noise across a campaign family). Falls back to
 // the full display when there's no run-date to distinguish by. Pair with formatCampaign().display
 // as the on-hover full name.
+//
+// The 2026-08 naming family is pipe-delimited instead — "Daily Automated Conversion | VOIZO
+// REACTIVATION Campaign - AU [| Fortune Play]" — and carries no L7_ offer to parse, so
+// formatCampaign can only prepend the country and keep the whole raw name: every row of the
+// campaigns filter read "Daily Automated Conversi…" (Val's CRM team, 2026-08-26).
+// pipeShortLabel leads with the DISTINCTIVE segment for that family.
+const BOILERPLATE_SEG = /^daily\s+automated(\s+conversions?)?$/i;
+// Every name in the family ends with the run date, and it lands on a DIFFERENT segment
+// depending on the shape ("… - AU (2026-08-20)" vs "… | Daily Automated (2026-08-20)").
+// Peel it off the whole name first, so the boilerplate test still recognises its segment,
+// then put it back at the end — one position for every shape.
+const DATE_STAMP = /\s*\((\d{4}-\d{2}-\d{2})\)\s*$/;
+
+// Strip what every campaign in the family shares: the VOIZO vendor prefix, the filler word
+// "Campaign", and the country token (rendered separately, and friendly). Splitting on the
+// separators also drops the "- AU" dash debris. `cc` is the PARSED country token, so a
+// legitimate two-letter word that isn't the country survives.
+function cleanSegment(seg: string, cc: string): string {
+  return seg
+    .replace(/\bvoizo\b/gi, "")
+    .replace(/\bcampaigns?\b/gi, "")
+    .split(/[\s_]+/)
+    // A dash is a SEPARATOR here ("Campaign - AU") but also part of a date
+    // ("Fortune Play (2026-08-25)"), so peel it off a token's ends, never split on it.
+    .map((t) => t.replace(/^[-\u2013\u00b7]+/, "").replace(/[-\u2013\u00b7]+$/, ""))
+    .filter((t) => t && t !== cc)
+    .join(" ");
+}
+
+// Segments in their original order, boilerplate dropped — so a trailing brand/date segment
+// still distinguishes two otherwise-identical runs. "" when nothing distinctive survives,
+// which the caller reads as "fall back to the full display".
+function pipeShortLabel(name: string): string {
+  const cc = parseCountryToken(name);
+  const stamp = name.match(DATE_STAMP)?.[1] ?? "";
+  const cleaned = name
+    .replace(DATE_STAMP, "")
+    .split("|")
+    .map((s) => s.trim())
+    .filter((s) => s && !BOILERPLATE_SEG.test(s))
+    .map((s) => cleanSegment(s, cc))
+    .filter(Boolean);
+  if (cleaned.length === 0) return "";
+  // Original order: the first surviving segment NAMES the campaign and a brand/date segment
+  // trails it. Leading with the LONGEST instead reads backwards on
+  // "... | VOIZO RND REG YESTERDAY AU | Fortune Play (2026-08-25)".
+  const core = cleaned.join(" · ");
+  return stamp ? `${core} (${stamp})` : core;
+}
+
 export function campaignShortLabel(rawName: string | null | undefined): string {
   const f = formatCampaign(rawName);
   if (f.runTag && f.country) return `${f.country} · ${f.runTag}`;
   if (f.runTag && f.offer) return `${f.offer} · ${f.runTag}`;
+  const piped = (rawName ?? "").includes("|") ? pipeShortLabel(rawName ?? "") : "";
+  if (piped) return f.country ? `${f.country} · ${piped}` : piped;
   return f.display;
+}
+
+// The fields the filter labels are derived from — structural, so tests need no full row.
+export interface LabelableCampaign {
+  id: string;
+  name: string;
+  brand?: string | null; // cio_workspace; absent on older API deploys
+  startAt: string | null;
+}
+
+/**
+ * Labels for the campaign FILTER (the dropdown options AND the active chips), disambiguated
+ * only as far as they have to be.
+ *
+ * Two campaigns sharing a short label are the same campaign run for two BRANDS — measured
+ * 2026-08-26 across a 234-campaign fleet: 33 such pairs, every one starting the same minute,
+ * so the start date cannot separate them and brand always can. The date stays as the last
+ * resort for a name that carries no run date of its own. Anything still tied after both is a
+ * genuine twin (same name, brand and day) and reads identically, exactly as it did before.
+ */
+export function campaignFilterLabels(camps: LabelableCampaign[]): Map<string, string> {
+  const tally = (vals: Iterable<string>) => {
+    const m = new Map<string, number>();
+    for (const v of vals) m.set(v, (m.get(v) ?? 0) + 1);
+    return m;
+  };
+  const short = new Map(camps.map((c) => [c.id, campaignShortLabel(c.name)] as const));
+  const shortCounts = tally(short.values());
+  const branded = new Map(
+    camps.map((c) => {
+      const s = short.get(c.id)!;
+      return [c.id, (shortCounts.get(s) ?? 0) > 1 ? `${s} · ${brandLabel(c.brand)}` : s] as const;
+    }),
+  );
+  const brandedCounts = tally(branded.values());
+  return new Map(
+    camps.map((c) => {
+      const b = branded.get(c.id)!;
+      if ((brandedCounts.get(b) ?? 0) === 1) return [c.id, b] as const;
+      const d = c.startAt ? new Date(c.startAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+      return [c.id, d ? `${b} · ${d}` : b] as const;
+    }),
+  );
 }
 
 // Compose a prompt's display label by leading with its base-agent NAME (the reliable persona —

@@ -11,7 +11,8 @@ import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import { Search, X, SlidersHorizontal } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import { formatCampaign, promptAgentLabel, distinctBrandLabels } from "@/lib/campaignDisplay";
+import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels } from "@/lib/campaignDisplay";
+import { matchesCampaignName, toggleAllMatching } from "./campaignFilters";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
 import CampaignTable from "./CampaignTable";
@@ -105,6 +106,10 @@ function buildQuery(f: Filters): string {
   return p.toString();
 }
 
+// Above this many selected campaigns the chip row collapses to a single "N campaigns" chip —
+// four fit on one line, thirty do not (measured 2026-08-26: they filled eight rows).
+const CHIP_LIST_MAX = 4;
+
 // Trigger/panel styling mirrors StyledSelect so the bar is visually uniform.
 const TRIGGER_CLS =
   "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
@@ -116,56 +121,121 @@ function MultiSelect({
   onChange,
 }: {
   label: string;
-  options: { value: string; label: string }[];
+  // `search` is what a query is matched against (label + raw campaign name), so a keyword
+  // works whether the operator types what they SEE or what's in the underlying name.
+  options: { value: string; label: string; search: string }[];
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Keyword search over the options (Val's CRM team, 2026-08-26): 60+ near-identical
+  // campaign names make "reactivation" the only practical way to reach a family of them.
+  // Local state, deliberately NOT part of Filters — typing here costs no analytics refetch.
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Closing clears the query. Reopening onto a stale filtered list reads as "my campaigns
+  // disappeared", and the selection it hides is still driving the KPIs.
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, []);
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, []);
+  }, [close]);
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+  // Same token-AND predicate as the Campaign Performance search (f902922): every whitespace-
+  // separated token must appear, in any order, so "rnd au" works and a longer query only narrows.
+  const shown = options.filter((o) => matchesCampaignName(o.search, query));
+  const selectedSet = new Set(selected); // hit once per option AND once per match — build it once
+  const allShownSelected = shown.length > 0 && shown.every((o) => selectedSet.has(o.value));
+  const searching = query.trim().length > 0;
   const text = selected.length === 0 ? label : `${selected.length} selected`;
   return (
-    <div ref={ref} className="relative min-w-[170px]">
-      <button type="button" onClick={() => setOpen(!open)} className={TRIGGER_CLS}>
+    <div
+      ref={ref}
+      className="relative min-w-[170px]"
+      // Escape hands focus BACK to the trigger. Only on this path: the click-outside close
+      // must leave focus wherever the user just clicked.
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        close();
+        triggerRef.current?.focus();
+      }}
+    >
+      <button ref={triggerRef} type="button" onClick={() => (open ? close() : setOpen(true))} aria-expanded={open} className={TRIGGER_CLS}>
         <span className={selected.length ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}>{text}</span>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-[var(--text-3)] transition-transform ${open ? "rotate-180" : ""}`}>
           <path d="m6 9 6 6 6-6" />
         </svg>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1.5 w-[max(100%,240px)] max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
-          {options.length === 0 ? (
-            <div className="px-3.5 py-2.5 text-xs text-[var(--text-3)]">No campaigns</div>
-          ) : (
-            options.map((o) => {
-              const on = selected.includes(o.value);
-              return (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => toggle(o.value)}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
-                >
-                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-primary border-primary text-white" : "border-[var(--border-2)]"}`}>
-                    {on && (
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5" />
-                      </svg>
-                    )}
-                  </span>
-                  <span className="truncate">{o.label}</span>
-                </button>
-              );
-            })
+        // The panel sizes to its content the way StyledSelect has since 3b30ed3 — this local
+        // twin never got that fix, which is why every row read "Daily Automated Conversi…".
+        // Only the option LIST scrolls, so the search box can't scroll out of reach.
+        <div className="absolute z-50 mt-1.5 min-w-full w-max max-w-[min(90vw,28rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
+          <div className="px-2 pb-1.5">
+            <div className="relative">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search campaigns by keyword"
+                placeholder="Search campaigns…"
+                className="pl-7 pr-2 py-1.5 w-full text-[12.5px] rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary"
+              />
+            </div>
+          </div>
+          {searching && shown.length > 0 && (
+            // The actual ask: reach a whole family ("all reactivation") in one click instead of
+            // ticking them one by one. Selections made under a different query are untouched.
+            <button
+              type="button"
+              onClick={() => onChange(toggleAllMatching(selected, shown.map((o) => o.value)))}
+              className="w-full flex items-center justify-between gap-3 px-3.5 py-1.5 text-[11.5px] border-y border-[var(--border)] text-primary hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              <span>{allShownSelected ? `Deselect all ${shown.length}` : `Select all ${shown.length}`}</span>
+              <span className="text-[var(--text-4)] font-mono">
+                {shown.length} of {options.length}
+              </span>
+            </button>
           )}
+          <div className="max-h-64 overflow-y-auto">
+            {shown.length === 0 ? (
+              <div className="px-3.5 py-2.5 text-xs text-[var(--text-3)]">
+                {options.length === 0 ? "No campaigns" : `No campaign matches “${query.trim()}”`}
+              </div>
+            ) : (
+              shown.map((o) => {
+                const on = selectedSet.has(o.value);
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => toggle(o.value)}
+                    aria-pressed={on}
+                    className="w-full flex items-start gap-2.5 px-3.5 py-2 text-sm text-left text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-colors"
+                  >
+                    <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? "bg-primary border-primary text-white" : "border-[var(--border-2)]"}`}>
+                      {on && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      )}
+                    </span>
+                    {/* Wraps rather than truncates: the AU/CA/NZ discriminator sits at the END. */}
+                    <span className="whitespace-normal break-words">{o.label}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -255,20 +325,19 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
     { value: "", label: "All prompts" },
     ...(data?.options.prompts ?? []).map((p) => ({ value: p.sha, label: promptDisplay(p.sha, p.label) })),
   ];
-  // Campaign labels: server lists only in-window campaigns; here we disambiguate same-named ones
-  // with their start date. campaignLabelById is shared by the dropdown options AND the active chips.
+  // Campaign labels: the server lists only in-window campaigns; campaignFilterLabels turns them
+  // into the DE-BOILERPLATED short form and disambiguates what collides (sixty raw names all
+  // opening "Daily Automated Conversion | VOIZO …" are unreadable in a dropdown — Val's CRM team,
+  // 2026-08-26). Shared by the dropdown options AND the active chips, so they always agree.
   const rawCampaigns = data?.options.campaigns ?? [];
-  const campaignNameCounts = new Map<string, number>();
-  for (const c of rawCampaigns) campaignNameCounts.set(c.name, (campaignNameCounts.get(c.name) ?? 0) + 1);
-  const fmtShortDate = (iso: string | null) =>
-    iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
-  const campaignLabelById = new Map(
-    rawCampaigns.map((c) => {
-      const d = (campaignNameCounts.get(c.name) ?? 0) > 1 ? fmtShortDate(c.startAt) : "";
-      return [c.id, d ? `${c.name} · ${d}` : c.name] as const;
-    }),
-  );
-  const campaignOptions = rawCampaigns.map((c) => ({ value: c.id, label: campaignLabelById.get(c.id)! }));
+  const campaignLabelById = campaignFilterLabels(rawCampaigns);
+  // Searchable text = the visible label PLUS the raw name, so a keyword still finds a campaign by
+  // something the short label drops ("voizo", "fortune", a date stamp) as well as by what's shown.
+  const campaignOptions = rawCampaigns.map((c) => ({
+    value: c.id,
+    label: campaignLabelById.get(c.id)!,
+    search: `${campaignLabelById.get(c.id)!} ${c.name}`,
+  }));
   const campaignName = (id: string) => campaignLabelById.get(id) ?? id;
   const promptLabelFor = (sha: string) => {
     const o = data?.options.prompts.find((p) => p.sha === sha);
@@ -285,11 +354,20 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         set({ range: "7d", from: undefined, to: undefined });
       },
     },
-    ...filters.campaignIds.map((id) => ({
-      key: `c-${id}`,
-      label: campaignName(id),
-      onRemove: () => set({ campaignIds: filters.campaignIds.filter((x) => x !== id) }),
-    })),
+    // Past a handful, one chip for the lot. "Select all 30" used to lay eight rows of chips
+    // across the bar and push the KPI cards off screen; nobody unpicks thirty campaigns one
+    // chip at a time anyway — they reopen the dropdown, or clear the lot here.
+    ...(filters.campaignIds.length > CHIP_LIST_MAX
+      ? [{
+          key: "campaigns",
+          label: `${filters.campaignIds.length} campaigns`,
+          onRemove: () => set({ campaignIds: [] }),
+        }]
+      : filters.campaignIds.map((id) => ({
+          key: `c-${id}`,
+          label: campaignName(id),
+          onRemove: () => set({ campaignIds: filters.campaignIds.filter((x) => x !== id) }),
+        }))),
     ...(filters.country ? [{ key: "country", label: `Country: ${filters.country}`, onRemove: () => set({ country: "" }) }] : []),
     ...(filters.prompt ? [{ key: "prompt", label: `Prompt: ${promptLabelFor(filters.prompt)}`, onRemove: () => set({ prompt: "" }) }] : []),
     ...(filters.phone.trim() ? [{ key: "phone", label: `Phone: ${filters.phone.trim()}`, onRemove: () => set({ phone: "" }) }] : []),
