@@ -130,6 +130,28 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
   const recipient = args.to.startsWith("+") ? args.to.slice(1) : args.to;
 
   const requestBody = {
+    // BOTH message fields, same content, on purpose (2026-08-27).
+    //
+    // Mobivate's docs name this field `text`; we have sent `body` since the
+    // integration was written, and messages deliver, so their send path accepts
+    // it. But `shortenUrls: true` (on since 8420c70, 2026-05-04) fires only
+    // SOMETIMES: measured over the 19 Aug capture, AU averaged 1.29 billed parts
+    // per message (mostly shortened) while all 134 delivered NZ messages billed
+    // 2 parts with the full 64-char URL still in Mobivate's own stored text (0
+    // shortened). Another integration on the same account gets `cllk.me` links on
+    // single-sends, so the feature works there. The most likely difference we can
+    // see is this field name: a shortener reading the documented `text` would
+    // never see a body-only payload, while the sender falls back to `body`.
+    //
+    // Populating both is the safe test of that: if they only ever read `body`,
+    // nothing changes; if the shortener wants `text`, it starts firing. Sending
+    // `text` ALONE would risk every SMS if some middleware needs `body`.
+    // Unshortened messages cross the 160-char line and bill double — about 37%
+    // of parts on that capture were avoidable second parts, and NZ is the
+    // priciest lane at EUR 0.11 per delivered message.
+    // REVERT THIS if Mobivate confirms the field is irrelevant and names the
+    // real cause (country, sender ID, or destination domain).
+    text: args.body,
     body: args.body,
     // Per-brand originator resolved at the call site (VOZ per-brand SMS); the
     // module-load default keeps pre-per-brand callers behaving exactly as before.

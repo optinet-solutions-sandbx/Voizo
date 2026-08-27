@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSmsSenderId } from "./mobivate";
 import { CIO_DEFAULT_WORKSPACE } from "./customerio";
 
@@ -70,5 +70,84 @@ describe("resolveSmsSenderId (per-brand SMS originator)", () => {
     const res = resolveSmsSenderId();
     expect(res.senderId).toBeNull();
     expect(res.error).toContain("MOBIVATE_SENDER_ID");
+  });
+});
+
+// ── 2026-08-27: the request body we actually POST ───────────────────────────
+// sendSMS reads its env at MODULE LOAD, so each case sets env then imports fresh
+// via vi.resetModules() + dynamic import. fetch is stubbed: nothing leaves the
+// machine and no message is ever sent.
+describe("sendSMS request body", () => {
+  const ENV_KEYS = ["MOBIVATE_API_KEY", "MOBIVATE_API_HOST", "MOBIVATE_SENDER_ID"] as const;
+  const saved: Record<string, string | undefined> = {};
+  let realFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    process.env.MOBIVATE_API_KEY = "test-key";
+    process.env.MOBIVATE_API_HOST = "vortex.example.com";
+    process.env.MOBIVATE_SENDER_ID = "Lucky7even";
+    realFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    globalThis.fetch = realFetch;
+    vi.resetModules();
+  });
+
+  async function captureRequest(body: string) {
+    let captured: Record<string, unknown> | null = null;
+    let calledUrl = "";
+    globalThis.fetch = (async (url: string, init: { body?: string }) => {
+      calledUrl = String(url);
+      captured = JSON.parse(String(init?.body ?? "{}"));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, record: { id: "prov-1" } }),
+      };
+    }) as unknown as typeof globalThis.fetch;
+    vi.resetModules();
+    const { sendSMS } = await import("./mobivate");
+    const result = await sendSMS({ to: "+64211657305", body, reference: "our-row-id" });
+    return { captured: captured as unknown as Record<string, unknown>, calledUrl, result };
+  }
+
+  const OFFER =
+    "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight. https://Lucky-even.win/promotions?fast-deposit=modal&bonus=LUCKY STOP? Qwt5.me";
+
+  it("sends the message in BOTH `text` and `body`, byte-identical", () => {
+    // The whole point of the 08-27 change: Mobivate documents `text`, we have
+    // always sent `body`. A drift between the two would text two different things.
+    return captureRequest(OFFER).then(({ captured }) => {
+      expect(captured.text).toBe(OFFER);
+      expect(captured.body).toBe(OFFER);
+      expect(captured.text).toBe(captured.body);
+    });
+  });
+
+  it("keeps asking for URL shortening and opt-out exclusion", () => {
+    return captureRequest(OFFER).then(({ captured }) => {
+      expect(captured.shortenUrls).toBe(true);
+      expect(captured.excludeOptouts).toBe(true);
+    });
+  });
+
+  it("strips the leading + from the recipient and passes originator + reference", () => {
+    return captureRequest(OFFER).then(({ captured, calledUrl }) => {
+      expect(captured.recipient).toBe("64211657305");
+      expect(captured.originator).toBe("Lucky7even");
+      expect(captured.reference).toBe("our-row-id");
+      expect(calledUrl).toBe("https://vortex.example.com/send/single");
+    });
+  });
+
+  it("returns the provider message id we store on the sms row", () => {
+    return captureRequest(OFFER).then(({ result }) => {
+      expect(result).toEqual({ success: true, providerMessageId: "prov-1", error: null });
+    });
   });
 });
