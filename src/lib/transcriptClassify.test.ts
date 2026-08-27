@@ -715,3 +715,109 @@ describe("isConclusiveVoicemail — NEVER fires on live-human utterances", () =>
     expect(isConclusiveVoicemail("   ")).toBe(false);
   });
 });
+
+// ── 2026-08-27 (VOZ-463): Google Call Assist's second script ────────────────
+// Every fixture below is a REAL production transcript, verbatim (ids in the
+// comments). The 08-13 addition matched only the "say who you are" call screen;
+// Google also answers with "I'm call assist by Google, recording this call for
+// the person you're trying to reach" and then narrates the outcome. Measured
+// over all 21,847 prod transcripts: 43 of these read as HUMAN, most recent
+// 2026-08-24, all stored voicemail=false — so under optin_reached_only they were
+// still being texted at EUR 0.032 a message.
+
+const CALL_ASSIST = {
+  // 9a29eed8, 2026-06-25 — the canonical script, said 5 times verbatim.
+  canonical:
+    "User: Hi. I'm call assist by Google, recording this call for the person you're trying to reach. Before I try to connect you, can I ask what you're calling about?\nAI: Goodbye.",
+  // 2e1c4f8b, 2026-07-30 — STT hears "calling assist".
+  asrCallingAssist:
+    "User: Hi. I'm calling assist by Google recording this call for the person you're trying to reach. I try to connect you, can I ask what you're calling about?\nAI: Goodbye.",
+  // b2594cf7, 2026-07-29 — STT drops the brand word entirely.
+  asrCallingThisBy:
+    "User: Hi. I'm calling this by Google. Recording this call for the person you're trying to reach. Can you say what you're calling about?\nAI: Goodbye.",
+  // 3a069ae3, 2026-07-30 — "calling just by Google".
+  asrCallingJustBy:
+    "User: Hi. I'm calling just by Google recording this call for the person you're trying to reach. Before I try to connect you, can I ask what you're calling about?\nAI: Goodbye.",
+  // 2fab7cb1, 2026-07-30 — "a call assistant", and STATE not SAY (the 08-13
+  // pattern assumed "say", so this one slipped it twice over).
+  aCallAssistantState:
+    "User: Hi. I'm a call assistant recording this call for the person you are trying to reach. Please state who you are and why you're calling.\nAI: Goodbye.",
+  // dad0741c, 2026-07-29 — STT cut the opening, so only the framing survives.
+  truncatedOpening:
+    "User: call for the person you're trying to reach. Can you say what you're calling about?\nAI: Oh, I'm calling from Lucky Seven Casino directly.",
+  // e129d069, 2026-06-02 — the screener REPLIED three times. Victor talked to a
+  // robot for four turns; this is the shape that reads most convincingly human.
+  screenerHeldAConversation:
+    "AI: Hi. It's Tom from Lucky Seven Casino. I saw you register an account with us recently. Does this sound familiar?\nUser: Who you are and why you're calling.\nAI: Hi. It's --\nUser: Please provide more detail.\nAI: Of course. I'm Tom from Lucky seven Casino.\nUser: The person you're calling is busy now. I'll let them know you called. Thank you.",
+  // fb88ca30, 2026-08-20 — Call Assist narrating while it checks.
+  checkingWithThePerson:
+    "AI: Hey, Victor here from Lucky Seven dot com. Quick question. Have you had a chance to log in to your account recently?\nUser: One sec. Checking with the person you called.\nAI: Uh-huh. No rush.\nUser: Great. I'll share this information with the person you're trying to reach. Thanks for",
+  // b7244992, 2026-08-20 — Call Assist offering to connect, then declining.
+  getThePersonOnTheLine:
+    "AI: Hey, Victor here from Lucky Seven dot com. Quick question. Have you had a chance to log in to your account recently?\nUser: Okay. Let me try to get the person you're trying to reach on the line.\nAI: Perfect. The reason I'm calling is\nUser: Sorry. They can't Have a great day.",
+};
+
+// Live humans who share vocabulary with the new patterns and MUST stay human.
+// The full-corpus replay found zero real humans flipping; these pin the classes
+// of phrase that came closest, so a future widening cannot quietly break them.
+const CALL_ASSIST_REAL_HUMANS = {
+  // "trying to reach" from a live wrong-number pickup, with no third-party framing.
+  wrongNumber:
+    "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: Nah mate you've got the wrong number, who are you trying to reach?\nAI: Sorry about that.",
+  // a live person taking a message for somebody else still says none of the
+  // scripted phrases — this is the nearest human miss and must stay human.
+  spouseTakingAMessage:
+    "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: He's out at the moment, can I get him to ring you? What's it regarding?\nAI: No problem.",
+  // "recording" said by a live human about something else entirely.
+  humanMentionsRecording:
+    "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: Hang on, are you recording? I'd rather you didn't. What is this about?\nAI: It's about your account.",
+  // a live human asking what WE are calling about — the screener's question, but
+  // asked in the first person, so none of the framing patterns can match.
+  humanAsksWhatAbout:
+    "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: Sorry, what are you calling about exactly?\nAI: I was going over your account.",
+};
+
+describe("isVoicemail — Google Call Assist, second script (2026-08-27, VOZ-463)", () => {
+  it("flags every real Call Assist shape measured in prod", () => {
+    for (const [name, t] of Object.entries(CALL_ASSIST)) {
+      expect(isVoicemail(t), name).toBe(true);
+    }
+  });
+
+  it("keeps live humans who share the vocabulary as non-voicemail", () => {
+    for (const [name, t] of Object.entries(CALL_ASSIST_REAL_HUMANS)) {
+      expect(isVoicemail(t), name).toBe(false);
+    }
+  });
+
+  it("NEVER feeds the mid-call kill path: Call Assist lines are label-only", () => {
+    // A live human sits behind a screener often enough (475 measured 2026-08-07),
+    // so a wrong kill hangs up on a customer. The label re-dials them instead.
+    for (const line of [
+      "Hi. I'm call assist by Google, recording this call for the person you're trying to reach.",
+      "The person you're calling is busy now. I'll let them know you called.",
+      "One sec. Checking with the person you called.",
+      "Let me try to get the person you're trying to reach on the line.",
+      "Please state who you are and why you're calling.",
+    ]) {
+      expect(isConclusiveVoicemail(line), line).toBe(false);
+    }
+  });
+
+  it("keeps them out of the Reviews queue and the QA/golden surfaces", () => {
+    // hasRealConversation gates /reviews, the QA candidate set and the golden
+    // freeze. Before this change all 43 were eligible for every one of them.
+    for (const [name, t] of Object.entries(CALL_ASSIST)) {
+      expect(hasRealConversation(t), name).toBe(false);
+    }
+  });
+
+  it("leaves the carrier 'not available at this moment' family alone (separate defect)", () => {
+    // 16 of the 43 are a DIFFERENT machine family and are out of scope here, so
+    // this pins the boundary: if a later change starts catching them, that is a
+    // deliberate decision and this test says so out loud.
+    const carrier =
+      "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: One b one. The client you are trying to reach is not available at this moment. Please try again later.";
+    expect(isVoicemail(carrier)).toBe(false);
+  });
+});

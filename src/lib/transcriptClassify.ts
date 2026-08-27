@@ -102,8 +102,40 @@ const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
   // allUserTurnsAreScreenerScript below. In this tier they label only — never kill —
   // because a live human can sit behind a screener (475 measured 2026-08-07), and the
   // label's voicemail routing re-dials them later, which is exactly right for a screener.
-  /\bsay who you are and why you(?:'re| are)? calling\b/i, // Google/Samsung call screen script
+  /\b(?:say|state) who you are and why you(?:'re| are)? calling\b/i, // Google/Samsung call screen script
   /\bthe number you have (?:dialled|dialed|called)\b/i, // carrier announce ("...has not been recognized")
+  // 2026-08-27 (VOZ-463): Google Call Assist's OTHER script. The 08-13 addition
+  // above matched only the "say who you are" screen; Google also runs
+  //   "Hi. I'm call assist by Google, recording this call for the person you're
+  //    trying to reach. Before I try to connect you, can I ask what you're
+  //    calling about?"
+  // and then narrates the outcome ("Checking with the person you called", "The
+  // person you're calling is busy now", "Let me try to get the person you're
+  // trying to reach on the line"). Measured over all 21,847 prod transcripts:
+  // 43 screener-shaped calls that isVoicemail read as HUMAN, 17 in 2026-07 and
+  // 17 in 2026-08, most recent 2026-08-24 — every one stored voicemail=false,
+  // so under optin_reached_only deriveAttemptTag kept texting them.
+  //
+  // The BRAND phrase is not dependable: STT renders "call assist" as "calling
+  // assist by Google", "calling this by Google", "calling just by Google" and
+  // "a call assistant". What survives every mangling is the THIRD-PARTY framing
+  // — the speaker is answering FOR somebody else — so that is what these match.
+  // Also verbatim: "state" where the 08-13 pattern assumed "say" (widened above).
+  //
+  // Label tier, never the kill tier, for the same reason as the 08-13 pair: a
+  // live human sits behind a screener often enough (475 measured 2026-08-07),
+  // and the voicemail label re-dials them, which is the right outcome. Replayed
+  // over the full corpus: 27 of the 43 flip to voicemail and ZERO of the 7,755
+  // currently-human transcripts do. The remaining 16 are a DIFFERENT machine
+  // family (carrier "the client you are trying to reach is not available at this
+  // moment") and are deliberately left alone here.
+  /\bfor the person (?:you(?:'re| are) (?:trying to reach|calling)|you called)\b/i,
+  /\brecording this call\b/i,
+  /\bcall(?:ing)? assist(?:ant)?(?:\s+\w+){0,2}\s+by google\b/i, // incl. "calling just by Google"
+  /\b(?:i'?m|this is) an? call assistant\b/i,
+  /\bthe person you(?:'re| are) calling is (?:busy|unavailable|not available)\b/i,
+  /\bwith the person you (?:called|'re calling|are calling)\b/i, // "Checking with the person you called"
+  /\bget the person you(?:'re| are) (?:trying to reach|calling)\b/i, // "...on the line"
 ];
 // Post-call labeling keeps the FULL set — isVoicemail behavior is unchanged.
 const VOICEMAIL_STRONG_PATTERNS = [
