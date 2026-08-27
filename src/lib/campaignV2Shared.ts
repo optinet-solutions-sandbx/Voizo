@@ -199,6 +199,27 @@ export function parsePhoneList(input: string): string[] {
  * unparseable entries are skipped; the first name seen for a phone wins
  * (mirrors parsePhoneList's first-occurrence dedup).
  */
+/**
+ * Is this SMS text safe to store and send? Returns an operator-readable problem,
+ * or null when the text is fine. Runs on the ASSEMBLED text (message + link +
+ * footer), not on the link field alone, so a scheme pasted into the message body
+ * is caught the same way.
+ *
+ * 2026-08-27: nine NZ templates went out as "https://https://Lucky-even.win/..."
+ * — a full address pasted into a field that already read https://. 124 players
+ * received a link that goes nowhere. The wizard's only check was startsWith
+ * ("https://"), which that text passes, and the edit page had no check at all.
+ * Called from every path that writes sms_template: the create route, the edit
+ * page's PATCH, and the wizard (so the operator sees it at Step 4).
+ */
+export function smsTemplateProblem(text: string | null | undefined): string | null {
+  if (!text) return null;
+  if (/https?:\/\/\s*https?:\/\//i.test(text)) {
+    return "The link has https:// twice (\"https://https://…\"). Players cannot open it. Paste the address once, without repeating https://.";
+  }
+  return null;
+}
+
 export function nameByE164(entries: Array<{ phone: string; name: string | null }>): Map<string, string> {
   const map = new Map<string, string>();
   for (const e of entries) {

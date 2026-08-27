@@ -13,7 +13,7 @@
 
 import type { RecurrencePattern } from "@/lib/types/recurrence";
 import { defaultRecurrencePattern } from "@/components/RecurrenceEditor";
-import { parsePhoneList, resolveCallDelay, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
+import { parsePhoneList, resolveCallDelay, smsTemplateProblem, type CallWindow, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
 import type { SmsConsentMode } from "@/lib/smsDispatchDecision";
 import { allowedTimezonesForCountry, audienceTzGuard, detectAudienceCountry } from "@/lib/audienceCountry";
 import { dayOfWeekInTimezone } from "@/lib/dayOfWeekInTimezone";
@@ -959,6 +959,10 @@ export function validateBeforeSubmit(state: WizardState): string | null {
   if (state.smsLink.trim() && !state.smsLink.trim().startsWith("https://")) {
     return "SMS link must start with https://";
   }
+  // Same check the create route and the edit page apply on the server — here so
+  // the operator sees it at Step 4 rather than as a 400 on submit.
+  const smsProblem = smsTemplateProblem(composedSmsTemplate(state)) ?? smsTemplateProblem(composedLastResortTemplate(state));
+  if (state.smsEnabled && smsProblem) return smsProblem;
 
   return null;
 }

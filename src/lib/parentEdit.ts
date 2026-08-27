@@ -8,6 +8,7 @@
 // must come back as a 400 the operator can read, never a silent no-op.
 
 import { validateRecurrencePattern, type RecurrencePattern } from "./types/recurrence";
+import { smsTemplateProblem } from "./campaignV2Shared";
 
 export interface ParentEditFields {
   recurrencePattern?: RecurrencePattern;
@@ -67,6 +68,8 @@ export function buildParentEditUpdate(f: ParentEditFields): ParentEditResult {
 
   if (f.smsTemplate !== undefined) {
     const t = typeof f.smsTemplate === "string" ? f.smsTemplate.trim() : "";
+    const problem = smsTemplateProblem(t);
+    if (problem) return { update: {}, error: problem };
     update.sms_template = t.length > 0 ? t : null;
   }
 

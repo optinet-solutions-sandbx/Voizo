@@ -71,3 +71,22 @@ describe("buildParentEditUpdate", () => {
     expect(r.update).toEqual({});
   });
 });
+
+// 2026-08-27: nine NZ templates were saved as "https://https://Lucky-even.win/…" and
+// 124 players received a link that opens nothing. The edit page had no check at all.
+describe("buildParentEditUpdate — sms template guard", () => {
+  it("refuses a doubled https:// with a readable error and writes nothing", () => {
+    const r = buildParentEditUpdate({
+      smsTemplate: "Your 20 spins await. https://https://Lucky-even.win/promotions?bonus=LUCKY STOP? Qwt5.me",
+    });
+    expect(r.error).toMatch(/https:\/\/ twice/);
+    expect(r.update).toEqual({});
+  });
+  it("accepts the same template with the address written once", () => {
+    const r = buildParentEditUpdate({
+      smsTemplate: "Your 20 spins await. https://Lucky-even.win/promotions?bonus=LUCKY STOP? Qwt5.me",
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.update.sms_template).toMatch(/^Your 20 spins/);
+  });
+});

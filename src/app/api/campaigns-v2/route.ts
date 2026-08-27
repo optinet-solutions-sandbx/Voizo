@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rejectIfCrossOriginStrict } from "@/lib/csrf";
 import { createCampaignV2, fetchCampaignsV2 } from "@/lib/campaignV2Data";
-import type { CampaignV2CreateInput } from "@/lib/campaignV2Shared";
+import { smsTemplateProblem, type CampaignV2CreateInput } from "@/lib/campaignV2Shared";
 
 /**
  * /api/campaigns-v2  (collection)
@@ -55,6 +55,12 @@ export async function POST(request: NextRequest) {
   }
   if (!Array.isArray(input.callWindows)) {
     return NextResponse.json({ error: "callWindows must be an array" }, { status: 400 });
+  }
+  // A broken link must never be stored: once on a recurring parent, every daily
+  // child copies it verbatim (2026-08-27: 124 NZ players texted "https://https://…").
+  const smsProblem = smsTemplateProblem(input.smsTemplate) ?? smsTemplateProblem(input.smsLastResortTemplate);
+  if (smsProblem) {
+    return NextResponse.json({ error: smsProblem }, { status: 400 });
   }
 
   try {

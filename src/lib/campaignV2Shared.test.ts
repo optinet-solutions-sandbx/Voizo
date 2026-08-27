@@ -8,6 +8,7 @@ import {
   resolveCallDelay,
   buildSmsConsentPatch,
   CALL_DELAY_MAX_MINUTES,
+  smsTemplateProblem,
 } from "./campaignV2Shared";
 
 // These tests pin the pure-helper contract that moved out of campaignV2Data.ts
@@ -272,5 +273,23 @@ describe("buildSmsConsentPatch — edit-page SMS keys (2026-08-20 settings conso
         lastResortText: "stale sorry-we-missed-you",
       }),
     ).toEqual({ smsLastResortTemplate: null });
+  });
+});
+
+// 2026-08-27: the doubled-scheme dead link (VOZ ticket pending). Runs on the
+// ASSEMBLED text so a scheme pasted into the message body is caught too.
+describe("smsTemplateProblem", () => {
+  it("flags https://https:// wherever it sits in the text", () => {
+    expect(smsTemplateProblem("Ends midnight. https://https://Lucky-even.win/x STOP? Qwt5.me")).toMatch(/twice/);
+    expect(smsTemplateProblem("https://https://lucky7even.org")).toMatch(/twice/);
+    expect(smsTemplateProblem("http://https://lucky7even.org")).toMatch(/twice/); // mixed schemes, same defect
+    expect(smsTemplateProblem("https:// https://lucky7even.org")).toMatch(/twice/); // with a stray space
+  });
+  it("passes a normal template, two distinct links, and empty input", () => {
+    expect(smsTemplateProblem("Ends midnight. https://Lucky-even.win/promotions?bonus=LUCKY STOP? Qwt5.me")).toBeNull();
+    expect(smsTemplateProblem("Offer https://a.example/x and terms https://b.example/y")).toBeNull();
+    expect(smsTemplateProblem("")).toBeNull();
+    expect(smsTemplateProblem(null)).toBeNull();
+    expect(smsTemplateProblem(undefined)).toBeNull();
   });
 });
