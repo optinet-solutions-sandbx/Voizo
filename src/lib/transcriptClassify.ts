@@ -136,6 +136,25 @@ const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
   /\bthe person you(?:'re| are) calling is (?:busy|unavailable|not available)\b/i,
   /\bwith the person you (?:called|'re calling|are calling)\b/i, // "Checking with the person you called"
   /\bget the person you(?:'re| are) (?:trying to reach|calling)\b/i, // "...on the line"
+  // 2026-08-27 (fix C): the IVR "for more options" family — the largest unflagged
+  // machine family in the corpus, surfaced by the robot-texted detector's own
+  // replay. "press <key> for more options" was only a WEAK signal (needs a pair)
+  // and "for more options" lived in the eval-only MACHINE_GREETING_PATTERNS, so
+  // the NZ carrier's post-greeting prompt ("When you have finished, please hang
+  // up or press the pound key for more options"), its STT-clipped tail ("for
+  // more options, or just hang up") and the recording menu ("To send this
+  // message now, press pound or hang up") all read as HUMAN: 244 transcripts,
+  // 204 of them in August, 8 texted. The phrase is written with the IVR grammar
+  // on either side of it — a key name before, or "hang up"/"press" after — and
+  // NOT as a bare /for more options/, because "I'm looking for more options" is
+  // a sentence a live customer can say. Replayed over all 21,847 prod
+  // transcripts: 244 flip to voicemail, zero real humans among them (every one
+  // read). Label tier: the label re-dials; the kill tier is untouched.
+  /\b(?:pound|hash|star|key|\d|one|two|three|four|five|six|seven|eight|nine) for more options\b/i,
+  /\bfor more options\b[.,?!]?\s+(?:or\s+)?(?:just\s+)?hang up\b/i, // "...for more options, or just hang up"
+  /\bfor more options,?\s+(?:press|say)\b/i, // "For more options, press one"
+  /\bhang up,?\s+or press\b/i, // "you can hang up, or press pound"
+  /\bpress (?:the )?(?:pound|hash|star|\d|one|two|three)(?: key)?,?\s+or hang up\b/i, // "press pound or hang up"
 ];
 // Post-call labeling keeps the FULL set — isVoicemail behavior is unchanged.
 const VOICEMAIL_STRONG_PATTERNS = [
@@ -194,6 +213,11 @@ function isBareMachineFragment(text: string): boolean {
     // the fragment alone was the entire user turn on 51 calls on 2026-08-13, which all
     // surfaced as fake 'early hang-up' humans. Whole-turn only, like every fragment here.
     /^(?:as )?(?:an )?audio message$/i.test(t) ||
+    // 2026-08-27 (fix C): the IVR prompt's tail as STT delivers it when the agent
+    // talks over it — "For more options." / "Pound for more options." as the ENTIRE
+    // customer turn (16 measured). Whole-turn only, like every fragment here: a
+    // human continuing past the phrase never matches.
+    /^(?:\w+ )?for more options$/i.test(t) ||
     DIGIT_RUN.test(t)
   );
 }

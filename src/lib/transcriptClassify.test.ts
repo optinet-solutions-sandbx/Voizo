@@ -293,18 +293,22 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
     // hold phrase is embedded in a genuine turn, so the every-turn rule never fires.
     expect(isVoicemail(REAL_WITH_HOLD)).toBe(false);
   });
-  it("call-path isVoicemail: stay-on-the-line NOW labels voicemail (2026-08-13); the rest stay eval-only", () => {
+  it("call-path isVoicemail: stay-on-the-line (2026-08-13) and hang-up-or-press (2026-08-27) label voicemail; the rest stay eval-only", () => {
     // The 2026-06-08 version of this test pinned ALL of these to isVoicemail=false,
     // reasoning the SMS gate was protected by hasGenuineCustomerConsent. That became
     // false on 2026-08-07 when optin_reached_only made the label itself the dispatch
     // trigger — 21 of these exact screener pickups were texted on 2026-08-13. The
     // screener script is now conclusive for the LABEL (never the kill path).
     expect(isVoicemail(MISSED_MACHINES_5.stayOnLine)).toBe(true);
-    // Still eval-only: not measured leaking texts, and each needs its every-turn
-    // guard (press-pound / for-more-options remain too generic for the label tier).
+    // 2026-08-27 (fix C): the 08-13 version kept press-pound / for-more-options
+    // eval-only as "not measured leaking texts" and "too generic". Both premises
+    // were then measured false: 8 texts went to "press hash for more options"
+    // 18-23 Aug, and written with the IVR grammar on either side of the phrase
+    // the shapes flipped 244 prod transcripts with zero real humans among them.
+    expect(isVoicemail(MISSED_MACHINES_5.hangUpPressPound)).toBe(true);
+    // Still eval-only: not measured leaking texts, and each needs its every-turn guard.
     expect(isVoicemail(MISSED_MACHINES_5.recordYourMessage)).toBe(false);
     expect(isVoicemail(MISSED_MACHINES_5.noMoreRoom)).toBe(false);
-    expect(isVoicemail(MISSED_MACHINES_5.hangUpPressPound)).toBe(false);
   });
   it("still keeps the verified real humans + genuine conversation + brush-off visible", () => {
     expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
@@ -819,5 +823,82 @@ describe("isVoicemail — Google Call Assist, second script (2026-08-27, VOZ-463
     const carrier =
       "AI: Hey, Victor here from Lucky Seven dot com. Have you had a chance to log in recently?\nUser: One b one. The client you are trying to reach is not available at this moment. Please try again later.";
     expect(isVoicemail(carrier)).toBe(false);
+  });
+});
+
+// ── 2026-08-27 (fix C): the IVR "for more options" family ───────────────────
+// Surfaced by the robot-texted detector's own replay: "Press hash for more options"
+// texted daily 18-23 Aug under optin_reached_only. The wider family read as HUMAN in
+// 244 prod transcripts (204 in August) because "press <key>" was only a weak signal
+// and "for more options" lived in the eval-only list. Every fixture below is a REAL
+// production transcript, trimmed. The pattern is written with the IVR grammar on
+// either side of the phrase — never a bare /for more options/, because a live
+// customer can say "I'm looking for more options".
+
+const MORE_OPTIONS_MACHINES = {
+  // the NZ carrier's post-greeting prompt — the bulk of the 204 August calls
+  nzCarrierPrompt: `${OPENER}\nUser: When you have finished, please hang up or press the pound key for more options.\nAI: Goodbye.`,
+  // the same prompt STT-clipped to its tail — 67 measured, the shape "strict" first missed
+  clippedTail: `${OPENER}\nUser: for more options. or just hang up.\nAI: Goodbye.`,
+  // 8 of these were TEXTED 18-23 Aug — the leak the detector found
+  pressHash: `${OPENER}\nUser: Press hash for more options.\nUser: or just hang up.\nAI: Goodbye.`,
+  // the recording menu, both orders it comes in
+  recordingMenu: `${OPENER}\nUser: To send this message now, press pound or hang up. To leave a callback number, press one. To replay your message, press three. For additional options, press nine.`,
+  recordingMenuReversed: `${OPENER}\nUser: To leave a callback number, press one. To send this message now, press pound or hang up.`,
+  // "That's all you can record" family — the human-sounding first turn is the greeting
+  thatsAllYouCanRecord: `${OPENER}\nUser: Give your name and number, and I'll give it to you. Thank you.\nUser: That's all you can record. To save this message, just hang up. For more options, press one.`,
+  // AU: the classic tail
+  auHangUpOrPress: `${OPENER}\nUser: You can hang up, or press pound for more options.\nAI: Goodbye.`,
+  // bare fragments as the ENTIRE customer turn (16 measured) — the whole-turn rule
+  bareFragment: `${OPENER}\nUser: For more options.\nAI: Goodbye.`,
+  bareFragmentWithKey: `${OPENER}\nUser: Pound for more options.\nAI: Goodbye.`,
+  // STT hears "cash" for "hash" — still the IVR grammar on the right
+  sttCash: `${OPENER}\nUser: Cash for more options or just hang up.\nAI: Goodbye.`,
+};
+
+// Live humans who share vocabulary with the family and MUST stay human.
+const MORE_OPTIONS_HUMANS = {
+  // the sentence the loose pattern would have caught — the reason it is not loose
+  lookingForMoreOptions: `${OPENER}\nUser: Yeah I'm looking for more options on the bonus to be honest, what else have you got?\nAI: Sure, let me explain.`,
+  // "hang up" from a human, no "press" anywhere
+  humanHangsUp: `${OPENER}\nUser: Sorry I'm going to hang up now, I'm at work.\nAI: No problem.`,
+  // "press" from a human about a button, not a menu
+  humanPressed: `${OPENER}\nUser: Hang on I pressed the wrong thing. Who is this?\nAI: It's Victor from Lucky Seven.`,
+  // a human continuing PAST the fragment — the whole-turn rule must not fire
+  fragmentThenSpeech: `${OPENER}\nUser: For more options I'd have to log in first, is that right?\nAI: That's right.`,
+  // the phrase "options" alone, in a real conversation
+  talksOptions: `${OPENER}\nUser: What are my options here?\nAI: You have twenty free spins waiting.\nUser: Okay, and the bonus?`,
+};
+
+describe("isVoicemail — the IVR 'for more options' family (2026-08-27, fix C)", () => {
+  it("flags every measured machine shape", () => {
+    for (const [name, t] of Object.entries(MORE_OPTIONS_MACHINES)) {
+      expect(isVoicemail(t), name).toBe(true);
+    }
+  });
+
+  it("keeps every human who shares the vocabulary", () => {
+    for (const [name, t] of Object.entries(MORE_OPTIONS_HUMANS)) {
+      expect(isVoicemail(t), name).toBe(false);
+    }
+  });
+
+  it("the bare fragment is whole-turn only: a human continuing past it never matches", () => {
+    expect(isVoicemail(`${OPENER}\nUser: for more options I would need to see the site first.`)).toBe(false);
+    expect(isVoicemail(`${OPENER}\nUser: For more options.`)).toBe(true);
+  });
+
+  it("NEVER feeds the mid-call kill path: every shape is label-only", () => {
+    for (const [name, t] of Object.entries(MORE_OPTIONS_MACHINES)) {
+      // isConclusiveVoicemail is fed a single utterance, never a whole transcript
+      const lastUser = t.split("\n").filter((l) => l.startsWith("User: ")).pop()!.slice(6);
+      expect(isConclusiveVoicemail(lastUser), name).toBe(false);
+    }
+  });
+
+  it("keeps them out of the Reviews queue and the QA/golden surfaces", () => {
+    for (const [name, t] of Object.entries(MORE_OPTIONS_MACHINES)) {
+      expect(hasRealConversation(t), name).toBe(false);
+    }
   });
 });
