@@ -341,3 +341,41 @@ describe("decideSmsDispatch — optin_reached_only (Val 2026-08-07)", () => {
     expect(resolveSmsConsentMode("optin_reached_onlyX")).toBe("verbal_yes");
   });
 });
+
+// 2026-08-27: a voicemail must never be texted in optin_reached_only, whatever the tag
+// says. deriveAttemptTag lets goal_reached beat voicemail (a DISPLAY rule, Val 2026-07-03),
+// and Vapi's success analysis has read machine greetings as a yes: nine texts went to a
+// machine that said only "Message.", four to "...will send the message as a text". The
+// webhook pre-empts this by dropping goal_reached on a voicemail, so the case below cannot
+// reach the function from production today — the test pins the invariant INSIDE the
+// function so it survives a caller that forgets the ordering.
+describe("decideSmsDispatch — optin_reached_only never texts a voicemail, even a 'positive' one (2026-08-27)", () => {
+  const goalOnVoicemail: SmsDispatchInput = {
+    mode: "optin_reached_only",
+    goalReached: true,
+    nativeSuccess: true,
+    voicemailDetected: true,
+    optedOut: false,
+    hasVerbalConsent: false,
+    agentAnnouncedSms: false,
+    customerDeclinedSms: false,
+    humanConversation: false,
+    attemptTag: "positive",
+  };
+  it("refuses a voicemail that carries goal_reached=true and a 'positive' tag", () => {
+    expect(decideSmsDispatch(goalOnVoicemail)).toEqual({ attempt: false, reason: "voicemail" });
+  });
+  it("refuses it under every textable tag, not only 'positive'", () => {
+    for (const attemptTag of ["neutral", "declined"] as const) {
+      expect(decideSmsDispatch({ ...goalOnVoicemail, attemptTag }), attemptTag).toEqual({ attempt: false, reason: "voicemail" });
+    }
+  });
+  it("the same call WITHOUT the voicemail flag is still texted — the guard is voicemail-only", () => {
+    expect(decideSmsDispatch({ ...goalOnVoicemail, voicemailDetected: false }))
+      .toEqual({ attempt: true, reason: "reached_engaged" });
+  });
+  it("'stop calling' still outranks it (reason stays opted_out_on_call)", () => {
+    expect(decideSmsDispatch({ ...goalOnVoicemail, optedOut: true }))
+      .toEqual({ attempt: false, reason: "opted_out_on_call" });
+  });
+});

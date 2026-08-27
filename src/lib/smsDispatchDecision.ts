@@ -190,6 +190,15 @@ export function decideSmsDispatch(i: SmsDispatchInput): SmsDispatchDecision {
   if (i.optedOut) return { attempt: false, reason: "opted_out_on_call" };
 
   if (i.mode === "optin_reached_only") {
+    // A voicemail is never texted in this mode, whatever the tag says (2026-08-27).
+    // deriveAttemptTag lets goal_reached beat voicemail (Val 2026-07-03, a DISPLAY
+    // rule so a positive contact never shows a non-positive attempt). Vapi's success
+    // analysis has read machine greetings as a yes — nine texts went to a machine
+    // that said only "Message.", four to "...will send the message as a text" — and
+    // a "positive" tag is textable. The webhook already drops goal_reached when the
+    // classifier says voicemail, so today this line is unreachable; it is here so
+    // the policy holds inside this function and not only in one caller's ordering.
+    if (i.voicemailDetected) return { attempt: false, reason: "voicemail" };
     // The dashboard's attempt tag IS the policy (Val 2026-08-07): the three
     // Reached-card sub-buckets that mean a live human engaged get the text —
     // including "declined" and on-call SMS refusals (customerDeclinedSms is
