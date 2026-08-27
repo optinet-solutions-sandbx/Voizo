@@ -22,7 +22,9 @@ import {
   detectAiPipelineBurst,
   detectConnectCollapse,
   detectDialSilence,
+  detectRobotTexted,
   type DialSilenceCandidate,
+  type RobotTextedCandidate,
 } from "./anomalyDetectors";
 import { isWithinCallWindowAt, type CallWindowLite } from "../scheduleWindow";
 import { countDialingCampaigns } from "../scheduler/dialingCampaigns";
@@ -154,6 +156,69 @@ export async function runAnomalySweep(supabase: SupabaseClient): Promise<void> {
               : "the gate is OPEN, so this is a stall (promotion, dialer, or trunk), not capacity."),
           "Check the campaign-scheduler cron log for the last tick's `reason`, then vapi_sip_pool leases (08-25 deadlock signature: leased slots held by paused/expired children).",
         ]);
+      }
+    }
+
+    // ── Detector D — texted a robot (2026-08-27) ──
+    // Re-reads every text sent in the window against the call it was sent from. Every
+    // robot ever texted traces to a machine script the classifier had not seen yet, and
+    // each was found by hand, days late. Three reads, all small: the window's sms rows
+    // (a few dozen at most), their calls, their campaigns. Any failure logs and skips —
+    // this detector must never take the others down with it. Every sms row carries a
+    // call_id (7,398 of 7,398 measured 2026-08-27), so the inner join loses nothing.
+    const { data: smsRows, error: smsErr } = await supabase
+      .from("sms_messages_v2")
+      .select("id, call_id, campaign_id")
+      .gte("created_at", since)
+      .not("call_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (smsErr) {
+      console.error("[anomaly-sweep] sms_messages_v2 query failed (robot-texted skipped):", smsErr.message);
+    } else if ((smsRows ?? []).length > 0) {
+      const sms = smsRows ?? [];
+      const callIds = Array.from(new Set(sms.map((s) => s.call_id as string)));
+      const campIds = Array.from(new Set(sms.map((s) => s.campaign_id as string).filter(Boolean)));
+      // campaign_id is nullable on sms rows; an empty .in() list is a query we never want to send.
+      const [{ data: callRows, error: callErr }, { data: campRows, error: campErr }] = await Promise.all([
+        supabase.from("calls_v2").select("id, transcript").in("id", callIds),
+        campIds.length > 0
+          ? supabase.from("campaigns_v2").select("id, name, sms_consent_mode").in("id", campIds)
+          : Promise.resolve({ data: [] as { id: string; name: string | null; sms_consent_mode: string | null }[], error: null }),
+      ]);
+      if (callErr || campErr) {
+        console.error("[anomaly-sweep] robot-texted joins failed (skipped):", callErr?.message ?? campErr?.message);
+      } else {
+        // calls_v2.transcript is jsonb { text } in the DB (a plain string only in tests).
+        const transcriptOf = new Map<string, string>();
+        for (const c of callRows ?? []) {
+          const t = c.transcript as { text?: string | null } | string | null;
+          transcriptOf.set(c.id as string, typeof t === "string" ? t : (t?.text ?? ""));
+        }
+        const campOf = new Map<string, { name: string; mode: string | null }>();
+        for (const k of campRows ?? []) {
+          campOf.set(k.id as string, { name: (k.name as string) ?? (k.id as string), mode: (k.sms_consent_mode as string | null) ?? null });
+        }
+        const candidates: RobotTextedCandidate[] = sms.map((s) => {
+          const camp = campOf.get(s.campaign_id as string);
+          return {
+            smsId: s.id as string,
+            callId: s.call_id as string,
+            campaignName: camp?.name ?? (s.campaign_id as string) ?? "(unknown campaign)",
+            mode: camp?.mode ?? null,
+            transcript: transcriptOf.get(s.call_id as string) ?? "",
+          };
+        });
+        const rt = detectRobotTexted(candidates);
+        if (rt.trip) {
+          await fireDeduped(supabase, "robot_texted", "Texted an answering machine — a machine script the classifier does not know", [
+            ...rt.offenders.map(
+              (o) => `${o.campaignName}: [${o.rule}] "${o.excerpt}" (call ${o.callId.slice(0, 8)}).`,
+            ),
+            `${rt.offenders.length} of ${candidates.length} texts in the last ${ANOMALY_WINDOW_MINUTES} min went to something that reads as a machine. Each costs EUR 0.03-0.11 and counts a machine as a reached human.`,
+            "Add the phrase to transcriptClassify.ts (LABEL tier, never the kill tier) after replaying it over prod transcripts — the VOZ-463 discipline: patterns from the transcripts, zero real humans flipping.",
+          ]);
+        }
       }
     }
   } catch (err) {
