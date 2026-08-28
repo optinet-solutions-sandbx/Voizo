@@ -549,6 +549,19 @@ export async function createClone(
       startSpeakingPlan: scriptClone.startSpeakingPlan,
       messagePlan: scriptClone.messagePlan,
       monitorPlan: scriptClone.monitorPlan,
+      // 2026-08-28: the engine ends scripted calls, never the model. Script mode already
+      // strips every model tool (noTools below) for exactly that reason, but Vapi's
+      // built-in endCall is a TOP-LEVEL flag inherited from the base (on since May), not
+      // a model.tools entry, so it slipped through. From 13 Aug the model started using
+      // it: the moment the customer says "thanks" it fires endCall, Vapi speaks the
+      // base's endCallMessage — literally "Goodbye." — and the line drops ~2s before the
+      // End box's wrap-up briefing arrives. Measured on script calls >= 20s: model-
+      // initiated hangups 0-2% → 11-36%, phrase-ended closings 100-150/day → ~0, bare
+      // "Goodbye." on two-way human calls 0-3% → ~50% (Val, 24 Aug). With the function
+      // off, the End box speaks the reworded closing and hangs up, and endCallPhrases
+      // still end the call after the model voices "...have a great day" — the path that
+      // carried every closing before 13 Aug. Agent-mode clones keep inheriting the base.
+      endCallFunctionEnabled: false,
       ...(scriptClone.firstMessageMode ? { firstMessageMode: scriptClone.firstMessageMode } : {}),
       ...(scriptClone.firstMessage != null ? { firstMessage: scriptClone.firstMessage } : {}),
       ...(isDeepgram

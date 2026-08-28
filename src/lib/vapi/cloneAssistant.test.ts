@@ -8,7 +8,7 @@
 // per the client's registration-opt-in direction (Val, 2026-06-11).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  VOIZO_SYSTEM_PREFIX, createClone, ensureCloneVoice,
+  VOIZO_SYSTEM_PREFIX, createClone, ensureCloneVoice, END_CALL_PHRASES,
   diffBaseAgainstPin, diffCloneAgainstPayload,
 } from "./cloneAssistant";
 import {
@@ -128,6 +128,63 @@ describe("createClone — stopSpeakingPlan phrase-list preservation (VOZ-128)", 
     // engine value wins (it spreads after the VOZ-128 merge); base phrases absent.
     expect(ssp(posted)).toEqual({ numWords: 1 });
     expect(ssp(posted).acknowledgementPhrases).toBeUndefined();
+  });
+});
+
+// ── 2026-08-28: the model must not be able to hang up a scripted call itself.
+// Since 13 Aug the model (gpt-5.2) has been calling Vapi's BUILT-IN endCall function
+// the instant the customer signals the end; Vapi then speaks the base assistant's
+// endCallMessage — literally "Goodbye." — and drops the line ~2s before the Script
+// Engine's wrap-up briefing arrives. Measured on script-mode calls >= 20s:
+// model-initiated hangups 0-2% before 13 Aug → 11-36% after; the model speaking its
+// closing and Vapi ending on an endCallPhrase 100-150/day → ~0; bare "Goodbye." on
+// two-way human calls 0-3% → ~50%. Nothing of ours changed — the flag was inherited
+// from the base since May and the model simply started using it. Script mode already
+// strips every model tool (noTools) because the engine drives the call; the built-in
+// endCall is a TOP-LEVEL flag, not a model.tools entry, so it slipped through.
+describe("createClone — script clones cannot hang up by themselves (2026-08-28)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  type FakeRes = { ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> };
+  function stubVapi(base: Record<string, unknown>) {
+    const posted: { body: Record<string, unknown> | null } = { body: null };
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit): Promise<FakeRes> => {
+      if (init?.method === "POST") {
+        posted.body = JSON.parse(String(init.body));
+        return { ok: true, status: 200, json: async () => ({ id: "clone_1", name: "n" }), text: async () => "" };
+      }
+      return { ok: true, status: 200, json: async () => base, text: async () => "" };
+    }));
+    return posted;
+  }
+  // What the live base actually carries (Val - Voice Agent, read 2026-08-28).
+  const BASE = { name: "Val", endCallFunctionEnabled: true, endCallMessage: "Goodbye.", model: { messages: [] } };
+  const SCRIPT = {
+    composedPrompt: "SCRIPT", firstMessage: null, firstMessageMode: null, serverMessages: [],
+    stopSpeakingPlan: { numWords: 1 }, startSpeakingPlan: {}, messagePlan: {}, monitorPlan: {},
+    transcriberKeyterms: [], noTools: true,
+  };
+
+  it("a SCRIPT clone posts endCallFunctionEnabled:false even when the base has it on", async () => {
+    const posted = stubVapi(BASE);
+    const res = await createClone("k", "base_val", { scriptClone: SCRIPT });
+    expect(res.ok).toBe(true);
+    expect(posted.body?.endCallFunctionEnabled).toBe(false);
+  });
+
+  it("an AGENT-mode clone is untouched — it still inherits the base flag", async () => {
+    const posted = stubVapi(BASE);
+    const res = await createClone("k", "base_val", {});
+    expect(res.ok).toBe(true);
+    expect(posted.body?.endCallFunctionEnabled).toBe(true);
+  });
+
+  it("the phrase-based ending stays: a script clone still carries endCallPhrases", async () => {
+    // With the function off, this is how a call ends after the model voices its closing
+    // ("...have a great day") — the mechanism that carried 100-150 calls/day before 13 Aug.
+    const posted = stubVapi(BASE);
+    await createClone("k", "base_val", { scriptClone: SCRIPT });
+    expect(posted.body?.endCallPhrases).toEqual(END_CALL_PHRASES);
+    expect((posted.body?.endCallPhrases as string[]).includes("goodbye")).toBe(true);
   });
 });
 
