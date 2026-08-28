@@ -11,7 +11,8 @@
 // message.type === "end-of-call-report" before calling this.
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback } from "@/lib/transcriptClassify";
+import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback, customerRiskDisclosure } from "@/lib/transcriptClassify";
+import { postSlackAlert } from "@/lib/alerts/slack";
 import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
 import { decideOutcomePark } from "@/lib/webhooks/hangupOutcome";
 import { deriveAttemptTag } from "@/lib/dashboardAnalytics";
@@ -133,6 +134,44 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
         `(Vapi analysis missing, customer requested no more calls). vapiCallId=${vapiCallId}`,
       );
     }
+  }
+
+  // ── Responsible-gambling disclosure (2026-08-28) ──
+  // Measured over all 22,041 prod transcripts: six customers disclosed self-exclusion, a
+  // gambling addiction or self-harm, and THREE were sent a promotional SMS afterwards.
+  // Nothing was looking for it — the two that WERE suppressed were suppressed by accident,
+  // because the agent's own reply matched the opt-out regexes above (which scan AI turns).
+  //
+  // Routed through `optedOut` deliberately, because that single flag already does every
+  // thing this needs and is already tested: decideSmsDispatch refuses in EVERY mode on its
+  // first line, decideOutcomePark returns null (no retry park), the outcome becomes
+  // terminal, and the block further down writes suppression_list so the dialer never picks
+  // the number again. Reusing it is a smaller and safer change than a parallel path.
+  const riskDisclosure = transcript ? customerRiskDisclosure(transcript) : null;
+  if (riskDisclosure) {
+    optedOut = true;
+    console.log(
+      `[risk-disclosure] category=${riskDisclosure.category} — SMS vetoed, number suppressed. ` +
+      `vapiCallId=${vapiCallId} excerpt="${riskDisclosure.excerpt}"`,
+    );
+    // Alert BEFORE any DB work and never awaited into the failure path: a human must see a
+    // harm disclosure even if every subsequent write fails. A Slack outage must not break
+    // the webhook, so the promise is caught and dropped.
+    // Severity stays "ALERT" — the union is INFO|WARN|ALERT and widening a shared type for
+    // one caller is not worth it; the TITLE carries the urgency, which is what a reader sees.
+    void postSlackAlert(
+      "ALERT",
+      riskDisclosure.category === "harm"
+        ? "URGENT — customer disclosed self-harm on a call, a human needs to read this now"
+        : `Customer disclosed ${riskDisclosure.category.replace("_", " ")} — call and SMS stopped`,
+      [
+        `The customer said: "${riskDisclosure.excerpt}"`,
+        `Vapi call ${vapiCallId}. The SMS was refused and the number is being added to the suppression list, so we will not call or text it again.`,
+        riskDisclosure.category === "harm"
+          ? "Read the transcript and decide whether the operator needs to be told. Automated handling stops here on purpose."
+          : "Marketing to a self-excluded or self-declared problem gambler is the breach — check whether this player should also be flagged in the CRM so we never load them again.",
+      ],
+    ).catch((err) => console.error("[risk-disclosure] Slack alert failed (handling continues):", err));
   }
 
   // ── Match to our calls_v2 record (H1 fix: reliable matching) ──
@@ -581,10 +620,19 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
       await supabaseAdmin
         .from("suppression_list")
         .upsert(
-          { phone_e164: numRow.phone_e164, reason: "opted_out_on_call", added_by: "webhook" },
+          {
+            phone_e164: numRow.phone_e164,
+            // The reason is the compliance record — "why is this number suppressed" must be
+            // answerable months later without re-reading the transcript.
+            reason: riskDisclosure ? `risk_disclosure_${riskDisclosure.category}` : "opted_out_on_call",
+            added_by: "webhook",
+          },
           { onConflict: "phone_e164", ignoreDuplicates: true },
         );
-      console.log(`Auto-suppressed ${numRow.phone_e164.slice(0, -4)}**** (opted out during call)`);
+      console.log(
+        `Auto-suppressed ${numRow.phone_e164.slice(0, -4)}**** ` +
+        `(${riskDisclosure ? `risk disclosure: ${riskDisclosure.category}` : "opted out during call"})`,
+      );
     }
   }
 

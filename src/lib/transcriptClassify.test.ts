@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isVoicemail, isConclusiveVoicemail, hasRealConversation, hasGenuineCustomerConsent,
   agentMentionedSms, customerDeclinedSms, substantiveUserTurnCount, customerRequestedCallback,
+  customerRiskDisclosure, type RiskDisclosureCategory,
 } from "./transcriptClassify";
 
 // Real AU "message bank" voicemails the filter MISSED (campaign 9df71cd3, 2026-06-03).
@@ -960,5 +961,96 @@ describe("isVoicemail — ordinary voicemail greetings the classifier missed (20
     for (const [name, turn] of Object.entries(VOICEMAIL_GAP_0828)) {
       expect(hasRealConversation(`${GAP_OPENER}\nUser: ${turn}\nAI: Goodbye.`), name).toBe(false);
     }
+  });
+});
+
+// ── 2026-08-28: responsible-gambling disclosures. Found while auditing the opt-out regex.
+// SIX real disclosures across 22,041 prod transcripts; THREE received a promotional SMS
+// afterwards. The two handled correctly were handled BY ACCIDENT — the agent's own reply
+// ("Do you want me to note your account so we don't call you again?") happened to match
+// processEndOfCall's opt-out regex, which scans AI turns too. Nothing in the codebase was
+// looking for the customer saying it. Every fixture below is verbatim customer speech.
+const RG_OPENER = "AI: Hey, Victor here from Lucky seven dot com. Have you had a chance to log in recently?";
+const rgCall = (turn: string) => `${RG_OPENER}\nUser: ${turn}\nAI: Goodbye.`;
+
+const RG_DISCLOSURES: Record<string, { turn: string; category: RiskDisclosureCategory }> = {
+  // harm — the most urgent: stop pitching, never text, and a human must see it
+  killMyself: { turn: "This is not twenty three spins in my account. I'm going to kill myself right now.", category: "harm" },
+  killEveryone: { turn: "Then kill myself and everyone around me.", category: "harm" },
+  endMyLife: { turn: "Honestly I just want to end my life over this.", category: "harm" },
+  suicidal: { turn: "Mate, this stuff has left me suicidal. I can't do it anymore.", category: "harm" },
+  // self-exclusion — a regulated status; marketing to these players is the breach
+  selfExclusionStated: { turn: "My account is is under self exclusion.", category: "self_exclusion" },
+  selfExcludedShort: { turn: "No. I got a self excluded.", category: "self_exclusion" },
+  betstop: { turn: "I signed up to BetStop last year, mate.", category: "self_exclusion" },
+  bannedMyself: { turn: "I banned myself from all that months ago.", category: "self_exclusion" },
+  // problem gambling
+  addiction: { turn: "Couldn't see I had a addiction one, turned to two, turned to three, then I need about six a day.", category: "problem_gambling" },
+  gamblingProblem: { turn: "Look, I've got a gambling problem, alright?", category: "problem_gambling" },
+  quitGambling: { turn: "No. We quit gambling.", category: "problem_gambling" },
+};
+
+// Speech that must NEVER fire it. The cost of a false positive here is a permanently
+// suppressed customer we were mandated to text, so these are load-bearing.
+const RG_NOT_DISCLOSURES = {
+  ordinaryDecline: rgCall("No thanks, I'm not interested today."),
+  abuse: rgCall("How about you go fuck yourself, scammers."), // abuse => DNC, but NOT a risk disclosure
+  agentSaysIt: `${RG_OPENER}\nAI: If you're self excluded I won't push anything promotional. Do you want me to note your account so we don't call you again?\nUser: Yeah okay.\nAI: Goodbye.`,
+  talkingAboutSomeoneElse: rgCall("My brother had a gambling problem, but I'm fine."),
+  gameAddictive: rgCall("That game is addictive, I love it."),
+  voicemailGreeting: `${RG_OPENER}\nUser: At the tone, record your message.\nAI: Goodbye.`,
+};
+
+describe("customerRiskDisclosure — responsible-gambling signals (2026-08-28)", () => {
+  it("flags every measured disclosure, with the right category", () => {
+    for (const [name, { turn, category }] of Object.entries(RG_DISCLOSURES)) {
+      const got = customerRiskDisclosure(rgCall(turn));
+      expect(got, name).not.toBeNull();
+      expect(got?.category, name).toBe(category);
+    }
+  });
+
+  it("harm outranks everything — it decides the response", () => {
+    // Against BOTH lower tiers, and across turns as well as within one: the tier order is the
+    // thing that picks which alert a human gets, so it is pinned in every direction.
+    expect(customerRiskDisclosure(rgCall("I've got a gambling problem and I'm going to kill myself."))?.category).toBe("harm");
+    expect(customerRiskDisclosure(rgCall("I am self excluded and honestly I want to end my life."))?.category).toBe("harm");
+    expect(customerRiskDisclosure(
+      `${RG_OPENER}\nUser: I am self excluded.\nAI: Understood.\nUser: I'm going to kill myself.\nAI: Goodbye.`,
+    )?.category).toBe("harm");
+  });
+
+  it("never fires on speech that is not a disclosure", () => {
+    for (const [name, t] of Object.entries(RG_NOT_DISCLOSURES)) {
+      expect(customerRiskDisclosure(t), name).toBeNull();
+    }
+  });
+
+  it("reads the CUSTOMER only — the agent saying it is not a disclosure", () => {
+    // This is the whole bug: prod's opt-out regex scanned AI turns, so the agent OFFERING
+    // to suppress ("Do you want me to mark you as do not call?") suppressed the number
+    // whether or not the customer agreed. 5 such transcripts measured.
+    expect(customerRiskDisclosure(RG_NOT_DISCLOSURES.agentSaysIt)).toBeNull();
+    expect(customerRiskDisclosure(`${RG_OPENER}\nAI: I'm going to kill myself.\nUser: What?`)).toBeNull();
+  });
+
+  it("returns a short, digit-masked excerpt for the alert (no phone numbers into Slack)", () => {
+    const got = customerRiskDisclosure(rgCall("Call me on 0412345678, I am self excluded."));
+    expect(got?.category).toBe("self_exclusion");
+    expect(got?.excerpt).not.toMatch(/\d{3,}/);
+    expect(got!.excerpt.length).toBeLessThanOrEqual(160);
+  });
+
+  it("empty / label-less / machine input is never a disclosure", () => {
+    expect(customerRiskDisclosure("")).toBeNull();
+    expect(customerRiskDisclosure(null)).toBeNull();
+    expect(customerRiskDisclosure(undefined)).toBeNull();
+    expect(customerRiskDisclosure("   \n  ")).toBeNull();
+  });
+
+  it("is capped like every other classifier — a huge transcript is not scanned in full", () => {
+    const filler = `${RG_OPENER}\nUser: ok.\n`.repeat(2000);
+    expect(filler.length).toBeGreaterThan(32_000);
+    expect(customerRiskDisclosure(filler + "\nUser: I am self excluded.")).toBeNull();
   });
 });

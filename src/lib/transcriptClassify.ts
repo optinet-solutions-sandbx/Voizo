@@ -573,6 +573,91 @@ export function hasRealConversation(transcript: string | null | undefined): bool
   return turns.some((t) => t.speaker === "user" && t.text.trim().length >= 2);
 }
 
+// ── Responsible-gambling disclosures (2026-08-28) ───────────────────────────
+// Found while auditing the opt-out regex. Across all 22,041 prod transcripts SIX
+// customers disclosed self-exclusion, a gambling addiction, or self-harm, and THREE
+// of them received a promotional SMS afterwards. Nothing in this codebase was looking
+// for it: the two that WERE suppressed were suppressed by accident, because the
+// agent's own reply ("Do you want me to note your account so we don't call you
+// again?") happened to match processEndOfCall's opt-out regex, which scans AI turns
+// too. Reword the agent and that stops working, silently.
+//
+// CUSTOMER TURNS ONLY, for exactly that reason — the agent OFFERING to suppress is not
+// a disclosure (5 transcripts measured where prod fired on the agent's speech alone).
+//
+// Response is not uniform, so the category is returned rather than a boolean:
+//   harm              stop, never text, suppress, and a HUMAN reads it the same hour
+//   self_exclusion    a regulated status — marketing to them is the breach
+//   problem_gambling  never market again
+// harm is checked first: when both appear, the harm response is the one that matters.
+//
+// These are LABEL-tier in spirit — they never end a live call on their own. A false
+// positive permanently suppresses a customer we were mandated to text, so the
+// not-a-disclosure guards below are load-bearing and tested.
+export type RiskDisclosureCategory = "harm" | "self_exclusion" | "problem_gambling";
+export interface RiskDisclosure {
+  category: RiskDisclosureCategory;
+  /** The customer's own words, digit-masked and capped — safe to put in a Slack alert. */
+  excerpt: string;
+}
+
+const RISK_HARM = [
+  /\b(?:kill|killing) myself\b/i,
+  /\bend(?:ing)? my (?:own )?life\b/i,
+  /\btake (?:my|me) own life\b/i,
+  /\bsuicid(?:e|al)\b/i,
+  /\btop myself\b/i, // AU/UK idiom
+];
+const RISK_SELF_EXCLUSION = [
+  /\bself[\s-]?exclu(?:ded|sion|de|ding)\b/i,
+  /\b(?:betstop|gamstop|gamban|gamcare|gambleaware)\b/i, // AU / UK self-exclusion registers
+  /\b(?:banned|blocked|barred|excluded) myself\b/i,
+  /\bnot (?:allowed|supposed) to (?:gamble|bet|play)\b/i,
+];
+const RISK_PROBLEM_GAMBLING = [
+  /\baddict(?:ion|ed)\b/i, // NOT "addictive" — "that game is addictive" is praise, not a disclosure
+  /\b(?:gambling|betting|gaming) (?:problem|issue)\b/i,
+  /\b(?:problem|compulsive) (?:gambler|gambling)\b/i,
+  /\bgambling ?help(?:line)?\b/i,
+  /\b(?:quit|quitting|stopped|gave up|giving up) (?:gambling|betting|the pokies)\b/i,
+];
+// "My brother had a gambling problem, but I'm fine." — a disclosure ABOUT SOMEONE ELSE
+// must not suppress the person we called. Applied to problem_gambling only: the harm and
+// self-exclusion phrasings above are inherently first-person ("kill myself", "banned
+// myself", "I am self excluded"), so the guard would only cost us true positives there.
+const RISK_THIRD_PARTY =
+  /\b(?:my|his|her|their|the) (?:brother|sister|mum|mother|dad|father|son|daughter|wife|husband|partner|mate|friend|neighbou?r|ex)\b/i;
+
+const RISK_TIERS: ReadonlyArray<readonly [RiskDisclosureCategory, readonly RegExp[], boolean]> = [
+  ["harm", RISK_HARM, false],
+  ["self_exclusion", RISK_SELF_EXCLUSION, false],
+  ["problem_gambling", RISK_PROBLEM_GAMBLING, true], // true = apply the third-party guard
+];
+
+/**
+ * Did the CUSTOMER disclose self-exclusion, problem gambling, or self-harm? User turns
+ * only, most urgent category first. Returns null on anything else — including agent
+ * speech, abuse ("go fuck yourself" is a DNC case, not a risk disclosure), and machine
+ * greetings. Capped like every other classifier here.
+ */
+export function customerRiskDisclosure(
+  transcript: string | null | undefined,
+): RiskDisclosure | null {
+  if (!transcript || !transcript.trim()) return null;
+  const turns = parseTranscriptTurns(transcript.slice(0, TRANSCRIPT_CAP)).filter(
+    (t) => t.speaker === "user" && t.text.trim().length >= 2,
+  );
+  for (const [category, patterns, guardThirdParty] of RISK_TIERS) {
+    for (const t of turns) {
+      if (guardThirdParty && RISK_THIRD_PARTY.test(t.text)) continue;
+      if (patterns.some((p) => p.test(t.text))) {
+        return { category, excerpt: t.text.trim().replace(/\d{3,}/g, "###").slice(0, 160) };
+      }
+    }
+  }
+  return null;
+}
+
 /** Count of substantive CUSTOMER (user) turns — a `user` turn with >=2 non-space chars.
  *  Engagement signal for the proxy attempt-tagger: 0 ⇒ no real conversation; <=1 with a
  *  customer-ended-call ⇒ pickup-and-bail. Reuses parseTranscriptTurns. */
