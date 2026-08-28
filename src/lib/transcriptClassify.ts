@@ -89,7 +89,7 @@ const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
   /\bvoice\s*mail(?:box)?\b/i, // incl. "voice mailbox"
   /\bvoicemail\b/i,
   /(?:can'?t|cannot|can not|are not able to|unable to) take your call/i,
-  /\brecord your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen)
+  /\brec(?:ord|all) your name\b/i, // "if you record your name and reason for calling" (virtual receptionist / call screen); STT also hears "recall" — 9 prod calls read as human (2026-08-28)
   /cannot come to the (?:phone|telephone)\b/i, // "the person you called cannot come to the phone"
   // 2026-08-13: call-screener script + carrier announce. #5's MACHINE_GREETING_PATTERNS
   // below already knew these shapes but was deliberately eval-only, reasoning that
@@ -155,6 +155,36 @@ const VOICEMAIL_STRONG_HUMAN_PLAUSIBLE_PATTERNS = [
   /\bfor more options,?\s+(?:press|say)\b/i, // "For more options, press one"
   /\bhang up,?\s+or press\b/i, // "you can hang up, or press pound"
   /\bpress (?:the )?(?:pound|hash|star|\d|one|two|three)(?: key)?,?\s+or hang up\b/i, // "press pound or hang up"
+  // 2026-08-28: no seventh FAMILY — a blind spot on ORDINARY voicemail greetings. The
+  // 08-27 method run deliberately (every currently-human transcript with exactly one
+  // substantive customer turn, grouped by shape, top groups read) showed the classifier
+  // matching NOTHING on "At the tone, record your message" (358 prod calls read as
+  // human), the STT-clipped "More options? or just hang up" (108 — fix C anchored on
+  // the "for" the STT drops), "and as an audio message" (74 — the 06-16 pattern needs
+  // the "sent" the STT drops), "To connect your call, press seven" (58) and nine
+  // smaller scripts: 857 machines counted as reached humans, 720 in August, 160 texted.
+  // Every phrase is verbatim from a prod transcript. Over all 21,847 transcripts none
+  // appears in an AI turn, and none in a live system prompt or SMS template — our own
+  // agent cannot trip them today; a future script reciting one would label every call
+  // (isVoicemail reads the whole transcript), the exposure every entry here carries.
+  // Each was replayed alone and every multi-turn flip (87) read: zero real
+  // conversations. Two were read and REJECTED — "callback number, press" flipped one
+  // real human (four conversational turns first), and "I'll get back to you" is a live
+  // brush-off the weak tier carries on purpose. Label tier: the label re-dials and
+  // refuses the text; the kill tier is untouched.
+  /\brecord your message\b/i, // "At the tone, record your message." / "When you hear the beep, record your message."
+  /\bor just hang up\b/i, // "More options? or just hang up." — fix C's tail without the "for"
+  /\bas an audio message\b/i, // "and as an audio message." — STT hears "sent" as and / then / extent
+  /\bto connect your call,?\s+press\b/i, // call-screen IVR: "To connect your call, press seven."
+  /\bsend the message as a (?:text|audio)\b/i, // "...after the tone and will send the message as a text."
+  /\byou may hang up\b/i, // "Recording, you may hang up."
+  /\bplease leave a message\b/i, // alone it was ONE weak signal; the >=2 rule never saw a second
+  /\bno more room to record\b/i, // "Sorry. There's no more room to record new messages."
+  /\bmailbox cannot receive\b/i, // "This mailbox cannot receive messages at this time."
+  /\bthis number has call control\b/i, // AU call screen: "...To get through, please press four."
+  /\bsatisfied with your message\b/i, // recording menu: "If you are satisfied with your message, press one."
+  /\bcan'?t take your message\b/i, // "We can't take your message at this time." (the "person you have called" greeting)
+  /\bno message can be left\b/i, // "No message can be left on this service."
 ];
 // Post-call labeling keeps the FULL set — isVoicemail behavior is unchanged.
 const VOICEMAIL_STRONG_PATTERNS = [

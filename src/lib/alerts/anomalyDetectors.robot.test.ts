@@ -63,9 +63,12 @@ describe("robotTextedRule — which signal says the texted call was a machine", 
     expect(robotTextedRule(INCIDENTS.callAssist)).toBe("classifier");
   });
 
-  it("tripwire rule: the fourth family the classifier does NOT know (2026-08-27)", () => {
-    expect(robotTextedRule(INCIDENTS.cantTakeYourMessage)).toBe("tripwire");
-    expect(robotTextedRule(INCIDENTS.mailboxCannotReceive)).toBe("tripwire");
+  it("tripwire rule: phrases the classifier does NOT know — and the handover once it learns one", () => {
+    // 2026-08-28: the ordinary-greeting sweep taught the classifier "can't take your
+    // message" and "mailbox cannot receive". Their tripwire entries stay; reading first
+    // as "classifier" is the designed handover (strongest signal first), not a dead wire.
+    expect(robotTextedRule(INCIDENTS.cantTakeYourMessage)).toBe("classifier");
+    expect(robotTextedRule(INCIDENTS.mailboxCannotReceive)).toBe("classifier");
     expect(robotTextedRule(INCIDENTS.operatorsBusy)).toBe("tripwire");
     expect(robotTextedRule(INCIDENTS.leaveAVoiceMessage)).toBe("tripwire");
   });
@@ -108,7 +111,7 @@ describe("detectRobotTexted — the sweep-facing predicate", () => {
     ]);
     expect(r.trip).toBe(true);
     expect(r.offenders.map((o) => o.smsId)).toEqual(["a", "b"]);
-    expect(r.offenders[0].rule).toBe("tripwire");
+    expect(r.offenders[0].rule).toBe("classifier"); // 2026-08-28: learnt by the classifier (see the robotTextedRule test above)
     expect(r.offenders[0].excerpt.startsWith("Hi. The person you have called is not available.")).toBe(true);
     expect(r.offenders[0].excerpt.length).toBeLessThanOrEqual(90);
   });

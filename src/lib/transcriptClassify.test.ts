@@ -293,7 +293,7 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
     // hold phrase is embedded in a genuine turn, so the every-turn rule never fires.
     expect(isVoicemail(REAL_WITH_HOLD)).toBe(false);
   });
-  it("call-path isVoicemail: stay-on-the-line (2026-08-13) and hang-up-or-press (2026-08-27) label voicemail; the rest stay eval-only", () => {
+  it("call-path isVoicemail: stay-on-the-line (2026-08-13), hang-up-or-press (2026-08-27), record-message + no-more-room (2026-08-28) all label voicemail", () => {
     // The 2026-06-08 version of this test pinned ALL of these to isVoicemail=false,
     // reasoning the SMS gate was protected by hasGenuineCustomerConsent. That became
     // false on 2026-08-07 when optin_reached_only made the label itself the dispatch
@@ -306,9 +306,11 @@ describe("hasRealConversation — #5 machine greetings (stay-on-line / record-me
     // 18-23 Aug, and written with the IVR grammar on either side of the phrase
     // the shapes flipped 244 prod transcripts with zero real humans among them.
     expect(isVoicemail(MISSED_MACHINES_5.hangUpPressPound)).toBe(true);
-    // Still eval-only: not measured leaking texts, and each needs its every-turn guard.
-    expect(isVoicemail(MISSED_MACHINES_5.recordYourMessage)).toBe(false);
-    expect(isVoicemail(MISSED_MACHINES_5.noMoreRoom)).toBe(false);
+    // 2026-08-28: the last two premises fell the same way. Over all 21,847 prod
+    // transcripts "record your message" was 358 currently-HUMAN calls (39 texted)
+    // and "no more room to record" 26 (5 texted) — see VOICEMAIL_GAP_0828 below.
+    expect(isVoicemail(MISSED_MACHINES_5.recordYourMessage)).toBe(true);
+    expect(isVoicemail(MISSED_MACHINES_5.noMoreRoom)).toBe(true);
   });
   it("still keeps the verified real humans + genuine conversation + brush-off visible", () => {
     expect(hasRealConversation(REAL_HUMANS.wrongNumber)).toBe(true);
@@ -899,6 +901,64 @@ describe("isVoicemail — the IVR 'for more options' family (2026-08-27, fix C)"
   it("keeps them out of the Reviews queue and the QA/golden surfaces", () => {
     for (const [name, t] of Object.entries(MORE_OPTIONS_MACHINES)) {
       expect(hasRealConversation(t), name).toBe(false);
+    }
+  });
+});
+
+// ── 2026-08-28: the seventh sweep found no seventh family — it found the classifier's blind
+// spot on ORDINARY voicemail greetings. Method (the one that surfaced "press hash" on 08-27, run
+// deliberately): every transcript isVoicemail still called HUMAN with exactly one substantive
+// customer turn, grouped by shape, top groups read. 857 machines were counted as reached humans,
+// 720 of them in August, 160 texted. Every user turn below is VERBATIM from a prod transcript.
+// Each fixture matches exactly ONE new pattern, so disabling that pattern turns its line red.
+const GAP_OPENER = "AI: Hi. It's Tom from Lucky seven Casino. Does this sound familiar?";
+const VOICEMAIL_GAP_0828 = {
+  atTheToneRecord: "At the tone, record your message.", // 358 — the biggest single miss
+  orJustHangUp: "More options? or just hang up.", // 108 — STT clipped the "for" that fix C anchored on
+  asAnAudioMessage: "and as an audio message.", // 74 — STT drops the "sent" the 06-16 pattern needs
+  toConnectYourCallPress: "To connect your call, press seven.", // 58 — call-screen IVR
+  sendMessageAsText: "after the tone and will send the message as a text.", // 53 — carrier voicemail-to-text
+  youMayHangUp: "Recording, you may hang up.", // 52 — "finished recording" needs "finished"
+  pleaseLeaveAMessage: "Please leave a message.", // 49 — alone it was one weak signal, never two
+  noRoomToRecord: "Sorry. There's no more room to record new messages.", // 26 — full mailbox, other wording
+  mailboxCannotReceive: "This mailbox cannot receive messages at this time.", // 20
+  callControl: "This number has call control. To get through, please press four.", // 19 — AU call screen
+  satisfiedWithYourMessage: "If you are satisfied with your message, press one. To listen to your message, press two. To erase and rerecord, press three.", // 18
+  cantTakeYourMessage: "Hi. The person you have called is not available. We can't take your message at this time. Please call again later. Goodbye.", // 10
+  noMessageCanBeLeft: "No message can be left on this service. Zero four six zero eight nine one six nine nine. Goodbye.", // 6
+  recallYourName: "If you recall your name and reason for calling, I'll see if this person is available.", // 9 — STT "recall" for "record"
+};
+// Read and REJECTED on 2026-08-28 — pinned here so a later widening turns red:
+//   • "To leave a callback number, press five" flipped ONE real human (four conversational turns
+//     before it). The bar is zero.
+//   • "I'll get back to you" is a live brush-off; the weak tier carries it deliberately (08-13).
+const VOICEMAIL_GAP_0828_HUMANS = {
+  realHumanThenCallbackMenu: `${GAP_OPENER}\nUser: Hello?\nAI: It's Tom from Lucky seven Casino.\nUser: Who is this?\nUser: I don't know what this is.\nUser: Okay. This is Anthony.\nUser: To leave a callback number, press five.`,
+  liveBrushOffGetBack: `${GAP_OPENER}\nUser: Sorry, I'm in a meeting. Leave it with me and I'll get back to you.`,
+};
+
+describe("isVoicemail — ordinary voicemail greetings the classifier missed (2026-08-28)", () => {
+  it("flags every measured greeting", () => {
+    for (const [name, turn] of Object.entries(VOICEMAIL_GAP_0828)) {
+      expect(isVoicemail(`${GAP_OPENER}\nUser: ${turn}\nAI: Goodbye.`), name).toBe(true);
+    }
+  });
+
+  it("keeps the read-and-rejected humans human", () => {
+    for (const [name, t] of Object.entries(VOICEMAIL_GAP_0828_HUMANS)) {
+      expect(isVoicemail(t), name).toBe(false);
+    }
+  });
+
+  it("NEVER feeds the mid-call kill path: every greeting is label-only", () => {
+    for (const [name, turn] of Object.entries(VOICEMAIL_GAP_0828)) {
+      expect(isConclusiveVoicemail(turn), name).toBe(false);
+    }
+  });
+
+  it("keeps them out of the Reviews queue and the QA/golden surfaces", () => {
+    for (const [name, turn] of Object.entries(VOICEMAIL_GAP_0828)) {
+      expect(hasRealConversation(`${GAP_OPENER}\nUser: ${turn}\nAI: Goodbye.`), name).toBe(false);
     }
   });
 });
