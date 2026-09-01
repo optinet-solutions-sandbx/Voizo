@@ -18,10 +18,19 @@ describe("GET /audience/preview", () => {
     expect(await res.text()).toBe(PREVIEW_HTML);
   });
 
-  it("the PREVIEW ribbon is present and says the numbers are fixtures, not live", () => {
-    expect(PREVIEW_HTML).toContain(">PREVIEW</span>");
-    expect(PREVIEW_HTML).toContain("not live");
-    expect(PREVIEW_HTML).toContain("measured 26 Aug");
+  it("the LIVE SNAPSHOT ribbon states provenance: real data, computed at a stated time", () => {
+    expect(PREVIEW_HTML).toContain(">LIVE SNAPSHOT</span>");
+    expect(PREVIEW_HTML).toContain("Real production data, computed 2026-");
+    expect(PREVIEW_HTML).toContain("Refreshed on request, not continuously");
+    // the deposit window disclosure — the capture bound until the CIO journeys go live
+    expect(PREVIEW_HTML).toContain("26 Jul");
+  });
+
+  it("carries real players, not fixtures (identity unmasked by decision, behind Basic Auth)", () => {
+    expect(PREVIEW_HTML).toContain("Shay Brown");          // known real depositor
+    expect(PREVIEW_HTML).not.toContain("STEVIC ×2");   // a fixture-only row marker
+    // full E.164 phones present (the no-masking decision, 2026-09-02)
+    expect(PREVIEW_HTML).toMatch(/\+61\d{9}/);
   });
 
   it("carries the ported reporting surfaces", () => {
@@ -42,6 +51,6 @@ describe("GET /audience/preview", () => {
     expect(PREVIEW_HTML).toContain("</html>");
     // the generator's marker discipline: exactly one body open tag, ribbon directly after it
     expect(PREVIEW_HTML.split("<body>").length).toBe(2);
-    expect(PREVIEW_HTML.indexOf(">PREVIEW</span>")).toBeGreaterThan(PREVIEW_HTML.indexOf("<body>"));
+    expect(PREVIEW_HTML.indexOf(">LIVE SNAPSHOT</span>")).toBeGreaterThan(PREVIEW_HTML.indexOf("<body>"));
   });
 });
