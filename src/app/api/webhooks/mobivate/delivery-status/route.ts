@@ -25,8 +25,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseServer";
-import { parseDeliveryReceipt } from "@/lib/mobivateDeliveryReceipt";
+// Relative, not "@/" — vitest has no alias config, so a route importing "@/lib/..." cannot be
+// unit-tested at all. Same resolved modules; this is the convention every tested route here
+// follows (see the sibling webhooks/customerio route + its test).
+import { supabaseAdmin } from "../../../../../lib/supabaseServer";
+import { parseDeliveryReceipt, describeFailure } from "../../../../../lib/mobivateDeliveryReceipt";
 
 export async function POST(request: NextRequest) {
   // Parsing (JSON / Mobivate `xml=`-wrapped XML / legacy form) lives in the pure,
@@ -40,9 +43,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true, parsed: false }, { status: 200 });
   }
 
-  const { reference, providerMessageId, status, reason } = parsed;
+  const { reference, providerMessageId, status } = parsed;
+  // VOZ-250: the cause, for the error_message column. Mobivate sends <status> + <statusCode> and
+  // no <reason>, so the old `reason`-only write left error_message NULL on all 667 non-delivered
+  // rows — we could say a text failed, never why. describeFailure keeps the provider's own words.
+  //
+  // Gated on the TERMINAL FAILURE states, not on `!== "delivered"`: normalizeSmsStatus maps
+  // ACCEPTED / SENT / ENROUTE to 'sent', so an interim receipt on a message still in flight would
+  // otherwise stamp error_message="ACCEPTED (code 1)" — an error string on a non-error, read
+  // verbatim by the dashboard and the CSV exports. 'queued'/'sent' are not failures; keep them NULL.
+  const isFailure = status === "failed" || status === "undelivered";
+  const failureDetail = isFailure ? describeFailure(parsed) : null;
   console.log(
-    `[mobivate/delivery-status] parsed reference=${reference} id=${providerMessageId} status=${status}`,
+    `[mobivate/delivery-status] parsed reference=${reference} id=${providerMessageId} status=${status}` +
+      ` raw=${parsed.rawStatus ?? "-"} code=${parsed.statusCode ?? "-"}`,
   );
 
   // Match on `reference` (our UUID) first — it's what we set at send time.
@@ -78,7 +92,7 @@ export async function POST(request: NextRequest) {
     .from("sms_messages_v2")
     .update({
       status,
-      error_message: status === "delivered" ? null : reason,
+      error_message: failureDetail,
       ...(providerMessageId ? { provider_message_id: providerMessageId } : {}),
     })
     .eq("id", row.id);

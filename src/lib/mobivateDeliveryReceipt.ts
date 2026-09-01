@@ -38,10 +38,37 @@ export interface ParsedReceipt {
   providerMessageId: string | null;
   /** Normalized status. */
   status: SmsStatus;
+  /** The provider's OWN status word, verbatim and un-normalized (VOZ-250). normalizeSmsStatus
+   *  collapses REJECTED / EXPIRED / UNKNOWN / FAILED_LIMITS_EXCEEDED all into 'failed', so
+   *  without this the only record of WHICH failure occurred is thrown away. */
+  rawStatus: string | null;
   /** Provider statusCode, if present (informational). */
   statusCode: string | null;
   /** Failure reason, if the provider supplied one (informational). */
   reason: string | null;
+}
+
+/**
+ * The human-readable cause we persist in sms_messages_v2.error_message for a non-delivered
+ * message (VOZ-250). Mobivate's XML carries <status> + <statusCode> and NO <reason>, so
+ * `reason` is null on every real receipt — which is why all 667 non-delivered rows read NULL
+ * and "why did this text fail" was unanswerable. Preference order: an explicit provider reason,
+ * else the provider's own status word, else the bare code.
+ *
+ * Deliberately NOT a code→meaning lookup: Mobivate has never documented one for vortex, and an
+ * invented table would be worse than the raw code. Once these strings accumulate in prod the
+ * real mapping can be read off the data. error_message is free text read straight through to
+ * the dashboard and exports (siblings already write "sender ID unresolved"), so no consumer
+ * parses this shape.
+ *
+ * Returns null — never "" — when the provider told us nothing: an empty string would read as
+ * "we know the reason and it is blank".
+ */
+export function describeFailure(receipt: ParsedReceipt): string | null {
+  const code = receipt.statusCode ? `code ${receipt.statusCode}` : null;
+  const cause = receipt.reason ?? receipt.rawStatus;
+  if (cause) return code ? `${cause} (${code})` : cause;
+  return code;
 }
 
 /** Extract the first <tag>…</tag> text (case-insensitive, non-nested). */
@@ -51,10 +78,12 @@ function xmlTag(xml: string, tag: string): string | null {
 }
 
 function fromXml(xml: string): ParsedReceipt {
+  const rawStatus = xmlTag(xml, "status");
   return {
     reference: xmlTag(xml, "clientReference"),
     providerMessageId: xmlTag(xml, "deliveryMessageId"),
-    status: normalizeSmsStatus(xmlTag(xml, "status")),
+    status: normalizeSmsStatus(rawStatus),
+    rawStatus,
     statusCode: xmlTag(xml, "statusCode"),
     reason: xmlTag(xml, "reason"),
   };
@@ -84,6 +113,7 @@ export function parseDeliveryReceipt(rawBody: string): ParsedReceipt | null {
         reference: strOrNull(j.reference),
         providerMessageId: strOrNull(j.id),
         status: normalizeSmsStatus(j.status),
+        rawStatus: strOrNull(j.status),
         statusCode: strOrNull(j.statusCode),
         reason: strOrNull(j.reason),
       };
@@ -112,6 +142,7 @@ export function parseDeliveryReceipt(rawBody: string): ParsedReceipt | null {
       reference: strOrNull(params.get("reference")),
       providerMessageId: strOrNull(params.get("id")),
       status: normalizeSmsStatus(params.get("status")),
+      rawStatus: strOrNull(params.get("status")),
       statusCode: strOrNull(params.get("statusCode")),
       reason: strOrNull(params.get("reason")),
     };
