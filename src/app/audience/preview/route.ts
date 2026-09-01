@@ -7,14 +7,17 @@ import { PREVIEW_HTML } from "./previewHtml";
  * Audience tab in prod, without us freezing any design decision prematurely. So this ships the
  * CANONICAL MOCKUP byte-for-byte (plus a PREVIEW ribbon), on its own URL:
  *   - the real sidebar/navigation is untouched — the page paints its own, as part of the preview;
- *   - nothing is wired to live data — every number is a fixture with its measurement date
- *     disclosed in the page's own tooltips, and the ribbon says so up top;
+ *   - the numbers are a LIVE SNAPSHOT of production (2026-09-02 decision): computed by
+ *     scripts/_gen-0902-audience-data.cjs at generation time — real players (identity unmasked,
+ *     behind Basic Auth), real Mobivate receipts, real deposits — refreshed on request, and the
+ *     ribbon states the computation time up top;
  *   - the existing /audience page (Lead Recycling) is untouched and unaffected.
  *
  * The HTML is a GENERATED module (previewHtml.ts) produced by
  * scripts/_gen-0902-audience-preview.cjs, which refuses to generate unless the mockup's own
- * 124-check contract gate passes. To update the preview: edit the mockup, keep its gate green,
- * re-run the script, commit. The preview can lag the design, never diverge from it.
+ * contract gate passes AND the data engine's reconciliation checks pass. To refresh:
+ *   node scripts/_gen-0902-audience-data.cjs && node scripts/_gen-0902-audience-preview.cjs
+ * then commit. The preview can lag the design and the data, never diverge from either.
  *
  * Auth: the app-wide Basic Auth middleware covers this route (only /api/webhooks/*, /api/cron/*
  * and static assets are exempt), so the preview is exactly as private as the rest of the console.
