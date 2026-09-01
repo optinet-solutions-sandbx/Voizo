@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parsePhoneList,
   nameByE164,
+  cioIdByE164,
   defaultCallWindows,
   formatDefaultCallWindowsJson,
   normalizeOperatorControls,
@@ -40,6 +41,31 @@ describe("nameByE164", () => {
     expect(map.has("+15872083253")).toBe(false);
     expect(map.size).toBe(1);
     expect(map.get("+12046511386")).toBe("First Wins");
+  });
+});
+
+describe("cioIdByE164", () => {
+  // Email follow-up (2026-09-01): identity joins by the SAME normalized key and the SAME
+  // first-wins rule as the name, so a duplicate phone resolves to ONE member for both.
+  it("keys cio_ids by the parsePhoneList-normalized phone", () => {
+    const map = cioIdByE164([
+      { phone: "+1 (587) 208-3253", cioId: "cio-aaa" },
+      { phone: "12046511386", cioId: "cio-bbb" },
+    ]);
+    expect(map.get("+15872083253")).toBe("cio-aaa");
+    expect(map.get("+12046511386")).toBe("cio-bbb");
+  });
+
+  it("skips identity-less and unparseable entries; first id for a phone wins", () => {
+    const map = cioIdByE164([
+      { phone: "+15872083253", cioId: null },
+      { phone: "not-a-phone", cioId: "cio-ghost" },
+      { phone: "+12046511386", cioId: "cio-first" },
+      { phone: "+12046511386", cioId: "cio-second" },
+    ]);
+    expect(map.has("+15872083253")).toBe(false);
+    expect(map.size).toBe(1);
+    expect(map.get("+12046511386")).toBe("cio-first");
   });
 });
 

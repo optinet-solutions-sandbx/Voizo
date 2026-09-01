@@ -136,17 +136,19 @@ describe("partitionRollover", () => {
     const rows = [
       // display_name carries across days (greet-by-name Ramp 1) — a player must
       // not lose their name when their number rolls into the next child.
-      { id: "1", phone_e164: "+61400000001", attempt_count: 0, outcome: "pending", display_name: "Vicky Seavers" },
-      { id: "2", phone_e164: "+61400000002", attempt_count: 2, outcome: "pending_retry", display_name: null },
-      { id: "3", phone_e164: "+61400000003", attempt_count: 1, outcome: "sent_sms", display_name: "Dropped Terminal" },
+      // cio_id carries across days too (2026-09-01 email follow-up): identity must survive
+      // the rollover, and a pre-identity row (no cio_id key at all) must carry null, not vanish.
+      { id: "1", phone_e164: "+61400000001", attempt_count: 0, outcome: "pending", display_name: "Vicky Seavers", cio_id: "cio-aaa" },
+      { id: "2", phone_e164: "+61400000002", attempt_count: 2, outcome: "pending_retry", display_name: null, cio_id: null },
+      { id: "3", phone_e164: "+61400000003", attempt_count: 1, outcome: "sent_sms", display_name: "Dropped Terminal", cio_id: "cio-ccc" },
       { id: "4", phone_e164: "+61400000004", attempt_count: null, outcome: "pending" },
-      { id: "5", phone_e164: "+61400000005", attempt_count: 3, outcome: "unreached", display_name: null },
+      { id: "5", phone_e164: "+61400000005", attempt_count: 3, outcome: "unreached", display_name: null, cio_id: null },
     ];
     const { carry, closeIds } = partitionRollover(rows);
     expect(carry).toEqual([
-      { phone_e164: "+61400000001", attempt_count: 0, display_name: "Vicky Seavers" },
-      { phone_e164: "+61400000002", attempt_count: 2, display_name: null },
-      { phone_e164: "+61400000004", attempt_count: 0, display_name: null },
+      { phone_e164: "+61400000001", attempt_count: 0, display_name: "Vicky Seavers", cio_id: "cio-aaa" },
+      { phone_e164: "+61400000002", attempt_count: 2, display_name: null, cio_id: null },
+      { phone_e164: "+61400000004", attempt_count: 0, display_name: null, cio_id: null },
     ]);
     expect(closeIds).toEqual(["1", "2", "4"]);
   });

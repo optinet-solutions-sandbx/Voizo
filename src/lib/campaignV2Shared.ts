@@ -229,3 +229,19 @@ export function nameByE164(entries: Array<{ phone: string; name: string | null }
   }
   return map;
 }
+
+/**
+ * Same join as nameByE164, for the member's Customer.io identity (2026-09-01 email-follow-up
+ * plan). first-wins on a duplicate phone, EXACTLY like nameByE164 — two profiles sharing a
+ * phone (re-signup) resolve to the first one the segment returned, and the dial row's identity
+ * stays consistent with the display name chosen next to it.
+ */
+export function cioIdByE164(entries: Array<{ phone: string; cioId: string | null }>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entries) {
+    if (!e.cioId) continue;
+    const e164 = parsePhoneList(e.phone)[0];
+    if (e164 && !map.has(e164)) map.set(e164, e.cioId);
+  }
+  return map;
+}

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchSegmentPhones } from "@/lib/customerio";
-import { parsePhoneList, nameByE164 } from "@/lib/campaignV2Shared";
+import { parsePhoneList, nameByE164, cioIdByE164 } from "@/lib/campaignV2Shared";
 import { parseJsonBody } from "@/lib/jsonBody";
 import { fetchAllRows, updateRowsIn } from "@/lib/supabaseFetchAll";
 
@@ -157,6 +157,8 @@ export async function POST(
   // Greet-by-name Ramp 1: names ride the same profile fetch, keyed by the
   // normalized phone so they line up with the rows inserted below.
   const namesByPhone = nameByE164(segmentResult.entries);
+  // Identity carry-through (2026-09-01): same join, same first-wins rule as the name.
+  const cioByPhone = cioIdByE164(segmentResult.entries);
 
   // ── 3. Read the source's existing campaign_numbers_v2 rows (paged — VOZ-266) ──
   // The bare select was clamped at 1000 rows, so on a large campaign the diff
@@ -252,6 +254,7 @@ export async function POST(
       phone_e164: phone,
       outcome: "pending" as const,
       display_name: namesByPhone.get(phone) ?? null,
+      cio_id: cioByPhone.get(phone) ?? null,
     }));
     const { error: insertErr } = await supabaseAdmin
       .from("campaign_numbers_v2")

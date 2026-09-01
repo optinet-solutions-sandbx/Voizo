@@ -113,6 +113,11 @@ export async function claimAndQueueMember(
     phone_e164: args.phone,
     outcome: "pending",
     display_name: args.displayName,
+    // Identity carried through (2026-09-01): the email follow-up addresses the player in
+    // Customer.io by this id at dispatch time. Requires supabase-migration-cio-track-followup.sql
+    // BEFORE deploy — an unknown column here fails the insert, releases the claim, and retries
+    // forever.
+    cio_id: args.cioId,
   });
   if (insErr) {
     // Unique (campaign_id, phone_e164) violation = the phone IS already queued
@@ -165,6 +170,8 @@ export async function promoteWaitingMember(
     phone_e164: args.phone,
     outcome: "pending",
     display_name: args.displayName,
+    // Same identity carry-through as claimAndQueueMember (2026-09-01).
+    cio_id: args.cioId,
   });
   if (insErr) {
     // Same duplicate-phone rule as claimAndQueueMember: already queued = done.

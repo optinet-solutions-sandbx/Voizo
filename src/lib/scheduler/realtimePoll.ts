@@ -128,13 +128,15 @@ export function duePromotions(
  * today's child).
  */
 export function partitionRollover(
-  rows: Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name?: string | null }>,
-): { carry: Array<{ phone_e164: string; attempt_count: number; display_name: string | null }>; closeIds: string[] } {
+  rows: Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name?: string | null; cio_id?: string | null }>,
+): { carry: Array<{ phone_e164: string; attempt_count: number; display_name: string | null; cio_id: string | null }>; closeIds: string[] } {
   const open = rows.filter((r) => r.outcome === "pending" || r.outcome === "pending_retry");
   return {
     // display_name carries across days (greet-by-name Ramp 1): a player must not
     // lose their name when their open number rolls into the next child.
-    carry: open.map((r) => ({ phone_e164: r.phone_e164, attempt_count: r.attempt_count ?? 0, display_name: r.display_name ?? null })),
+    // cio_id carries the same way (2026-09-01): dropping it here would strip the
+    // email-follow-up identity from every player who rolls into a new day.
+    carry: open.map((r) => ({ phone_e164: r.phone_e164, attempt_count: r.attempt_count ?? 0, display_name: r.display_name ?? null, cio_id: r.cio_id ?? null })),
     closeIds: open.map((r) => r.id),
   };
 }
@@ -185,7 +187,9 @@ export async function rolloverLeftovers(
   // strand the tail, i.e. reintroduce this exact bug through the error path.
   // A thrown error instead carries nothing (the old error contract): all rows
   // stay open and the spawn itself still succeeds via the caller's catch.
-  const LEFTOVER_COLS = "id, phone_e164, attempt_count, outcome, display_name";
+  // cio_id added 2026-09-01: without it in the SELECT, the carry map's `c.cio_id` would be
+  // undefined on every row and the rollover would silently strip identity each midnight.
+  const LEFTOVER_COLS = "id, phone_e164, attempt_count, outcome, display_name, cio_id";
   let rows: Array<Record<string, unknown>>;
   try {
     const pending = await fetchAllRows(supabase, "campaign_numbers_v2", LEFTOVER_COLS, "id", [
@@ -209,7 +213,7 @@ export async function rolloverLeftovers(
   }
 
   const { carry, closeIds } = partitionRollover(
-    rows as unknown as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name: string | null }>,
+    rows as unknown as Array<{ id: string; phone_e164: string; attempt_count: number | null; outcome: string; display_name: string | null; cio_id?: string | null }>,
   );
   if (carry.length > 0) {
     const { error: insErr } = await supabase.from("campaign_numbers_v2").insert(
@@ -219,6 +223,10 @@ export async function rolloverLeftovers(
         attempt_count: c.attempt_count,
         outcome: "pending",
         display_name: c.display_name,
+        // Identity rides the rollover with the row (2026-09-01). `?? null` because rows minted
+        // before the cio_id column existed legitimately carry none — dispatch-time resolution
+        // (followupEvent identity ladder) covers those.
+        cio_id: c.cio_id ?? null,
       })),
     );
     if (insErr) {

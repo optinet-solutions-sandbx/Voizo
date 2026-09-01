@@ -111,6 +111,8 @@ describe("claimAndQueueMember", () => {
       phone_e164: "+61412345678",
       outcome: "pending",
       display_name: "Maria",
+      // identity carry-through (2026-09-01): the email follow-up addresses the player by this
+      cio_id: "cio-9",
     });
   });
 
@@ -197,6 +199,8 @@ describe("promoteWaitingMember", () => {
       phone_e164: "+61412345678",
       outcome: "pending",
       display_name: "Maria",
+      // identity carry-through (2026-09-01): the email follow-up addresses the player by this
+      cio_id: "cio-9",
     });
   });
 

@@ -461,16 +461,18 @@ export async function fetchSegmentPhones(
   segmentId: number,
   workspace?: string | null,
 ): Promise<
-  | { ok: true; phones: string[]; entries: Array<{ phone: string; name: string | null }>; sampled: number }
+  | { ok: true; phones: string[]; entries: Array<{ phone: string; name: string | null; cioId: string | null }>; sampled: number }
   | { ok: false; status: number; error: string }
 > {
   const PAGE_CAP = 10;
   const allRawPhones: string[] = [];
-  // Raw {phone, name} pairs (greet-by-name Ramp 1): the profile payload we
-  // already fetch carries the name — zero extra Customer.io calls. `phones`
-  // is kept unchanged for existing callers; name-aware callers join entries
-  // to their normalized inserts via nameByE164 (campaignV2Shared).
-  const allEntries: Array<{ phone: string; name: string | null }> = [];
+  // Raw {phone, name, cioId} tuples: the segment membership we already page through carries the
+  // member's cio_id — zero extra Customer.io calls. `phones` is kept unchanged for existing
+  // callers (5 direct callers, 6 execution flows incl. the scheduler cron — this field is
+  // ADDITIVE ONLY). Name-aware callers join via nameByE164; identity-aware callers via
+  // cioIdByE164 (campaignV2Shared). cioId feeds campaign_numbers_v2.cio_id so the email
+  // follow-up event can address the player in Customer.io (2026-09-01 plan).
+  const allEntries: Array<{ phone: string; name: string | null; cioId: string | null }> = [];
   let cursor: string | undefined;
   let pages = 0;
 
@@ -486,16 +488,25 @@ export async function fetchSegmentPhones(
       };
     }
 
-    const profiles = await chunkedPromiseAll(batchResult.data.identifiers, 8, (m) =>
-      lookupMemberProfileWithFallback(m, workspace),
-    );
+    // The member rides THROUGH the lookup closure so identity↔profile pairing is structural,
+    // not positional: chunkedPromiseAll happens to preserve order today, but an identity
+    // attached to the wrong phone would email the wrong player — that failure mode must not
+    // exist at all, not merely be unlikely.
+    const profiles = await chunkedPromiseAll(batchResult.data.identifiers, 8, async (m) => ({
+      member: m,
+      result: await lookupMemberProfileWithFallback(m, workspace),
+    }));
 
-    for (const profile of profiles) {
+    for (const { member, result: profile } of profiles) {
       if (!profile.success) continue;
       const phone = extractPhoneFromAttrs(profile.data.attributes);
       if (phone) {
         allRawPhones.push(phone);
-        allEntries.push({ phone, name: extractNameFromAttrs(profile.data.attributes) });
+        allEntries.push({
+          phone,
+          name: extractNameFromAttrs(profile.data.attributes),
+          cioId: typeof member.cio_id === "string" && member.cio_id ? member.cio_id : null,
+        });
       }
     }
 

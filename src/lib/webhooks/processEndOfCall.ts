@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isVoicemail, hasGenuineCustomerConsent, hasRealConversation, agentMentionedSms, customerDeclinedSms, customerRequestedCallback, customerRiskDisclosure } from "@/lib/transcriptClassify";
 import { postSlackAlert } from "@/lib/alerts/slack";
 import { decideSmsDispatch, resolveSmsConsentMode, type SmsConsentMode } from "@/lib/smsDispatchDecision";
+import { fireCallFollowup } from "@/lib/followupEvent";
 import { decideOutcomePark } from "@/lib/webhooks/hangupOutcome";
 import { deriveAttemptTag } from "@/lib/dashboardAnalytics";
 import { resolveCallCosts, type VapiCostPayload } from "@/lib/callCost";
@@ -648,9 +649,12 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
     const shouldSendSms = smsConfigured && typeof smsTemplate === "string" && smsTemplate.length > 0;
 
     if (shouldSendSms && typeof smsTemplate === "string") {
+      // select * (same rationale as the campaign select above): cio_id feeds the email
+      // follow-up event, and naming it explicitly would fail this select in a pre-migration
+      // deploy window and kill the SMS with it.
       const { data: numRow } = await supabaseAdmin
         .from("campaign_numbers_v2")
-        .select("phone_e164")
+        .select("*")
         .eq("id", callRow.campaign_number_id)
         .single();
 
@@ -766,6 +770,25 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
                       `SMS ${result.success ? "sent" : "failed"} for ${numRow.phone_e164.slice(0, -4)}**** ` +
                       `(brand=${campaign?.cio_workspace ?? "default"}, sender=${senderId}, reason=${decision.reason}, provider_id=${result.providerMessageId})`,
                     );
+
+                    // ── Email follow-up event (2026-09-01 plan) ──
+                    // Fires ONLY here, inside the same block the SMS just cleared: consent
+                    // decision, suppression_list, SMS dedup and the risk-disclosure veto all
+                    // stand between the call and this line. sms_sent carries the actual SMS
+                    // outcome; the event fires either way — it is a CALL follow-up, and the
+                    // email is CIO's channel, not a retry of ours. Never throws; its own
+                    // ledger's unique index makes webhook retries a no-op. The sweep lane
+                    // (lastResortSweep) deliberately does NOT fire this — Q2, narrow start.
+                    await fireCallFollowup(supabaseAdmin, {
+                      workspace: campaign?.cio_workspace ?? null,
+                      campaignId: (callRow.campaign_id as string | null) ?? null,
+                      campaignNumberId: callRow.campaign_number_id as string,
+                      callId: (callRow.id as string | null) ?? null,
+                      phone: numRow.phone_e164 as string,
+                      rowCioId: (numRow as { cio_id?: string | null }).cio_id ?? null,
+                      callOutcome: attemptTag,
+                      smsSent: result.success === true,
+                    });
                   }
                 } else {
                   console.warn(
