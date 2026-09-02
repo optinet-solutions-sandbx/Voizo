@@ -12,7 +12,7 @@ import { Search, X, SlidersHorizontal } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
-import { groupCampaignOptions, type GroupableOption } from "@/lib/campaignGroups";
+import { groupCampaignOptions, visibleChildren, type GroupableOption } from "@/lib/campaignGroups";
 import { matchesCampaignName, toggleAllMatching } from "./campaignFilters";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
@@ -159,6 +159,11 @@ function MultiSelect({
   // Which parent groups are expanded. Collapsed by default is the whole point: in the default
   // 7-day window all 63 options are children of just 10 parents (measured 2026-08-26).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Groups the operator asked to see in full. A group opens CAPPED at CHILD_PAGE_SIZE
+  // (Jasiel 2026-09-01): a recurring campaign spawns a child a day, so a 90-day window put
+  // 96 dated rows under one parent in a box that shows about 7, and a search force-expands
+  // every group at once. Collapsing a group drops it from here, so reopening starts capped.
+  const [showAll, setShowAll] = useState<Set<string>>(new Set());
   // Keyword search over the options (Val's CRM team, 2026-08-26): 60+ near-identical
   // campaign names make "reactivation" the only practical way to reach a family of them.
   // Local state, deliberately NOT part of Filters — typing here costs no analytics refetch.
@@ -240,7 +245,10 @@ function MultiSelect({
               </span>
             </button>
           )}
-          <div className="max-h-64 overflow-y-auto">
+          {/* 320px: a group header, its first CHILD_PAGE_SIZE runs AND the "show all" button all
+              fit without scrolling. At the old 256px the button sat 30px below the fold, measured
+              in the real app on 2026-09-02 — the way out of a capped list has to be on screen. */}
+          <div className="max-h-80 overflow-y-auto">
             {shown.length === 0 ? (
               <div className="px-3.5 py-2.5 text-xs text-[var(--text-3)]">
                 {options.length === 0 ? "No campaigns" : `No campaign matches “${query.trim()}”`}
@@ -251,14 +259,20 @@ function MultiSelect({
                   const ids = g.options.map((o) => o.value);
                   const on = ids.filter((v) => selectedSet.has(v)).length;
                   const isOpen = searching || expanded.has(g.key);
+                  const { shown: kids, hidden } = visibleChildren(g.options, showAll.has(g.key));
                   return (
                     <div key={g.key}>
-                      <div className="w-full flex items-center gap-1 pl-1.5 pr-3 hover:bg-[var(--bg-hover)] transition-colors">
+                      {/* Sticky: with a long group open, the header scrolled away and left a
+                          list of bare dates with nothing naming what they belong to. */}
+                      <div className="w-full flex items-center gap-1 pl-1.5 pr-3 hover:bg-[var(--bg-hover)] transition-colors sticky top-0 z-10 bg-[var(--bg-card)]">
                         <button
                           type="button"
                           onClick={() => setExpanded((prev) => {
                             const next = new Set(prev);
-                            if (next.has(g.key)) next.delete(g.key); else next.add(g.key);
+                            if (next.has(g.key)) {
+                              next.delete(g.key);
+                              setShowAll((s) => { const n = new Set(s); n.delete(g.key); return n; });
+                            } else next.add(g.key);
                             return next;
                           })}
                           aria-expanded={isOpen}
@@ -286,7 +300,7 @@ function MultiSelect({
                         </span>
                       </div>
                       {isOpen &&
-                        g.options.map((o) => (
+                        kids.map((o) => (
                           <button
                             key={o.value}
                             type="button"
@@ -300,6 +314,20 @@ function MultiSelect({
                             <span className="font-mono">{o.runLabel || o.label}</span>
                           </button>
                         ))}
+                      {isOpen && hidden > 0 && (
+                        // Named by the group's TOTAL, not the remainder: "show all 36" answers
+                        // "how many are there", which is the question a capped list provokes.
+                        // Not pagination on purpose: these rows are dates, and scrolling reads
+                        // better than clicking through pages to reach one.
+                        <button
+                          type="button"
+                          onClick={() => setShowAll((s) => new Set(s).add(g.key))}
+                          title={`${g.label} — ${hidden} more run${hidden === 1 ? "" : "s"} not shown`}
+                          className="w-full pl-9 pr-3.5 py-1.5 text-[11.5px] text-left text-primary hover:bg-[var(--bg-hover)] transition-colors"
+                        >
+                          show all {g.options.length} runs
+                        </button>
+                      )}
                     </div>
                   );
                 })}

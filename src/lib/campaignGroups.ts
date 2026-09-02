@@ -55,3 +55,18 @@ export function groupCampaignOptions(
     .sort((a, b) => a.label.localeCompare(b.label));
   return { groups, loose };
 }
+
+/**
+ * How many children a group shows before it asks for "show all" (Jasiel 2026-09-01). A recurring
+ * real-time campaign spawns one child per day, so widening the window puts dozens under one
+ * parent: measured at 90 daily spawns, the open group was 96 dated rows in a box that shows
+ * about 7, and a search force-expands every group at once. Seven fills that box exactly once.
+ * The cap is DISPLAY, never scope: ticking the parent still selects every run.
+ */
+export const CHILD_PAGE_SIZE = 7;
+
+/** The children a group renders: all of them once the operator asked, else the first page. */
+export function visibleChildren<T>(options: T[], showAll: boolean): { shown: T[]; hidden: number } {
+  const shown = showAll ? options : options.slice(0, CHILD_PAGE_SIZE);
+  return { shown, hidden: options.length - shown.length };
+}

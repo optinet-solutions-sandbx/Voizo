@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupCampaignOptions, type GroupableOption } from "./campaignGroups";
+import { groupCampaignOptions, visibleChildren, CHILD_PAGE_SIZE, type GroupableOption } from "./campaignGroups";
 
 const opt = (value: string, over: Partial<GroupableOption> = {}): GroupableOption => ({
   value,
@@ -82,5 +82,27 @@ describe("groupCampaignOptions", () => {
 
   it("handles an empty option list without inventing rows", () => {
     expect(groupCampaignOptions([], PARENTS)).toEqual({ groups: [], loose: [] });
+  });
+});
+
+describe("visibleChildren — a group opens capped (2026-09-01)", () => {
+  const runs = Array.from({ length: 36 }, (_, i) => `run-${i}`);
+
+  it("shows the first CHILD_PAGE_SIZE and counts the rest", () => {
+    const { shown, hidden } = visibleChildren(runs, false);
+    expect(shown).toHaveLength(CHILD_PAGE_SIZE);
+    expect(shown[0]).toBe("run-0");
+    expect(hidden).toBe(36 - CHILD_PAGE_SIZE);
+  });
+
+  it("shows everything once asked, and hides nothing", () => {
+    const { shown, hidden } = visibleChildren(runs, true);
+    expect(shown).toHaveLength(36);
+    expect(hidden).toBe(0);
+  });
+
+  it("a group at or under the cap never offers show-all", () => {
+    expect(visibleChildren(runs.slice(0, CHILD_PAGE_SIZE), false).hidden).toBe(0);
+    expect(visibleChildren([], false)).toEqual({ shown: [], hidden: 0 });
   });
 });
