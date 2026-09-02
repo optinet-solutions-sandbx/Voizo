@@ -113,6 +113,145 @@ describe("parseCioEvent — occurred_at, the unit trap", () => {
   });
 });
 
+// VOZ-476 (2) — created_at is the field Customer.io actually sends. The captured deposit_made body
+// carries created_at + finished_at; occurred_at / timestamp / event_timestamp are the names the
+// parser was written against, and none of them appear.
+describe("parseCioEvent — created_at, the name CIO really uses", () => {
+  const body = (extra: Record<string, unknown>) =>
+    parseCioEvent(JSON.stringify({ ...base, ...extra }), RECEIVED_MS);
+
+  it("reads created_at as epoch seconds — the deposit_made shape", () => {
+    const r = body({ created_at: 1788000000 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAt.toISOString()).toBe("2026-08-29T10:40:00.000Z");
+    expect(r.event.occurredAtSource).toBe("payload");
+  });
+
+  it("reads created_at as a HUMAN STRING — the deposit_canceled shape, same field name", () => {
+    // The same attribute arrives as an epoch int on deposit_made and as prose on deposit_canceled.
+    // The band-checked multi-format path already copes; this pins that it must keep coping.
+    const r = body({ created_at: "August 10, 2026 07:58" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAtSource).toBe("payload");
+    expect(r.event.occurredAt.getUTCFullYear()).toBe(2026);
+    expect(r.event.occurredAt.getUTCMonth()).toBe(7); // August
+  });
+
+  it("prefers occurred_at when BOTH are present — our own template stays authoritative", () => {
+    const r = body({ occurred_at: "2026-08-30T04:05:06Z", created_at: 1788000000 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAt.toISOString()).toBe("2026-08-30T04:05:06.000Z");
+  });
+
+  // THE case the ticket is actually about. Liquid renders a missing variable as an empty string, so
+  // a template with "occurred_at": "{{event.timestamp}}" and no event.timestamp sends occurred_at:"".
+  // `??` only falls through on null/undefined, so "" would win the chain, fail to parse, and the
+  // event would be stamped with OUR clock while created_at sat unread in the same body.
+  it("falls through an occurred_at that is present but UNPARSEABLE, and finds created_at", () => {
+    const r = body({ occurred_at: "", created_at: 1788000000 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAtSource).toBe("payload");
+    expect(r.event.occurredAt.toISOString()).toBe("2026-08-29T10:40:00.000Z");
+  });
+
+  it.each([
+    ["an unrendered Liquid tag", "{{event.timestamp}}"],
+    ["a blank string", "   "],
+    ["an out-of-band year", 99999999999999],
+  ])("falls through occurred_at = %s to reach created_at", (_label, bad) => {
+    const r = body({ occurred_at: bad, created_at: 1788000000 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAtSource).toBe("payload");
+    expect(r.event.occurredAt.toISOString()).toBe("2026-08-29T10:40:00.000Z");
+  });
+
+  it("still falls back to receipt time when EVERY candidate is unbelievable", () => {
+    const r = body({ occurred_at: "", timestamp: "nope", event_timestamp: null, created_at: 0 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAtSource).toBe("received");
+    expect(r.event.occurredAt.toISOString()).toBe("2026-09-01T12:00:00.000Z");
+  });
+});
+
+// VOZ-476 (1) — the proven collision. Two segment_entered events one second apart in Jasiel's own
+// profile screenshots ("Entered 1 and exited 6 segment(s)"), so same-second bursts are routine.
+describe("parseCioEvent — an explicit dedupe_key from the body", () => {
+  const body = (extra: Record<string, unknown>) =>
+    parseCioEvent(JSON.stringify({ ...base, ...extra }), RECEIVED_MS);
+
+  it("carries dedupe_key through when the template sets one", () => {
+    const r = body({ dedupe_key: "abc-seg-4DEP-1788000000" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.dedupeKey).toBe("abc-seg-4DEP-1788000000");
+  });
+
+  it("is NULL when absent, so the fallback chain is unchanged", () => {
+    expect((body({}) as { ok: true; event: { dedupeKey: string | null } }).event.dedupeKey).toBeNull();
+  });
+
+  it.each([
+    ["blank", "   "],
+    ["empty", ""],
+    ["a number", 12345],
+    ["an object", {}],
+  ])("ignores a %s dedupe_key rather than keying on junk", (_label, v) => {
+    expect((body({ dedupe_key: v }) as { ok: true; event: { dedupeKey: string | null } }).event.dedupeKey).toBeNull();
+  });
+});
+
+describe("dedupeKeyOf — VOZ-476: the segment_entered collision", () => {
+  // Reproduces the collision recorded on the ticket against the SHIPPED code: same player, same
+  // event name, same second, different segment -> one identical key -> the second row refused.
+  const sameSecond = {
+    paymentCode: null,
+    cioId: "83da08078f3be0a30d",
+    eventName: "segment_entered",
+    occurredAt: new Date("2026-09-02T02:31:09.000Z"),
+  };
+
+  it("still collides when the template supplies NO dedupe_key — the documented ceiling", () => {
+    expect(dedupeKeyOf(sameSecond)).toBe(dedupeKeyOf({ ...sameSecond }));
+  });
+
+  it("separates them once the template supplies one", () => {
+    const a = dedupeKeyOf({ ...sameSecond, dedupeKey: "83da…-seg-Players with 4+ DEP-1788000669" });
+    const b = dedupeKeyOf({ ...sameSecond, dedupeKey: "83da…-seg-CP count <25-1788000669" });
+    expect(a).not.toBe(b);
+    expect(a).toBe("83da…-seg-Players with 4+ DEP-1788000669");
+  });
+
+  it("OUTRANKS payment_code — the template is the single authority on uniqueness", () => {
+    expect(dedupeKeyOf({ ...sameSecond, paymentCode: "PC-9931", dedupeKey: "explicit-wins" }))
+      .toBe("explicit-wins");
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["blank", "   "],
+    ["empty", ""],
+  ])("falls back to payment_code when dedupeKey is %s", (_label, v) => {
+    expect(dedupeKeyOf({ ...sameSecond, paymentCode: "PC-9931", dedupeKey: v }))
+      .toBe("PC-9931");
+  });
+
+  it("falls all the way to the hash when neither is usable", () => {
+    const k = dedupeKeyOf({ ...sameSecond, dedupeKey: "  ", paymentCode: "  " });
+    expect(k).toHaveLength(64); // sha256 hex
+  });
+
+  it("trims an explicit key, so trailing whitespace cannot mint a second row", () => {
+    expect(dedupeKeyOf({ ...sameSecond, dedupeKey: "  k-1  " })).toBe("k-1");
+  });
+});
+
 describe("parseCioEvent — money, best effort and never invented", () => {
   const money = (extra: Record<string, unknown>) =>
     parseCioEvent(JSON.stringify({ ...base, ...extra }), RECEIVED_MS);

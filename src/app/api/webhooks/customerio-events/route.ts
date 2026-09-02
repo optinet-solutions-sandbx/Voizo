@@ -17,6 +17,18 @@ import { parseCioEvent, dedupeKeyOf } from "../../../../lib/cioEventPayload";
  * 🔴 The action must be set to "Send Automatically" — its default is Queue Draft, which SILENTLY
  * skips, so the journey looks configured and nothing ever arrives.
  *
+ * FOR ANY EVENT THAT IS NOT A DEPOSIT, add a `dedupe_key` (VOZ-476). Deposits are unique by
+ * payment_code; nothing else is, and the fallback hash is only (cio_id | event_name | occurred_at),
+ * so two same-second events of one name collapse into a single stored row. Same-second bursts are
+ * routine — one profile shows "Entered 1 and exited 6 segment(s)". Make the key contain whatever
+ * actually distinguishes the event:
+ *   segment_entered → "dedupe_key": "{{customer.cio_id}}-seg-{{event.segment}}-{{event.timestamp}}"
+ *   bonus issued    → "dedupe_key": "{{customer.cio_id}}-bonus-{{event.bonus_name}}-{{event.timestamp}}"
+ * Without one the ingress still stores the event; it just cannot tell two of them apart.
+ *
+ * `created_at` is also read as a timestamp, because that is the field Customer.io's own payloads
+ * actually carry — mapping `occurred_at` explicitly is preferred but no longer required.
+ *
  * WHY THIS EXISTS: the Audience surface's deposit figures come from a manual Activities capture
  * today, and that API's window is ~30 days and rolls strictly (measured +6 days over 6 days). One
  * day of player history is lost per day this is not live. Events that arrive here never expire.
@@ -77,6 +89,10 @@ export async function POST(request: NextRequest) {
     cio_id: e.cioId,
     event_name: e.eventName,
     dedupe_key: dedupeKeyOf({
+      // An explicit dedupe_key from the template outranks everything (VOZ-476). Without it,
+      // same-second bursts of one event name — routine for segment enter/exit — hash identically
+      // and the second row is refused by the primary key below.
+      dedupeKey: e.dedupeKey,
       paymentCode: e.paymentCode,
       cioId: e.cioId,
       eventName: e.eventName,

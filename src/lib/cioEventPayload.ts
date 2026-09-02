@@ -39,6 +39,17 @@ const FORBIDDEN = new Set<string>(CIO_FORBIDDEN_FIELDS.map((f) => f.toLowerCase(
 const MIN_YEAR = 2020;
 const MAX_YEAR = 2100;
 
+/**
+ * Timestamp attribute names, in order of authority. The first three are what OUR Liquid template
+ * sets, so they stay ahead. `created_at` is what Customer.io itself actually sends — confirmed on
+ * two captured bodies — which is why every event before VOZ-476 fell back to our receipt clock.
+ *
+ * ⚠ `created_at` arrives as epoch SECONDS on deposit_made and as a HUMAN STRING
+ * ("August 10, 2026 07:58") on deposit_canceled: one field name, two formats, two event types.
+ * parseTimestamp's band-checked multi-format handling is what copes — do not "simplify" it.
+ */
+const TIMESTAMP_FIELDS = ["occurred_at", "timestamp", "event_timestamp", "created_at"] as const;
+
 export interface CioEvent {
   cioId: string;
   eventName: string;
@@ -54,6 +65,9 @@ export interface CioEvent {
   amountLocal: string | null;
   /** For the dedupe key. Not persisted as its own column; it lives in the payload. */
   paymentCode: string | null;
+  /** An explicit idempotency key set by the CRM template (VOZ-476). Outranks everything. NULL when
+   *  the template does not set one, which leaves the pre-existing chain exactly as it was. */
+  dedupeKey: string | null;
   /** The delivery as received, minus CIO_FORBIDDEN_FIELDS. */
   payload: unknown;
 }
@@ -131,19 +145,34 @@ function parseTimestamp(v: unknown): Date | null {
 
 /**
  * The idempotency key. Customer.io retries deliveries AND its UI has a Resend button, so duplicates
- * are certain rather than hypothetical. `payment_code` is the natural key on money events; when it is
- * absent we hash the identity triple so the same delivery twice yields the same key.
+ * are certain rather than hypothetical.
  *
- * Ceiling (deliberate): two genuinely distinct non-deposit events in the same second for one player
- * collapse into one row. Money events carry payment_code, and a same-second repeat on a neutral event
- * is a retry in practice.
+ * Precedence, widest authority first (VOZ-476):
+ *   1. `dedupe_key` set by the CRM template — the template knows what makes THIS event unique.
+ *   2. `payment_code` — the natural key on money events.
+ *   3. A hash of the identity triple, so the same delivery twice yields the same key.
+ *
+ * The explicit key was added because step 3 collapses same-second bursts: two `segment_entered`
+ * events one second apart (routine — a profile shows "Entered 1 and exited 6 segment(s)") hash
+ * identically and the second row is silently refused by the primary key. Deposits were never at
+ * risk; segment and bonus events were, which blocked the whole class. A template setting
+ * "{{customer.cio_id}}-seg-{{event.segment}}-{{event.timestamp}}" now controls its own uniqueness.
+ *
+ * Ceiling (unchanged, now opt-out rather than forced): a template that sets NO dedupe_key on a
+ * non-money event still collapses same-second duplicates.
  */
 export function dedupeKeyOf(args: {
   paymentCode: string | null;
   cioId: string;
   eventName: string;
   occurredAt: Date;
+  /** Optional so the pre-VOZ-476 call shape stays valid. */
+  dedupeKey?: string | null;
 }): string {
+  // Trimmed, because trailing whitespace from a Liquid render would otherwise mint a second row
+  // for an event we already hold — the exact duplicate this key exists to prevent.
+  const explicit = args.dedupeKey?.trim();
+  if (explicit) return explicit;
   const code = args.paymentCode?.trim();
   if (code) return code;
   return createHash("sha256")
@@ -177,8 +206,16 @@ export function parseCioEvent(rawBody: string, receivedAtMs: number): CioParseRe
 
   // Best effort from here down. Alternate spellings are tried because the exact attribute names are
   // unconfirmed; each is a NAME guess only — no VALUE is ever invented.
-  const tsRaw = obj.occurred_at ?? obj.timestamp ?? obj.event_timestamp;
-  const fromPayload = parseTimestamp(tsRaw);
+  //
+  // FIRST THAT PARSES, not first that is present (VOZ-476). `??` falls through on null/undefined
+  // only, and Liquid renders a missing variable as an EMPTY STRING — so a template carrying
+  // "occurred_at": "{{event.timestamp}}" with no event.timestamp sends occurred_at:"". That would
+  // win a `??` chain, fail to parse, and stamp the event with our receipt clock while a perfectly
+  // good created_at sat unread two fields away.
+  const fromPayload = TIMESTAMP_FIELDS.reduce<Date | null>(
+    (found, field) => found ?? parseTimestamp(obj[field]),
+    null,
+  );
   const occurredAt = fromPayload ?? new Date(receivedAtMs);
   const occurredAtSource: "payload" | "received" = fromPayload ? "payload" : "received";
 
@@ -186,6 +223,10 @@ export function parseCioEvent(rawBody: string, receivedAtMs: number): CioParseRe
   const amountLocal = str(obj.amount_local ?? obj.human_amount);
   const currency = str(obj.currency)?.toUpperCase() ?? null;
   const paymentCode = str(obj.payment_code);
+  // strictStr, not str: a dedupe key is a primary-key component, so a JSON number must not be
+  // coerced into one — same reasoning as cio_id. Blank or non-string becomes null and the
+  // pre-existing fallback chain runs untouched.
+  const dedupeKey = strictStr(obj.dedupe_key);
 
   return {
     ok: true,
@@ -198,6 +239,7 @@ export function parseCioEvent(rawBody: string, receivedAtMs: number): CioParseRe
       currency,
       amountLocal,
       paymentCode,
+      dedupeKey,
       // Scrubbed HERE, not in the route, so a caller cannot forget it.
       payload: scrubPayload(obj),
     },
