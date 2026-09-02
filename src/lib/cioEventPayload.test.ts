@@ -206,6 +206,81 @@ describe("parseCioEvent — an explicit dedupe_key from the body", () => {
   });
 });
 
+// 2026-09-02, found on the FIRST live delivery. Customer.io's "Test response" button sends the webhook
+// body UNRENDERED when there is no event in scope — the literal text "{{customer.cio_id}}" arrives
+// where an id should be. The ingress accepted it and stored a row whose cio_id is a Liquid tag,
+// whose dedupe_key is "{{event.payment_code}}" (so it would collide with every other test), and whose
+// currency was upper-cased to "{{EVENT.CURRENCY}}". The design intent was always that a structurally
+// broken body gets a 400 the CRM team can SEE in the Customer.io UI. An unrendered template is the
+// most structurally broken body there is.
+describe("parseCioEvent — unrendered Liquid is a template error, not data", () => {
+  const body = (extra: Record<string, unknown>) =>
+    parseCioEvent(JSON.stringify({ ...base, ...extra }), RECEIVED_MS);
+
+  it.each([
+    ["cio_id", { cio_id: "{{customer.cio_id}}", event_name: "deposit_made" }],
+    ["event_name", { cio_id: "abc", event_name: "{{event_name}}" }],
+    ["cio_id with surrounding spaces", { cio_id: "  {{ customer.cio_id }}  ", event_name: "deposit_made" }],
+  ])("rejects an unrendered %s with a 400-class reason that names the template", (_label, b) => {
+    const r = parseCioEvent(JSON.stringify(b), RECEIVED_MS);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    // The reason is what the CRM team reads in the Customer.io delivery log. It must say WHAT to fix.
+    expect(r.reason).toMatch(/unrendered|template/i);
+  });
+
+  it("treats an unrendered dedupe_key as ABSENT so the fallback chain runs — never as a key", () => {
+    // "{{event.payment_code}}" as a literal key would make every test send a duplicate of the last.
+    const r = body({ dedupe_key: "{{event.payment_code}}" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.dedupeKey).toBeNull();
+  });
+
+  it("treats unrendered money fields as UNKNOWN, never as values", () => {
+    const r = body({
+      payment_code: "{{event.payment_code}}",
+      currency: "{{event.currency}}",
+      amount_local: "{{event.human_amount}}",
+      amount_total: "{{event.human_amount_total}}",
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.paymentCode).toBeNull();
+    expect(r.event.currency).toBeNull(); // the real row held "{{EVENT.CURRENCY}}"
+    expect(r.event.amountLocal).toBeNull();
+    expect(r.event.amountNorm).toBeNull();
+  });
+
+  it("does NOT touch rendered values that merely contain braces elsewhere", () => {
+    // Guard against over-matching: only the Liquid delimiters {{ }} mark an unrendered tag.
+    const r = body({ payment_code: "PC-{9931}", currency: "aud", dedupe_key: "k{1}" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.paymentCode).toBe("PC-{9931}");
+    expect(r.event.currency).toBe("AUD");
+    expect(r.event.dedupeKey).toBe("k{1}");
+  });
+
+  it("still accepts the REAL rendered body that landed at 10:38Z", () => {
+    const r = body({
+      cio_id: "a2f70706e56e86ed0b",
+      created_at: "1788345496",
+      finished_at: "1788345532",
+      amount_local: "70",
+      amount_total: "43.157083221",
+      currency: "AUD",
+      payment_code: "01a061b2-b318-2ef2-3bcd-f499fdad7738",
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.event.occurredAtSource).toBe("payload");
+    expect(r.event.occurredAt.toISOString()).toBe("2026-09-02T10:38:16.000Z");
+    expect(r.event.amountNorm).toBe(43.157083221);
+    expect(r.event.paymentCode).toBe("01a061b2-b318-2ef2-3bcd-f499fdad7738");
+  });
+});
+
 describe("dedupeKeyOf — VOZ-476: the segment_entered collision", () => {
   // Reproduces the collision recorded on the ticket against the SHIPPED code: same player, same
   // event name, same second, different segment -> one identical key -> the second row refused.

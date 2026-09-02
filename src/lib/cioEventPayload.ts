@@ -88,7 +88,22 @@ export function scrubPayload(value: unknown): unknown {
   return out;
 }
 
+/**
+ * An UNRENDERED Liquid tag. Customer.io's "Test response" button (and any journey whose trigger
+ * carries no event) sends the webhook body with the template text intact — "{{customer.cio_id}}"
+ * arrives where an id should be. Found on the first live delivery, 2026-09-02: the ingress stored a
+ * row whose cio_id was a Liquid tag, whose dedupe_key was "{{event.payment_code}}" (so every later
+ * test would collide with it) and whose currency had been upper-cased to "{{EVENT.CURRENCY}}".
+ * Only the opening double-brace counts — a rendered value may legitimately contain single braces,
+ * and a stray "}}" without its opener is data, not a tag. (Matching "}}" too survived a mutation
+ * pass as dead code: no real body has a closer without an opener, so it never decided anything.)
+ */
+const UNRENDERED_LIQUID = /\{\{/;
+const isUnrendered = (v: unknown): boolean => typeof v === "string" && UNRENDERED_LIQUID.test(v);
+
+/** Best-effort string. An unrendered template is UNKNOWN, never a value. */
 function str(v: unknown): string | null {
+  if (isUnrendered(v)) return null;
   if (typeof v === "string") return v.trim() || null;
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   return null;
@@ -101,6 +116,7 @@ function str(v: unknown): string | null {
  * A silent join failure is far worse than a loud 400 — the 400 is visible in the Customer.io UI.
  */
 function strictStr(v: unknown): string | null {
+  if (isUnrendered(v)) return null;
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
@@ -199,6 +215,13 @@ export function parseCioEvent(rawBody: string, receivedAtMs: number): CioParseRe
   const obj = parsed as Record<string, unknown>;
 
   // The only two fields we can promise: our own Liquid template sets them.
+  // An unrendered tag gets its OWN reason: this string is what the CRM team reads in the Customer.io
+  // delivery log, and "is required" would send them looking for a missing field that is plainly
+  // present. The fix is on their side (the journey has no event in scope) and the message says so.
+  const unrenderedReason = (field: string) =>
+    `${field} is an unrendered Liquid template tag — the webhook body was sent without an event in scope (Test response, or a non-event trigger); check the journey trigger and template`;
+  if (isUnrendered(obj.cio_id)) return { ok: false, reason: unrenderedReason("cio_id") };
+  if (isUnrendered(obj.event_name)) return { ok: false, reason: unrenderedReason("event_name") };
   const cioId = strictStr(obj.cio_id);
   const eventName = strictStr(obj.event_name);
   if (!cioId) return { ok: false, reason: "cio_id is required (string)" };
