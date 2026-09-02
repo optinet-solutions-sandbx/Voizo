@@ -771,6 +771,10 @@ export interface CampaignTableRow {
   scriptId: string | null;
   scriptName: string | null;
   segmentId: string | null;
+  // The recurring parent this run was spawned from (2026-09-02): the family the table groups
+  // by, the same key the campaign picker groups by. null = a one-off. Optional so session
+  // snapshots saved before this field read as one-offs rather than crashing.
+  parentCampaignId?: string | null;
   calls: number;
   connected: number;
   terminal: number;
@@ -837,6 +841,7 @@ export function computeCampaignTable(
         scriptId: c.script_id ?? null,
         scriptName: c.script_name ?? null,
         segmentId: c.segment_id ?? null,
+        parentCampaignId: c.parent_campaign_id ?? null,
         calls: r?.calls ?? 0,
         connected: r?.connected ?? 0,
         terminal: r?.terminal ?? 0,
@@ -987,6 +992,7 @@ export function computeCampaignTableFromRollup(
         scriptId: c.script_id ?? null,
         scriptName: c.script_name ?? null,
         segmentId: c.segment_id ?? null,
+        parentCampaignId: c.parent_campaign_id ?? null,
         calls: cb.total,
         connected,
         terminal,

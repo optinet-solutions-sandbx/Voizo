@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
       "campaigns_v2",
       // cio_workspace: the per-row brand chip (VOZ-216).
       // script_id/script_name/segment_id: the section filters + mass export (Val 2026-08-07).
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at, script_id, script_name, segment_id",
+      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at, script_id, script_name, segment_id, parent_campaign_id",
       "id",
     ),
     // Players (full roster count) is campaign-LIFETIME. Counted in SQL: paging the

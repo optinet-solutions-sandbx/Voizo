@@ -63,6 +63,10 @@ export interface CampaignRowData {
   players: number;
   startAt: string | null;
   perf: { callAttempts: PerfMetric; reached: PerfMetric; sms: PerfMetric };
+  /** What the title reads when the row sits under a family header that already carries the
+   *  country, name and brand (Campaign Performance grouping, 2026-09-02): the run's date, via
+   *  campaignRunLabel. The full name stays on hover. Absent = the usual formatted name. */
+  titleOverride?: string;
 }
 
 // Shared grid template — header row + every campaign row align to it.
@@ -149,7 +153,7 @@ export default function CampaignRow({
           >
             <ChevronRight size={14} className={`text-[var(--text-3)] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
             <span className="text-sm font-semibold text-[var(--text-1)] truncate group-hover:text-primary transition-colors" title={c.name}>
-              {fmt.offer || fmt.display}
+              {c.titleOverride || fmt.offer || fmt.display}
             </span>
           </button>
           <div className="text-[11px] text-[var(--text-3)] mt-1 flex items-center gap-1.5 flex-wrap">

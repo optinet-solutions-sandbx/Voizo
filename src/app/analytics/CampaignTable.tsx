@@ -38,6 +38,12 @@ import {
   NO_CAMPAIGN_FILTERS, NO_SCRIPT, type CampaignFilterState,
 } from "./campaignFilters";
 import { buildCampaignPerfCsv } from "./campaignPerfCsv";
+// Grouping (Jasiel 2026-09-02, from the dashboard mockup): runs fold under their family,
+// country, brand, voice agent or script. A family is the recurring parent, the same key the
+// campaign picker groups by. Children under an open group are capped the way the picker is.
+import { groupCampaignRows, sortGroups, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
+import { visibleChildren } from "@/lib/campaignGroups";
+import { campaignGroupHeaderLabels, campaignRunLabel } from "@/lib/campaignDisplay";
 
 interface Row {
   id: string;
@@ -53,6 +59,7 @@ interface Row {
   scriptId?: string | null;
   scriptName?: string | null;
   segmentId?: string | null;
+  parentCampaignId?: string | null; // the family (recurring parent); absent pre-2026-09-02
   calls: number;
   connected: number;
   terminal: number;
@@ -196,6 +203,23 @@ export default function CampaignTable() {
   // hero) — remembered across visits like the rest of the section state.
   const [showSummary, setShowSummary] = useState<boolean>(() => loadSnapshot<boolean>("dashboard.campaigns.showSummary") ?? true);
   const toggleSummary = () => setShowSummary((prev) => { const next = !prev; saveSnapshot("dashboard.campaigns.showSummary", next); return next; });
+  // Group by (Jasiel 2026-09-02). Family by default: in the default window every row is a
+  // daily child of one of a handful of recurring parents. Remembered like the rest.
+  const [groupBy, setGroupBy] = useState<GroupFacet>(() => loadSnapshot<GroupFacet>("dashboard.campaigns.groupBy") ?? "family");
+  // Which groups are open, and which of those the operator asked to see in full. A group opens
+  // capped at CHILD_PAGE_SIZE (the picker's rule); collapsing it forgets the show-all.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [showAllIn, setShowAllIn] = useState<Set<string>>(new Set());
+  const changeGroupBy = (g: GroupFacet) => {
+    setGroupBy(g); setPage(1); setOpenGroups(new Set()); setShowAllIn(new Set());
+    saveSnapshot("dashboard.campaigns.groupBy", g);
+  };
+  const toggleGroup = (key: string) => setOpenGroups((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) { next.delete(key); setShowAllIn((s) => { const t = new Set(s); t.delete(key); return t; }); }
+    else next.add(key);
+    return next;
+  });
   // Click-to-drill drawer — identical mechanism to Global Performance (same
   // totalFilter/rowFilter mapping, same drawer). Clicking an already-open slice
   // closes it (Global's toggle semantics).
@@ -433,9 +457,86 @@ export default function CampaignTable() {
   const phoneMatchesShown = phoneRes ? phoneRes.matches.filter((m) => visibleIds.has(m.campaignId)) : [];
   const phoneMatchesHidden = phoneRes ? phoneRes.matches.length - phoneMatchesShown.length : 0;
 
-  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  // Family labels come from the recurring parents themselves. The API lists them alongside the
+  // runs (they are filtered out of `rows` above because a parent never dials); the picker in
+  // Global Performance labels the same parents the same way, so the two surfaces agree.
+  const parentLabel = useMemo(() => {
+    const parents = (data?.rows ?? [])
+      .filter((r) => r.scheduleType === "recurring")
+      .map((r) => ({ id: r.id, name: r.name, brand: r.cioWorkspace, startAt: r.startAt }));
+    return campaignGroupHeaderLabels(parents);
+  }, [data]);
+  const groupLabels: GroupLabels = {
+    family: (pid) => parentLabel.get(pid) ?? null,
+    brand: (ws) => brandLabel(ws),
+    agent: (r) => agentLabelOf(r as unknown as Row),
+    fallbackName: (r) => formatCampaign(r.name).display,
+  };
+  // Groups follow the row sort: metric sorts by the group's sum, newest by its newest run.
+  const groups = sortGroups(
+    groupCampaignRows(
+      visible.map((r) => ({
+        ...r,
+        attempts: r.perf.callAttempts.total,
+        conversations: r.perf.reached.total,
+        sms: r.perf.sms.total,
+      })),
+      groupBy,
+      groupLabels,
+    ),
+    sort,
+  );
+  const familyCount = groups.filter((g) => !g.single).length;
+
+  // Pages are pages of GROUPS. Under Group: None every group is one run, so this is exactly
+  // the flat table it always was.
+  const totalPages = Math.max(1, Math.ceil(groups.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const pageRows = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageGroups = groups.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  // `underHeader`: the row sits under a family header that already says country, name and
+  // brand, so the title only has to say WHICH RUN it is (prod's campaignRunLabel, written for
+  // this case). Under any other facet the header does not carry the name, so the name stays.
+  const rowDataOf = (r: Row, underHeader = false): CampaignRowData => ({
+    id: r.id,
+    name: r.name,
+    country: r.country,
+    cioWorkspace: r.cioWorkspace,
+    voiceId: r.voiceId,
+    agentLabel: r.agentLabel,
+    baseAssistantId: r.baseAssistantId,
+    scheduleType: r.scheduleType,
+    status: r.displayStatus,
+    timeLabel: runWindow(r),
+    players: r.players,
+    startAt: r.startAt,
+    perf: r.perf,
+    titleOverride: underHeader ? campaignRunLabel(r.name, r.startAt) || undefined : undefined,
+  });
+  const renderRun = (r: Row, underHeader = false) => (
+    <CampaignRow
+      key={r.id}
+      c={rowDataOf(r, underHeader)}
+      expanded={expanded.has(r.id)}
+      onToggle={() => toggleExpand(r.id)}
+      slice={slices[r.id]?.slice}
+      sliceLabel={slices[r.id]?.label}
+      onMetricPick={(s, l) => pickMetric(r.id, s, l)}
+      onClearSlice={() => clearSlice(r.id)}
+      onViewPrompt={() => setPromptFor({ id: r.id, title: formatCampaign(r.name).display })}
+      trailing={
+        <>
+          <span className="text-[var(--border-2)]">·</span>
+          <Link
+            href={`/campaigns/v2/${r.id}`}
+            className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-primary transition-colors"
+          >
+            open in campaign <ArrowRight size={10} />
+          </Link>
+        </>
+      }
+    />
+  );
 
   return (
     <>
@@ -468,9 +569,12 @@ export default function CampaignTable() {
         <Pagination
           currentPage={safePage}
           totalPages={totalPages}
-          totalItems={visible.length}
+          totalItems={groups.length}
           pageSize={PAGE_SIZE}
           onPageChange={setPage}
+          // the unit a page holds: a group when grouping, a run when not. Calling a run a
+          // "family" would be a count the operator cannot reconcile against anything else.
+          noun={groupBy === "none" ? "runs" : familyCount === groups.length ? "families" : "families and one-offs"}
         />
       }
     >
@@ -514,6 +618,16 @@ export default function CampaignTable() {
 
       {/* Section filters (Val 2026-08-07): country · brand · voice agent · script · player phone. */}
       <div className="flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b border-[var(--border)]">
+        {/* Group by: one select, prod's control language for "pick one of a list". */}
+        <span className="text-[11px] text-[var(--text-3)]">Group</span>
+        <StyledSelect
+          size="sm"
+          options={GROUP_FACETS.map((f) => ({ value: f.key, label: f.label }))}
+          value={groupBy}
+          onChange={(v) => changeGroupBy((v || "family") as GroupFacet)}
+          placeholder="Family"
+        />
+        <span className="w-px h-5 bg-[var(--border)] mx-1" />
         <StyledSelect size="sm" options={countryOptions} value={filters.country} onChange={(v) => setFilter({ country: v })} placeholder="All countries" />
         <StyledSelect size="sm" options={agentOptions} value={filters.agent} onChange={(v) => setFilter({ agent: v })} placeholder="All voice agents" />
         <StyledSelect size="sm" options={scriptOptions} value={filters.script} onChange={(v) => setFilter({ script: v })} placeholder="All scripts" />
@@ -676,45 +790,63 @@ export default function CampaignTable() {
                 <CampaignRowsSkeleton rows={PAGE_SIZE} />
               )
             ) : (
-              pageRows.map((r) => {
-                const rowData: CampaignRowData = {
-                  id: r.id,
-                  name: r.name,
-                  country: r.country,
-                  cioWorkspace: r.cioWorkspace,
-                  voiceId: r.voiceId,
-                  agentLabel: r.agentLabel,
-                  baseAssistantId: r.baseAssistantId,
-                  scheduleType: r.scheduleType,
-                  status: r.displayStatus,
-                  timeLabel: runWindow(r),
-                  players: r.players,
-                  startAt: r.startAt,
-                  perf: r.perf,
-                };
+              pageGroups.map((g) => {
+                // A group of ONE is the run itself: a header over a single row would say the
+                // same thing twice (mockup rule, 2026-09-01). Under Group: None every group is one.
+                if (g.single) return renderRun(g.rows[0]);
+                const open = openGroups.has(g.key);
+                const { shown, hidden: more } = visibleChildren(g.rows, showAllIn.has(g.key));
+                const st = STATUS_META[g.status];
                 return (
-                  <CampaignRow
-                    key={r.id}
-                    c={rowData}
-                    expanded={expanded.has(r.id)}
-                    onToggle={() => toggleExpand(r.id)}
-                    slice={slices[r.id]?.slice}
-                    sliceLabel={slices[r.id]?.label}
-                    onMetricPick={(s, l) => pickMetric(r.id, s, l)}
-                    onClearSlice={() => clearSlice(r.id)}
-                    onViewPrompt={() => setPromptFor({ id: r.id, title: formatCampaign(r.name).display })}
-                    trailing={
-                      <>
-                        <span className="text-[var(--border-2)]">·</span>
-                        <Link
-                          href={`/campaigns/v2/${r.id}`}
-                          className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-primary transition-colors"
-                        >
-                          open in campaign <ArrowRight size={10} />
-                        </Link>
-                      </>
-                    }
-                  />
+                  <div key={g.key} className="border-b border-[var(--border)] last:border-b-0">
+                    {/* Family header: name, brand chips when the family spans brands, the three
+                        summed metrics under the same columns as the runs, run count, status. */}
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(g.key)}
+                      aria-expanded={open}
+                      className={`${CAMPAIGN_ROW_GRID} w-full items-center px-4 py-3 text-left bg-[var(--bg-elevated)]/40 hover:bg-[var(--bg-hover)] transition-colors`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${open ? "rotate-90" : ""}`}>
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                        {/* Wraps rather than truncates: the brand, the only thing telling the
+                            two REACTIVATION families apart, sits at the END of the label. */}
+                        <span className="text-[13px] font-medium text-[var(--text-1)] whitespace-normal break-words">{g.label}</span>
+                        {g.brands.length > 1 && g.brands.map((b) => (
+                          <span key={b} className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--text-3)]">{brandLabel(b)}</span>
+                        ))}
+                        <span className="shrink-0 text-[11px] font-mono text-[var(--text-3)]">{g.rows.length} runs</span>
+                      </div>
+                      <div>
+                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${st.cls}`}>
+                          {st.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+                          {st.label}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.attempts.toLocaleString("en-US")}</div>
+                      <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.conversations.toLocaleString("en-US")}</div>
+                      <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.sms.toLocaleString("en-US")}</div>
+                    </button>
+                    {open && (
+                      <div className="border-l-2 border-[var(--border-2)] ml-4">
+                        {shown.map((r) => renderRun(r, groupBy === "family"))}
+                        {more > 0 && (
+                          // Named by the family's TOTAL, the same rule as the picker: "how many
+                          // are there" is the question a capped list provokes.
+                          <button
+                            type="button"
+                            onClick={() => setShowAllIn((s) => new Set(s).add(g.key))}
+                            className="w-full px-4 py-2 text-left text-[11.5px] text-primary hover:bg-[var(--bg-hover)] transition-colors"
+                            title={`${g.label}: ${more} more run${more === 1 ? "" : "s"} not shown`}
+                          >
+                            show all {g.rows.length} runs
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 );
               })
             )}
