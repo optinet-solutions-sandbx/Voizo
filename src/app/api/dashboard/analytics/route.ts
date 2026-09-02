@@ -17,7 +17,9 @@ import {
   type DashCampaignRow,
   type DashSmsRow,
   type TodayPerfDay,
+  type CallRollupRow,
 } from "@/lib/dashboardAnalytics";
+import { baselineSeries } from "@/lib/connectRateHero";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows, fetchAllRowsParallel } from "@/lib/supabaseFetchAll";
 import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
@@ -60,6 +62,30 @@ export async function GET(request: NextRequest) {
   const { startMs, endMs } = rangeToWindow(rangeKey, now, searchParams.get("from"), searchParams.get("to"));
   const startIso = new Date(startMs).toISOString();
   const rangeDays = Math.round((endMs - startMs) / MS_PER_DAY);
+
+  // Baseline for the Global connect-rate hero (2026-09-02): the equal-length window immediately
+  // BEFORE this one, as per-campaign-per-day counts from the SQL rollup the Today and Campaigns
+  // routes already use (parity-tested against the JS in dashboardRollup.parity.test.ts). Fired
+  // here so it runs alongside the big reads. Skipped for lifetime (no equal-length window
+  // exists) and for a phone search (the rollup has no per-number grain): the hero then says
+  // "no comparable baseline" instead of guessing. A failure degrades to null, loudly, and the
+  // rest of the page is untouched.
+  const baselineWanted = rangeKey !== "lifetime" && !phone;
+  const baselinePromise: Promise<CallRollupRow[] | null> = baselineWanted
+    ? (async () => {
+        try {
+          const r = await supabaseAdmin.rpc("dashboard_call_rollup", {
+            p_start: new Date(startMs - (endMs - startMs)).toISOString(),
+            p_end: startIso, // the rollup is [p_start, p_end); the window is [startMs, endMs]
+          });
+          if (r.error) throw r.error;
+          return (r.data ?? []) as CallRollupRow[];
+        } catch (err: unknown) {
+          console.error("[dashboard/analytics] baseline rollup failed — hero shows no baseline:", err);
+          return null;
+        }
+      })()
+    : Promise.resolve(null);
 
   // Phone lookup → matching campaign_number_ids + the campaigns they belong to.
   let numberIds: string[] | null = null;
@@ -130,6 +156,19 @@ export async function GET(request: NextRequest) {
   }
   // Prompt filter (prompt is per-campaign in v1): keep calls whose campaign's prompt hash matches.
   if (promptSha) filtered = filtered.filter((c) => promptByCampaign.get(c.campaign_id)?.sha === promptSha);
+
+  // The baseline keeps exactly the campaigns the window kept: live (no ghost, no test), in the
+  // picker if one is set, in the country if one is set, on the prompt if one is set.
+  const liveIds = new Set(live.map((c) => c.id));
+  const pickedIds = campaignIds && campaignIds.length ? new Set(campaignIds) : null;
+  const countryIdSet = country ? campaignIdsForCountry(live, country) : null;
+  const keepInBaseline = (id: string) =>
+    liveIds.has(id) &&
+    (!pickedIds || pickedIds.has(id)) &&
+    (!countryIdSet || countryIdSet.has(id)) &&
+    (!promptSha || promptByCampaign.get(id)?.sha === promptSha);
+  const baselineRows = await baselinePromise;
+  const baseline = baselineRows ? baselineSeries(baselineRows, keepInBaseline) : null;
 
   const global = computeGlobalKpis(filtered, index);
   const prompts = computePromptRollups(filtered, promptByCampaign);
@@ -302,6 +341,9 @@ export async function GET(request: NextRequest) {
       campaignCount: r.campaignCount,
     })),
     trend: computeTrend(filtered, startMs, endMs, scopedSms),
+    // Per-day completed/connected for the equal-length window before this one (hero delta).
+    // null = no comparable baseline (lifetime, phone search, or the rollup failed).
+    baseline,
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, endMs),
     heatmap: computeHeatmap(filtered, campaigns),
     perf,

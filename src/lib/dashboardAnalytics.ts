@@ -522,6 +522,10 @@ export interface TrendPoint {
   connectRate: number | null;
   successRate: number | null;
   calls: number; // = call attempts that day
+  // Added 2026-09-02 for the Global connect-rate hero: the two counts its rate is made of,
+  // so the client never has to back a count out of a rounded rate.
+  terminal: number; // completed calls that day (the connect-rate denominator)
+  connected: number; // connected calls that day (the numerator)
   reached: number; // human-only connects that day (connected − voicemail)
   smsSent: number; // offer texts sent|delivered that day
 }
@@ -567,6 +571,8 @@ export function computeTrend(calls: DashCallRow[], startMs: number, endMs: numbe
       connectRate: r?.connectRate ?? null,
       successRate: r?.successRate ?? null,
       calls: r?.calls ?? 0,
+      terminal: r?.terminal ?? 0,
+      connected: r?.connected ?? 0,
       reached: r?.reach ?? 0,
       smsSent: smsByDay.get(day) ?? 0,
     });

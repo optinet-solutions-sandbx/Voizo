@@ -20,11 +20,14 @@ import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import HeatMap from "./HeatMap";
-import PerformanceCards, { EstBadge } from "./PerformanceCards";
-import RangedRecordsDrawer, { type DrawerFilter, totalFilter, rowFilter } from "./RangedRecordsDrawer";
-import { useDrawerClaim } from "./drawerExclusivity";
+// The three PerformanceCards that sat in the overview island were replaced by ConnectRateHero
+// (Jasiel 2026-09-02): their Call attempts / Reached / SMS numbers duplicate Campaign
+// Performance's own summary below. The drill-down drawer only those cards could open went
+// with them; Campaign Performance keeps its own.
+import ConnectRateHero from "./ConnectRateHero";
+import type { DayCount } from "@/lib/connectRateHero";
 import { CardGridSkeleton } from "./loadingSkeletons";
-import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, PerfRow } from "@/lib/dashboardAnalytics";
+import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay } from "@/lib/dashboardAnalytics";
 import { type RangeKey } from "@/lib/rangeWindow";
 
 // RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
@@ -61,6 +64,9 @@ interface AnalyticsResponse {
   agents: AgentRow[];
   prompts: PromptRow[];
   trend: TrendPoint[];
+  // Per-day completed/connected for the equal-length window before this one (the hero's
+  // comparison). null = no comparable baseline. Absent on older API deploys, which reads as null.
+  baseline?: DayCount[] | null;
   dailyVolume: VolumeResult;
   heatmap: HeatmapResult;
   options: {
@@ -368,18 +374,6 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Drill-down: a clicked card total/row/sub-row opens the ranged records drawer for that slice.
-  const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
-  // Drawer exclusivity (mockup): opening this drawer closes the Today / Top-performers ones.
-  const closeDrawerSelf = useCallback(() => setDrawerFilter(null), []);
-  useDrawerClaim("global", drawerFilter !== null, closeDrawerSelf);
-  // Re-clicking the open slice closes the drawer (toggle); status+outcome+smsOnly identify a slice.
-  const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
-    !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
-  const openTotal = (card: "callAttempts" | "reached" | "sms") =>
-    setDrawerFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
-  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) =>
-    setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
 
   const load = useCallback(async (query: string) => {
     setLoading(true);
@@ -669,30 +663,30 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
         </div>
       )}
 
-      {/* Overview panel — the window's headline KPIs + the 3-card performance breakdown grouped
-          into one island, mirroring Today's Performance (Jasiel 2026-07-03). The filter bar,
-          leaderboards, charts, table and heatmap stay free-standing on the app background. */}
+      {/* Overview island (Jasiel 2026-07-03), now holding ONE thing (Jasiel 2026-09-02): the
+          connect-rate hero. Gaining or losing, with outage days excluded from the comparison on
+          both sides. The three PerformanceCards that lived here since Slice B duplicated Campaign
+          Performance's summary below and were removed, as prod itself removed the KPI stat-band
+          above them on 2026-07-08 for the same reason. The filter bar, leaderboards, charts,
+          table and heatmap stay free-standing on the app background. */}
       <SectionIsland>
-      {/* Ranged 3-card Performance (Val's mockup, Slice B) — replaces the old 5-card KPI strip.
-          The KPI stat-band above these cards was removed (2026-07-08): its Call attempts / Reached /
-          SMS numbers duplicated the card headlines, "Positive response" is the Reached card's Positive
-          row, and the campaign count moved to the section header — see the Global Performance dedupe.
-          NO deltas (mockup intent for Global). The Connect/Reached/Voicemail/Positive metrics now
-          live as breakdown ROWS inside the cards. `est` note when voicemail coverage is low on long
-          windows (forward-only detection). Drill-down drawer is wired in the next step. */}
-      {data?.perf ? (
-        <div className="grid gap-2">
-          {reachEstimated && (
-            <p className="text-[11px] text-[var(--text-3)] flex items-center gap-1.5">
-              <EstBadge tone="warn" content="Estimated: long windows include connects not yet evaluated for voicemail (forward-only from ~19 Jun), which count as reached." />
-              Reached-based splits are best-effort over this window; early-hang-up vs neutral is approximate (no transcript scan).
-            </p>
-          )}
-          <PerformanceCards perf={data.perf} showDeltas={false} onOpenTotal={openTotal} onOpenRow={openRow} />
-          <RangedRecordsDrawer filters={filters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
-        </div>
-      ) : data ? (
-        <p className="text-center text-xs text-[var(--text-3)] py-8">Performance breakdown unavailable for this filter.</p>
+      {data ? (
+        <ConnectRateHero
+          trend={data.trend}
+          baseline={data.baseline ?? null}
+          rangeDays={data.rangeDays}
+          todayIso={new Date().toISOString().slice(0, 10)}
+          estimated={reachEstimated}
+          noBaselineWhy={
+            filters.range === "lifetime"
+              ? "All time has no equal-length window before it."
+              : filters.phone.trim()
+                ? "A number search has no comparable window."
+                : data.baseline === undefined
+                  ? "This deployment's API does not return a baseline yet."
+                  : undefined
+          }
+        />
       ) : (
         <CardGridSkeleton />
       )}
