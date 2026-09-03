@@ -80,3 +80,22 @@ export function matchesCampaignFilters(r: FilterableCampaign, f: CampaignFilterS
 export function anyCampaignFilterActive(f: CampaignFilterState): boolean {
   return Boolean(f.country || f.brands.length > 0 || f.agent || f.script || f.name.trim());
 }
+
+/**
+ * ONE search box for Campaign Performance (mockup, ported 2026-09-03): a campaign name, a
+ * player's number, or a player's name. Decides which lookup a query is asking for.
+ *   none  — under 2 characters: the operator is still typing; filter nothing, say nothing.
+ *   short — digits only but fewer than 4: the lookup route refuses (matches half the table).
+ *   phone — 4+ digits (spaces, dashes, brackets, + allowed): player-number lookup.
+ *   name  — anything else: matches campaign names client-side AND asks the lookup route for
+ *           players by display name.
+ */
+export type QueryKind = "none" | "short" | "phone" | "name";
+export function classifyQuery(raw: string): { kind: QueryKind; needle: string } {
+  const q = raw.trim();
+  if (q.length < 2) return { kind: "none", needle: "" };
+  const digits = q.replace(/[^\d]/g, "");
+  const numberish = q.replace(/[\s()+\-.]/g, "").length === digits.length; // only digits once punctuation is gone
+  if (numberish) return digits.length >= 4 ? { kind: "phone", needle: q.replace(/[^\d+]/g, "") } : { kind: "short", needle: digits };
+  return { kind: "name", needle: q };
+}

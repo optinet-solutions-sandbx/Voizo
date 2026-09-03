@@ -31,18 +31,34 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const phone = (new URL(request.url).searchParams.get("phone") ?? "").trim();
-  const needle = phone.replace(/[^\d+]/g, "");
-  if (needle.length < 4) {
-    // Sub-4-digit needles match half the table — refuse loudly instead of
-    // returning a misleading MATCH_CAP-truncated everything.
-    return NextResponse.json({ error: "Enter at least 4 digits of the number." }, { status: 400 });
+  // Two shapes of query (2026-09-03, the one search box in Campaign Performance):
+  //   ?phone=<digits>  — the original: substring match on phone_e164, 4-digit floor.
+  //   ?name=<text>     — a player's display name, substring match, 2-character floor. The
+  //                      dashboard mockup's box finds a player "by number or name", and the
+  //                      Audience members route already matches display_name the same way.
+  const params = new URL(request.url).searchParams;
+  const phone = (params.get("phone") ?? "").trim();
+  const name = (params.get("name") ?? "").trim();
+  let needle: string;
+  let matchColumn: "phone_e164" | "display_name";
+  if (name) {
+    if (name.length < 2) return NextResponse.json({ error: "Enter at least 2 characters of the name." }, { status: 400 });
+    needle = name;
+    matchColumn = "display_name";
+  } else {
+    needle = phone.replace(/[^\d+]/g, "");
+    if (needle.length < 4) {
+      // Sub-4-digit needles match half the table — refuse loudly instead of
+      // returning a misleading MATCH_CAP-truncated everything.
+      return NextResponse.json({ error: "Enter at least 4 digits of the number." }, { status: 400 });
+    }
+    matchColumn = "phone_e164";
   }
 
   const { data: nums, error } = await supabaseAdmin
     .from("campaign_numbers_v2")
     .select("id, campaign_id, phone_e164, display_name, outcome, attempt_count, last_attempted_at")
-    .ilike("phone_e164", `%${needle}%`)
+    .ilike(matchColumn, `%${needle}%`)
     .limit(MATCH_CAP);
   if (error) {
     console.error("[campaigns/phone-lookup] query failed:", error.message);

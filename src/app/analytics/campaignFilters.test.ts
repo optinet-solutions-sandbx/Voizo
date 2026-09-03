@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, matchesCampaignName, scriptKeyOf,
-  toggleAllMatching,
+  toggleAllMatching, classifyQuery,
   DEFAULT_BRAND_KEY, NO_CAMPAIGN_FILTERS, NO_SCRIPT, type FilterableCampaign,
 } from "./campaignFilters";
 
@@ -132,5 +132,26 @@ describe("toggleAllMatching — select/deselect every option the search turned u
     const out = toggleAllMatching(["a"], ["a", "b"]);
     expect(out).toEqual(["a", "b"]);
     expect(new Set(out).size).toBe(out.length);
+  });
+});
+
+describe("classifyQuery — one box, three lookups", () => {
+  it("under two characters is nobody's search", () => {
+    expect(classifyQuery("")).toEqual({ kind: "none", needle: "" });
+    expect(classifyQuery(" a ")).toEqual({ kind: "none", needle: "" });
+  });
+  it("a number with 4+ digits is a phone lookup, punctuation and + tolerated", () => {
+    expect(classifyQuery("0412")).toEqual({ kind: "phone", needle: "0412" });
+    expect(classifyQuery("+61 (4) 12-345")).toEqual({ kind: "phone", needle: "+61412345" });
+  });
+  it("a short number is refused, not searched", () => {
+    expect(classifyQuery("041")).toEqual({ kind: "short", needle: "041" });
+    expect(classifyQuery("12")).toEqual({ kind: "short", needle: "12" });
+  });
+  it("letters are a name search: campaign names and player names", () => {
+    expect(classifyQuery("rnd au")).toEqual({ kind: "name", needle: "rnd au" });
+    expect(classifyQuery("Maria")).toEqual({ kind: "name", needle: "Maria" });
+    // a date inside a campaign name has letters around it? no: a bare date is digits with dashes
+    expect(classifyQuery("2026-08-25").kind).toBe("phone"); // 8 digits: the route will simply find no number
   });
 });

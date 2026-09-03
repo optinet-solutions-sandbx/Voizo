@@ -170,3 +170,16 @@ export function sortGroups<R extends GroupableRow>(groups: CampaignGroup<R>[], s
   };
   return [...groups].sort((a, b) => value(b) - value(a));
 }
+
+/**
+ * The PLAY a family runs (mockup's family chips: Reactivation / Daily Conversion / STEVIC),
+ * derived from the family's header label, which reads "Australia · REACTIVATION · Fortune Play":
+ * drop the leading country and the trailing brand and what is left names the play, the same
+ * across brands and markets. "" when nothing is left, so the caller can skip the chip.
+ */
+export function playOf(label: string, country: string, brand: string): string {
+  const parts = label.split(" · ").map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1 && parts[0].toLowerCase() === country.toLowerCase()) parts.shift();
+  if (parts.length > 1 && parts[parts.length - 1].toLowerCase() === brand.toLowerCase()) parts.pop();
+  return parts.join(" · ");
+}

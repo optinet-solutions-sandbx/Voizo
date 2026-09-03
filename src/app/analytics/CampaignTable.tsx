@@ -14,10 +14,11 @@ import Link from "next/link";
 import { ArrowRight, Download, Eye, EyeOff, Search, X } from "lucide-react";
 import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type CampaignMoveRow, type SmsRollupRow, type PerfRow } from "@/lib/dashboardAnalytics";
 import { MAX_CAMPAIGNS } from "@/lib/rangedRecords";
-import { formatCampaign, distinctBrandLabels, brandLabel } from "@/lib/campaignDisplay";
+import { formatCampaign, brandLabel } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { triggerDownload } from "@/lib/download";
 import PromptModal from "./PromptModal";
+import Hint from "@/components/Hint";
 import DatePickerField from "@/components/DatePickerField";
 import Pagination from "@/components/Pagination";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
@@ -34,15 +35,17 @@ import PerformanceCards from "./PerformanceCards";
 import RangedRecordsDrawer, { totalFilter, rowFilter, type DrawerFilter } from "./RangedRecordsDrawer";
 import type { Filters as GlobalFilters } from "./GlobalPerformance";
 import {
-  agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, scriptKeyOf,
-  NO_CAMPAIGN_FILTERS, NO_SCRIPT, type CampaignFilterState,
+  agentKeyOf, anyCampaignFilterActive, brandKeyOf, matchesCampaignFilters, matchesCampaignName, scriptKeyOf,
+  classifyQuery, NO_CAMPAIGN_FILTERS, NO_SCRIPT, type CampaignFilterState,
 } from "./campaignFilters";
 import { buildCampaignPerfCsv } from "./campaignPerfCsv";
 // Grouping (Jasiel 2026-09-02, from the dashboard mockup): runs fold under their family,
 // country, brand, voice agent or script. A family is the recurring parent, the same key the
 // campaign picker groups by. Children under an open group are capped the way the picker is.
-import { groupCampaignRows, sortGroups, runOrdinals, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
-import { visibleChildren } from "@/lib/campaignGroups";
+import { groupCampaignRows, sortGroups, runOrdinals, playOf, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
+import { visibleChildren, type GroupableOption } from "@/lib/campaignGroups";
+// The same picker Global Performance uses, now inside this section too (mockup's "All campaigns (N)").
+import CampaignPicker from "./CampaignPicker";
 import { campaignGroupHeaderLabels, campaignRunLabel } from "@/lib/campaignDisplay";
 
 interface Row {
@@ -195,14 +198,19 @@ export default function CampaignTable() {
   const [page, setPage] = useState(1);
   // Section filters (Val 2026-08-07): country / brand / agent / script + player-phone lookup.
   const [filters, setFilters] = useState<CampaignFilterState>(NO_CAMPAIGN_FILTERS);
+  // ONE search box (mockup, 2026-09-03): a campaign name, a player's number, or a player's
+  // name. `phone` keeps its name for the lookup plumbing below; classifyQuery decides what
+  // the text is asking for. The two boxes it replaced were "Campaign name…" and "Player number…".
   const [phone, setPhone] = useState("");
+  // The section's own campaign picker (mockup's "All campaigns (N)"): ticked RUN ids; empty = all.
+  const [pickedIds, setPickedIds] = useState<string[]>([]);
+  // Family chips: the PLAY a family runs (REACTIVATION, RND REG YESTERDAY, ...); "" = all.
+  const [play, setPlay] = useState("");
   const [phoneRes, setPhoneRes] = useState<PhoneLookup | null>(null);
   const [phoneErr, setPhoneErr] = useState<string | null>(null);
   const [phoneLoading, setPhoneLoading] = useState(false);
-  // Summary visibility (Jasiel 2026-08-07: collapsible so the table stays the
-  // hero) — remembered across visits like the rest of the section state.
-  const [showSummary, setShowSummary] = useState<boolean>(() => loadSnapshot<boolean>("dashboard.campaigns.showSummary") ?? true);
-  const toggleSummary = () => setShowSummary((prev) => { const next = !prev; saveSnapshot("dashboard.campaigns.showSummary", next); return next; });
+  // The section summary ("All campaigns" band) is ALWAYS visible since 2026-09-03 (mockup);
+  // the 2026-08-07 hide/show toggle and its "dashboard.campaigns.showSummary" snapshot are gone.
   // Group by (Jasiel 2026-09-02). Family by default: in the default window every row is a
   // daily child of one of a handful of recurring parents. Remembered like the rest.
   const [groupBy, setGroupBy] = useState<GroupFacet>(() => loadSnapshot<GroupFacet>("dashboard.campaigns.groupBy") ?? "family");
@@ -241,19 +249,23 @@ export default function CampaignTable() {
     setFilters((prev) => ({ ...prev, ...patch }));
   };
 
-  // Player-phone lookup — debounced; needs ≥4 digits (the API refuses less).
+  // Player lookup — debounced. What the one box asks for decides the request: 4+ digits look
+  // up a NUMBER (the API refuses less), anything else looks up a player NAME as well as
+  // matching campaign names client-side. Under 2 characters nothing is asked.
+  const queryKind = classifyQuery(phone);
   useEffect(() => {
-    const needle = phone.replace(/[^\d+]/g, "");
-    if (needle.length < 4) {
+    const { kind, needle } = classifyQuery(phone);
+    if (kind === "none" || kind === "short") {
       setPhoneRes(null);
-      setPhoneErr(phone.trim() ? "Enter at least 4 digits." : null);
+      setPhoneErr(kind === "short" ? "Enter at least 4 digits of the number." : null);
       return;
     }
     let stale = false;
     setPhoneLoading(true);
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/dashboard/campaigns/phone-lookup?phone=${encodeURIComponent(needle)}`, { cache: "no-store" });
+        const param = kind === "phone" ? `phone=${encodeURIComponent(needle)}` : `name=${encodeURIComponent(needle)}`;
+        const res = await fetch(`/api/dashboard/campaigns/phone-lookup?${param}`, { cache: "no-store" });
         const json = (await res.json()) as PhoneLookup & { error?: string };
         if (stale) return;
         if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -304,14 +316,12 @@ export default function CampaignTable() {
   // Reset to page 1 whenever a filter/sort/date changes — done in the handlers (matches the SortControl
   // pattern in RankedTables), NOT a state→state effect. `safePage` still clamps as a safety net so you
   // never land on an empty page.
-  const toggleStatus = (s: DisplayStatus) => {
+  // Status is ONE choice with an All (mockup): pick Running and the others hide. `hidden`
+  // keeps its shape underneath so every consumer (rows, options, summary) is unchanged.
+  const campStatus: "all" | DisplayStatus = hidden.size === 0 ? "all" : (STATUS_ORDER.find((s) => !hidden.has(s)) ?? "all");
+  const selectStatus = (s: "all" | DisplayStatus) => {
     setPage(1);
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) next.delete(s);
-      else next.add(s);
-      return next;
-    });
+    setHidden(s === "all" ? new Set() : new Set(STATUS_ORDER.filter((x) => x !== s)));
   };
 
   // Recurring PARENTS are schedules, not dialers (Jasiel 2026-08-07): they
@@ -330,19 +340,44 @@ export default function CampaignTable() {
     () => (phoneRes ? new Set(phoneRes.matches.map((m) => m.campaignId)) : null),
     [phoneRes],
   );
+  // Family labels come from the recurring parents themselves. The API lists them alongside the
+  // runs (they are filtered out of `rows` above because a parent never dials); the picker in
+  // Global Performance labels the same parents the same way, so the two surfaces agree.
+  const parentLabel = useMemo(() => {
+    const parents = (data?.rows ?? [])
+      .filter((r) => r.scheduleType === "recurring")
+      .map((r) => ({ id: r.id, name: r.name, brand: r.cioWorkspace, startAt: r.startAt }));
+    return campaignGroupHeaderLabels(parents);
+  }, [data]);
+  // The play a run belongs to, for the family chips, from its FAMILY's label. A one-off has no
+  // family and no play ("" → no chip): the first run on real data made 84 test campaigns into 84
+  // chips. The label leads with the friendly country ("Australia"); the row carries the token
+  // ("AU"), so the friendly name comes from the campaign name, the way the label built it.
+  const playOfRow = (r: Row): string => {
+    const label = r.parentCampaignId ? parentLabel.get(r.parentCampaignId) : null;
+    return label ? playOf(label, formatCampaign(r.name).country || r.country, brandLabel(r.cioWorkspace)) : "";
+  };
+  // The one search box, as a row predicate. A number narrows to the campaigns holding it; a
+  // name keeps a row if the CAMPAIGN name matches OR a PLAYER by that name is in it (the
+  // mockup's rule); a refused or unfinished query filters nothing rather than emptying the table.
+  const queryMatch = (r: Row): boolean => {
+    if (queryKind.kind === "phone") return phoneCampaignIds === null || phoneCampaignIds.has(r.id);
+    if (queryKind.kind === "name") return matchesCampaignName(r.name, queryKind.needle) || (phoneCampaignIds?.has(r.id) ?? false);
+    return true;
+  };
+  const pickedSet = pickedIds.length ? new Set(pickedIds) : null;
   const visible = rows
     .filter(
       (r) =>
         !hidden.has(r.displayStatus) &&
         activeInRange(r, fromMs, toMs) &&
         matchesCampaignFilters(r, filters) &&
-        (phoneCampaignIds === null || phoneCampaignIds.has(r.id)),
+        (pickedSet === null || pickedSet.has(r.id)) &&
+        (play === "" || playOfRow(r) === play) &&
+        queryMatch(r),
     )
     .sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
 
-  // Brands present in the CURRENTLY-LISTED rows (post status/date filter) — the
-  // scope line must describe what's on screen, not everything in the database.
-  const visibleBrands = distinctBrandLabels(visible.map((r) => r.cioWorkspace));
 
   // Agent chip identity — the SAME resolution CampaignRow renders (base agent
   // name, falling back to the voice), so the dropdown can never disagree with
@@ -359,9 +394,44 @@ export default function CampaignTable() {
     () => rows.filter((r) => !hidden.has(r.displayStatus) && activeInRange(r, fromMs, toMs)),
     [rows, hidden, fromMs, toMs],
   );
+  // The plays in scope, for the family chips: distinct, sorted, from the same status+date
+  // scoped rows the other axes derive from. One value = no chips (nothing to narrow).
+  const plays = useMemo(
+    () => [...new Set(optionRows.map(playOfRow).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    // playOfRow is a derived fn over parentLabel; key on its inputs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [optionRows, parentLabel],
+  );
+  // The section's campaign picker: every run in scope as a selectable option, grouped by its
+  // family exactly as Global's picker groups them (same label functions, same parent ids).
+  const pickerOptions: GroupableOption[] = useMemo(
+    () => optionRows.map((r) => {
+      const label = formatCampaign(r.name).display;
+      const parent = r.parentCampaignId ? parentLabel.get(r.parentCampaignId) ?? "" : "";
+      return { value: r.id, label, search: `${label} ${parent} ${r.name}`, parentId: r.parentCampaignId ?? null, runLabel: campaignRunLabel(r.name, r.startAt) };
+    }),
+    [optionRows, parentLabel],
+  );
+  const pickerParentLabels = useMemo(() => Object.fromEntries(parentLabel), [parentLabel]);
+  // How many distinct values each facet holds in scope, shown in the Group menu (mockup):
+  // "Family (11)" says what grouping will do before it is chosen.
+  const facetCounts = useMemo<Record<GroupFacet, number>>(() => {
+    const distinct = (f: (r: Row) => string) => new Set(optionRows.map(f)).size;
+    return {
+      // parents only: one-offs are families of one, and counting them read "Family (95)" against
+      // the band's "11 families" on real data
+      family: new Set(optionRows.map((r) => r.parentCampaignId).filter(Boolean)).size,
+      country: distinct((r) => r.country),
+      brand: distinct((r) => brandKeyOf(r)),
+      agent: distinct((r) => agentKeyOf(r)),
+      script: distinct((r) => scriptKeyOf(r)),
+      none: optionRows.length,
+    };
+  }, [optionRows]);
   const countryOptions: DropdownOption[] = useMemo(() => {
     const uniq = [...new Set(optionRows.map((r) => r.country).filter(Boolean))].sort();
-    return [{ value: "", label: "All countries" }, ...uniq.map((c) => ({ value: c, label: c }))];
+    // the All option states how many values are in scope (mockup): a menu of one narrows nothing, and says so
+    return [{ value: "", label: `All countries (${uniq.length})` }, ...uniq.map((c) => ({ value: c, label: c }))];
   }, [optionRows]);
   const agentOptions: DropdownOption[] = useMemo(() => {
     const byKey = new Map<string, string>();
@@ -370,7 +440,7 @@ export default function CampaignTable() {
       if (key && !byKey.has(key)) byKey.set(key, agentLabelOf(r));
     }
     return [
-      { value: "", label: "All voice agents" },
+      { value: "", label: `All voice agents (${byKey.size})` },
       ...[...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label })),
     ];
   }, [optionRows, agentLabelOf]);
@@ -381,7 +451,7 @@ export default function CampaignTable() {
       if (!byKey.has(key)) byKey.set(key, key === NO_SCRIPT ? "No script" : (r.scriptName ?? "Unnamed script"));
     }
     return [
-      { value: "", label: "All scripts" },
+      { value: "", label: `All scripts (${byKey.size})` },
       ...[...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label })),
     ];
   }, [optionRows]);
@@ -406,7 +476,7 @@ export default function CampaignTable() {
     () => (rollup ? summarizeRollupWindow(rollup.calls, rollup.sms, new Set(visible.map((r) => r.id)), fromMs, toMs, rollup.moves ?? []) : null),
     // visible is derived (not state) — key the memo on its identity inputs instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rollup, rows, hidden, fromMs, toMs, filters, phoneCampaignIds],
+    [rollup, rows, hidden, fromMs, toMs, filters, phoneCampaignIds, pickedIds, play, phone],
   );
 
   // Drawer scope: the records endpoint takes campaignIds (≤ MAX_CAMPAIGNS) +
@@ -423,7 +493,8 @@ export default function CampaignTable() {
     campaignIds: drawerFamilyIds ?? visible.map((r) => r.id),
     country: "",
     prompt: "",
-    phone,
+    // the records route reads this as a NUMBER needle; a name query must not reach it
+    phone: queryKind.kind === "phone" ? phone : "",
   };
   const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
     !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
@@ -467,15 +538,6 @@ export default function CampaignTable() {
   const phoneMatchesShown = phoneRes ? phoneRes.matches.filter((m) => visibleIds.has(m.campaignId)) : [];
   const phoneMatchesHidden = phoneRes ? phoneRes.matches.length - phoneMatchesShown.length : 0;
 
-  // Family labels come from the recurring parents themselves. The API lists them alongside the
-  // runs (they are filtered out of `rows` above because a parent never dials); the picker in
-  // Global Performance labels the same parents the same way, so the two surfaces agree.
-  const parentLabel = useMemo(() => {
-    const parents = (data?.rows ?? [])
-      .filter((r) => r.scheduleType === "recurring")
-      .map((r) => ({ id: r.id, name: r.name, brand: r.cioWorkspace, startAt: r.startAt }));
-    return campaignGroupHeaderLabels(parents);
-  }, [data]);
   const groupLabels: GroupLabels = {
     family: (pid) => parentLabel.get(pid) ?? null,
     brand: (ws) => brandLabel(ws),
@@ -602,59 +664,60 @@ export default function CampaignTable() {
         />
       }
     >
-      {/* Table-level filters (independent of the global bar). */}
+      {/* The filter bar (dashboard mockup, ported 2026-09-03). ONE row of filters, left to right:
+          status (one at a time, with All) · the play a family runs · country / agent / script,
+          each stating how many values are in scope · brand when more than one · ONE search box
+          for a campaign name, a player's number or a player's name · the section's own campaign
+          picker · the date range on the right. View controls (Group, parent summaries) sit on
+          the summary row below, because they change how runs are stacked, never which are listed. */}
       <div className="flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b border-[var(--border)]">
-        {STATUS_ORDER.map((s) => {
-          const on = !hidden.has(s);
-          const m = STATUS_META[s];
+        {(["all", ...STATUS_ORDER] as const).map((s) => {
+          const on = s === campStatus;
+          const cls = s === "all" ? "bg-blue-500/15 text-blue-400 border-blue-500/40" : STATUS_META[s].cls;
           return (
             <button
               key={s}
-              onClick={() => toggleStatus(s)}
+              type="button"
+              onClick={() => selectStatus(s)}
+              aria-pressed={on}
               className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
-                on ? m.cls : "bg-transparent text-[var(--text-3)] border-[var(--border)] opacity-50"
+                on ? cls : "bg-transparent text-[var(--text-3)] border-[var(--border)] hover:text-[var(--text-2)]"
               }`}
             >
-              {m.label}
+              {s === "all" ? "All" : STATUS_META[s].label}
             </button>
           );
         })}
-        <span className="w-px h-5 bg-[var(--border)] mx-1" />
-        <DatePickerField value={from} onChange={(v) => { setFrom(v); setPage(1); }} placeholder="From date" ariaLabel="From date" />
-        <span className="text-[var(--text-3)] text-xs">→</span>
-        <DatePickerField value={to} onChange={(v) => { setTo(v); setPage(1); }} placeholder="To date" ariaLabel="To date" />
-        {(from || to) && (
-          <button type="button" onClick={() => { setFrom(""); setTo(""); setPage(1); }} className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]">
-            Reset
-          </button>
+        {plays.length > 1 && (
+          <>
+            <span className="w-px h-5 bg-[var(--border)] mx-1" />
+            {/* Family chips: the PLAY (REACTIVATION, RND REG YESTERDAY, ...), the same across brands
+                and markets, derived from each family's label. One chip per play plus All. */}
+            {["", ...plays].map((p) => {
+              const on = p === play;
+              return (
+                <button
+                  key={p || "__all__"}
+                  type="button"
+                  onClick={() => { setPlay(p); setPage(1); }}
+                  aria-pressed={on}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                    on ? "bg-blue-500/15 text-blue-400 border-blue-500/40" : "bg-transparent text-[var(--text-3)] border-[var(--border)] hover:text-[var(--text-2)]"
+                  }`}
+                  title={p ? `Only families running ${p}` : "Every family"}
+                >
+                  {p || "All families"}
+                </button>
+              );
+            })}
+          </>
         )}
-        <span className="text-[11px] text-[var(--text-3)]">{from || to ? "activity in range · lifetime totals" : "all campaigns · lifetime totals"}</span>
-        {/* Brand scope of the rows actually listed (VOZ-216) — moves with the filters. */}
-        {visibleBrands.length > 0 && (
-          <span className="text-[11px] text-[var(--text-3)]">
-            · {visibleBrands.length === 1 ? "brand" : "brands"}:{" "}
-            <span className="text-primary">{visibleBrands.join(" · ")}</span>
-          </span>
-        )}
-        {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
-        {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
-      </div>
-
-      {/* Section filters (Val 2026-08-07): country · brand · voice agent · script · player phone. */}
-      <div className="flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b border-[var(--border)]">
-        {/* Group by: one select, prod's control language for "pick one of a list". */}
-        <span className="text-[11px] text-[var(--text-3)]">Group</span>
-        <StyledSelect
-          size="sm"
-          options={GROUP_FACETS.map((f) => ({ value: f.key, label: f.label }))}
-          value={groupBy}
-          onChange={(v) => changeGroupBy((v || "family") as GroupFacet)}
-          placeholder="Family"
-        />
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
-        <StyledSelect size="sm" options={countryOptions} value={filters.country} onChange={(v) => setFilter({ country: v })} placeholder="All countries" />
-        <StyledSelect size="sm" options={agentOptions} value={filters.agent} onChange={(v) => setFilter({ agent: v })} placeholder="All voice agents" />
-        <StyledSelect size="sm" options={scriptOptions} value={filters.script} onChange={(v) => setFilter({ script: v })} placeholder="All scripts" />
+        {/* Each axis states how many values are in scope; with one value the control filters
+            nothing and says so in its label rather than pretending a menu of one narrows anything. */}
+        <StyledSelect size="sm" options={countryOptions} value={filters.country} onChange={(v) => setFilter({ country: v })} placeholder={`All countries (${countryOptions.length})`} />
+        <StyledSelect size="sm" options={agentOptions} value={filters.agent} onChange={(v) => setFilter({ agent: v })} placeholder={`All agents (${agentOptions.length})`} />
+        <StyledSelect size="sm" options={scriptOptions} value={filters.script} onChange={(v) => setFilter({ script: v })} placeholder={`All scripts (${scriptOptions.length})`} />
         {brandChoices.length > 1 && (
           <>
             <span className="w-px h-5 bg-[var(--border)] mx-1" />
@@ -679,54 +742,61 @@ export default function CampaignTable() {
           </>
         )}
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
-        {/* Campaign-name search (Val 2026-08-25). Token-AND over the name, so "rnd au"
-            finds "…RND REG YESTERDAY AU" and a date finds that day's runs. Purely
-            client-side over rows already loaded — no request, no debounce needed. */}
-        <div className="relative">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
-          <input
-            type="text"
-            value={filters.name}
-            onChange={(e) => setFilter({ name: e.target.value })}
-            placeholder="Campaign name…"
-            aria-label="Search campaigns by name"
-            className="pl-8 pr-7 py-1.5 w-[210px] rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
-          />
-          {filters.name && (
-            <button type="button" aria-label="Clear campaign name search" onClick={() => setFilter({ name: "" })} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-1)]">
-              <X size={13} />
-            </button>
-          )}
-        </div>
+        {/* ONE box (mockup): a campaign name, a player's number, or a player's name. Rows narrow
+            to the campaigns that match, or that hold a player who does. Replaces the separate
+            "Campaign name…" and "Player number…" boxes. */}
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-3)]" />
           <input
             type="text"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="Player number…"
-            aria-label="Search by player phone number"
-            className="pl-8 pr-7 py-1.5 w-[180px] rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
+            onChange={(e) => { setPhone(e.target.value); setPage(1); }}
+            placeholder="Campaign, number or name…"
+            aria-label="Search by campaign name, player number or player name"
+            title="One box: a campaign name, a player's number, or a player's name."
+            className="pl-8 pr-7 py-1.5 w-[230px] rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-1)] placeholder:text-[var(--text-3)] focus:outline-none focus:border-blue-500/50 transition"
           />
           {phone && (
-            <button type="button" aria-label="Clear phone search" onClick={() => setPhone("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-1)]">
+            <button type="button" aria-label="Clear the search" onClick={() => { setPhone(""); setPage(1); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-3)] hover:text-[var(--text-1)]">
               <X size={13} />
             </button>
           )}
         </div>
+        {/* The section's own campaign picker — the same control as Global's, grouped by family,
+            capped at 7 per family with show-all. Ticked runs govern the rows; none = all. */}
+        <div className="min-w-[190px]">
+          <CampaignPicker
+            label={`All campaigns (${pickerOptions.length})`}
+            options={pickerOptions}
+            parentLabels={pickerParentLabels}
+            selected={pickedIds}
+            onChange={(ids) => { setPickedIds(ids); setPage(1); }}
+          />
+        </div>
         {phoneLoading && <span className="text-[11px] text-[var(--text-3)]">Searching…</span>}
         {phoneErr && <span className="text-[11px] text-amber-400">{phoneErr}</span>}
-        {(anyCampaignFilterActive(filters) || phone) && (
+        {(anyCampaignFilterActive(filters) || phone || pickedIds.length > 0 || play || campStatus !== "all") && (
           <button
             type="button"
-            onClick={() => { setFilters(NO_CAMPAIGN_FILTERS); setPhone(""); setPage(1); }}
-            className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)]"
+            onClick={() => { setFilters(NO_CAMPAIGN_FILTERS); setPhone(""); setPickedIds([]); setPlay(""); setHidden(new Set()); setPage(1); }}
+            className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)] transition"
           >
             Clear filters
           </button>
         )}
+        <span className="ml-auto flex items-center gap-2">
+          <DatePickerField value={from} onChange={(v) => { setFrom(v); setPage(1); }} placeholder="From date" ariaLabel="From date" />
+          <span className="text-[var(--text-3)] text-xs">→</span>
+          <DatePickerField value={to} onChange={(v) => { setTo(v); setPage(1); }} placeholder="To date" ariaLabel="To date" />
+          {(from || to) && (
+            <button type="button" onClick={() => { setFrom(""); setTo(""); setPage(1); }} className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)] transition">
+              Reset
+            </button>
+          )}
+        </span>
+        {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
+        {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
       </div>
-
       {/* Player-number results — records for the number WITHIN the filtered campaigns (Val 2026-08-07). */}
       {phoneRes && (
         <div className="px-3.5 py-2.5 border-b border-[var(--border)] flex flex-col gap-1.5">
@@ -763,38 +833,54 @@ export default function CampaignTable() {
         </div>
       )}
 
-      {/* Filter-scoped summary (Val 2026-08-07) — the SAME cards + click-to-drill
-          drawer as Global Performance, scoped to exactly the campaigns listed
-          below. Collapsible (Jasiel 2026-08-07) and remembered. */}
+      {/* View controls (mockup): how runs are STACKED, never which are listed, so they sit apart
+          from the filter row. Group states how many values each facet holds; Show parent
+          summaries adds the three cards under every family header. */}
       <div className="px-3.5 pt-3 pb-1 flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          onClick={toggleSummary}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition"
-        >
-          {showSummary ? <EyeOff size={13} /> : <Eye size={13} />}
-          {showSummary ? "Hide summary" : "Show summary"}
-        </button>
+        <span className="text-[11px] text-[var(--text-3)] inline-flex items-center gap-1">
+          Group
+          <Hint content="Group the list. It changes how runs are stacked, never which runs are listed. A family is a recurring campaign and its daily runs.">
+            <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-[var(--border-2)] text-[9px] cursor-help select-none">i</span>
+          </Hint>
+        </span>
+        <StyledSelect
+          size="sm"
+          options={GROUP_FACETS.map((f) => ({ value: f.key, label: f.key === "none" ? f.label : `${f.label} (${facetCounts[f.key]})` }))}
+          value={groupBy}
+          onChange={(v) => changeGroupBy((v || "family") as GroupFacet)}
+          placeholder="Family"
+        />
         {groupBy !== "none" && familyCount > 0 && (
-          <button
-            type="button"
-            onClick={toggleFamilySummaries}
-            title="Three cards under each open family, summed over that family's runs in the picked window"
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition"
-          >
-            {showFamilySummaries ? <EyeOff size={13} /> : <Eye size={13} />}
-            {showFamilySummaries ? "Hide family summaries" : "Show family summaries"}
-          </button>
+          <>
+            <span className="w-px h-5 bg-[var(--border)] mx-1" />
+            <button
+              type="button"
+              onClick={toggleFamilySummaries}
+              aria-pressed={showFamilySummaries}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition"
+            >
+              {showFamilySummaries ? <EyeOff size={13} /> : <Eye size={13} />}
+              {showFamilySummaries ? "Hide parent summaries" : "Show parent summaries"}
+            </button>
+            <Hint content="Each summary sums exactly the cells of that family's runs in the selected window. The filters above recompute it. The All campaigns band below is always there; this adds one block per family.">
+              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-[var(--border-2)] text-[9px] text-[var(--text-3)] cursor-help select-none">i</span>
+            </Hint>
+          </>
         )}
-        <span className="text-[11px] text-[var(--text-3)]">Summary of the runs listed below · {scopeLabel}</span>
         {drawerBlocked && (
           <span className="text-[11px] text-amber-400">
             Too many campaigns to drill into records ({visible.length} &gt; {MAX_CAMPAIGNS}) — narrow the filters first.
           </span>
         )}
       </div>
-      {showSummary && summaryPerf && (
+      {/* The All campaigns band (mockup): ALWAYS on. The summary of every family in the current
+          filters, the same three cards as Global once had, summed over exactly the runs listed. */}
+      {summaryPerf && (
         <div className="px-3.5 pb-2">
+          <div className="text-[12px] mb-2">
+            <span className="font-semibold text-[var(--text-1)]">All campaigns</span>
+            <span className="text-[var(--text-3)]"> — every {groupBy === "none" ? "run" : "family"} in the current filters · {scopeLabel}</span>
+          </div>
           <PerformanceCards
             perf={summaryPerf}
             showDeltas={false}
@@ -871,25 +957,26 @@ export default function CampaignTable() {
                       <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.conversations.toLocaleString("en-US")}</div>
                       <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.sms.toLocaleString("en-US")}</div>
                     </button>
+                    {/* The parent summary (mockup): the section's three cards, summed over exactly
+                        this family's runs in the picked window, from the same rollup rows the
+                        All campaigns band sums. It sits under the HEADER, open or collapsed, so
+                        "Show parent summaries" reads every family at once without expanding
+                        each. Only for a multi-run group (this branch), never for a group of one:
+                        a summary of one row prints the row back at itself. Cards drill the shared
+                        drawer, scoped to this family. */}
+                    {showFamilySummaries && rollup && (
+                      <div className="px-3.5 py-2 border-l-2 border-[var(--border-2)] ml-4">
+                        <PerformanceCards
+                          perf={summarizeRollupWindow(rollup.calls, rollup.sms, new Set(g.rows.map((r) => r.id)), fromMs, toMs, rollup.moves ?? [])}
+                          showDeltas={false}
+                          onOpenTotal={(card) => openTotal(card, g.rows.map((r) => r.id))}
+                          onOpenRow={(card, row) => openRow(card, row, g.rows.map((r) => r.id))}
+                          noDrillHintFor={summaryNoDrillHint}
+                        />
+                      </div>
+                    )}
                     {open && (
                       <div className="border-l-2 border-[var(--border-2)] ml-4">
-                        {/* The family's own summary: the section's three cards, summed over
-                            exactly this family's runs in the picked window, from the same
-                            rollup rows the section summary sums. Only for a MULTI-run group
-                            (this branch), never for a group of one: a summary of one row
-                            prints the row back at itself. Cards drill the shared drawer,
-                            scoped to this family. */}
-                        {showFamilySummaries && rollup && (
-                          <div className="px-3.5 py-2">
-                            <PerformanceCards
-                              perf={summarizeRollupWindow(rollup.calls, rollup.sms, new Set(g.rows.map((r) => r.id)), fromMs, toMs, rollup.moves ?? [])}
-                              showDeltas={false}
-                              onOpenTotal={(card) => openTotal(card, g.rows.map((r) => r.id))}
-                              onOpenRow={(card, row) => openRow(card, row, g.rows.map((r) => r.id))}
-                              noDrillHintFor={summaryNoDrillHint}
-                            />
-                          </div>
-                        )}
                         {shown.map((r) => renderRun(r, groupBy === "family"))}
                         {more > 0 && (
                           // Named by the family's TOTAL, the same rule as the picker: "how many

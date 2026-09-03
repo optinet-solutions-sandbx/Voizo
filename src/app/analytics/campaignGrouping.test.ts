@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupCampaignRows, sortGroups, runOrdinals, type GroupableRow, type GroupLabels } from "./campaignGrouping";
+import { groupCampaignRows, sortGroups, runOrdinals, playOf, type GroupableRow, type GroupLabels } from "./campaignGrouping";
 
 const L: GroupLabels = {
   family: (pid) => ({ "p-fp-au": "Australia · Daily Conversion · Fortune Play", "p-l7-au": "Australia · Daily Conversion · Lucky7even" }[pid] ?? null),
@@ -137,5 +137,20 @@ describe("runOrdinals — a family that ran twice in one day numbers its runs (2
   it("three in a day count to three", () => {
     const rows = ["a", "b", "c"].map((id, i) => twin(id, `2026-08-19T0${i + 1}:00:00Z`));
     expect([...runOrdinals(rows).values()]).toEqual(["run 1 of 3", "run 2 of 3", "run 3 of 3"]);
+  });
+});
+
+describe("playOf — the family's play, same across brands and markets", () => {
+  it("drops the country in front and the brand behind", () => {
+    expect(playOf("Australia · REACTIVATION · Fortune Play", "Australia", "Fortune Play")).toBe("REACTIVATION");
+    expect(playOf("Australia · REACTIVATION · Lucky7even", "Australia", "Lucky7even")).toBe("REACTIVATION");
+    expect(playOf("New Zealand · RND REG YESTERDAY · Fortune Play", "New Zealand", "Fortune Play")).toBe("RND REG YESTERDAY");
+  });
+  it("keeps a label that has no country or brand to drop", () => {
+    expect(playOf("STEVIC", "Australia", "Fortune Play")).toBe("STEVIC");
+  });
+  it("never empties a one-segment label, and never drops a segment that only looks like the brand", () => {
+    expect(playOf("Fortune Play", "Australia", "Fortune Play")).toBe("Fortune Play");
+    expect(playOf("Australia · Fortune Play Reactivation · Fortune Play", "Australia", "Fortune Play")).toBe("Fortune Play Reactivation");
   });
 });
