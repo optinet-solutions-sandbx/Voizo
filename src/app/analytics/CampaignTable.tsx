@@ -19,7 +19,7 @@ import { voiceName } from "@/lib/voiceOptions";
 import { triggerDownload } from "@/lib/download";
 import PromptModal from "./PromptModal";
 import Hint from "@/components/Hint";
-import DatePickerField from "@/components/DatePickerField";
+import RangeCalendar from "./RangeCalendar";
 import Pagination from "@/components/Pagination";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { SortControl, type SortKey } from "./SortControl";
@@ -784,15 +784,17 @@ export default function CampaignTable() {
             Clear filters
           </button>
         )}
-        <span className="ml-auto flex items-center gap-2">
-          <DatePickerField value={from} onChange={(v) => { setFrom(v); setPage(1); }} placeholder="From date" ariaLabel="From date" />
-          <span className="text-[var(--text-3)] text-xs">→</span>
-          <DatePickerField value={to} onChange={(v) => { setTo(v); setPage(1); }} placeholder="To date" ariaLabel="To date" />
-          {(from || to) && (
-            <button type="button" onClick={() => { setFrom(""); setTo(""); setPage(1); }} className="text-xs text-[var(--text-2)] hover:text-[var(--text-1)] px-2 py-1 rounded-lg border border-[var(--border)] hover:bg-[var(--bg-hover)] transition">
-              Reset
-            </button>
-          )}
+        {/* The window (mockup): one button reading "Aug 16 – Aug 22" that opens the shared calendar.
+            Counts on its cells come from every run in the status scope, the window itself excluded,
+            because the calendar is how the window is chosen. */}
+        <span className="ml-auto">
+          <RangeCalendar
+            from={from}
+            to={to}
+            runDates={rows.filter((r) => !hidden.has(r.displayStatus)).map((r) => (r.startAt ?? "").slice(0, 10)).filter(Boolean)}
+            onApply={(f, t) => { setFrom(f); setTo(t); setPage(1); }}
+            ariaLabel="Pick the Campaign Performance window"
+          />
         </span>
         {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
         {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}

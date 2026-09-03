@@ -14,6 +14,7 @@ import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
 // The campaign picker lives in CampaignPicker.tsx since 2026-09-03 (shared with Campaign Performance).
 import CampaignPicker from "./CampaignPicker";
+import RangeCalendar from "./RangeCalendar";
 import { useBaseAgentNames } from "./useBaseAgentNames";
 import Leaderboards, { type AgentRow, type CampaignLbRow, type PromptRow } from "./Leaderboards";
 import CampaignTable from "./CampaignTable";
@@ -326,27 +327,17 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
               Custom
             </button>
           </div>
-          {/* Custom date range — native pickers (no date lib). Picking BOTH dates switches to "custom". */}
+          {/* Custom date range — the same window picker Campaign Performance uses (mockup, 2026-09-03:
+              one calendar vocabulary across the dashboard). Day / week / month / year / range, each
+              compiling to one from→to pair; Select switches the preset row to "custom". */}
           {customVisible && (
-            <div className="inline-flex items-center gap-1">
-              <input
-                type="date"
-                aria-label="Range from date"
-                value={filters.from ?? ""}
-                max={filters.to || undefined}
-                onChange={(e) => applyDates(e.target.value || undefined, filters.to)}
-                className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
-              />
-              <span className="text-[var(--text-4)] text-[11px]">–</span>
-              <input
-                type="date"
-                aria-label="Range to date"
-                value={filters.to ?? ""}
-                min={filters.from || undefined}
-                onChange={(e) => applyDates(filters.from, e.target.value || undefined)}
-                className="px-2 py-1 rounded-md text-[12px] font-mono bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-2)] [color-scheme:dark] focus:outline-none focus:border-primary"
-              />
-            </div>
+            <RangeCalendar
+              from={filters.from ?? ""}
+              to={filters.to ?? ""}
+              runDates={(data?.options.campaigns ?? []).map((c) => (c.startAt ?? "").slice(0, 10)).filter(Boolean)}
+              onApply={(f, t) => (f && t ? applyDates(f, t) : closeCustom())}
+              ariaLabel="Pick a custom window"
+            />
           )}
         </div>
         <div className="w-px h-6 bg-[var(--border)]" />
