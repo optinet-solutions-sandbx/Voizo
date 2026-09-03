@@ -9,7 +9,8 @@
 
 import { useState } from "react";
 import type { RunningCampaignCard } from "@/lib/dashboardAnalytics";
-import { formatCampaign } from "@/lib/campaignDisplay";
+import { formatCampaign, brandLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
+import { playOf, runOrdinals } from "./campaignGrouping";
 import { useExpandSlices } from "./useExpandSlices";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData } from "./CampaignRow";
 import PromptModal from "./PromptModal";
@@ -42,6 +43,24 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
   const rows = campaigns
     .filter((c) => c.scheduleType !== "recurring")
     .sort((a, b) => b.perf.callAttempts.total - a.perf.callAttempts.total);
+
+  // Val's law, from the mockup (2026-09-03): a Today row is named by its LANE, Brand · Market ·
+  // Play, because that is what dials and what breaks. The brand leads only when more than one
+  // brand is live (under one brand it is constant and says nothing); the play comes from the
+  // family's header label with country and brand stripped; a run with no family keeps its own
+  // name. The chip strip is hidden here: every chip restated the title. Same-day twins carry
+  // "run 1 of 2", counted over every running row so the pair is always numbered together.
+  const parentLabel = campaignGroupHeaderLabels(
+    campaigns.filter((c) => c.scheduleType === "recurring").map((c) => ({ id: c.id, name: c.name, brand: c.cioWorkspace, startAt: c.startAt })),
+  );
+  const brandsLive = new Set(rows.map((c) => brandLabel(c.cioWorkspace))).size;
+  const laneLabelOf = (c: RunningCampaignCard): string => {
+    const label = c.parentCampaignId ? parentLabel.get(c.parentCampaignId) : null;
+    const brand = brandLabel(c.cioWorkspace);
+    const play = label ? playOf(label, formatCampaign(c.name).country || c.country, brand) : formatCampaign(c.name).offer || formatCampaign(c.name).display;
+    return `${brandsLive > 1 ? `${brand} · ` : ""}${c.country} · ${play}`;
+  };
+  const ordinals = runOrdinals(rows.map((c) => ({ ...c, attempts: c.perf.callAttempts.total, conversations: c.perf.reached.total, sms: c.perf.sms.total, displayStatus: "running" as const })));
 
   if (rows.length === 0) return null;
 
@@ -79,6 +98,9 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
                 players: c.players,
                 startAt: c.startAt,
                 perf: c.perf,
+                titleOverride: laneLabelOf(c),
+                runOrdinal: ordinals.get(c.id) || undefined,
+                hideChips: true,
               };
               return (
                 <CampaignRow

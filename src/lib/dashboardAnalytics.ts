@@ -173,6 +173,7 @@ export interface RunningCampaignCard {
   startAt: string | null; // run-window start — drives the "running for X" runtime (Slice A)
   players: number; // campaign roster size (route-supplied; 0 when unavailable)
   perf: TodayPerfDay; // per-campaign today breakdown (no deltas) for the Today's-campaigns rows
+  parentCampaignId?: string | null; // the family (recurring parent), for the lane label (2026-09-03)
 }
 
 // ── Today's Performance 3-card model (Val's mockup, 2026-06-29) ──────────────
@@ -204,6 +205,9 @@ export interface TodaySnapshot {
   today: TodayPerfDay; // 3-card block for today (the toggle default)
   yesterday: TodayPerfDay; // same block for yesterday (toggle)
   runningCampaigns: RunningCampaignCard[];
+  /** Lane health (2026-09-03): one row per brand × country that dialled, judged on the last
+   *  closed day. Optional: pre-deploy session snapshots have none. */
+  lanes?: import("./laneHealth").LaneHealthRow[];
   ops: {
     callsToday: number;
     callsYesterday: number;
@@ -2232,6 +2236,8 @@ export function computeTodayFromRollup(
         startAt: c.start_at ?? c.created_at ?? null,
         players: rosterByCampaign.get(c.id) ?? 0,
         perf: assembleWindowPerf(cb, sb),
+        // the family (recurring parent) this run belongs to — Today's lane label (2026-09-03)
+        parentCampaignId: c.parent_campaign_id ?? null,
       };
     });
 

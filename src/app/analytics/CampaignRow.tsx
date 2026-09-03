@@ -70,6 +70,9 @@ export interface CampaignRowData {
   /** "run 1 of 2" when this family ran more than once on this day and the rows would otherwise
    *  read identically (campaignGrouping.runOrdinals). Empty or absent = not a twin, no chip. */
   runOrdinal?: string;
+  /** Today's lane list (2026-09-03) names each row Brand · Market · Play and hides the chip strip:
+   *  every chip there restated the title. Campaign Performance keeps its chips. */
+  hideChips?: boolean;
 }
 
 // Shared grid template — header row + every campaign row align to it.
@@ -179,6 +182,7 @@ export default function CampaignRow({
             </PromptHoverCard>
             {trailing}
           </div>
+          {!c.hideChips && (
           <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[10px] text-[var(--text-3)]">
             {/* Brand first (VOZ-216): with several brands live, "whose campaign is
                 this?" is the first question a row has to answer. Tinted so it reads
@@ -209,6 +213,7 @@ export default function CampaignRow({
               </Hint>
             )}
           </div>
+          )}
         </div>
 
         {/* Status + time */}

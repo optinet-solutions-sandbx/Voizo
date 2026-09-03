@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
+import { buildLaneHealth } from "@/lib/laneHealth";
 import {
   buildCandidateDelta,
   computeTodayFromRollup,
@@ -208,5 +209,16 @@ export async function GET(request: NextRequest) {
     rosterByCampaign,
   );
 
-  return NextResponse.json(snapshot);
+  // Lane health (2026-09-03): one row per brand × country from the SAME rollup the snapshot was
+  // built from, judged on the last closed UTC day, today's figures alongside. Ghost and test
+  // campaigns excluded as everywhere else on this route.
+  const todayIso = new Date(todayStartMs).toISOString().slice(0, 10);
+  const judgedOn = new Date(todayStartMs - MS_PER_DAY).toISOString().slice(0, 10);
+  const lanes = buildLaneHealth(
+    (callRollupRes.data ?? []) as CallRollupRow[],
+    campaignRows.filter((c) => c.source !== "ghost_portal" && c.is_test !== true),
+    judgedOn,
+    todayIso,
+  );
+  return NextResponse.json({ ...snapshot, lanes });
 }

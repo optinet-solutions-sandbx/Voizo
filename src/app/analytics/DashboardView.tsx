@@ -16,6 +16,7 @@ import { distinctBrandLabels } from "@/lib/campaignDisplay";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
+import LaneHealthStrip from "./LaneHealthStrip";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 
 const POLL_MS = 30_000;
@@ -128,6 +129,11 @@ export default function DashboardView() {
       {/* Today's Performance — 3-card redesign (Val's mockup 2026-06-29): Call Attempts / Reached /
           SMS Sent, Today/Yesterday toggle, dual deltas, and click-anything → inline records drawer.
           Pinned above the running-campaign rows (Jasiel 2026-07-01) so the headline metrics stay on top. */}
+      {/* Lane health (mockup, 2026-09-03): which market is broken right now. One card per brand ×
+          country, worst first, judged on the last closed day. Sits above the cards because a dead
+          trunk must be the first thing on the page; the Global average hides it. */}
+      <LaneHealthStrip lanes={data?.lanes ?? []} />
+
       <TodayPerformanceCards data={data} />
 
       {/* Today's campaigns — expandable per-campaign rows (Val's mockup, Slice A). Hidden when none running. */}
