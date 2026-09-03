@@ -43,7 +43,8 @@ import { buildCampaignPerfCsv } from "./campaignPerfCsv";
 // country, brand, voice agent or script. A family is the recurring parent, the same key the
 // campaign picker groups by. Children under an open group are capped the way the picker is.
 import { groupCampaignRows, sortGroups, runOrdinals, playOf, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
-import { visibleChildren, type GroupableOption } from "@/lib/campaignGroups";
+import { CHILD_PAGE_SIZE, type GroupableOption } from "@/lib/campaignGroups";
+import { weekStart, addDays } from "@/lib/rangeCalendar";
 // The same picker Global Performance uses, now inside this section too (mockup's "All campaigns (N)").
 import CampaignPicker from "./CampaignPicker";
 import { campaignGroupHeaderLabels, campaignRunLabel } from "@/lib/campaignDisplay";
@@ -187,8 +188,11 @@ function sortValue(r: Row, key: SortKey): number {
 // `brand` / `country` are the PAGE-level scope (the sidebar's brand switcher, Global's market
 // tabs; mockup 2026-09-03): they narrow the rows before this section's own filters. "" = all.
 export default function CampaignTable({ brand = "", country = "" }: { brand?: string; country?: string }) {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  // The window opens on the CURRENT WEEK (Jasiel 2026-09-03: "the newest week, not all data"), the
+  // same week the calendar's Week granularity would pick for today. Clear in the calendar still
+  // gives all time.
+  const [from, setFrom] = useState(() => weekStart(new Date().toISOString().slice(0, 10)));
+  const [to, setTo] = useState(() => addDays(weekStart(new Date().toISOString().slice(0, 10)), 6));
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -216,26 +220,28 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
   // Group by (Jasiel 2026-09-02). Family by default: in the default window every row is a
   // daily child of one of a handful of recurring parents. Remembered like the rest.
   const [groupBy, setGroupBy] = useState<GroupFacet>(() => loadSnapshot<GroupFacet>("dashboard.campaigns.groupBy") ?? "family");
-  // Which groups are open, and which of those the operator asked to see in full. A group opens
-  // capped at CHILD_PAGE_SIZE (the picker's rule); collapsing it forgets the show-all.
+  // Which groups are open, and which PAGE of runs each shows (Jasiel 2026-09-03: an open family
+  // lists CHILD_PAGE_SIZE runs and pages through the rest, never a "show all 34"). Collapsing a
+  // family forgets its page.
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
-  const [showAllIn, setShowAllIn] = useState<Set<string>>(new Set());
+  const [childPage, setChildPage] = useState<Map<string, number>>(new Map());
+  const setChildPageFor = (key: string, page: number) => setChildPage((m) => new Map(m).set(key, page));
   // Family summaries (2026-09-02): the same three cards as the section summary, summed over ONE
-  // open family's runs. Off by default, as the mockup shipped them: the family header already
+  // family's runs. Off on every load (Jasiel 2026-09-03, "cleaner"): the family header already
   // carries the three totals, and a page of card blocks under every family was measured at 55%
-  // of the section restating its own rows. Remembered like the rest.
-  const [showFamilySummaries, setShowFamilySummaries] = useState<boolean>(() => loadSnapshot<boolean>("dashboard.campaigns.showFamilySummaries") ?? false);
-  const toggleFamilySummaries = () => setShowFamilySummaries((prev) => { const next = !prev; saveSnapshot("dashboard.campaigns.showFamilySummaries", next); return next; });
+  // of the section restating its own rows. Not remembered, on purpose.
+  const [showFamilySummaries, setShowFamilySummaries] = useState(false);
+  const toggleFamilySummaries = () => setShowFamilySummaries((prev) => !prev);
   // When a FAMILY card opened the drawer, the drawer lists that family's runs only. null = the
   // section summary opened it, scoped to everything listed.
   const [drawerFamilyIds, setDrawerFamilyIds] = useState<string[] | null>(null);
   const changeGroupBy = (g: GroupFacet) => {
-    setGroupBy(g); setPage(1); setOpenGroups(new Set()); setShowAllIn(new Set());
+    setGroupBy(g); setPage(1); setOpenGroups(new Set()); setChildPage(new Map());
     saveSnapshot("dashboard.campaigns.groupBy", g);
   };
   const toggleGroup = (key: string) => setOpenGroups((prev) => {
     const next = new Set(prev);
-    if (next.has(key)) { next.delete(key); setShowAllIn((s) => { const t = new Set(s); t.delete(key); return t; }); }
+    if (next.has(key)) { next.delete(key); setChildPage((m) => { const t = new Map(m); t.delete(key); return t; }); }
     else next.add(key);
     return next;
   });
@@ -438,11 +444,6 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
       none: optionRows.length,
     };
   }, [optionRows]);
-  const countryOptions: DropdownOption[] = useMemo(() => {
-    const uniq = [...new Set(optionRows.map((r) => r.country).filter(Boolean))].sort();
-    // the All option states how many values are in scope (mockup): a menu of one narrows nothing, and says so
-    return [{ value: "", label: `All countries (${uniq.length})` }, ...uniq.map((c) => ({ value: c, label: c }))];
-  }, [optionRows]);
   const agentOptions: DropdownOption[] = useMemo(() => {
     const byKey = new Map<string, string>();
     for (const r of optionRows) {
@@ -465,18 +466,6 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
       ...[...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label })),
     ];
   }, [optionRows]);
-  const brandChoices = useMemo(() => {
-    const byKey = new Map<string, string>();
-    for (const r of optionRows) {
-      const key = brandKeyOf(r);
-      if (!byKey.has(key)) byKey.set(key, brandLabel(r.cioWorkspace));
-    }
-    return [...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [optionRows]);
-  const toggleBrand = (key: string) =>
-    setFilter({
-      brands: filters.brands.includes(key) ? filters.brands.filter((b) => b !== key) : [...filters.brands, key],
-    });
 
   // Summary + export: windowed sums over the SAME rollup rows the table rows
   // were built from, scoped to exactly the ids on screen — so the summary block
@@ -729,33 +718,11 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
         )}
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
         {/* Each axis states how many values are in scope; with one value the control filters
-            nothing and says so in its label rather than pretending a menu of one narrows anything. */}
-        <StyledSelect size="sm" options={countryOptions} value={filters.country} onChange={(v) => setFilter({ country: v })} placeholder={`All countries (${countryOptions.length})`} />
+            nothing and says so in its label rather than pretending a menu of one narrows anything.
+            No country select and no brand chips here (Jasiel 2026-09-03): brand and market are
+            PAGE-level now (the sidebar switcher, Global's market tabs) and already narrow the rows. */}
         <StyledSelect size="sm" options={agentOptions} value={filters.agent} onChange={(v) => setFilter({ agent: v })} placeholder={`All agents (${agentOptions.length})`} />
         <StyledSelect size="sm" options={scriptOptions} value={filters.script} onChange={(v) => setFilter({ script: v })} placeholder={`All scripts (${scriptOptions.length})`} />
-        {brandChoices.length > 1 && (
-          <>
-            <span className="w-px h-5 bg-[var(--border)] mx-1" />
-            {brandChoices.map(([key, label]) => {
-              const on = filters.brands.includes(key);
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => toggleBrand(key)}
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
-                    on
-                      ? "bg-blue-500/15 text-blue-400 border-blue-500/40"
-                      : "bg-transparent text-[var(--text-3)] border-[var(--border)] hover:text-[var(--text-2)]"
-                  }`}
-                  title={on ? `Showing ${label} — click to remove` : `Only show ${label} campaigns`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </>
-        )}
         <span className="w-px h-5 bg-[var(--border)] mx-1" />
         {/* ONE box (mockup): a campaign name, a player's number, or a player's name. Rows narrow
             to the campaigns that match, or that hold a player who does. Replaces the separate
@@ -940,7 +907,9 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
                 // same thing twice (mockup rule, 2026-09-01). Under Group: None every group is one.
                 if (g.single) return renderRun(g.rows[0]);
                 const open = openGroups.has(g.key);
-                const { shown, hidden: more } = visibleChildren(g.rows, showAllIn.has(g.key));
+                const childPages = Math.max(1, Math.ceil(g.rows.length / CHILD_PAGE_SIZE));
+                const cp = Math.min(childPage.get(g.key) ?? 1, childPages);
+                const shown = g.rows.slice((cp - 1) * CHILD_PAGE_SIZE, cp * CHILD_PAGE_SIZE);
                 const st = STATUS_META[g.status];
                 return (
                   <div key={g.key} className="border-b border-[var(--border)] last:border-b-0">
@@ -1012,17 +981,34 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
                     {open && (
                       <div className="border-l-2 border-[var(--border-2)] ml-4">
                         {shown.map((r) => renderRun(r, groupBy === "family"))}
-                        {more > 0 && (
-                          // Named by the family's TOTAL, the same rule as the picker: "how many
-                          // are there" is the question a capped list provokes.
-                          <button
-                            type="button"
-                            onClick={() => setShowAllIn((s) => new Set(s).add(g.key))}
-                            className="w-full px-4 py-2 text-left text-[11.5px] text-primary hover:bg-[var(--bg-hover)] transition-colors"
-                            title={`${g.label}: ${more} more run${more === 1 ? "" : "s"} not shown`}
-                          >
-                            show all {g.rows.length} runs
-                          </button>
+                        {childPages > 1 && (
+                          // Pages of runs inside the family, the family's TOTAL always stated.
+                          <div className="flex items-center justify-between px-4 py-2 text-[11.5px] text-[var(--text-3)]">
+                            <span>
+                              Showing {(cp - 1) * CHILD_PAGE_SIZE + 1}–{Math.min(cp * CHILD_PAGE_SIZE, g.rows.length)} of {g.rows.length} runs
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={cp <= 1}
+                                onClick={() => setChildPageFor(g.key, cp - 1)}
+                                aria-label={`${g.label}: previous runs`}
+                                className="w-6 h-6 rounded-md border border-[var(--border)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                ‹
+                              </button>
+                              <span className="font-mono">{cp} / {childPages}</span>
+                              <button
+                                type="button"
+                                disabled={cp >= childPages}
+                                onClick={() => setChildPageFor(g.key, cp + 1)}
+                                aria-label={`${g.label}: next runs`}
+                                className="w-6 h-6 rounded-md border border-[var(--border)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                ›
+                              </button>
+                            </span>
+                          </div>
                         )}
                       </div>
                     )}
