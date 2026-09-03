@@ -107,10 +107,13 @@ interface GlobalPerformanceProps {
   // can drive "Filter to this campaign" through the same filter state.
   filters: Filters;
   onChange: (next: Filters) => void;
+  // Page-level brand scope from the sidebar switcher (mockup, 2026-09-03). "" = all brands.
+  brand: string;
 }
 
-function buildQuery(f: Filters): string {
+function buildQuery(f: Filters, brand: string): string {
   const p = new URLSearchParams();
+  if (brand) p.set("brand", brand);
   if (f.range === "custom" && f.from && f.to) {
     p.set("from", f.from);
     p.set("to", f.to);
@@ -132,7 +135,7 @@ const CHIP_LIST_MAX = 4;
 // The "estimated" pill on reach-derived sections is the shared EstBadge (PerformanceCards)
 // with tone="warn" — unified 2026-07-02 so the disclosure styling/tooltip can't drift.
 
-export default function GlobalPerformance({ filters, onChange }: GlobalPerformanceProps) {
+export default function GlobalPerformance({ filters, onChange, brand }: GlobalPerformanceProps) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,7 +156,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
     }
   }, []);
 
-  const query = buildQuery(filters);
+  const query = buildQuery(filters, brand);
   useEffect(() => {
     // Stale-while-revalidate (2026-08-05): paint the last snapshot for THIS filter
     // combination instantly (skeleton gates on !data; `loading` renders the
@@ -354,8 +357,24 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
           selected={filters.campaignIds}
           onChange={(ids) => set({ campaignIds: ids })}
         />
-        <div className="min-w-[150px]">
-          <StyledSelect options={countryOptions} value={filters.country} onChange={(v) => set({ country: v })} placeholder="All countries" />
+        {/* Markets (mockup): the brand's own countries in this window, as tabs, All first. A
+            market this brand does not dial is never offered, so a tab can never dead-end. */}
+        <div role="tablist" aria-label="Markets" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]">
+          {countryOptions.map((o) => {
+            const on = filters.country === o.value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => set({ country: o.value })}
+                className={`px-2.5 py-1 rounded-md text-[11.5px] transition-colors ${on ? "bg-[var(--bg-card)] text-[var(--text-1)] shadow-sm" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
+              >
+                {o.value === "" ? "All markets" : o.label}
+              </button>
+            );
+          })}
         </div>
         <div className="min-w-[150px]">
           <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
@@ -458,8 +477,10 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       </ChartStrip>
 
       {/* Campaign Performance — its own date range + status filters (independent of the bar above). */}
+      {/* Page scope reaches the section: brand remounts it (its own filters start over, as the
+          mockup resets them on a brand change); the market narrows its rows. */}
       <div id="sec-camps" className="scroll-mt-14">
-        <CampaignTable />
+        <CampaignTable key={brand} brand={brand} country={filters.country} />
       </div>
 
       <div id="sec-heat" className="scroll-mt-14">

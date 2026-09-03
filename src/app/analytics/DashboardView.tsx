@@ -13,6 +13,7 @@ import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
 import { distinctBrandLabels } from "@/lib/campaignDisplay";
+import { useBrandScope } from "@/lib/brandScope";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
@@ -36,32 +37,42 @@ export default function DashboardView() {
   // Global Performance filters live here (lifted 2026-06-16) so a running card AND the leaderboard
   // can both "Filter dashboard to this campaign" through one state.
   const [filters, setFilters] = useState<Filters>(DEFAULTS);
+  // Page-level brand scope (mockup, 2026-09-03), chosen in the sidebar. Today and Global both
+  // follow it. A brand change puts Global's filters back to their defaults, as the mockup does:
+  // a campaign picked under one brand means nothing under another.
+  const brand = useBrandScope();
+  const [prevBrand, setPrevBrand] = useState(brand);
+  if (prevBrand !== brand) {
+    setPrevBrand(brand);
+    setFilters(DEFAULTS);
+  }
+  const todayKey = `dashboard.today:${brand}`;
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await fetch("/api/dashboard/today", { cache: "no-store" });
+      const r = await fetch(`/api/dashboard/today${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const json = (await r.json()) as TodaySnapshot;
       setData(json);
-      saveSnapshot("dashboard.today", json);
+      saveSnapshot(todayKey, json);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [brand, todayKey]);
 
   useEffect(() => {
-    // Stale-while-revalidate (2026-08-05): paint the last session's snapshot
+    // Stale-while-revalidate (2026-08-05): paint the last session's snapshot for THIS brand
     // instantly, then load() replaces it (and keeps replacing on the poll).
-    const snap = loadSnapshot<TodaySnapshot>("dashboard.today");
+    const snap = loadSnapshot<TodaySnapshot>(todayKey);
     if (snap) setData(snap);
     load();
     const id = window.setInterval(load, POLL_MS);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, todayKey]);
 
   // Brands behind today's live numbers (VOZ-216) — read off the running campaigns
   // themselves, so the header can never disagree with the rows underneath it.
@@ -151,7 +162,7 @@ export default function DashboardView() {
 
       {/* Global — filtered historical performance. NO panel wrap (reference): tick header +
           sticky filter bar + free-standing modules on the app background. */}
-      <GlobalPerformance filters={filters} onChange={setFilters} />
+      <GlobalPerformance filters={filters} onChange={setFilters} brand={brand} />
       </div>
     </>
   );

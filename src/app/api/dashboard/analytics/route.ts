@@ -23,7 +23,7 @@ import {
 import { baselineSeries } from "@/lib/connectRateHero";
 import { resolvePromptByCampaign } from "@/lib/promptResolution";
 import { fetchAllRows, fetchAllRowsParallel } from "@/lib/supabaseFetchAll";
-import { formatCampaign, campaignIdsForCountry } from "@/lib/campaignDisplay";
+import { formatCampaign, campaignIdsForCountry, brandKey } from "@/lib/campaignDisplay";
 import { rangeToWindow, MS_PER_DAY } from "@/lib/rangeWindow";
 
 /**
@@ -57,6 +57,8 @@ export async function GET(request: NextRequest) {
   const country = searchParams.get("country");
   const promptSha = searchParams.get("prompt");
   const phone = (searchParams.get("phone") ?? "").trim();
+  // Page-level brand scope (mockup, 2026-09-03): a brand key, or blank for all brands.
+  const brand = (searchParams.get("brand") ?? "").trim().toLowerCase();
 
   const now = Date.now();
   // Range → window: presets (7d…90d), "lifetime", or a custom from/to pair (shared resolver).
@@ -140,7 +142,10 @@ export async function GET(request: NextRequest) {
 
   const campaigns = campaignRows as unknown as (DashCampaignRow & { system_prompt?: string | null })[];
   const index = buildCampaignIndex(campaigns);
-  const live = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
+  const liveAll = campaigns.filter((c) => c.source !== "ghost_portal" && c.is_test !== true);
+  // Brand scope narrows the live set at the source, so the options, the country ids, the
+  // baseline and the SMS scope below all follow it without a second filter each.
+  const live = brand ? liveAll.filter((c) => brandKey(c.cio_workspace) === brand) : liveAll;
 
   // Per-campaign prompt identity (sha + label + base agent) — shared resolver (chunked .in()).
   const promptByCampaign = await resolvePromptByCampaign(live);
@@ -150,6 +155,10 @@ export async function GET(request: NextRequest) {
     { startMs, endMs, campaignIds, numberIds },
     index,
   );
+  if (brand) {
+    const brandIds = new Set(live.map((c) => c.id));
+    filtered = filtered.filter((c) => brandIds.has(c.campaign_id));
+  }
   // Country filter (replaces the agent filter): keep calls whose campaign parses to the chosen country.
   if (country) {
     const countryIds = campaignIdsForCountry(live, country);

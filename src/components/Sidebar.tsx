@@ -8,6 +8,8 @@ import {
   Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone, Workflow, FlaskConical,
 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
+import { ALL_BRANDS, setBrandScope, useBrandScope } from "@/lib/brandScope";
+import { BRAND_WORKSPACES, brandGlyph, brandLabel } from "@/lib/campaignDisplay";
 import NotificationBell from "@/components/NotificationBell";
 // Animated sidebar nav icons (lucide-animated.com, motion-powered). These run
 // only on the desktop nav; the mobile bottom nav reuses the same animated icons.
@@ -126,6 +128,71 @@ function NavRow({ item, isActive, collapsed }: { item: NavItem; isActive: boolea
   );
 }
 
+// Brand glyph backgrounds (mockup): one per brand, a neutral one for "All brands" and any
+// brand not listed here.
+const GLYPH_BG: Record<string, string> = {
+  lucky7even: "linear-gradient(145deg,#2fb673,#1f8d57)",
+  fortuneplay: "linear-gradient(145deg,#8b6cf0,#6a4bd0)",
+  [ALL_BRANDS]: "linear-gradient(145deg,#4a5160,#353b47)",
+};
+
+// Brand switcher (dashboard mockup, ported 2026-09-03): the page-level brand scope, at the top of
+// the sidebar where the mockup put it. "All brands" is offered first but is not the default.
+function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
+  const brand = useBrandScope();
+  const [open, setOpen] = useState(false);
+  const label = brand === ALL_BRANDS ? "All brands" : brandLabel(brand);
+  const glyph = brand === ALL_BRANDS ? "AB" : brandGlyph(brandLabel(brand));
+  const choices: [string, string, string][] = [
+    [ALL_BRANDS, "All brands", "AB"],
+    ...BRAND_WORKSPACES.map((ws): [string, string, string] => [ws, brandLabel(ws), brandGlyph(brandLabel(ws))]),
+  ];
+  return (
+    <div className={`relative px-2 pt-2 ${collapsed ? "flex justify-center" : ""}`}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Brand: ${label}`}
+        title={collapsed ? label : undefined}
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] hover:border-[var(--border-2)] transition-colors ${collapsed ? "p-1" : "w-full gap-2 px-2 py-1.5 text-left"}`}
+      >
+        <span className="w-7 h-7 rounded-md flex items-center justify-center text-white text-[11px] font-bold shrink-0" style={{ background: GLYPH_BG[brand] ?? GLYPH_BG[ALL_BRANDS] }}>{glyph}</span>
+        {!collapsed && (
+          <>
+            <span className="flex flex-col leading-tight min-w-0">
+              <b className="text-[13px] text-[var(--text-1)] truncate">{label}</b>
+              <small className="text-[10px] text-[var(--text-3)]">{brand === ALL_BRANDS ? "every brand's numbers" : "one brand's numbers"}</small>
+            </span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="ml-auto shrink-0 text-[var(--text-3)]"><path d="m6 9 6 6 6-6" /></svg>
+          </>
+        )}
+      </button>
+      {open && (
+        <>
+          <button type="button" aria-label="Close brand menu" onClick={() => setOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+          <div role="menu" className="absolute left-2 top-full mt-1 z-50 min-w-[180px] rounded-lg border border-[var(--border-2)] bg-[var(--bg-card)] shadow-xl p-1">
+            {choices.map(([key, name, g]) => (
+              <button
+                key={key || "all"}
+                type="button"
+                role="menuitemradio"
+                aria-checked={key === brand}
+                onClick={() => { setBrandScope(key); setOpen(false); }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-left hover:bg-[var(--bg-hover)] ${key === brand ? "text-[var(--text-1)] bg-[var(--bg-elevated)]" : "text-[var(--text-2)]"}`}
+              >
+                <span className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold shrink-0" style={{ background: GLYPH_BG[key] ?? GLYPH_BG[ALL_BRANDS] }}>{g}</span>
+                {name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; locked: boolean; setLocked: (locked: boolean) => void }) {
   const pathname = usePathname();
   return (
@@ -163,6 +230,8 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
           </button>
         )}
       </div>
+
+      <BrandSwitcher collapsed={collapsed} />
 
       <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {navSections.map((section) => (

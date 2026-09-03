@@ -14,7 +14,7 @@ import Link from "next/link";
 import { ArrowRight, Download, Eye, EyeOff, Search, X } from "lucide-react";
 import { summarizeRollupWindow, deriveRecordStatus, type TodayPerfDay, type CallRollupRow, type CampaignMoveRow, type SmsRollupRow, type PerfRow } from "@/lib/dashboardAnalytics";
 import { MAX_CAMPAIGNS } from "@/lib/rangedRecords";
-import { formatCampaign, brandLabel } from "@/lib/campaignDisplay";
+import { formatCampaign, brandLabel, brandKey } from "@/lib/campaignDisplay";
 import { voiceName } from "@/lib/voiceOptions";
 import { triggerDownload } from "@/lib/download";
 import PromptModal from "./PromptModal";
@@ -184,7 +184,9 @@ function sortValue(r: Row, key: SortKey): number {
   return r.perf.callAttempts.total; // fallback (e.g. a stale "connect"/"success" key) → by attempts
 }
 
-export default function CampaignTable() {
+// `brand` / `country` are the PAGE-level scope (the sidebar's brand switcher, Global's market
+// tabs; mockup 2026-09-03): they narrow the rows before this section's own filters. "" = all.
+export default function CampaignTable({ brand = "", country = "" }: { brand?: string; country?: string }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [data, setData] = useState<Resp | null>(null);
@@ -329,7 +331,15 @@ export default function CampaignTable() {
   // They stay visible on /campaigns (Always-on section); here only campaigns
   // that actually dial — fixed ones and spawned children — are listed, summed,
   // and exported.
-  const rows = useMemo(() => (data?.rows ?? []).filter((r) => r.scheduleType !== "recurring"), [data]);
+  // Page scope: the brand by its key (null workspace = the default brand, as brandLabel reads
+  // it) and the market by the SAME name parse Global's country filter uses.
+  const rows = useMemo(
+    () => (data?.rows ?? []).filter((r) =>
+      r.scheduleType !== "recurring" &&
+      (!brand || brandKey(r.cioWorkspace) === brand) &&
+      (!country || formatCampaign(r.name).country === country)),
+    [data, brand, country],
+  );
 
   // Date range (client-side): keep campaigns whose activity span overlaps the picked [from, to].
   const fromMs = parseDayMs(from, false);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { fetchAllRows } from "@/lib/supabaseFetchAll";
 import { buildLaneHealth } from "@/lib/laneHealth";
+import { brandKey } from "@/lib/campaignDisplay";
 import {
   buildCandidateDelta,
   computeTodayFromRollup,
@@ -83,7 +84,16 @@ export async function GET(request: NextRequest) {
     );
     return NextResponse.json({ error: "Failed to read today's metrics" }, { status: 500 });
   }
-  const campaignRows = campaignRowsRaw as unknown as DashCampaignRow[];
+  const allCampaignRows = campaignRowsRaw as unknown as DashCampaignRow[];
+  // Page-level brand scope (mockup, 2026-09-03): `?brand=<key>`, blank = all brands. The rollups
+  // carry every campaign and computeTodayFromRollup sums whatever rows it is handed, so the
+  // rollups are narrowed here alongside the campaign list; the candidate calls follow through
+  // campIndex below. No brand = the exact response as before.
+  const brand = (new URL(request.url).searchParams.get("brand") ?? "").trim().toLowerCase();
+  const campaignRows = brand ? allCampaignRows.filter((c) => brandKey(c.cio_workspace) === brand) : allCampaignRows;
+  const inBrand = new Set(campaignRows.map((c) => c.id));
+  const callRollup = ((callRollupRes.data ?? []) as CallRollupRow[]).filter((r) => !brand || inBrand.has(r.campaign_id));
+  const smsRollup = ((smsRollupRes.data ?? []) as SmsRollupRow[]).filter((r) => !brand || inBrand.has(r.campaign_id));
 
   // ── Transcript-candidate fetch (every bucket the transcript can change) ──
   // Keyset-paged: never trust a bare select's 1000-row clamp. Predicate mirrors
@@ -201,8 +211,8 @@ export async function GET(request: NextRequest) {
   }
 
   const snapshot = computeTodayFromRollup(
-    (callRollupRes.data ?? []) as CallRollupRow[],
-    (smsRollupRes.data ?? []) as SmsRollupRow[],
+    callRollup,
+    smsRollup,
     campaignRows,
     now,
     delta,
@@ -215,7 +225,7 @@ export async function GET(request: NextRequest) {
   const todayIso = new Date(todayStartMs).toISOString().slice(0, 10);
   const judgedOn = new Date(todayStartMs - MS_PER_DAY).toISOString().slice(0, 10);
   const lanes = buildLaneHealth(
-    (callRollupRes.data ?? []) as CallRollupRow[],
+    callRollup,
     campaignRows.filter((c) => c.source !== "ghost_portal" && c.is_test !== true),
     judgedOn,
     todayIso,

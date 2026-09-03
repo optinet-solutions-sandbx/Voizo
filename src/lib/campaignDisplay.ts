@@ -79,9 +79,13 @@ export const DEFAULT_BRAND_WORKSPACE = "lucky7even";
 // Operator-facing brand names. A workspace missing here still renders (title-cased
 // from its label) so a newly-configured brand is never blank on the dashboard —
 // add a line only when its marketing spelling differs (e.g. "spinsup" → "SpinsUp").
+// Since 2026-09-03 this catalog is also the brand SWITCHER's list: a brand missing here still
+// renders in mixed views but cannot be chosen on its own. Roosterbet keeps the spelling the
+// fallback already produced, so no existing label moved.
 const BRAND_NAMES: Record<string, string> = {
   lucky7even: "Lucky7even",
   fortuneplay: "Fortune Play",
+  roosterbet: "Roosterbet",
 };
 
 /** Display name for a campaign's brand. null/blank → the default brand. */
@@ -97,6 +101,25 @@ export function brandLabel(workspace: string | null | undefined): string {
  */
 export function distinctBrandLabels(workspaces: (string | null | undefined)[]): string[] {
   return [...new Set(workspaces.map(brandLabel))].sort((a, b) => a.localeCompare(b));
+}
+
+/** Brand KEY for scoping (the page-level switcher, the dashboard routes): the routing label
+ *  normalised the way brandLabel reads it. null/blank → the default brand. */
+export function brandKey(workspace: string | null | undefined): string {
+  return (workspace ?? "").trim().toLowerCase() || DEFAULT_BRAND_WORKSPACE;
+}
+
+/** The brands the switcher offers, catalog order. */
+export const BRAND_WORKSPACES: readonly string[] = Object.keys(BRAND_NAMES);
+
+/** Two-letter glyph for a brand name: initials of two words ("Fortune Play" → FP), else the
+ *  first letter and first digit ("Lucky7even" → L7), else the first two letters. */
+export function brandGlyph(label: string): string {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  const w = words[0] ?? "";
+  if (!w) return "?";
+  return (w[0] + (w.match(/\d/)?.[0] ?? w[1] ?? "")).toUpperCase();
 }
 
 // Compact, DISTINGUISHING label for legends / breakdowns where many same-offer campaigns
