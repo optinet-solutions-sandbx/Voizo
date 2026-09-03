@@ -17,6 +17,7 @@ import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
 import LaneHealthStrip from "./LaneHealthStrip";
+import SectionRail from "./SectionRail";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 
 const POLL_MS = 30_000;
@@ -75,9 +76,11 @@ export default function DashboardView() {
           layout (cards stretched too wide, Val's meeting note). Val's mockup shell is 900px,
           but the live Campaign Performance table (5 cols) clips at 900, so capped at 1120. */}
       <div className="p-4 w-full max-w-[1120px] mx-auto grid gap-4">
+      {/* Section rail (mockup): pinned jump links, current section marked. */}
+      <SectionRail />
       {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
           by the green tick (pattern brief §1), not a background wash. */}
-      <SectionIsland>
+      <SectionIsland id="sec-today">
       {/* Header — title/LIVE on the left; agents-active chip grouped with Refresh top-right
           (mockup parity, Jasiel 2026-07-03). The Today/Yesterday toggle sits alone below (in
           TodayPerformanceCards). items-start so the right group aligns with the title row. */}

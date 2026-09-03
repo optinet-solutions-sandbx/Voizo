@@ -283,7 +283,7 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
   const rangeBrands = distinctBrandLabels((data?.options.campaigns ?? []).map((c) => c.brand));
 
   return (
-    <section id="global-performance" className="scroll-mt-4">
+    <section id="global-performance" className="scroll-mt-14">
       <div className="grid gap-4 min-w-0">
       <div className="flex items-center gap-2.5 flex-wrap">
         <SectionTick color="#5b9bf0" />
@@ -303,7 +303,8 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
 
       {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll
           without orphaning layout. Same state/handlers as ever, re-housed. */}
-      <div className="sticky top-0 z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
+      {/* Pinned under the section rail (52px) on desktop; the rail is hidden on phones. */}
+      <div className="sticky top-0 md:top-[52px] z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
         <div className="flex items-center gap-2.5">
           <SlidersHorizontal size={15} className="text-[var(--text-3)]" />
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-4)]">Range</span>
@@ -457,18 +458,22 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       </ChartStrip>
 
       {/* Campaign Performance — its own date range + status filters (independent of the bar above). */}
-      <CampaignTable />
+      <div id="sec-camps" className="scroll-mt-14">
+        <CampaignTable />
+      </div>
 
-      <HeatMap
-        cells={data?.heatmap?.cells ?? []}
-        utcFallbackCalls={data?.heatmap?.utcFallbackCalls ?? 0}
-      />
+      <div id="sec-heat" className="scroll-mt-14">
+        <HeatMap
+          cells={data?.heatmap?.cells ?? []}
+          utcFallbackCalls={data?.heatmap?.utcFallbackCalls ?? 0}
+        />
+      </div>
 
       {/* Leaderboards — ONE module for best campaign/agent/prompt (pattern brief §6): dimension
           switch + best-in-view highlight + ranked table; rows drill into the scoped drawer.
           Relocated to the bottom of the section + wrapped in a reused SectionIsland overview
           panel for parity with the rest (Jasiel 2026-07-03). */}
-      <SectionIsland>
+      <SectionIsland id="sec-lead">
         <Leaderboards
           campaigns={data?.campaigns ?? []}
           agents={data?.agents ?? []}

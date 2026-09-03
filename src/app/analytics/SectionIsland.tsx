@@ -16,9 +16,10 @@ export function SectionTick({ color }: { color: string }) {
   );
 }
 
-export default function SectionIsland({ children }: { children: ReactNode }) {
+// `id` makes the panel a rail anchor (SectionRail); scroll-mt clears the pinned rail.
+export default function SectionIsland({ children, id }: { children: ReactNode; id?: string }) {
   return (
-    <section className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-panel)] p-4 sm:p-5">
+    <section id={id} className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-panel)] p-4 sm:p-5 scroll-mt-14">
       <div className="grid gap-4">{children}</div>
     </section>
   );

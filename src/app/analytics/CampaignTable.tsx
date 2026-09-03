@@ -515,10 +515,12 @@ export default function CampaignTable() {
     setDrawerFamilyIds(familyIds);
     setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
   };
-  const exportCsv = () => {
-    if (!rollup || visible.length === 0) return;
+  // One export module for the section button and the per-family link in each header (mockup):
+  // the family export is the same CSV with its rows narrowed to that family, as filtered.
+  const exportRows = (rowsToExport: Row[], suffix = "") => {
+    if (!rollup || rowsToExport.length === 0) return;
     const csv = buildCampaignPerfCsv({
-      rows: visible,
+      rows: rowsToExport,
       callRollup: rollup.calls,
       smsRollup: rollup.sms,
       moves: rollup.moves ?? [],
@@ -528,8 +530,11 @@ export default function CampaignTable() {
       agentLabelOf: (r) => agentLabelOf(r as unknown as Row),
     });
     const stamp = new Date().toISOString().slice(0, 10);
-    triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8" }), `voizo-campaign-performance-${stamp}.csv`);
+    triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8" }), `voizo-campaign-performance${suffix}-${stamp}.csv`);
   };
+  const exportCsv = () => exportRows(visible);
+  const exportFamily = (label: string, familyRows: Row[]) =>
+    exportRows(familyRows, "-" + label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60));
 
   // Phone strip: matches inside the visible set (with campaign names), and a
   // count of matches the current filters exclude.
@@ -930,24 +935,41 @@ export default function CampaignTable() {
                 return (
                   <div key={g.key} className="border-b border-[var(--border)] last:border-b-0">
                     {/* Family header: name, brand chips when the family spans brands, the three
-                        summed metrics under the same columns as the runs, run count, status. */}
-                    <button
-                      type="button"
+                        summed metrics under the same columns as the runs, run count, status, and
+                        a CSV link for this family alone (mockup). The whole row toggles; the
+                        toggle itself is the named button (a button may not hold another button,
+                        so the row is a div and the CSV link a sibling that stops the toggle). */}
+                    <div
                       onClick={() => toggleGroup(g.key)}
-                      aria-expanded={open}
-                      className={`${CAMPAIGN_ROW_GRID} w-full items-center px-4 py-3 text-left bg-[var(--bg-elevated)]/40 hover:bg-[var(--bg-hover)] transition-colors`}
+                      className={`${CAMPAIGN_ROW_GRID} w-full items-center px-4 py-3 text-left cursor-pointer bg-[var(--bg-elevated)]/40 hover:bg-[var(--bg-hover)] transition-colors`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${open ? "rotate-90" : ""}`}>
-                          <path d="m9 18 6-6-6-6" />
-                        </svg>
-                        {/* Wraps rather than truncates: the brand, the only thing telling the
-                            two REACTIVATION families apart, sits at the END of the label. */}
-                        <span className="text-[13px] font-medium text-[var(--text-1)] whitespace-normal break-words">{g.label}</span>
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          onClick={(e) => { e.stopPropagation(); toggleGroup(g.key); }}
+                          className="flex items-center gap-2 min-w-0 text-left"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${open ? "rotate-90" : ""}`}>
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                          {/* Wraps rather than truncates: the brand, the only thing telling the
+                              two REACTIVATION families apart, sits at the END of the label. */}
+                          <span className="text-[13px] font-medium text-[var(--text-1)] whitespace-normal break-words">{g.label}</span>
+                        </button>
                         {g.brands.length > 1 && g.brands.map((b) => (
                           <span key={b} className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--text-3)]">{brandLabel(b)}</span>
                         ))}
                         <span className="shrink-0 text-[11px] font-mono text-[var(--text-3)]">{g.rows.length} runs</span>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); exportFamily(g.label, g.rows); }}
+                          disabled={!rollup}
+                          title="Download this family's runs, as filtered, as CSV"
+                          className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] disabled:opacity-50"
+                        >
+                          CSV
+                        </button>
                       </div>
                       <div>
                         <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${st.cls}`}>
@@ -958,7 +980,7 @@ export default function CampaignTable() {
                       <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.attempts.toLocaleString("en-US")}</div>
                       <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.conversations.toLocaleString("en-US")}</div>
                       <div className="font-mono text-[15px] text-[var(--text-1)] tabular-nums">{g.sms.toLocaleString("en-US")}</div>
-                    </button>
+                    </div>
                     {/* The parent summary (mockup): the section's three cards, summed over exactly
                         this family's runs in the picked window, from the same rollup rows the
                         All campaigns band sums. It sits under the HEADER, open or collapsed, so
