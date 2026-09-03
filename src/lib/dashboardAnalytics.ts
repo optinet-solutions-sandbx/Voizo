@@ -2269,3 +2269,23 @@ export function computeTodayFromRollup(
     },
   };
 }
+
+// ── Market comparison (Global chart strip, mockup ported 2026-09-03) ──────────────
+/** One market's share of the window's volume and its connect rate: calls, connected and
+ *  completed per campaign COUNTRY, the same country mapping computeDailyVolume uses so the two
+ *  charts can never disagree about which market a call belongs to. Sorted by calls, desc;
+ *  markets with no calls are dropped ("no dials is an answer" is the chart's to print). */
+export interface MarketRow {
+  country: string; // friendly name, or "other" for unparseable campaign names
+  calls: number;
+  connected: number;
+  terminal: number;
+}
+export function computeMarketComparison(calls: DashCallRow[], campaigns: DashCampaignRow[]): MarketRow[] {
+  const index = buildCampaignIndex(campaigns);
+  const countryOf = (c: DashCallRow) => formatCampaign(index.get(c.campaign_id)?.name ?? null).country || "other";
+  return [...rollup(calls, countryOf).entries()]
+    .map(([country, r]) => ({ country, calls: r.calls, connected: r.connected, terminal: r.terminal }))
+    .filter((m) => m.calls > 0)
+    .sort((a, b) => b.calls - a.calls);
+}

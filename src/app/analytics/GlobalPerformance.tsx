@@ -21,6 +21,9 @@ import CampaignTable from "./CampaignTable";
 import TrendChart from "./TrendChart";
 import DailyVolumeChart from "./DailyVolumeChart";
 import HeatMap from "./HeatMap";
+import ChartStrip from "./ChartStrip";
+import ConversionFunnel from "./ConversionFunnel";
+import MarketComparison from "./MarketComparison";
 // The three PerformanceCards that sat in the overview island were replaced by ConnectRateHero
 // (Jasiel 2026-09-02): their Call attempts / Reached / SMS numbers duplicate Campaign
 // Performance's own summary below. The drill-down drawer only those cards could open went
@@ -28,7 +31,7 @@ import HeatMap from "./HeatMap";
 import ConnectRateHero from "./ConnectRateHero";
 import type { DayCount } from "@/lib/connectRateHero";
 import { CardGridSkeleton } from "./loadingSkeletons";
-import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay } from "@/lib/dashboardAnalytics";
+import type { TrendPoint, VolumeResult, HeatmapResult, TodayPerfDay, MarketRow } from "@/lib/dashboardAnalytics";
 import { type RangeKey } from "@/lib/rangeWindow";
 
 // RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
@@ -69,6 +72,8 @@ interface AnalyticsResponse {
   // comparison). null = no comparable baseline. Absent on older API deploys, which reads as null.
   baseline?: DayCount[] | null;
   dailyVolume: VolumeResult;
+  // per-market calls / connected / completed (2026-09-03). Absent on older API deploys.
+  markets?: MarketRow[];
   heatmap: HeatmapResult;
   options: {
     // `brand` = campaigns_v2.cio_workspace (VOZ-216); absent on older API deploys.
@@ -439,11 +444,17 @@ export default function GlobalPerformance({ filters, onChange }: GlobalPerforman
       )}
       </SectionIsland>
 
-      {/* Trend + Daily Volume side-by-side (compact); they stack on narrow screens. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Four charts as ONE swipeable strip, two shown at a time (mockup, 2026-09-03): Activity
+          Trend and Daily Call Volume as before, plus the Conversion Funnel (the stages the removed
+          cards carried, as one shape) and Market Comparison (volume share vs connect rate per
+          market). A four-up grid read as a wall; a strip keeps the row height and the reader's
+          place. They stack on narrow screens. */}
+      <ChartStrip count={4}>
         <TrendChart data={data?.trend ?? []} />
         <DailyVolumeChart data={data?.dailyVolume ?? { days: [], series: [] }} />
-      </div>
+        <ConversionFunnel perf={data?.perf ?? null} connected={data?.kpis.connected ?? 0} rangeDays={data?.rangeDays ?? 0} />
+        <MarketComparison markets={data?.markets ?? []} />
+      </ChartStrip>
 
       {/* Campaign Performance — its own date range + status filters (independent of the bar above). */}
       <CampaignTable />

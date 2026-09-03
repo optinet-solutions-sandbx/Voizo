@@ -7,6 +7,7 @@ import {
   computePromptRollups,
   computeTrend,
   computeDailyVolume,
+  computeMarketComparison,
   computeHeatmap,
   representativeBaseBySha,
   bestByPositiveResponse,
@@ -345,6 +346,8 @@ export async function GET(request: NextRequest) {
     // null = no comparable baseline (lifetime, phone search, or the rollup failed).
     baseline,
     dailyVolume: computeDailyVolume(filtered, campaigns, startMs, endMs),
+    // per-market calls / connected / completed for the Market Comparison card (2026-09-03)
+    markets: computeMarketComparison(filtered, campaigns),
     heatmap: computeHeatmap(filtered, campaigns),
     perf,
     options: {

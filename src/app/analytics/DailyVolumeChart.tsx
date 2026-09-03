@@ -27,7 +27,8 @@ const COUNTRY_COLORS: Record<string, string> = {
   Philippines: "#e46664",
 };
 const COUNTRY_FALLBACK = ["#5b9bf0", "#c98a4a", "#e0814a", "#3a6fd0", "#9b7fe0"];
-function countryColor(name: string): string {
+// Exported for the Market Comparison card (2026-09-03): one colour per country across both charts.
+export function countryColor(name: string): string {
   if (name === "other") return "#565b64";
   if (COUNTRY_COLORS[name]) return COUNTRY_COLORS[name];
   let h = 0;
