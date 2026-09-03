@@ -200,6 +200,9 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
   const todayIso = new Date().toISOString().slice(0, 10);
   const [from, setFrom] = useState(() => addDays(todayIso, -6));
   const [to, setTo] = useState(() => todayIso);
+  // Whether the window came from the calendar (Jasiel 2026-09-03): then its button reads the picked
+  // dates; under a preset it reads "Pick a window".
+  const [calendarPicked, setCalendarPicked] = useState(false);
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -711,7 +714,7 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
                   key={key}
                   type="button"
                   aria-pressed={on}
-                  onClick={() => { setFrom(pf); setTo(pt); setPage(1); }}
+                  onClick={() => { setFrom(pf); setTo(pt); setCalendarPicked(false); setPage(1); }}
                   className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${on ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"}`}
                 >
                   {key}
@@ -798,9 +801,9 @@ export default function CampaignTable({ brand = "", country = "" }: { brand?: st
               from={from}
               to={to}
               runDates={rows.filter((r) => !hidden.has(r.displayStatus)).map((r) => (r.startAt ?? "").slice(0, 10)).filter(Boolean)}
-              onApply={(f, t) => { setFrom(f); setTo(t); setPage(1); }}
+              onApply={(f, t) => { setFrom(f); setTo(t); setCalendarPicked(!!(f || t)); setPage(1); }}
               ariaLabel="Pick the Campaign Performance window"
-              label="Pick a window"
+              label={calendarPicked ? undefined : "Pick a window"}
             />
           </span>
         </div>
