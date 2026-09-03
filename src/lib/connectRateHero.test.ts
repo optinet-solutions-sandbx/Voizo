@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeWindow, compareWindows, deltaLabel, baselineSeries, barSeries, type DayCount } from "./connectRateHero";
+import { summarizeWindow, compareWindows, deltaLabel, baselineSeries, barSeries, OUTAGE_MIN_COMPLETED, type DayCount } from "./connectRateHero";
 
 const day = (d: string, terminal: number, connected: number): DayCount => ({ day: d, terminal, connected });
 
@@ -155,5 +155,26 @@ describe("barSeries — what the hero can draw", () => {
 
   it("an all-idle series draws nothing rather than 20,699 stubs", () => {
     expect(barSeries(Array.from({ length: 20699 }, (_, i) => ({ day: `d${i}`, terminal: 0, connected: 0 })))).toEqual([]);
+  });
+});
+
+describe("the outage rule has a volume floor (found live 2026-09-03)", () => {
+  // The 90d card excluded "8 outage days"; three were pilot days with 1, 3 and 6 completed
+  // calls and zero connects. One unanswered call is a quiet day, not an outage. The floor is
+  // prod's own CONNECT_COLLAPSE_MIN_DIALS, the number the anomaly detector needs before it will
+  // call a connect collapse.
+  it("a zero-connect day UNDER the floor is quiet, not dead", () => {
+    const w = summarizeWindow([day("2026-04-23", 6, 0), day("2026-04-27", 3, 0), day("2026-05-08", 1, 0), day("2026-05-09", 100, 70)]);
+    expect(w.deadDays).toEqual([]);
+    expect(w.deadTerminal).toBe(0);
+  });
+  it("a zero-connect day AT the floor is dead", () => {
+    expect(summarizeWindow([day("d", OUTAGE_MIN_COMPLETED, 0)]).deadDays).toEqual(["d"]);
+  });
+  it("a zero-connect day one under the floor is not", () => {
+    expect(summarizeWindow([day("d", OUTAGE_MIN_COMPLETED - 1, 0)]).deadDays).toEqual([]);
+  });
+  it("the floor is prod's connect-collapse minimum, not a new number", () => {
+    expect(OUTAGE_MIN_COMPLETED).toBe(20);
   });
 });

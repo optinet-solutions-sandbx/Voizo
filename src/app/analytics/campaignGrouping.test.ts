@@ -87,3 +87,14 @@ describe("sortGroups — groups follow the sort the rows are under", () => {
     expect(input.map((g) => g.key)).toEqual(["s", "b"]);
   });
 });
+
+describe("a null brand is the default brand, never 'Default' (found live 2026-09-03)", () => {
+  it("brand chips on a mixed header name the default workspace, and group the null rows with it", () => {
+    const rows = [run("a", { cioWorkspace: null }), run("b", { cioWorkspace: "lucky7even" }), run("c", { cioWorkspace: "fortuneplay" })];
+    const byBrand = groupCampaignRows(rows, "brand", L);
+    expect(byBrand.map((g) => [g.label, g.rows.length]).sort()).toEqual([["Fortune Play", 1], ["Lucky7even", 2]]);
+    const one = groupCampaignRows(rows, "country", L)[0];
+    expect(one.brands.sort()).toEqual(["fortuneplay", "lucky7even"]);
+    expect(one.brands).not.toContain("default");
+  });
+});

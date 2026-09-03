@@ -14,7 +14,7 @@
 import Hint from "@/components/Hint";
 import type { TrendPoint } from "@/lib/dashboardAnalytics";
 import {
-  summarizeWindow, compareWindows, deltaLabel, barSeries, type DayCount,
+  summarizeWindow, compareWindows, deltaLabel, barSeries, OUTAGE_MIN_COMPLETED, type DayCount,
 } from "@/lib/connectRateHero";
 import { ROW_COLOR, EstBadge } from "./PerformanceCards";
 
@@ -133,7 +133,7 @@ export default function ConnectRateHero({
                       <>
                         {" · "}{dropped.length} outage day{dropped.length === 1 ? "" : "s"} excluded
                         <Info text={
-                          `A day that completed calls and connected nothing is an outage, not trading. Both sides of this comparison drop those days before their rates are taken, so the two figures describe the same kind of day. ` +
+                          `A day that completed at least ${OUTAGE_MIN_COMPLETED} calls and connected nothing is an outage, not trading. Both sides of this comparison drop those days before their rates are taken, so the two figures describe the same kind of day. ` +
                           `Dropped: ${[byWin.length ? `${byWin.join(", ")} from this window` : "", byBase.length ? `${byBase.join(", ")} from the baseline` : ""].filter(Boolean).join("; ")}. ` +
                           `Only the denominator moves; such a day contributes no connects by definition. The rate on the left is NOT adjusted.`
                         } />

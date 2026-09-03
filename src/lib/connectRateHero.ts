@@ -6,6 +6,14 @@
 // RateRow.connectRate uses everywhere else on the page. The mockup this was ported from used
 // all attempts as the denominator; that would have disagreed with every other rate shown.
 
+import { CONNECT_COLLAPSE_MIN_DIALS } from "./alerts/anomalyDetectors";
+
+/** Completed calls a day needs before "zero connected" means an OUTAGE rather than a quiet
+ *  day. Found live on 2026-09-03: the 90-day card excluded "8 outage days", three of which were
+ *  pilot days with 1, 3 and 6 completed calls. The floor is prod's own connect-collapse minimum
+ *  (anomalyDetectors.ts), the volume the alert needs before it will call a collapse. */
+export const OUTAGE_MIN_COMPLETED = CONNECT_COLLAPSE_MIN_DIALS;
+
 /** One day of the series: completed calls and how many of them connected. */
 export interface DayCount {
   day: string; // YYYY-MM-DD (UTC)
@@ -20,7 +28,8 @@ export interface WindowSummary {
    *  outage days — this states what the window did, and must keep equalling the
    *  "N of M" printed beneath it. */
   rate: number | null;
-  /** Days that completed calls and connected none. An outage, not trading. */
+  /** Days that completed at least OUTAGE_MIN_COMPLETED calls and connected none. An outage,
+   *  not trading. A zero-connect day under the floor is a quiet day and stays in. */
   deadDays: string[];
   /** Completed calls on those days — the only extra a like-for-like comparison needs. */
   deadTerminal: number;
@@ -32,7 +41,7 @@ export function summarizeWindow(days: DayCount[]): WindowSummary {
   for (const d of days) {
     terminal += d.terminal;
     connected += d.connected;
-    if (d.terminal > 0 && d.connected === 0) {
+    if (d.terminal >= OUTAGE_MIN_COMPLETED && d.connected === 0) {
       deadDays.push(d.day);
       deadTerminal += d.terminal;
     }

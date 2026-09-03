@@ -9,6 +9,13 @@
 // parent is a family of one.
 
 import type { SortKey } from "./SortControl";
+// Relative on purpose: this file has unit tests, and vitest does not resolve the `@/` alias.
+import { DEFAULT_BRAND_WORKSPACE } from "../../lib/campaignDisplay";
+
+/** campaigns_v2.cio_workspace as a grouping key. null/blank is a pre-VOZ-198 row and means the
+ *  DEFAULT brand, the same rule brandLabel() applies, so a null row groups with Lucky7even and
+ *  its chip reads Lucky7even, never "Default" (found live 2026-09-03). */
+const brandKey = (ws: string | null | undefined) => (ws ?? "").trim().toLowerCase() || DEFAULT_BRAND_WORKSPACE;
 
 export type GroupFacet = "family" | "country" | "brand" | "agent" | "script" | "none";
 
@@ -66,7 +73,7 @@ function keyOf(r: GroupableRow, facet: GroupFacet): string {
   switch (facet) {
     case "family": return r.parentCampaignId ? `p:${r.parentCampaignId}` : `solo:${r.id}`;
     case "country": return r.country || "—";
-    case "brand": return (r.cioWorkspace ?? "").trim().toLowerCase() || "default";
+    case "brand": return brandKey(r.cioWorkspace);
     case "agent": return r.baseAssistantId ?? r.voiceId ?? "unknown";
     case "script": return r.scriptId ?? "none";
     case "none": return r.id;
@@ -106,7 +113,7 @@ export function groupCampaignRows<R extends GroupableRow>(rows: R[], facet: Grou
       const st = r.displayStatus === "scheduled" ? "paused" : r.displayStatus;
       return STATUS_RANK[st] < STATUS_RANK[acc] ? st : acc;
     }, "finished"),
-    brands: [...new Set(list.map((r) => (r.cioWorkspace ?? "").trim().toLowerCase() || "default"))],
+    brands: [...new Set(list.map((r) => brandKey(r.cioWorkspace)))],
   }));
 }
 
