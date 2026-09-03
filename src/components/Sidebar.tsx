@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useRef, useState, useSyncExternalStore } from "react";
 import {
   PhoneOff, BookOpen, LayoutDashboard, Sun, Moon, Globe2,
-  Activity, Users, Lock, LockOpen, ClipboardCheck, Megaphone, Workflow, FlaskConical,
+  Activity, Users, PanelLeftClose, PanelLeftOpen, ClipboardCheck, Megaphone, Workflow, FlaskConical,
 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
 import { ALL_BRANDS, setBrandScope, useBrandScope } from "@/lib/brandScope";
@@ -72,8 +72,10 @@ const navSections: { label: string; items: NavItem[] }[] = [
 
 const navItems: NavItem[] = navSections.flatMap((s) => s.items);
 
-const SIDEBAR_LOCK_KEY = "voizo-sidebar-locked";
-const SIDEBAR_LOCK_EVENT = "voizo-sidebar-lock-change";
+// The stored preference is now COLLAPSED (Jasiel 2026-09-03, the Gemini toggle): true = icon rail
+// that peeks open on hover; false = expanded. New key, so the old lock value cannot invert it.
+const SIDEBAR_LOCK_KEY = "voizo-sidebar-collapsed";
+const SIDEBAR_LOCK_EVENT = "voizo-sidebar-collapse-change";
 
 // External-store accessors for the persisted sidebar lock. Read via useSyncExternalStore so the
 // server + first client paint agree (collapsed default), then the client localStorage value takes
@@ -142,13 +144,14 @@ function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
   const brand = useBrandScope();
   const [open, setOpen] = useState(false);
   const label = brand === ALL_BRANDS ? "All brands" : brandLabel(brand);
-  const glyph = brand === ALL_BRANDS ? "AB" : brandGlyph(brandLabel(brand));
   const choices: [string, string, string][] = [
     [ALL_BRANDS, "All brands", "AB"],
     ...BRAND_WORKSPACES.map((ws): [string, string, string] => [ws, brandLabel(ws), brandGlyph(brandLabel(ws))]),
   ];
   return (
-    <div className={`relative px-2 pt-2 ${collapsed ? "flex justify-center" : ""}`}>
+    // The VOIZO block IS the switcher (Jasiel 2026-09-03): the brand sits where "DIALER" was, and
+    // the block opens the brand menu. The logo mark stays the V for now.
+    <div className="relative min-w-0">
       <button
         type="button"
         aria-haspopup="menu"
@@ -156,23 +159,28 @@ function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
         aria-label={`Brand: ${label}`}
         title={collapsed ? label : undefined}
         onClick={() => setOpen((o) => !o)}
-        className={`flex items-center rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] hover:border-[var(--border-2)] transition-colors ${collapsed ? "p-1" : "w-full gap-2 px-2 py-1.5 text-left"}`}
+        className={`group flex items-center rounded-lg transition-colors ${collapsed ? "flex-col gap-1" : "gap-3 pr-1 text-left"}`}
       >
-        <span className="w-7 h-7 rounded-md flex items-center justify-center text-white text-[11px] font-bold shrink-0" style={{ background: GLYPH_BG[brand] ?? GLYPH_BG[ALL_BRANDS] }}>{glyph}</span>
+        <div
+          className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: "linear-gradient(145deg,#4d90f0,#3a6fd0)", boxShadow: "0 2px 10px rgba(77,144,240,.35)" }}
+        >
+          <span className="text-white text-base font-bold">V</span>
+        </div>
         {!collapsed && (
           <>
-            <span className="flex flex-col leading-tight min-w-0">
-              <b className="text-[13px] text-[var(--text-1)] truncate">{label}</b>
-              <small className="text-[10px] text-[var(--text-3)]">{brand === ALL_BRANDS ? "every brand's numbers" : "one brand's numbers"}</small>
-            </span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="ml-auto shrink-0 text-[var(--text-3)]"><path d="m6 9 6 6 6-6" /></svg>
+            <div className="flex flex-col leading-none min-w-0">
+              <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
+              <span className="text-[10px] tracking-wide text-[var(--text-3)] mt-0.5 truncate group-hover:text-[var(--text-2)] transition-colors">{label}</span>
+            </div>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
           </>
         )}
       </button>
       {open && (
         <>
           <button type="button" aria-label="Close brand menu" onClick={() => setOpen(false)} className="fixed inset-0 z-40 cursor-default" />
-          <div role="menu" className="absolute left-2 top-full mt-1 z-50 min-w-[180px] rounded-lg border border-[var(--border-2)] bg-[var(--bg-card)] shadow-xl p-1">
+          <div role="menu" className="absolute left-0 top-full mt-1.5 z-50 min-w-[180px] rounded-lg border border-[var(--border-2)] bg-[var(--bg-card)] shadow-xl p-1">
             {choices.map(([key, name, g]) => (
               <button
                 key={key || "all"}
@@ -198,40 +206,22 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
   return (
     <div className="flex flex-col h-full">
       <div className={`flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
-        <Link href="/dashboard" className={`flex items-center group ${collapsed ? "flex-col gap-1" : "gap-3"}`}>
-          <div
-            className="w-11 h-11 rounded-xl flex items-center justify-center transition-all flex-shrink-0"
-            style={{ background: "linear-gradient(145deg,#4d90f0,#3a6fd0)", boxShadow: "0 2px 10px rgba(77,144,240,.35)" }}
-          >
-            <span className="text-white text-base font-bold">V</span>
-          </div>
-          {!collapsed && (
-            <div className="flex flex-col leading-none">
-              <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
-              <span className="text-[9px] tracking-wider uppercase text-[var(--text-3)] mt-0.5">DIALER</span>
-            </div>
-          )}
-        </Link>
-        {collapsed ? (
-          <span className="text-[9px] tracking-wider uppercase text-[var(--text-3)] leading-none">DIALER</span>
-        ) : (
+        <BrandSwitcher collapsed={collapsed} />
+        {/* The panel toggle (Gemini's mechanism): collapse to an icon rail, or pin it open. A
+            collapsed rail peeks open on hover, and this button shows in the peek to pin it back. */}
+        {collapsed ? null : (
           <button
             type="button"
             onClick={() => setLocked(!locked)}
             aria-pressed={locked}
-            title={locked ? "Unlock (auto-collapse on mouse-leave)" : "Lock sidebar open"}
-            className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
-              locked
-                ? "bg-[var(--bg-card)] border border-[var(--border-2)] text-[var(--text-1)]"
-                : "text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)]"
-            }`}
+            aria-label={locked ? "Pin the sidebar open" : "Collapse the sidebar"}
+            title={locked ? "Pin the sidebar open" : "Collapse the sidebar to icons"}
+            className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition-all"
           >
-            {locked ? <Lock size={13} /> : <LockOpen size={13} />}
+            {locked ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
           </button>
         )}
       </div>
-
-      <BrandSwitcher collapsed={collapsed} />
 
       <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {navSections.map((section) => (
@@ -302,12 +292,11 @@ function MobileBottomNav() {
 export default function Sidebar() {
   // Persisted lock read SSR-safely via useSyncExternalStore (server + first client paint render
   // the collapsed default → no hydration mismatch; React then swaps in the localStorage value).
-  const pathname = usePathname();
   const locked = useSyncExternalStore(subscribeLock, getLockSnapshot, getLockServerSnapshot);
   const [hovered, setHovered] = useState(false);
-  // Dashboard is the home view — always expanded. Other pages keep the compact auto-collapse rail.
-  const onDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
-  const collapsed = !locked && !hovered && !onDashboard;
+  // `locked` now reads "collapsed by choice" (the toggle in the header). Expanded by default on
+  // every page; a collapsed rail peeks open while hovered.
+  const collapsed = locked && !hovered;
 
   return (
     <>

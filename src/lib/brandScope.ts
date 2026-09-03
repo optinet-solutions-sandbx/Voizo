@@ -1,11 +1,11 @@
 "use client";
 
-// Page-level brand scope (dashboard mockup, ported 2026-09-03). One brand at a time is what an
-// operator gets unless they ask for "All brands" (Play spec ruling 3); the choice is remembered
-// per browser and shared across tabs. "" = all brands. Same external-store pattern as the
-// sidebar lock, so the server and the first client paint agree on the default.
+// Page-level brand scope (dashboard mockup, ported 2026-09-03). The page opens on ALL brands
+// (Jasiel 2026-09-03, overriding the mockup's one-brand default); picking a brand isolates every
+// section to it, and the choice is remembered per browser and shared across tabs. "" = all
+// brands. Same external-store pattern as the sidebar lock, so the server and the first client
+// paint agree on the default.
 import { useSyncExternalStore } from "react";
-import { DEFAULT_BRAND_WORKSPACE } from "./campaignDisplay";
 
 export const ALL_BRANDS = "";
 const KEY = "voizo-brand";
@@ -21,18 +21,17 @@ function subscribe(onChange: () => void): () => void {
   };
 }
 
-/** The stored choice; a browser that never chose gets the default brand, not all brands. */
+/** The stored choice; a browser that never chose gets all brands. */
 export function readBrandScope(): string {
   try {
-    const v = localStorage.getItem(KEY);
-    return v === null ? DEFAULT_BRAND_WORKSPACE : v;
+    return localStorage.getItem(KEY) ?? ALL_BRANDS;
   } catch {
-    return DEFAULT_BRAND_WORKSPACE;
+    return ALL_BRANDS;
   }
 }
 
 export function useBrandScope(): string {
-  return useSyncExternalStore(subscribe, readBrandScope, () => DEFAULT_BRAND_WORKSPACE);
+  return useSyncExternalStore(subscribe, readBrandScope, () => ALL_BRANDS);
 }
 
 export function setBrandScope(brand: string): void {
