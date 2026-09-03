@@ -41,7 +41,7 @@ import { buildCampaignPerfCsv } from "./campaignPerfCsv";
 // Grouping (Jasiel 2026-09-02, from the dashboard mockup): runs fold under their family,
 // country, brand, voice agent or script. A family is the recurring parent, the same key the
 // campaign picker groups by. Children under an open group are capped the way the picker is.
-import { groupCampaignRows, sortGroups, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
+import { groupCampaignRows, sortGroups, runOrdinals, GROUP_FACETS, type GroupFacet, type GroupLabels } from "./campaignGrouping";
 import { visibleChildren } from "@/lib/campaignGroups";
 import { campaignGroupHeaderLabels, campaignRunLabel } from "@/lib/campaignDisplay";
 
@@ -210,6 +210,15 @@ export default function CampaignTable() {
   // capped at CHILD_PAGE_SIZE (the picker's rule); collapsing it forgets the show-all.
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [showAllIn, setShowAllIn] = useState<Set<string>>(new Set());
+  // Family summaries (2026-09-02): the same three cards as the section summary, summed over ONE
+  // open family's runs. Off by default, as the mockup shipped them: the family header already
+  // carries the three totals, and a page of card blocks under every family was measured at 55%
+  // of the section restating its own rows. Remembered like the rest.
+  const [showFamilySummaries, setShowFamilySummaries] = useState<boolean>(() => loadSnapshot<boolean>("dashboard.campaigns.showFamilySummaries") ?? false);
+  const toggleFamilySummaries = () => setShowFamilySummaries((prev) => { const next = !prev; saveSnapshot("dashboard.campaigns.showFamilySummaries", next); return next; });
+  // When a FAMILY card opened the drawer, the drawer lists that family's runs only. null = the
+  // section summary opened it, scoped to everything listed.
+  const [drawerFamilyIds, setDrawerFamilyIds] = useState<string[] | null>(null);
   const changeGroupBy = (g: GroupFacet) => {
     setGroupBy(g); setPage(1); setOpenGroups(new Set()); setShowAllIn(new Set());
     saveSnapshot("dashboard.campaigns.groupBy", g);
@@ -399,9 +408,6 @@ export default function CampaignTable() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rollup, rows, hidden, fromMs, toMs, filters, phoneCampaignIds],
   );
-  const scopeLabel = `${visible.length} ${visible.length === 1 ? "campaign" : "campaigns"} · ${
-    from || to ? "metrics in the picked date range" : "lifetime metrics"
-  }`;
 
   // Drawer scope: the records endpoint takes campaignIds (≤ MAX_CAMPAIGNS) +
   // the custom window + the phone needle — so a drill-down shows records for
@@ -414,24 +420,28 @@ export default function CampaignTable() {
     // side (2026-04-01 predates the first call ever; today closes an open end).
     from: from || to ? (from || "2026-04-01") : undefined,
     to: from || to ? (to || todayStr) : undefined,
-    campaignIds: visible.map((r) => r.id),
+    campaignIds: drawerFamilyIds ?? visible.map((r) => r.id),
     country: "",
     prompt: "",
     phone,
   };
   const sameSlice = (a: DrawerFilter | null, b: DrawerFilter) =>
     !!a && a.status === b.status && a.outcome === b.outcome && a.smsOnly === b.smsOnly;
-  const guardScope = (): boolean => {
-    const blocked = visible.length > MAX_CAMPAIGNS;
+  // `familyIds` = a FAMILY card opened the drawer, scoped to that family's runs; null = the
+  // section summary did, scoped to everything listed. The guard counts whichever scope applies.
+  const guardScope = (familyIds: string[] | null): boolean => {
+    const blocked = (familyIds ?? visible).length > MAX_CAMPAIGNS;
     setDrawerBlocked(blocked);
     return blocked;
   };
-  const openTotal = (card: "callAttempts" | "reached" | "sms") => {
-    if (guardScope()) return;
+  const openTotal = (card: "callAttempts" | "reached" | "sms", familyIds: string[] | null = null) => {
+    if (guardScope(familyIds)) return;
+    setDrawerFamilyIds(familyIds);
     setDrawerFilter((prev) => { const next = totalFilter(card); return sameSlice(prev, next) ? null : next; });
   };
-  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow) => {
-    if (guardScope()) return;
+  const openRow = (card: "callAttempts" | "reached" | "sms", row: PerfRow, familyIds: string[] | null = null) => {
+    if (guardScope(familyIds)) return;
+    setDrawerFamilyIds(familyIds);
     setDrawerFilter((prev) => { const next = rowFilter(card, row.key, row.label); return sameSlice(prev, next) ? null : next; });
   };
   const exportCsv = () => {
@@ -487,6 +497,19 @@ export default function CampaignTable() {
     sort,
   );
   const familyCount = groups.filter((g) => !g.single).length;
+  // "run N of M" for same-day twins, counted over EVERY run loaded (not the page, not the
+  // filtered set): which run of the day this is, is a fact about the estate, so narrowing a
+  // filter must not renumber it.
+  const ordinals = useMemo(
+    () => runOrdinals(rows.map((r) => ({ ...r, attempts: r.perf.callAttempts.total, conversations: r.perf.reached.total, sms: r.perf.sms.total }))),
+    [rows],
+  );
+  // The scope line names the unit that exists: families when grouping folds runs, runs alone
+  // otherwise. "287 campaigns" was a count the operator could not reconcile with the rows.
+  const runsWord = `${visible.length} ${visible.length === 1 ? "run" : "runs"}`;
+  const scopeLabel = `${groupBy !== "none" && familyCount > 0 ? `${familyCount} ${familyCount === 1 ? "family" : "families"} · ` : ""}${runsWord} · ${
+    from || to ? "metrics in the picked date range" : "lifetime metrics"
+  }`;
 
   // Pages are pages of GROUPS. Under Group: None every group is one run, so this is exactly
   // the flat table it always was.
@@ -512,6 +535,7 @@ export default function CampaignTable() {
     startAt: r.startAt,
     perf: r.perf,
     titleOverride: underHeader ? campaignRunLabel(r.name, r.startAt) || undefined : undefined,
+    runOrdinal: ordinals.get(r.id) || undefined,
   });
   const renderRun = (r: Row, underHeader = false) => (
     <CampaignRow
@@ -751,7 +775,18 @@ export default function CampaignTable() {
           {showSummary ? <EyeOff size={13} /> : <Eye size={13} />}
           {showSummary ? "Hide summary" : "Show summary"}
         </button>
-        <span className="text-[11px] text-[var(--text-3)]">Summary of the campaigns listed below · {scopeLabel}</span>
+        {groupBy !== "none" && familyCount > 0 && (
+          <button
+            type="button"
+            onClick={toggleFamilySummaries}
+            title="Three cards under each open family, summed over that family's runs in the picked window"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-[var(--border)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--bg-hover)] transition"
+          >
+            {showFamilySummaries ? <EyeOff size={13} /> : <Eye size={13} />}
+            {showFamilySummaries ? "Hide family summaries" : "Show family summaries"}
+          </button>
+        )}
+        <span className="text-[11px] text-[var(--text-3)]">Summary of the runs listed below · {scopeLabel}</span>
         {drawerBlocked && (
           <span className="text-[11px] text-amber-400">
             Too many campaigns to drill into records ({visible.length} &gt; {MAX_CAMPAIGNS}) — narrow the filters first.
@@ -763,13 +798,20 @@ export default function CampaignTable() {
           <PerformanceCards
             perf={summaryPerf}
             showDeltas={false}
-            onOpenTotal={openTotal}
-            onOpenRow={openRow}
+            /* Wrapped, not passed through: the cards' third argument is a parent KEY (a
+               string) and openRow's third is the family scope (ids). Passing openRow
+               straight in would have handed a string to the scope. tsc caught it. */
+            onOpenTotal={(card) => openTotal(card)}
+            onOpenRow={(card, row) => openRow(card, row)}
             noDrillHintFor={summaryNoDrillHint}
           />
-          <RangedRecordsDrawer filters={drawerFilters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
         </div>
       )}
+      {/* ONE drawer for the section summary and every family summary, rendered outside the
+          summary's own toggle so a family card can open it while the section summary is hidden. */}
+      <div className="px-3.5">
+        <RangedRecordsDrawer filters={drawerFilters} filter={drawerFilter} onClose={() => setDrawerFilter(null)} />
+      </div>
 
       {/* Rows (shared camp-row, same as Today's campaigns). WidgetCard is the frame. */}
       <div className="overflow-x-auto">
@@ -831,6 +873,23 @@ export default function CampaignTable() {
                     </button>
                     {open && (
                       <div className="border-l-2 border-[var(--border-2)] ml-4">
+                        {/* The family's own summary: the section's three cards, summed over
+                            exactly this family's runs in the picked window, from the same
+                            rollup rows the section summary sums. Only for a MULTI-run group
+                            (this branch), never for a group of one: a summary of one row
+                            prints the row back at itself. Cards drill the shared drawer,
+                            scoped to this family. */}
+                        {showFamilySummaries && rollup && (
+                          <div className="px-3.5 py-2">
+                            <PerformanceCards
+                              perf={summarizeRollupWindow(rollup.calls, rollup.sms, new Set(g.rows.map((r) => r.id)), fromMs, toMs, rollup.moves ?? [])}
+                              showDeltas={false}
+                              onOpenTotal={(card) => openTotal(card, g.rows.map((r) => r.id))}
+                              onOpenRow={(card, row) => openRow(card, row, g.rows.map((r) => r.id))}
+                              noDrillHintFor={summaryNoDrillHint}
+                            />
+                          </div>
+                        )}
                         {shown.map((r) => renderRun(r, groupBy === "family"))}
                         {more > 0 && (
                           // Named by the family's TOTAL, the same rule as the picker: "how many

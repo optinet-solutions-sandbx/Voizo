@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupCampaignRows, sortGroups, type GroupableRow, type GroupLabels } from "./campaignGrouping";
+import { groupCampaignRows, sortGroups, runOrdinals, type GroupableRow, type GroupLabels } from "./campaignGrouping";
 
 const L: GroupLabels = {
   family: (pid) => ({ "p-fp-au": "Australia · Daily Conversion · Fortune Play", "p-l7-au": "Australia · Daily Conversion · Lucky7even" }[pid] ?? null),
@@ -96,5 +96,46 @@ describe("a null brand is the default brand, never 'Default' (found live 2026-09
     const one = groupCampaignRows(rows, "country", L)[0];
     expect(one.brands.sort()).toEqual(["fortuneplay", "lucky7even"]);
     expect(one.brands).not.toContain("default");
+  });
+});
+
+describe("runOrdinals — a family that ran twice in one day numbers its runs (2026-09-01 rule)", () => {
+  const twin = (id: string, startAt: string, o: Partial<GroupableRow> = {}) => run(id, { startAt, ...o });
+
+  it("two runs of one family on one day read 'run 1 of 2' and 'run 2 of 2', in start order", () => {
+    const rows = [twin("late", "2026-08-19T14:00:00Z"), twin("early", "2026-08-19T09:00:00Z"), twin("other", "2026-08-20T09:00:00Z")];
+    const n = runOrdinals(rows);
+    expect(n.get("early")).toBe("run 1 of 2");
+    expect(n.get("late")).toBe("run 2 of 2");
+    expect(n.get("other")).toBe("");
+  });
+
+  it("a lone run is never numbered — 'run 1 of 1' would be noise", () => {
+    expect(runOrdinals([twin("a", "2026-08-19T09:00:00Z")]).get("a")).toBe("");
+  });
+
+  it("same day, different brand or country or family: not twins", () => {
+    const rows = [
+      twin("a", "2026-08-19T09:00:00Z"),
+      twin("b", "2026-08-19T10:00:00Z", { cioWorkspace: "lucky7even" }),
+      twin("c", "2026-08-19T11:00:00Z", { country: "New Zealand" }),
+      twin("d", "2026-08-19T12:00:00Z", { parentCampaignId: "p-other" }),
+    ];
+    const n = runOrdinals(rows);
+    expect([...n.values()].every((v) => v === "")).toBe(true);
+  });
+
+  it("the day is the UTC day of startAt; a run with no startAt is never numbered", () => {
+    const rows = [twin("a", "2026-08-19T23:30:00Z"), twin("b", "2026-08-20T00:30:00Z"), run("x", { startAt: null }), run("y", { startAt: null })];
+    const n = runOrdinals(rows);
+    expect(n.get("a")).toBe("");
+    expect(n.get("b")).toBe("");
+    expect(n.get("x")).toBe("");
+    expect(n.get("y")).toBe("");
+  });
+
+  it("three in a day count to three", () => {
+    const rows = ["a", "b", "c"].map((id, i) => twin(id, `2026-08-19T0${i + 1}:00:00Z`));
+    expect([...runOrdinals(rows).values()]).toEqual(["run 1 of 3", "run 2 of 3", "run 3 of 3"]);
   });
 });

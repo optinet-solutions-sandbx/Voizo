@@ -67,6 +67,9 @@ export interface CampaignRowData {
    *  country, name and brand (Campaign Performance grouping, 2026-09-02): the run's date, via
    *  campaignRunLabel. The full name stays on hover. Absent = the usual formatted name. */
   titleOverride?: string;
+  /** "run 1 of 2" when this family ran more than once on this day and the rows would otherwise
+   *  read identically (campaignGrouping.runOrdinals). Empty or absent = not a twin, no chip. */
+  runOrdinal?: string;
 }
 
 // Shared grid template — header row + every campaign row align to it.
@@ -196,6 +199,15 @@ export default function CampaignRow({
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--bg-elevated)]">
               <Calendar size={10} /> {fmtDay(c.startAt)}
             </span>
+            {/* Same-day twin (2026-09-02): the only fact that tells this run from its sibling,
+                so it sits with the other identity facts. Not tinted: it is not an owner. */}
+            {c.runOrdinal && (
+              <Hint content="This campaign ran more than once on this day, and the two runs are otherwise identical.">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--border-2)] text-[var(--text-2)] cursor-help">
+                  {c.runOrdinal}
+                </span>
+              </Hint>
+            )}
           </div>
         </div>
 

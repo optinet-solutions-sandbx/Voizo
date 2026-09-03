@@ -117,6 +117,44 @@ export function groupCampaignRows<R extends GroupableRow>(rows: R[], facet: Grou
   }));
 }
 
+/**
+ * "run N of M" for runs that cannot otherwise be told apart (mockup, 2026-09-01): same brand,
+ * same country, same family, same UTC start day. A recurring campaign normally spawns once a
+ * day, so two on one day is a re-spawn, and the row's title, chips and run window all read
+ * identically for the pair. Anything that does not repeat gets "" and is never numbered: a lone
+ * run labelled "run 1 of 1" is clutter. Counted over EVERY run handed in, never the page on
+ * screen, so narrowing a filter cannot silently unnumber one twin. A run with no startAt has
+ * no day and is never numbered rather than guessed.
+ */
+export function runOrdinals(rows: GroupableRow[]): Map<string, string> {
+  const dayOf = (r: GroupableRow) => {
+    const t = r.startAt ? Date.parse(r.startAt) : NaN;
+    return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : null;
+  };
+  const keyOf = (r: GroupableRow) => {
+    const day = dayOf(r);
+    return day ? `${brandKey(r.cioWorkspace)}|${r.country}|${r.parentCampaignId ?? `solo:${r.id}`}|${day}` : null;
+  };
+  const count = new Map<string, number>();
+  for (const r of rows) {
+    const k = keyOf(r);
+    if (k) count.set(k, (count.get(k) ?? 0) + 1);
+  }
+  // number in start order, so "run 1" is the earlier of the two
+  const ordered = [...rows].sort((a, b) => (Date.parse(a.startAt ?? "") || 0) - (Date.parse(b.startAt ?? "") || 0));
+  const seen = new Map<string, number>();
+  const out = new Map<string, string>();
+  for (const r of ordered) {
+    const k = keyOf(r);
+    const total = k ? count.get(k) ?? 0 : 0;
+    if (!k || total < 2) { out.set(r.id, ""); continue; }
+    const n = (seen.get(k) ?? 0) + 1;
+    seen.set(k, n);
+    out.set(r.id, `run ${n} of ${total}`);
+  }
+  return out;
+}
+
 /** Order groups the way the rows are sorted: by the summed metric, or for "newest" by the
  *  newest run inside. Rows inside a group are left in their incoming order. */
 export function sortGroups<R extends GroupableRow>(groups: CampaignGroup<R>[], sort: SortKey): CampaignGroup<R>[] {
