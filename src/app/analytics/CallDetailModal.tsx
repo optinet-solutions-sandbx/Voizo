@@ -154,7 +154,10 @@ export default function CallDetailModal({ record, runs, playerName, onOpenRun, o
               <GlobalExport
                 compact
                 query={new URLSearchParams({
-                  range: "lifetime",
+                  // the span of the player's runs, not all time: the route reads every call in the
+                  // window before narrowing to the number, and all time timed out on Vercel
+                  from: runs.map((r) => r.dateIso).filter((d): d is string => !!d).sort()[0] ?? "2026-04-01",
+                  to: new Date().toISOString().slice(0, 10),
                   campaigns: [...new Set(runs.map((r) => r.campaignId))].join(","),
                   phone: record.phone.replace(/[^\d+]/g, ""),
                   offset: "0",
