@@ -51,8 +51,9 @@ export interface CampaignGroup<R extends GroupableRow> {
   key: string;
   label: string;
   rows: R[];
-  /** A group of ONE renders as a bare run row: a header over a single row would say the same
-   *  thing twice, and a summary of one row would print the row back at itself (2026-09-01). */
+  /** A bare run row, no header: under Group: None every row, under Family only a ONE-OFF (a run
+   *  with no family). A family that ran once in the window keeps its header like the rest
+   *  (Jasiel 2026-09-03); a raw run name among family labels read as an odd campaign. */
   single: boolean;
   attempts: number;
   conversations: number;
@@ -104,7 +105,7 @@ export function groupCampaignRows<R extends GroupableRow>(rows: R[], facet: Grou
     key,
     label: labelOf(list[0], facet, L),
     rows: list,
-    single: list.length === 1,
+    single: facet === "none" || (facet === "family" && key.startsWith("solo:")),
     attempts: list.reduce((s, r) => s + r.attempts, 0),
     conversations: list.reduce((s, r) => s + r.conversations, 0),
     sms: list.reduce((s, r) => s + r.sms, 0),

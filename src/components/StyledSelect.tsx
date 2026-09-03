@@ -24,10 +24,17 @@ interface Props {
   disabled?: boolean;
   /** "sm" = compact (filter rows, matches DatePickerField); "md" (default) = form-field size. */
   size?: "sm" | "md";
+  /** Muted axis label inside the trigger ("Family:"), so a toolbar of selects reads "Axis: value"
+   *  in one vocabulary (dashboard, 2026-09-03). */
+  prefix?: string;
+  /** Trigger surface. "app" (default) is the form-field convention; "elevated" sits inside cards
+   *  without the high-contrast well (dashboard filter bars). The compact size is always elevated. */
+  surface?: "app" | "elevated";
 }
 
-export default function StyledSelect({ icon, options, value, onChange, placeholder, disabled, size = "md" }: Props) {
+export default function StyledSelect({ icon, options, value, onChange, placeholder, disabled, size = "md", prefix, surface = "app" }: Props) {
   const sm = size === "sm";
+  const elevated = sm || surface === "elevated";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value);
@@ -53,7 +60,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
-        className={`w-full flex items-center ${sm ? "gap-2 pr-8 py-2 rounded-lg text-sm" : "gap-2.5 pr-10 py-3 rounded-xl text-sm"} ${icon ? (sm ? "pl-3" : "pl-3.5") : (sm ? "pl-3" : "pl-4")} bg-[var(--bg-app)] border text-left transition-all ${
+        className={`w-full flex items-center ${sm ? "gap-2 pr-8 py-2 rounded-lg text-sm" : "gap-2.5 pr-10 py-3 rounded-xl text-sm"} ${icon ? (sm ? "pl-3" : "pl-3.5") : (sm ? "pl-3" : "pl-4")} ${elevated ? "bg-[var(--bg-elevated)]" : "bg-[var(--bg-app)]"} border text-left transition-all ${
           disabled
             ? "border-[var(--border)] opacity-60 cursor-not-allowed"
             : open
@@ -62,6 +69,7 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         }`}
       >
         {icon && <span className="text-[var(--text-3)] shrink-0">{icon}</span>}
+        {prefix && <span className="text-[var(--text-3)] shrink-0">{prefix}</span>}
         {/* The closed trigger is a fixed-width control, so a long value still ellipses
             here — title exposes it on hover. The OPEN panel below no longer truncates. */}
         <span
@@ -82,7 +90,10 @@ export default function StyledSelect({ icon, options, value, onChange, placehold
         // Size it to its content instead: never narrower than the trigger, never wider
         // than the viewport allows. It is absolutely positioned, so growing it cannot
         // reflow the page behind it.
-        <div className="absolute z-50 mt-1.5 min-w-full w-max max-w-[min(90vw,28rem)] max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
+        // `w-max` measured 300px for 67px of text (2026-09-03: the percentage-width rows inside a
+        // max-content box resolve against the cap); shrink-to-fit (auto) gives the trigger's width
+        // or the longest option, whichever is wider.
+        <div className="absolute z-50 mt-1.5 min-w-full max-w-[min(90vw,28rem)] max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 py-1">
           {groupKeys.map((g) => (
             <div key={g}>
               {g && (

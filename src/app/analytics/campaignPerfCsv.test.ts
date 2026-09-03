@@ -73,3 +73,39 @@ describe("buildCampaignPerfCsv — mass export (Val 2026-08-07)", () => {
     expect(csv).toContain("\"'+SUM(1)\"");
   });
 });
+
+describe("buildCampaignPerfCsv — families (Jasiel 2026-09-03)", () => {
+  const D1 = "2026-08-01";
+  const base = {
+    callRollup: [call("a", D1), call("b", D1), call("c", D1, { attempts: 7, terminal: 7 })],
+    smsRollup: [] as SmsRollupRow[],
+    moves: [],
+    fromMs: null,
+    toMs: null,
+    brandLabelOf: () => "Fortune Play",
+    agentLabelOf: () => "Val - Voice Agent",
+  };
+  const cells = (l: string) => l.split(",").map((c) => c.replace(/^"|"$/g, ""));
+
+  it("writes each family's runs then a SUBTOTAL, one-offs after, then the TOTAL", () => {
+    const csv = buildCampaignPerfCsv({
+      ...base,
+      rows: [rowOf("c"), rowOf("a"), rowOf("b")],
+      groups: [{ label: "Australia · REACTIVATION · Fortune Play", ids: new Set(["a", "b"]) }],
+    });
+    const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+    const attempts = cells(lines[0]).indexOf("callAttempts");
+    expect(lines.map((l) => cells(l)[0])).toEqual([
+      "campaign", "Camp a", "Camp b", "SUBTOTAL Australia · REACTIVATION · Fortune Play (2 runs)", "Camp c", "TOTAL (3 campaigns)",
+    ]);
+    expect(cells(lines[3])[attempts]).toBe("20"); // a + b
+    expect(cells(lines[5])[attempts]).toBe("27"); // a + b + c
+  });
+
+  it("a family with no rows in the export leaves no trace; no groups = the flat file", () => {
+    const grouped = buildCampaignPerfCsv({ ...base, rows: [rowOf("c")], groups: [{ label: "Empty", ids: new Set(["zz"]) }] });
+    const flat = buildCampaignPerfCsv({ ...base, rows: [rowOf("c")] });
+    expect(grouped).toBe(flat);
+    expect(flat).not.toContain("SUBTOTAL");
+  });
+});

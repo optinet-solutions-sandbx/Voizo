@@ -16,7 +16,7 @@ export function SectionTick({ color }: { color: string }) {
   );
 }
 
-// `id` makes the panel a rail anchor (SectionRail); scroll-mt clears the pinned rail.
+// `id` makes the panel addressable (deep links, probes); scroll-mt keeps a jumped-to panel clear of the top edge.
 export default function SectionIsland({ children, id }: { children: ReactNode; id?: string }) {
   return (
     <section id={id} className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-panel)] p-4 sm:p-5 scroll-mt-14">

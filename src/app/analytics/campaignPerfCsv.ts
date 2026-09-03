@@ -74,32 +74,47 @@ export function buildCampaignPerfCsv(args: {
   /** Display resolvers injected from the component (they use hooks/catalogs). */
   brandLabelOf: (workspace: string | null) => string;
   agentLabelOf: (row: ExportableCampaignRow) => string;
+  /** Families (Jasiel 2026-09-03): rows are written family by family, each family closed by a
+   *  SUBTOTAL line computed the way the TOTAL is. Rows in no family follow, then the TOTAL.
+   *  Omitted = the flat file as before. */
+  groups?: readonly { label: string; ids: ReadonlySet<string> }[];
 }): string {
-  const { rows, callRollup, smsRollup, moves, fromMs, toMs, brandLabelOf, agentLabelOf } = args;
+  const { rows, callRollup, smsRollup, moves, fromMs, toMs, brandLabelOf, agentLabelOf, groups } = args;
   const lines: string[] = [HEADER.map(csvCell).join(",")];
 
-  for (const r of rows) {
+  const rowLine = (r: ExportableCampaignRow): string => {
     const perf = summarizeRollupWindow(callRollup, smsRollup, new Set([r.id]), fromMs, toMs, moves);
-    lines.push(
-      [
-        r.name, brandLabelOf(r.cioWorkspace), r.country, agentLabelOf(r),
-        r.scriptName ?? "", r.segmentId ?? "", r.displayStatus, r.scheduleType,
-        r.players, r.startAt ?? "", r.lastCallAt ?? "",
-        ...metricCells(perf),
-      ].map(csvCell).join(","),
-    );
+    return [
+      r.name, brandLabelOf(r.cioWorkspace), r.country, agentLabelOf(r),
+      r.scriptName ?? "", r.segmentId ?? "", r.displayStatus, r.scheduleType,
+      r.players, r.startAt ?? "", r.lastCallAt ?? "",
+      ...metricCells(perf),
+    ].map(csvCell).join(",");
+  };
+  const sumLine = (caption: string, subset: ExportableCampaignRow[]): string => {
+    const perf = summarizeRollupWindow(callRollup, smsRollup, new Set(subset.map((r) => r.id)), fromMs, toMs, moves);
+    return [
+      caption, "", "", "", "", "", "", "",
+      subset.reduce((s, r) => s + r.players, 0), "", "",
+      ...metricCells(perf),
+    ].map(csvCell).join(",");
+  };
+
+  if (groups && groups.length) {
+    const placed = new Set<string>();
+    for (const g of groups) {
+      const members = rows.filter((r) => g.ids.has(r.id) && !placed.has(r.id));
+      if (members.length === 0) continue;
+      for (const r of members) { lines.push(rowLine(r)); placed.add(r.id); }
+      lines.push(sumLine(`SUBTOTAL ${g.label} (${members.length} run${members.length === 1 ? "" : "s"})`, members));
+    }
+    for (const r of rows) if (!placed.has(r.id)) lines.push(rowLine(r));
+  } else {
+    for (const r of rows) lines.push(rowLine(r));
   }
 
   // TOTAL row — the same computation the summary block renders.
-  const total = summarizeRollupWindow(callRollup, smsRollup, new Set(rows.map((r) => r.id)), fromMs, toMs, moves);
-  const totalPlayers = rows.reduce((s, r) => s + r.players, 0);
-  lines.push(
-    [
-      `TOTAL (${rows.length} campaigns)`, "", "", "", "", "", "", "",
-      totalPlayers, "", "",
-      ...metricCells(total),
-    ].map(csvCell).join(","),
-  );
+  lines.push(sumLine(`TOTAL (${rows.length} campaigns)`, rows));
 
   return CSV_BOM + lines.join("\r\n");
 }

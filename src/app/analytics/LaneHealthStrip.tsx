@@ -29,7 +29,7 @@ export default function LaneHealthStrip({ lanes }: { lanes: LaneHealthRow[] }) {
     <div role="status" aria-label="Lane health" className="grid gap-2">
       <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-3)]">
         <span className="font-semibold uppercase tracking-[0.07em]">Lanes</span>
-        <span>{lanes.length} lane{lanes.length === 1 ? "" : "s"} · judged on {shortDay(judged)}, the last closed day · today shown as figures so far</span>
+        <span>{lanes.length} lane{lanes.length === 1 ? "" : "s"} · judged on {shortDay(judged)} · today so far</span>
         <Hint content="One card per lane, a brand and market pair. The verdict is prod's connect-collapse rule on the last closed day: at least 20 dials and under half connected is a collapse; under 20 dials it declines to judge. Today carries no verdict: a few hours of dialling is not a day.">
           <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-[var(--border-2)] text-[9px] cursor-help select-none">i</span>
         </Hint>

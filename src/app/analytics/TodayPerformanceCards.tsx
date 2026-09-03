@@ -81,7 +81,9 @@ export default function TodayPerformanceCards({ data }: { data: TodaySnapshot | 
         <CardGridSkeleton />
       ) : (
         <>
-          <PerformanceCards perf={perf} showDeltas onOpenTotal={openTotal} onOpenRow={openRow} />
+          {/* Compact (Jasiel 2026-09-03): buckets with nothing in them fold into one line, as in
+              Campaign Performance, so the eye lands on what happened. */}
+          <PerformanceCards perf={perf} showDeltas compact zeroWord={day} onOpenTotal={openTotal} onOpenRow={openRow} />
           <TodayRecordsDrawer day={day} filter={filter} onClose={() => setFilter(null)} />
         </>
       )}

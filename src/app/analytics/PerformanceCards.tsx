@@ -132,6 +132,8 @@ function MetricCard({
   isSms,
   inFlight,
   showDeltas,
+  compact,
+  zeroWord = "this window",
   onOpenTotal,
   onOpenRow,
   noDrillHintFor,
@@ -141,11 +143,32 @@ function MetricCard({
   isSms?: boolean;
   inFlight?: number;
   showDeltas: boolean;
+  compact?: boolean;
+  zeroWord?: string;
   onOpenTotal: () => void;
   onOpenRow: (row: PerfRow, parentKey?: string) => void;
   noDrillHintFor?: (row: PerfRow) => string | undefined;
 }) {
   const delta = metric.deltaPctVsSevenDayAvg;
+  // Compact (mockup, Jasiel 2026-09-03 "less is more"): a row with nothing in it is not a row,
+  // it is a word in one muted line, so the card holds only the buckets that happened. Sub-rows
+  // fold the same way. Off on Today, where the zero rows carry deltas.
+  const zeroLabels: string[] = [];
+  const rows = compact
+    ? metric.rows.filter((row) => {
+        if (row.count > 0) return true;
+        zeroLabels.push(row.label);
+        return false;
+      })
+    : metric.rows;
+  const subRowsOf = (row: PerfRow): PerfRow[] | undefined => {
+    if (!compact) return row.subRows;
+    return row.subRows?.filter((sub) => {
+      if (sub.count > 0) return true;
+      zeroLabels.push(sub.label);
+      return false;
+    });
+  };
   return (
     <div className="h-full bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] px-5 py-[18px] flex flex-col">
       <div className="text-[11px] font-semibold uppercase tracking-[0.09em] text-[var(--text-3)] mb-3">{label}</div>
@@ -170,17 +193,24 @@ function MetricCard({
       <div className="my-4">
         <SegBar rows={metric.rows} />
       </div>
-      <div className="flex flex-col">
-        {metric.rows.map((row) => (
+      <div className="flex flex-col flex-1">
+        {rows.map((row) => (
           <div key={row.key} className="flex flex-col">
             <MetricRow row={row} showDelta={showDeltas} onOpen={() => onOpenRow(row)} noDrillHint={noDrillHintFor?.(row)} />
             {/* SMS "by response" sub-rows live under the Reached row. */}
             {isSms &&
-              row.subRows?.map((sub) => (
+              subRowsOf(row)?.map((sub) => (
                 <MetricRow key={sub.key} row={sub} indent showDelta={showDeltas} onOpen={() => onOpenRow(sub, row.key)} noDrillHint={noDrillHintFor?.(sub)} />
               ))}
           </div>
         ))}
+        {compact && zeroLabels.length > 0 && (
+          // Pinned to the card's foot so three cards of different row counts still align.
+          <div className="mt-auto pt-3 text-[11px] leading-relaxed text-[var(--text-3)]">
+            {rows.length === 0 ? `Nothing ${zeroWord}: ` : `Zero ${zeroWord}: `}
+            {zeroLabels.join(" · ")}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -192,6 +222,8 @@ export default function PerformanceCards({
   onOpenTotal,
   onOpenRow,
   noDrillHintFor,
+  compact = false,
+  zeroWord = "this window",
 }: {
   perf: TodayPerfDay;
   showDeltas: boolean;
@@ -203,6 +235,10 @@ export default function PerformanceCards({
    *  ranged drawer is transcript-less and so can never list silent pickups).
    *  Omitted everywhere else, so /today and the ranged cards are unchanged. */
   noDrillHintFor?: (row: PerfRow) => string | undefined;
+  /** Fold zero rows into one muted line at the card's foot. */
+  compact?: boolean;
+  /** The period named in that line: "Zero this window" (default), "Zero today", "Zero yesterday". */
+  zeroWord?: string;
 }) {
   // "In progress" (inFlight) is a LIVE concept — only meaningful on the always-live Today view.
   const callInFlight = showDeltas ? perf.inFlight : undefined;
@@ -220,6 +256,8 @@ export default function PerformanceCards({
           metric={perf.callAttempts}
           inFlight={callInFlight}
           showDeltas={showDeltas}
+          compact={compact}
+          zeroWord={zeroWord}
           onOpenTotal={() => onOpenTotal("callAttempts")}
           onOpenRow={(row) => onOpenRow("callAttempts", row)}
           noDrillHintFor={noDrillHintFor}
@@ -230,6 +268,8 @@ export default function PerformanceCards({
           label="Conversations Established"
           metric={perf.reached}
           showDeltas={showDeltas}
+          compact={compact}
+          zeroWord={zeroWord}
           onOpenTotal={() => onOpenTotal("reached")}
           onOpenRow={(row) => onOpenRow("reached", row)}
           noDrillHintFor={noDrillHintFor}
@@ -241,6 +281,8 @@ export default function PerformanceCards({
           metric={perf.sms}
           isSms
           showDeltas={showDeltas}
+          compact={compact}
+          zeroWord={zeroWord}
           onOpenTotal={() => onOpenTotal("sms")}
           onOpenRow={(row, parentKey) => onOpenRow("sms", row, parentKey)}
           noDrillHintFor={noDrillHintFor}

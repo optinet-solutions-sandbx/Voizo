@@ -11,11 +11,14 @@
 // react-doctor's state-synced-to-prop error). Modal chrome follows PromptModal (backdrop / Esc / ✕).
 
 import { useEffect, useRef, useState } from "react";
-import { X, Download, VolumeX, Target, Phone } from "lucide-react";
+import Link from "next/link";
+import { X, Download, VolumeX, Target, Phone, ArrowUpRight, MessageSquare } from "lucide-react";
 import type { CallRecord } from "@/lib/dashboardAnalytics";
+import type { PlayerRun } from "./playerGrouping";
 import CallTranscript from "@/components/CallTranscript";
 import Hint from "@/components/Hint";
 import { BlockSkeleton } from "./loadingSkeletons";
+import GlobalExport from "./GlobalExport";
 
 interface Attempt {
   callId: string;
@@ -59,8 +62,27 @@ function audioExt(proxyUrl: string): string {
   }
 }
 
-export default function CallDetailModal({ record, onClose }: { record: CallRecord | null; onClose: () => void }) {
-  const numberId = record?.campaignNumberId ?? null;
+export default function CallDetailModal({ record, runs, playerName, onOpenRun, onClose }: {
+  /** The contact to open on. Only the number id and phone are read. */
+  record: Pick<CallRecord, "campaignNumberId" | "phone"> | null;
+  /** From the player search (2026-09-03): every run this player sat in. Rendered as a card above
+   *  the attempts; picking one switches the attempts below to that run, and each has a way into
+   *  its campaign. Omitted from the records table, where a click already names one run. */
+  runs?: PlayerRun[];
+  playerName?: string | null;
+  /** Take the operator to that run where they already are (Campaign Performance) instead of the
+   *  Campaigns page. When absent, the run links to its campaign page. */
+  onOpenRun?: (campaignId: string) => void;
+  onClose: () => void;
+}) {
+  // Which run's attempts are shown: the picked one, else the record's own. A new record resets it.
+  const [picked, setPicked] = useState<string | null>(null);
+  const [prevRecordKey, setPrevRecordKey] = useState(record?.campaignNumberId ?? null);
+  if (prevRecordKey !== (record?.campaignNumberId ?? null)) {
+    setPrevRecordKey(record?.campaignNumberId ?? null);
+    setPicked(null);
+  }
+  const numberId = picked ?? record?.campaignNumberId ?? null;
   const [cache, setCache] = useState<Record<string, DetailPayload>>({});
   const [error, setError] = useState<{ key: string; msg: string } | null>(null);
 
@@ -117,20 +139,82 @@ export default function CallDetailModal({ record, onClose }: { record: CallRecor
             <div className="flex items-center gap-2 text-[var(--text-1)] min-w-0">
               <Phone size={15} className="shrink-0" />
               <span className="font-semibold font-mono truncate">{record.phone ?? "Contact"}</span>
-              {contactName && (
-                <span className="text-xs text-[var(--text-2)] truncate" title={contactName}>
-                  · {contactName}
+              {(playerName ?? contactName) && (
+                <span className="text-xs text-[var(--text-2)] truncate" title={playerName ?? contactName ?? undefined}>
+                  · {playerName ?? contactName}
                 </span>
               )}
             </div>
             <p className="text-[11px] text-[var(--text-3)] mt-1">Call recordings &amp; transcripts, one block per attempt.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors shrink-0">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Single-player export (Jasiel 2026-09-03): this number across every run it sat in,
+                through the records export engine (CSV with transcripts, audio zip, transcripts). */}
+            {runs && runs.length > 0 && record.phone && (
+              <GlobalExport
+                compact
+                query={new URLSearchParams({
+                  range: "lifetime",
+                  campaigns: [...new Set(runs.map((r) => r.campaignId))].join(","),
+                  phone: record.phone.replace(/[^\d+]/g, ""),
+                  offset: "0",
+                  limit: "all",
+                }).toString()}
+                fileBase={`player-${safeId}`}
+              />
+            )}
+            <button type="button" onClick={onClose} aria-label="Close" className="text-[var(--text-3)] hover:text-[var(--text-1)] transition-colors shrink-0">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto grid gap-4">
+          {runs && runs.length > 0 && (
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/50 p-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-3)] px-1 mb-1.5">
+                {runs.length === 1 ? "1 run" : `${runs.length} runs`}
+              </div>
+              <div className="grid gap-1">
+                {runs.map((r) => {
+                  const on = r.numberId === numberId;
+                  return (
+                    <div key={r.numberId} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${on ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-[var(--bg-hover)]"}`}>
+                      <button type="button" onClick={() => setPicked(r.numberId)} aria-pressed={on} className="flex-1 min-w-0 flex items-center gap-2 text-left">
+                        <span className="text-[12.5px] text-[var(--text-1)] truncate">{r.label}</span>
+                        {r.dateIso && <span className="font-mono text-[11px] text-[var(--text-3)] shrink-0">{r.dateIso}</span>}
+                        <span className="ml-auto shrink-0 flex items-center gap-2 text-[11px] font-mono text-[var(--text-3)]">
+                          <span>{r.attemptCount === 0 ? "never called" : `${r.attemptCount} ${r.attemptCount === 1 ? "attempt" : "attempts"}`}</span>
+                          {r.smsSent && <MessageSquare size={11} aria-label="SMS sent" />}
+                          <span className="px-2 py-0.5 rounded-full border border-[var(--border)] text-[var(--text-2)] font-sans">{r.outcomeLabel}</span>
+                        </span>
+                      </button>
+                      {onOpenRun ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenRun(r.campaignId)}
+                          title="Show this run in the table below"
+                          aria-label={`Show ${r.label} in the table`}
+                          className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] hover:text-primary transition-colors"
+                        >
+                          Show in table <ArrowUpRight size={12} />
+                        </button>
+                      ) : (
+                        <Link
+                          href={`/campaigns/v2/${r.campaignId}`}
+                          title="Open this campaign"
+                          aria-label={`Open the campaign ${r.label}`}
+                          className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[var(--text-3)] hover:text-primary transition-colors"
+                        >
+                          Open <ArrowUpRight size={12} />
+                        </Link>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
           {campaign && (
             <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-app)] p-4">
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] font-mono min-w-0">

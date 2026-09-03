@@ -323,7 +323,7 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
       {/* Filter bar (mockup order, 2026-09-03): search, campaigns, markets, prompts, Clear, then
           the window picker at the right. The range presets moved up to the header. Pinned under
           the section rail on desktop for as long as the panel is in view. */}
-      <div className="sticky top-0 md:top-[52px] z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
+      <div className="sticky top-0 z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
         <div className="relative min-w-[200px]">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
           <input
@@ -361,7 +361,7 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
           })}
         </div>
         <div className="min-w-[150px]">
-          <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
+          <StyledSelect surface="elevated" options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
         </div>
         {!isDefault && (
           <button

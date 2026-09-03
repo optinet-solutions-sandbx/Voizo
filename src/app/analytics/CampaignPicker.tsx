@@ -8,12 +8,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { groupCampaignOptions, visibleChildren, type GroupableOption } from "@/lib/campaignGroups";
+import { groupCampaignOptions, CHILD_PAGE_SIZE, type GroupableOption } from "@/lib/campaignGroups";
 import { matchesCampaignName, toggleAllMatching } from "./campaignFilters";
 
 // Trigger/panel styling mirrors StyledSelect so the bar is visually uniform.
 const TRIGGER_CLS =
-  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-app)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
+  // Elevated surface, not the app's darkest ground (Jasiel 2026-09-03: the dark triggers read as
+  // high contrast inside a card); StyledSelect's compact size paints the same.
+  "w-full flex items-center justify-between gap-2 pl-3.5 pr-3 py-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border)] text-sm text-left hover:border-primary/40 transition-all cursor-pointer";
 
 // The checkbox glyph, shared by the group header (which can be half-selected) and the rows.
 function Tick({ state }: { state: "on" | "off" | "mixed" }) {
@@ -36,12 +38,16 @@ function Tick({ state }: { state: "on" | "off" | "mixed" }) {
 
 export default function CampaignPicker({
   label,
+  prefix,
   options,
   parentLabels,
   selected,
   onChange,
 }: {
   label: string;
+  /** Muted axis label inside the trigger ("Campaign:"), matching StyledSelect's prefix so a
+   *  toolbar of controls reads "Axis: value" in one vocabulary (dashboard, 2026-09-03). */
+  prefix?: string;
   // `search` is what a query is matched against (label + parent label + raw campaign name), so a
   // keyword works whether the operator types what they SEE or what's in the underlying name.
   options: GroupableOption[];
@@ -58,7 +64,8 @@ export default function CampaignPicker({
   // (Jasiel 2026-09-01): a recurring campaign spawns a child a day, so a 90-day window put
   // 96 dated rows under one parent in a box that shows about 7, and a search force-expands
   // every group at once. Collapsing a group drops it from here, so reopening starts capped.
-  const [showAll, setShowAll] = useState<Set<string>>(new Set());
+  // Which PAGE of runs each open group shows (Jasiel 2026-09-03: pages, not "show all").
+  const [kidPage, setKidPage] = useState<Map<string, number>>(new Map());
   // Keyword search over the options (Val's CRM team, 2026-08-26): 60+ near-identical
   // campaign names make "reactivation" the only practical way to reach a family of them.
   // Local state, deliberately NOT part of Filters — typing here costs no analytics refetch.
@@ -103,7 +110,10 @@ export default function CampaignPicker({
       }}
     >
       <button ref={triggerRef} type="button" onClick={() => (open ? close() : setOpen(true))} aria-expanded={open} className={TRIGGER_CLS}>
-        <span className={selected.length ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}>{text}</span>
+        <span className="inline-flex items-center gap-2 min-w-0">
+          {prefix && <span className="text-[var(--text-3)] shrink-0">{prefix}</span>}
+          <span className={selected.length || prefix ? "text-[var(--text-1)]" : "text-[var(--text-3)]"}>{text}</span>
+        </span>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-[var(--text-3)] transition-transform ${open ? "rotate-180" : ""}`}>
           <path d="m6 9 6 6 6-6" />
         </svg>
@@ -122,7 +132,7 @@ export default function CampaignPicker({
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Search campaigns by keyword"
                 placeholder="Search campaigns…"
-                className="pl-7 pr-2 py-1.5 w-full text-[12.5px] rounded-lg bg-[var(--bg-app)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary"
+                className="pl-7 pr-2 py-1.5 w-full text-[12.5px] rounded-lg bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary"
               />
             </div>
           </div>
@@ -140,7 +150,7 @@ export default function CampaignPicker({
               </span>
             </button>
           )}
-          {/* 320px: a group header, its first CHILD_PAGE_SIZE runs AND the "show all" button all
+          {/* 320px: a group header, its first CHILD_PAGE_SIZE runs AND the page footer all
               fit without scrolling. At the old 256px the button sat 30px below the fold, measured
               in the real app on 2026-09-02 — the way out of a capped list has to be on screen. */}
           <div className="max-h-80 overflow-y-auto">
@@ -154,7 +164,9 @@ export default function CampaignPicker({
                   const ids = g.options.map((o) => o.value);
                   const on = ids.filter((v) => selectedSet.has(v)).length;
                   const isOpen = searching || expanded.has(g.key);
-                  const { shown: kids, hidden } = visibleChildren(g.options, showAll.has(g.key));
+                  const kidPages = Math.max(1, Math.ceil(g.options.length / CHILD_PAGE_SIZE));
+                  const kp = Math.min(kidPage.get(g.key) ?? 1, kidPages);
+                  const kids = g.options.slice((kp - 1) * CHILD_PAGE_SIZE, kp * CHILD_PAGE_SIZE);
                   return (
                     <div key={g.key}>
                       {/* Sticky: with a long group open, the header scrolled away and left a
@@ -166,7 +178,7 @@ export default function CampaignPicker({
                             const next = new Set(prev);
                             if (next.has(g.key)) {
                               next.delete(g.key);
-                              setShowAll((s) => { const n = new Set(s); n.delete(g.key); return n; });
+                              setKidPage((m) => { const n = new Map(m); n.delete(g.key); return n; });
                             } else next.add(g.key);
                             return next;
                           })}
@@ -209,19 +221,17 @@ export default function CampaignPicker({
                             <span className="font-mono">{o.runLabel || o.label}</span>
                           </button>
                         ))}
-                      {isOpen && hidden > 0 && (
-                        // Named by the group's TOTAL, not the remainder: "show all 36" answers
-                        // "how many are there", which is the question a capped list provokes.
-                        // Not pagination on purpose: these rows are dates, and scrolling reads
-                        // better than clicking through pages to reach one.
-                        <button
-                          type="button"
-                          onClick={() => setShowAll((s) => new Set(s).add(g.key))}
-                          title={`${g.label} — ${hidden} more run${hidden === 1 ? "" : "s"} not shown`}
-                          className="w-full pl-9 pr-3.5 py-1.5 text-[11.5px] text-left text-primary hover:bg-[var(--bg-hover)] transition-colors"
-                        >
-                          show all {g.options.length} runs
-                        </button>
+                      {isOpen && kidPages > 1 && (
+                        // Pages of runs, the group's TOTAL always stated: the same footer the
+                        // Campaign Performance families use.
+                        <div className="flex items-center justify-between pl-9 pr-3 py-1.5 text-[11px] text-[var(--text-3)]">
+                          <span>Showing {(kp - 1) * CHILD_PAGE_SIZE + 1}–{Math.min(kp * CHILD_PAGE_SIZE, g.options.length)} of {g.options.length} runs</span>
+                          <span className="inline-flex items-center gap-1">
+                            <button type="button" disabled={kp <= 1} onClick={() => setKidPage((m) => new Map(m).set(g.key, kp - 1))} aria-label={`${g.label}: previous runs`} className="w-6 h-6 rounded-md border border-[var(--border)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed">‹</button>
+                            <span className="font-mono">{kp} / {kidPages}</span>
+                            <button type="button" disabled={kp >= kidPages} onClick={() => setKidPage((m) => new Map(m).set(g.key, kp + 1))} aria-label={`${g.label}: next runs`} className="w-6 h-6 rounded-md border border-[var(--border)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed">›</button>
+                          </span>
+                        </div>
                       )}
                     </div>
                   );

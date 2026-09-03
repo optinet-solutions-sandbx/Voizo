@@ -18,7 +18,6 @@ import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
 import TodaysCampaigns from "./TodaysCampaigns";
 import LaneHealthStrip from "./LaneHealthStrip";
-import SectionRail from "./SectionRail";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 
 const POLL_MS = 30_000;
@@ -90,8 +89,6 @@ export default function DashboardView() {
           screen is used instead of framing a 1120px column in empty space. Top padding stays 16px:
           the pinned rail's geometry (-mt-4 pt-4) depends on it. */}
       <div className="px-[30px] pt-4 pb-16 w-full max-w-[1680px] mx-auto grid gap-4">
-      {/* Section rail (mockup): pinned jump links, current section marked. */}
-      <SectionRail />
       {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked
           by the green tick (pattern brief §1), not a background wash. */}
       <SectionIsland id="sec-today">

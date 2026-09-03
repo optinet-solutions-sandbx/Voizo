@@ -154,3 +154,19 @@ describe("playOf — the family's play, same across brands and markets", () => {
     expect(playOf("Australia · Fortune Play Reactivation · Fortune Play", "Australia", "Fortune Play")).toBe("Fortune Play Reactivation");
   });
 });
+
+describe("single (Jasiel 2026-09-03)", () => {
+  const L2 = { family: (pid: string) => (pid === "p9" ? "Australia · REACTIVATION · Roosterbet" : null), brand: (ws: string | null) => ws ?? "", agent: () => "Val", fallbackName: (r: { name: string }) => r.name };
+  const lone = { id: "z", name: "VOIZO REACTIVATION - AU | Daily Automated (2026-08-29)", country: "AU", cioWorkspace: "roosterbet", parentCampaignId: "p9", voiceId: null, agentLabel: null, baseAssistantId: null, scriptId: null, startAt: "2026-08-29T00:00:00Z", attempts: 990, conversations: 16, sms: 13, displayStatus: "finished" as const };
+  it("a family that ran once in the window keeps its header", () => {
+    const g = groupCampaignRows([lone], "family", L2);
+    expect(g).toHaveLength(1);
+    expect(g[0].single).toBe(false);
+    expect(g[0].label).toBe("Australia · REACTIVATION · Roosterbet");
+  });
+  it("a run with no family is a bare row; under None every row is", () => {
+    expect(groupCampaignRows([{ ...lone, parentCampaignId: null }], "family", L2)[0].single).toBe(true);
+    expect(groupCampaignRows([lone], "none", L2)[0].single).toBe(true);
+    expect(groupCampaignRows([lone], "country", L2)[0].single).toBe(false);
+  });
+});

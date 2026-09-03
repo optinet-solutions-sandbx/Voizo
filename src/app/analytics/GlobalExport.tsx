@@ -38,11 +38,18 @@ export function exportQuery(f: Filters, scopeIds: string[]): string {
   return q.toString();
 }
 
-export default function GlobalExport({ filters, scopeIds, disabled }: {
-  filters: Filters;
+export default function GlobalExport({ filters, scopeIds, disabled, query, fileBase, compact }: {
+  filters?: Filters;
   /** In-scope campaign ids under a brand; null under All brands (the routes then see everything). */
-  scopeIds: string[] | null;
+  scopeIds?: string[] | null;
   disabled?: boolean;
+  /** A ready records query (the player popup, 2026-09-03: one number across its runs). When given,
+   *  `filters` and `scopeIds` are not read. */
+  query?: string;
+  /** File name stem; default derives from the window. */
+  fileBase?: string;
+  /** Icon-only trigger for tight headers. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
@@ -54,19 +61,23 @@ export default function GlobalExport({ filters, scopeIds, disabled }: {
     setOpen(false);
     setNote(null);
     // The routes take at most MAX_CAMPAIGNS ids and silently drop the rest: refuse, never truncate.
-    if (scopeIds && !filters.campaignIds.length && scopeIds.length > MAX_CAMPAIGNS) {
+    if (!query && filters && scopeIds && !filters.campaignIds.length && scopeIds.length > MAX_CAMPAIGNS) {
       setNote(`${scopeIds.length.toLocaleString("en-US")} campaigns in scope, the export takes ${MAX_CAMPAIGNS}. Pick a shorter window or some campaigns.`);
       return;
     }
+    if (!query && !filters) return;
     const c = new AbortController();
     ctrl.current = c;
     setProgress({ current: 0, total: 0, stage: "Fetching export data…" });
     try {
-      const r = await fetch(`/api/dashboard/export-metadata?${exportQuery(filters, scopeIds ?? [])}`, { cache: "no-store", signal: c.signal });
+      const q = query ?? exportQuery(filters!, scopeIds ?? []);
+      const r = await fetch(`/api/dashboard/export-metadata?${q}`, { cache: "no-store", signal: c.signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j: { leads: ExportLead[]; total: number; truncated: boolean; cap: number } = await r.json();
       if (!j.leads.length) throw new Error("No records in this window.");
-      const base = `global-${filters.range === "custom" && filters.from && filters.to ? `${filters.from}_${filters.to}` : filters.range}`;
+      const base = fileBase ?? (filters
+        ? `global-${filters.range === "custom" && filters.from && filters.to ? `${filters.from}_${filters.to}` : filters.range}`
+        : "records");
       await runExport({
         leads: j.leads,
         mode,
@@ -98,9 +109,11 @@ export default function GlobalExport({ filters, scopeIds, disabled }: {
         aria-expanded={open}
         disabled={disabled || !!progress}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-2)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition disabled:opacity-50 disabled:cursor-not-allowed"
+        title={compact ? "Export this player's calls: CSV, audio or transcripts" : undefined}
+        aria-label={compact ? "Export" : undefined}
+        className={`inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-2)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition disabled:opacity-50 disabled:cursor-not-allowed ${compact ? "p-1.5" : "px-3 py-1.5"}`}
       >
-        <Download size={13} /> Export
+        <Download size={13} />{!compact && " Export"}
       </button>
       {open && (
         <>
