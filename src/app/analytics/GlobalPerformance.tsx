@@ -8,8 +8,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
-import { Search, X, SlidersHorizontal } from "lucide-react";
+import { Search, X } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
+import GlobalExport from "./GlobalExport";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
 import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
 // The campaign picker lives in CampaignPicker.tsx since 2026-09-03 (shared with Campaign Performance).
@@ -180,14 +181,9 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
   // Custom date range: flip to "custom" once BOTH dates are picked; keep partial entries otherwise.
   const applyDates = (from?: string, to?: string) =>
     from && to ? set({ range: "custom", from, to }) : set({ from, to });
-  // The date inputs are hidden until asked for — two permanently-empty mm/dd/yyyy boxes read as a
-  // broken filter (Jasiel 2026-07-10). "custom" range set from outside still reveals them.
-  const [customOpen, setCustomOpen] = useState(false);
-  const customVisible = customOpen || filters.range === "custom";
-  const closeCustom = () => {
-    setCustomOpen(false);
+  // Clearing the calendar returns to the 7d preset (the calendar owns its own open state now).
+  const closeCustom = () =>
     set({ range: filters.range === "custom" ? "7d" : filters.range, from: undefined, to: undefined });
-  };
   const isDefault =
     filters.range === "7d" &&
     filters.campaignIds.length === 0 &&
@@ -239,10 +235,7 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
     {
       key: "range",
       label: filters.range === "custom" && filters.from && filters.to ? `${filters.from} → ${filters.to}` : RANGE_LABEL[filters.range],
-      onRemove: () => {
-        setCustomOpen(false);
-        set({ range: "7d", from: undefined, to: undefined });
-      },
+      onRemove: () => set({ range: "7d", from: undefined, to: undefined }),
     },
     // Past a handful, one chip for the lot. "Select all 30" used to lay eight rows of chips
     // across the bar and push the KPI cards off screen; nobody unpicks thirty campaigns one
@@ -286,8 +279,11 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
   const rangeBrands = distinctBrandLabels((data?.options.campaigns ?? []).map((c) => c.brand));
 
   return (
-    <section id="global-performance" className="scroll-mt-14">
-      <div className="grid gap-4 min-w-0">
+    <section className="grid gap-4 min-w-0">
+      {/* The panel (mockup, 2026-09-03): header, filter bar, connect-rate hero and the chart strip
+          in ONE bordered island; Campaign Performance, the heat map and the leaderboards follow as
+          their own cards. The rail's "Performance" anchor is this island. */}
+      <SectionIsland id="global-performance">
       <div className="flex items-center gap-2.5 flex-wrap">
         <SectionTick color="#5b9bf0" />
         <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
@@ -302,23 +298,17 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
             <span className="text-primary font-medium">{rangeBrands.join(" · ")}</span>
           </span>
         )}
-      </div>
-
-      {/* Sticky filter bar (pattern brief §5) — scopes this section, stays reachable on scroll
-          without orphaning layout. Same state/handlers as ever, re-housed. */}
-      {/* Pinned under the section rail (52px) on desktop; the rail is hidden on phones. */}
-      <div className="sticky top-0 md:top-[52px] z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
-        <div className="flex items-center gap-2.5">
-          <SlidersHorizontal size={15} className="text-[var(--text-3)]" />
-          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-4)]">Range</span>
+        {/* Header right (mockup): the load state, Export, and the range presets. */}
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
+          {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+          <GlobalExport filters={filters} scopeIds={brand ? rawCampaigns.map((c) => c.id) : null} disabled={!data} />
           <div className="inline-flex p-[3px] gap-0.5 rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)]">
             {RANGES.map((r) => (
               <button
                 key={r}
-                onClick={() => {
-                  setCustomOpen(false);
-                  set({ range: r, from: undefined, to: undefined });
-                }}
+                type="button"
+                onClick={() => set({ range: r, from: undefined, to: undefined })}
                 className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
                   filters.range === r ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
                 }`}
@@ -326,30 +316,24 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
                 {RANGE_BTN[r] ?? r}
               </button>
             ))}
-            <button
-              type="button"
-              onClick={() => (customVisible ? closeCustom() : setCustomOpen(true))}
-              className={`px-2.5 py-1 rounded-md text-[12.5px] font-semibold font-mono transition ${
-                customVisible ? "bg-primary text-white" : "text-[var(--text-3)] hover:text-[var(--text-1)]"
-              }`}
-            >
-              Custom
-            </button>
           </div>
-          {/* Custom date range — the same window picker Campaign Performance uses (mockup, 2026-09-03:
-              one calendar vocabulary across the dashboard). Day / week / month / year / range, each
-              compiling to one from→to pair; Select switches the preset row to "custom". */}
-          {customVisible && (
-            <RangeCalendar
-              from={filters.from ?? ""}
-              to={filters.to ?? ""}
-              runDates={(data?.options.campaigns ?? []).map((c) => (c.startAt ?? "").slice(0, 10)).filter(Boolean)}
-              onApply={(f, t) => (f && t ? applyDates(f, t) : closeCustom())}
-              ariaLabel="Pick a custom window"
-            />
-          )}
         </div>
-        <div className="w-px h-6 bg-[var(--border)]" />
+      </div>
+
+      {/* Filter bar (mockup order, 2026-09-03): search, campaigns, markets, prompts, Clear, then
+          the window picker at the right. The range presets moved up to the header. Pinned under
+          the section rail on desktop for as long as the panel is in view. */}
+      <div className="sticky top-0 md:top-[52px] z-20 flex items-center gap-3 flex-wrap px-3.5 py-2.5 rounded-[13px] border border-[var(--border)] bg-[rgba(15,17,22,0.94)] backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.25)]">
+        <div className="relative min-w-[200px]">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
+          <input
+            value={filters.phone}
+            onChange={(e) => set({ phone: e.target.value })}
+            placeholder="Search any called number…"
+            aria-label="Search Global Performance by a called number"
+            className="pl-8 pr-3 py-1.5 w-full text-[13px] rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary transition"
+          />
+        </div>
         <CampaignPicker
           label="All campaigns"
           options={campaignOptions}
@@ -379,28 +363,26 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
         <div className="min-w-[150px]">
           <StyledSelect options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
         </div>
-        <div className="relative flex-1 min-w-[170px]">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-4)] pointer-events-none" />
-          <input
-            value={filters.phone}
-            onChange={(e) => set({ phone: e.target.value })}
-            placeholder="Search any called number…"
-            className="pl-8 pr-3 py-1.5 w-full text-[13px] rounded-[9px] bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text-1)] placeholder-[var(--text-4)] focus:outline-none focus:border-primary transition-all"
-          />
-        </div>
         {!isDefault && (
           <button
-            onClick={() => {
-              setCustomOpen(false);
-              onChange(DEFAULTS);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition-colors"
+            onClick={() => onChange(DEFAULTS)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] border border-[var(--border)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition"
           >
             <X size={13} /> Clear
           </button>
         )}
-        {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
-        {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}
+        {/* Custom window: the same calendar Campaign Performance uses. An empty pair here means a
+            preset is in charge, so the button reads "Pick a window", not "All time". */}
+        <div className="ml-auto">
+          <RangeCalendar
+            from={filters.range === "custom" ? filters.from ?? "" : ""}
+            to={filters.range === "custom" ? filters.to ?? "" : ""}
+            runDates={(data?.options.campaigns ?? []).map((c) => (c.startAt ?? "").slice(0, 10)).filter(Boolean)}
+            onApply={(f, t) => (f && t ? applyDates(f, t) : closeCustom())}
+            ariaLabel="Pick a custom window"
+            emptyLabel="Pick a window"
+          />
+        </div>
         {chips.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap w-full">
             {chips.map((c) => (
@@ -441,7 +423,6 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
           Performance's summary below and were removed, as prod itself removed the KPI stat-band
           above them on 2026-07-08 for the same reason. The filter bar, leaderboards, charts,
           table and heatmap stay free-standing on the app background. */}
-      <SectionIsland>
       {data ? (
         <ConnectRateHero
           trend={data.trend}
@@ -462,7 +443,6 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
       ) : (
         <CardGridSkeleton />
       )}
-      </SectionIsland>
 
       {/* Four charts as ONE swipeable strip, two shown at a time (mockup, 2026-09-03): Activity
           Trend and Daily Call Volume as before, plus the Conversion Funnel (the stages the removed
@@ -475,6 +455,7 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
         <ConversionFunnel perf={data?.perf ?? null} connected={data?.kpis.connected ?? 0} rangeDays={data?.rangeDays ?? 0} />
         <MarketComparison markets={data?.markets ?? []} />
       </ChartStrip>
+      </SectionIsland>
 
       {/* Campaign Performance — its own date range + status filters (independent of the bar above). */}
       {/* Page scope reaches the section: brand remounts it (its own filters start over, as the
@@ -503,7 +484,6 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
           filters={filters}
         />
       </SectionIsland>
-      </div>
     </section>
   );
 }

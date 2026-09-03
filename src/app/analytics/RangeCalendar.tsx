@@ -23,6 +23,7 @@ export default function RangeCalendar({
   runDates,
   onApply,
   ariaLabel = "Pick a window",
+  emptyLabel,
   todayIso = new Date().toISOString().slice(0, 10),
 }: {
   /** Current window, "YYYY-MM-DD" or "" for an open end. */
@@ -33,6 +34,9 @@ export default function RangeCalendar({
   /** Fires with the compiled window on Select. ("", "") clears to all time. */
   onApply: (from: string, to: string) => void;
   ariaLabel?: string;
+  /** Caption when no window is set. Default: the window caption ("All time"). Global passes
+   *  "Pick a window" because there an empty pair means a preset is in charge, not all time. */
+  emptyLabel?: string;
   todayIso?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -176,7 +180,7 @@ export default function RangeCalendar({
         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-mono text-[var(--text-2)] hover:text-[var(--text-1)] hover:border-[var(--border-2)] transition"
       >
         <Calendar size={12} className="text-[var(--text-3)]" />
-        {windowCaption(from, to)}
+        {!from && !to && emptyLabel ? emptyLabel : windowCaption(from, to)}
       </button>
       {open && (
         <div role="dialog" aria-label={ariaLabel} className="absolute right-0 top-[calc(100%+5px)] z-40 w-[250px] p-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30">

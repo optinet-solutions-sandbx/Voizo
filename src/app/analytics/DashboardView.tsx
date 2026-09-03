@@ -86,7 +86,10 @@ export default function DashboardView() {
       {/* Centered, capped width — 2026-07-07. Reverts the 2026-07-02 fluid "use the screen"
           layout (cards stretched too wide, Val's meeting note). Val's mockup shell is 900px,
           but the live Campaign Performance table (5 cols) clips at 900, so capped at 1120. */}
-      <div className="p-4 w-full max-w-[1120px] mx-auto grid gap-4">
+      {/* Width follows the mockup shell (2026-09-03): fluid to 1680px with 30px gutters, so a wide
+          screen is used instead of framing a 1120px column in empty space. Top padding stays 16px:
+          the pinned rail's geometry (-mt-4 pt-4) depends on it. */}
+      <div className="px-[30px] pt-4 pb-16 w-full max-w-[1680px] mx-auto grid gap-4">
       {/* Section rail (mockup): pinned jump links, current section marked. */}
       <SectionRail />
       {/* Today panel — the always-live snapshot, never affected by the filters. Zone is marked

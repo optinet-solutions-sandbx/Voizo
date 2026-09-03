@@ -4,7 +4,7 @@ import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import Providers from "@/components/Providers";
-import DotField from "@/components/DotField";
+import DotFieldLayer from "@/components/DotFieldLayer";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,10 +34,9 @@ export default function RootLayout({
         {/* Global interactive dot-field — ONE fixed layer behind the whole app. -z-10 paints it
             above the body bg but below all content, so no page needs a z-wrapper (keeps full-height
             pages like Workers intact) and no stacking context is introduced (modals stay on top).
-            Sidebar + Header are opaque, so the dots only show through the transparent <main>. */}
-        <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-          <DotField />
-        </div>
+            Sidebar + Header are opaque, so the dots only show through the transparent <main>.
+            Not on the dashboard (flat ground, as the mockup): DotFieldLayer decides by route. */}
+        <DotFieldLayer />
         <Providers>
           <div className="flex h-screen overflow-hidden">
             <Sidebar />
