@@ -195,6 +195,13 @@ describe("sendSMS request body", () => {
     });
   });
 
+  it("a 201 Created is a success: the docs say 200, the live endpoint answered 201 (probe 2026-09-04)", () => {
+    return captureRequest(OFFER, { status: 201, response: { ...BATCH_ACCEPTED, record: { ...BATCH_ACCEPTED.record, id: "cc931ea3-live" } } })
+      .then(({ result }) => {
+        expect(result).toEqual({ success: true, providerMessageId: "cc931ea3-live", error: null });
+      });
+  });
+
   it("a 200 with no record id is a failure, never a silent success", () => {
     return captureRequest(OFFER, { response: { success: true } }).then(({ result }) => {
       expect(result.success).toBe(false);
