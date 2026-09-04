@@ -12,7 +12,7 @@ import { Search, X } from "lucide-react";
 import SectionIsland, { SectionTick } from "./SectionIsland";
 import GlobalExport from "./GlobalExport";
 import StyledSelect, { type DropdownOption } from "@/components/StyledSelect";
-import { formatCampaign, promptAgentLabel, distinctBrandLabels, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
+import { formatCampaign, promptAgentLabel, campaignFilterLabels, campaignRunLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
 // The campaign picker lives in CampaignPicker.tsx since 2026-09-03 (shared with Campaign Performance).
 import CampaignPicker from "./CampaignPicker";
 import RangeCalendar from "./RangeCalendar";
@@ -38,7 +38,6 @@ import { type RangeKey } from "@/lib/rangeWindow";
 // RangeKey is shared with the backend window resolver (rangeWindow.ts) so presets / lifetime / custom stay in sync.
 const RANGES: RangeKey[] = ["7d", "14d", "30d", "60d", "90d", "lifetime"];
 const RANGE_BTN: Record<string, string> = { lifetime: "All" }; // button caption; presets show their raw key
-const RANGE_LABEL: Record<RangeKey, string> = { "7d": "Last 7 days", "14d": "Last 14 days", "30d": "Last 30 days", "60d": "Last 60 days", "90d": "Last 90 days", lifetime: "All time", custom: "Custom range" };
 
 export interface BestPerformer {
   key: string;
@@ -196,7 +195,9 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
     ...(data?.options.countries ?? []).map((c) => ({ value: c.value, label: c.label })),
   ];
   const promptOptions: DropdownOption[] = [
-    { value: "", label: "All prompts" },
+    // "All (N)" on the option itself, not the placeholder: StyledSelect renders the SELECTED
+    // option, and the trigger already says "Prompt:" — Campaign Performance's own idiom.
+    { value: "", label: `All (${(data?.options.prompts ?? []).length})` },
     ...(data?.options.prompts ?? []).map((p) => ({ value: p.sha, label: promptDisplay(p.sha, p.label) })),
   ];
   // Campaign labels: the server lists only in-window campaigns; campaignFilterLabels turns them
@@ -232,11 +233,9 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
 
   // Active-filter chips.
   const chips: { key: string; label: string; onRemove: () => void }[] = [
-    {
-      key: "range",
-      label: filters.range === "custom" && filters.from && filters.to ? `${filters.from} → ${filters.to}` : RANGE_LABEL[filters.range],
-      onRemove: () => set({ range: "7d", from: undefined, to: undefined }),
-    },
+    // No range chip (Jasiel 2026-09-04): it was the one chip present on every load, saying "Last
+    // 7 days" directly under a lit "7d" preset, and on a custom window it repeated the calendar
+    // caption beside it. The window has two truths already; a third was noise.
     // Past a handful, one chip for the lot. "Select all 30" used to lay eight rows of chips
     // across the bar and push the KPI cards off screen; nobody unpicks thirty campaigns one
     // chip at a time anyway — they reopen the dropdown, or clear the lot here.
@@ -274,9 +273,6 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
   const bestPrompt = data?.best.prompt
     ? { ...data.best.prompt, label: promptDisplay(data.best.prompt.key, data.best.prompt.label) }
     : null;
-  // Brands represented in the range's campaigns (VOZ-216). options.campaigns IS the
-  // in-window live set the KPIs aggregate, so this needs no second fetch.
-  const rangeBrands = distinctBrandLabels((data?.options.campaigns ?? []).map((c) => c.brand));
 
   return (
     <section className="grid gap-4 min-w-0">
@@ -287,17 +283,10 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
       <div className="flex items-center gap-2.5 flex-wrap">
         <SectionTick color="#5b9bf0" />
         <h2 className="text-lg font-semibold tracking-tight">Global Performance</h2>
-        <span className="text-[13px] text-[var(--text-3)]">
-          {data ? `(historical · ${data.campaignCount} campaign${data.campaignCount === 1 ? "" : "s"})` : "(historical, across all campaigns)"}
-        </span>
-        {/* Brand scope of these KPIs (VOZ-216): the in-window campaigns the numbers
-            are built from — so "whose performance is this?" needs no drill-down. */}
-        {rangeBrands.length > 0 && (
-          <span className="text-[13px] text-[var(--text-3)]">
-            {rangeBrands.length === 1 ? "brand" : "brands"}:{" "}
-            <span className="text-primary font-medium">{rangeBrands.join(" · ")}</span>
-          </span>
-        )}
+        {/* No scope line beside the title (Jasiel 2026-09-04, the rule he set on Campaign
+            Performance): no counts and no brand list in a section header. The campaign count now
+            rides the picker below ("Campaign: All (N)"), where Campaign Performance keeps its own,
+            and the brand in scope is the sidebar switcher's job. */}
         {/* Header right (mockup): the load state, Export, and the range presets. */}
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           {loading && <span className="text-[11px] text-[var(--text-3)]">Updating…</span>}
@@ -335,7 +324,8 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
           />
         </div>
         <CampaignPicker
-          label="All campaigns"
+          prefix="Campaign:"
+          label={`All (${campaignOptions.length})`}
           options={campaignOptions}
           parentLabels={parentLabels}
           selected={filters.campaignIds}
@@ -361,7 +351,7 @@ export default function GlobalPerformance({ filters, onChange, brand }: GlobalPe
           })}
         </div>
         <div className="min-w-[150px]">
-          <StyledSelect surface="elevated" options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All prompts" />
+          <StyledSelect surface="elevated" prefix="Prompt:" options={promptOptions} value={filters.prompt} onChange={(v) => set({ prompt: v })} placeholder="All" />
         </div>
         {!isDefault && (
           <button

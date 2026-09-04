@@ -37,7 +37,8 @@ export default function HeatMap({ cells, utcFallbackCalls }: { cells: HeatCell[]
     <WidgetCard
       title="Daily & Hourly Heat Map"
       icon={<LayoutGrid size={14} className="text-[var(--text-3)]" />}
-      context="attempts by hour in each campaign's local time · hover a cell for the breakdown"
+      /* No context tail on the header (Jasiel 2026-09-04): Campaign Performance dropped its
+         own, and a chart that needs a sentence to be read needs better labels. */
       actions={
         <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-3)]">
           Fewer

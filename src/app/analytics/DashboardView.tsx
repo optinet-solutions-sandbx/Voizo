@@ -12,7 +12,6 @@ import { RefreshCWIcon } from "@/components/icons/animated/refresh-cw";
 import { HoverIcon } from "@/components/icons/animated/HoverIcon";
 import type { TodaySnapshot } from "@/lib/dashboardAnalytics";
 import { loadSnapshot, saveSnapshot } from "@/lib/sessionSnapshot";
-import { distinctBrandLabels } from "@/lib/campaignDisplay";
 import { useBrandScope } from "@/lib/brandScope";
 import GlobalPerformance, { type Filters, DEFAULTS } from "./GlobalPerformance";
 import TodayPerformanceCards from "./TodayPerformanceCards";
@@ -73,12 +72,6 @@ export default function DashboardView() {
     return () => clearInterval(id);
   }, [load, todayKey]);
 
-  // Brands behind today's live numbers (VOZ-216) — read off the running campaigns
-  // themselves, so the header can never disagree with the rows underneath it.
-  const todaysBrands = distinctBrandLabels(
-    (data?.runningCampaigns ?? []).map((c) => c.cioWorkspace),
-  );
-
   return (
     <>
       {/* Background dot-field is now global (rendered once in the app layout). */}
@@ -105,20 +98,10 @@ export default function DashboardView() {
               LIVE{data ? ` · ${fmtDay(data.dayUtc)}` : ""}
             </span>
           </div>
-          <p className="text-xs text-[var(--text-3)] mt-0.5">
-            Live operational snapshot. Never affected by the filters below.
-            {/* Which brands today's numbers cover (VOZ-216). Derived from the running
-                campaigns themselves, so it can never disagree with the rows below. */}
-            {todaysBrands.length > 0 && (
-              <>
-                {" "}
-                <span className="text-[var(--text-2)]">
-                  {todaysBrands.length === 1 ? "Brand" : "Brands"} live today:{" "}
-                  <span className="text-primary font-medium">{todaysBrands.join(" · ")}</span>
-                </span>
-              </>
-            )}
-          </p>
+          {/* No line under the title (Jasiel 2026-09-04, his Campaign Performance rule applied
+              here): "Live operational snapshot. Never affected by the filters below." explained
+              the LIVE badge that says it, and the brand list repeated the sidebar switcher, the
+              lane cards' brand chips and every row's own brand. */}
         </div>
         <div className="flex items-center gap-2">
           {error && <span className="text-[11px] text-amber-400 font-mono">{error}</span>}

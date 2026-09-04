@@ -19,9 +19,9 @@ export default function ConversionFunnel({ perf, connected, rangeDays }: { perf:
   const conversations = perf?.reached.total ?? 0;
   const sms = perf?.sms.total ?? 0;
   const rows = [
-    { l: "Call attempts", v: attempts, color: ROW_COLOR.neutral, note: `measured — the ${rangeDays}-day series` },
+    { l: "Call attempts", v: attempts, color: ROW_COLOR.neutral, note: `the ${rangeDays}-day series` },
     { l: "Connected", v: connected, color: ROW_COLOR.reached, note: attempts ? `${pct(connected, attempts)} of attempts` : "measured" },
-    { l: "Conversations established", v: conversations, color: ROW_COLOR.positive, note: connected ? `${pct(conversations, connected)} of connected — a live two-way exchange` : "measured" },
+    { l: "Conversations established", v: conversations, color: ROW_COLOR.positive, note: connected ? `${pct(conversations, connected)} of connected` : "measured" },
     { l: "SMS sent", v: sms, color: ROW_COLOR.voicemail, note: conversations ? `${pct(sms, conversations)} of conversations` : "measured" },
   ];
   const w = (v: number) => (attempts && v ? Math.max((v / attempts) * 100, 0.6) : 0);
@@ -29,7 +29,8 @@ export default function ConversionFunnel({ perf, connected, rangeDays }: { perf:
     <WidgetCard
       title="Conversion Funnel"
       icon={<Filter size={14} className="text-[var(--text-3)]" />}
-      context="attempts → connected → conversations → texts, one shape, same window"
+      /* No context tail on the header (Jasiel 2026-09-04): Campaign Performance dropped its
+         own, and a chart that needs a sentence to be read needs better labels. */
     >
       {!perf ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No completed calls in this window.</p>

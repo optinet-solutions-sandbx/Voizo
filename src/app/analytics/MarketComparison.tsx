@@ -18,10 +18,11 @@ export default function MarketComparison({ markets }: { markets: MarketRow[] }) 
     <WidgetCard
       title="Market Comparison"
       icon={<Globe2 size={14} className="text-[var(--text-3)]" />}
-      context="volume share vs connect rate, per market, same window"
+      /* No context tail on the header (Jasiel 2026-09-04): Campaign Performance dropped its
+         own, and a chart that needs a sentence to be read needs better labels. */
     >
       {markets.length === 0 ? (
-        <p className="text-xs text-[var(--text-3)] py-8 text-center">No calls in this window. An empty result is an answer.</p>
+        <p className="text-xs text-[var(--text-3)] py-8 text-center">No calls in this window.</p>
       ) : (
         <div className="grid gap-2">
           <div className="grid grid-cols-[110px_1fr_52px_1fr_52px] gap-2 text-[10px] uppercase tracking-wider text-[var(--text-4)]">
@@ -42,7 +43,7 @@ export default function MarketComparison({ markets }: { markets: MarketRow[] }) 
             );
           })}
           {markets.length === 1 && (
-            <p className="text-[11px] text-[var(--text-3)] mt-1">One market in scope. A comparison needs a second market; this is an answer, not a failure.</p>
+            <p className="text-[11px] text-[var(--text-3)] mt-1">One market in scope.</p>
           )}
         </div>
       )}

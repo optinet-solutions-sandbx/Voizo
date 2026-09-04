@@ -53,13 +53,11 @@ export default function TrendChart({ data }: { data: TrendPoint[] }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   return (
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] p-5 flex flex-col">
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-2 mb-3">
         <Activity size={16} style={{ color: "#5b9bf0" }} />
         <h3 className="text-[15px] font-semibold">Activity Trend</h3>
       </div>
-      <p className="text-[12.5px] text-[var(--text-3)] mb-3">
-        Daily call attempts, players reached, and offer texts sent.
-      </p>
+      {/* No subtitle (Jasiel 2026-09-04): the legend under the chart names the three series. */}
       <div className="flex-1 min-h-[240px]">
         <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 5, right: 8, left: -8, bottom: 0 }}>

@@ -163,7 +163,8 @@ export default function Leaderboards({
       <div className="flex items-center gap-2.5 flex-wrap">
         <Trophy size={17} className="text-[var(--text-3)]" />
         <h3 className="text-[15px] font-semibold">Leaderboards</h3>
-        <span className="text-[13px] text-[var(--text-3)]">best performers in this window · every row drills into records</span>
+        {/* No tail beside the title (Jasiel 2026-09-04): the card below is labelled BEST
+            CAMPAIGN and the rows are clickable. */}
         <span className="flex-1" />
         <div className="inline-flex p-[3px] gap-0.5 rounded-[10px] bg-[var(--bg-elevated)] border border-[var(--border)]">
           {DIMS.map((d) => (

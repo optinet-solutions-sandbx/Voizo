@@ -89,11 +89,11 @@ export default function DailyVolumeChart({ data }: { data: VolumeResult }) {
   const colors = buildColors(series);
   return (
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-[14px] p-5">
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-2 mb-3">
         <BarChart3 size={16} style={{ color: "#3ec08a" }} />
         <h3 className="text-[15px] font-semibold">Daily Call Volume</h3>
       </div>
-      <p className="text-[12.5px] text-[var(--text-3)] mb-3">Calls per day, stacked by country.</p>
+      {/* No subtitle (Jasiel 2026-09-04): the country legend under the bars says it. */}
       {series.length === 0 ? (
         <p className="text-xs text-[var(--text-3)] py-8 text-center">No call volume in this window.</p>
       ) : (

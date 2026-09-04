@@ -45,7 +45,7 @@ export default function ChartStrip({ children, count }: { children: ReactNode; c
         ref={ref}
         role="region"
         tabIndex={0}
-        aria-label={`Global charts — ${count} cards, two shown at a time; scroll or swipe for the rest`}
+        aria-label={`Global charts, ${count} cards, two shown at a time. Scroll or swipe for the rest.`}
         className="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-1 [scrollbar-width:thin] max-lg:flex-col max-lg:overflow-visible [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[calc(50%-8px)] max-lg:[&>*]:w-full"
       >
         {children}
