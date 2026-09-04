@@ -72,7 +72,10 @@ export async function GET(request: NextRequest) {
       supabaseAdmin,
       "campaigns_v2",
       // cio_workspace: the brand chip + panel brand-scope line (VOZ-216).
-      "id, name, status, source, is_test, campaign_type, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
+      // parent_campaign_id: the family a day-child belongs to, which names the Today row
+      // (Brand · Country · Play). Omitted here until 2026-09-04, so every Today row fell back
+      // to the run's own raw name.
+      "id, name, status, source, is_test, campaign_type, parent_campaign_id, voice_id, vapi_assistant_name, base_assistant_id, cio_workspace, start_at, created_at, end_at",
       "id",
     ),
   ]);

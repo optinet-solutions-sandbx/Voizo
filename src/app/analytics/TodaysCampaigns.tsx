@@ -9,7 +9,7 @@
 
 import { useState } from "react";
 import type { RunningCampaignCard } from "@/lib/dashboardAnalytics";
-import { formatCampaign, brandLabel, campaignGroupHeaderLabels } from "@/lib/campaignDisplay";
+import { formatCampaign, brandLabel, campaignGroupHeaderLabels, campaignShortLabel } from "@/lib/campaignDisplay";
 import { playOf, runOrdinals } from "./campaignGrouping";
 import { useExpandSlices } from "./useExpandSlices";
 import CampaignRow, { CAMPAIGN_ROW_GRID, type CampaignRowData } from "./CampaignRow";
@@ -57,8 +57,16 @@ export default function TodaysCampaigns({ campaigns }: { campaigns: RunningCampa
   const laneLabelOf = (c: RunningCampaignCard): string => {
     const label = c.parentCampaignId ? parentLabel.get(c.parentCampaignId) : null;
     const brand = brandLabel(c.cioWorkspace);
-    const play = label ? playOf(label, formatCampaign(c.name).country || c.country, brand) : formatCampaign(c.name).offer || formatCampaign(c.name).display;
-    return `${brandsLive > 1 ? `${brand} · ` : ""}${c.country} · ${play}`;
+    // The country the label carries is the NAME ("Australia"); c.country is the token ("AU").
+    // Use the name so the row reads like the lane cards above it, and so a play tail that still
+    // carries "AU" does not sit next to a second "AU".
+    const country = formatCampaign(c.name).country || c.country;
+    // A run with no family is named from itself, through the same stripping, so the country and
+    // brand are not said twice.
+    const play = playOf(label || campaignShortLabel(c.name), country, brand);
+    // Joined, not concatenated: a campaign whose name carries no country and no play would
+    // otherwise leave a dangling separator in the row's only label.
+    return [brandsLive > 1 ? brand : "", country, play].filter(Boolean).join(" · ");
   };
   const ordinals = runOrdinals(rows.map((c) => ({ ...c, attempts: c.perf.callAttempts.total, conversations: c.perf.reached.total, sms: c.perf.sms.total, displayStatus: "running" as const })));
 
