@@ -225,7 +225,7 @@ export async function runLastResortSweep(
         continue;
       }
 
-      const result = await sendSMS({ to: phone, body: template, reference: smsRow.id, originator: senderId });
+      const result = await sendSMS({ to: phone, body: template, reference: smsRow.id, originator: senderId, campaignName });
       await supabase
         .from("sms_messages_v2")
         .update({

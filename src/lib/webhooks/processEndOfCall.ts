@@ -455,6 +455,9 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
     /** Brand routing anchor (VOZ-198). The `*` select provides it; the legacy
      *  fallback select omits it → undefined → default brand (Lucky7even). */
     cio_workspace?: string | null;
+    /** The run's name. Names the Mobivate batch (2026-09-04) so their per-campaign
+     *  click report groups like ours. The `*` select provides it; legacy omits it → no name. */
+    name?: string | null;
   };
   let campaign: SmsCampaignConfig | null = null;
   {
@@ -754,6 +757,7 @@ export async function processEndOfCall(message: Record<string, unknown>): Promis
                       body: smsTemplate,
                       reference: smsRow.id,
                       originator: senderId,
+                      campaignName: campaign?.name ?? null,
                     });
 
                     await supabaseAdmin

@@ -1,8 +1,14 @@
 /**
  * Mobivate SMS API client.
  *
- * Sends SMS via Mobivate's Bulk API (POST /send/single with Bearer auth).
+ * Sends SMS via Mobivate's Bulk API (POST /send/batch with Bearer auth, one recipient per call).
  * Server-side only — NEVER import from client components.
+ *
+ * 2026-09-04: moved from /send/single to /send/batch at Mobivate's request (relayed by Gisela):
+ * only the batch ("campaign") path carries their link tracking, so clicks on the shortened
+ * offer link show in their per-campaign report. Dispatch is still one text per call end, so
+ * every batch holds exactly ONE recipient and nothing upstream of sendSMS changed. The batch
+ * is named after OUR campaign run, so their report groups the way ours does.
  *
  * Manifesto compliance:
  * - Provider-agnostic schema: sms_messages_v2.provider = 'mobivate' (§2 Evolvability)
@@ -12,7 +18,8 @@
  *
  * API docs: https://wiki.mobivatebulksms.com
  * Auth: Bearer token in Authorization header
- * Endpoint: POST https://vortex.mobivatebulksms.com/send/single
+ * Endpoint: POST https://vortex.mobivatebulksms.com/send/batch
+ *   (docs: https://wiki.mobivatebulksms.com/sending-sms/send-batch-sms-messages)
  *
  * Spec: docs/2026-04-15_SPEC_FreeSWITCH_Pitch_MVP.md (SMS dispatch section)
  */
@@ -95,12 +102,20 @@ export interface SendSMSArgs {
    *  at the call site and pass it here. Omitted → the legacy default MOBIVATE_SENDER_ID
    *  (backward-compatible with pre-per-brand callers). */
   originator?: string;
+  /** Our campaign run's name (campaigns_v2.name). Becomes the Mobivate batch/campaign `name`,
+   *  so their per-campaign click report lines up with our runs. Omitted when unknown. */
+  campaignName?: string | null;
 }
 
 export interface SendSMSResult {
   /** Whether Mobivate accepted the request */
   success: boolean;
-  /** Mobivate's message ID — store in sms_messages_v2.provider_message_id */
+  /** Mobivate's id for the accepted request — store in sms_messages_v2.provider_message_id.
+   *  On /send/batch this is the BATCH id (type BatchSMS), not a per-message id: the batch
+   *  answer carries none. The delivery-receipt route matches our `reference` first and then
+   *  overwrites provider_message_id with the receipt's real <deliveryMessageId>, so this is a
+   *  placeholder for the ~6 s until the receipt lands (the ~6% of texts that never get a receipt
+   *  keep the batch id, which still finds the send in Mobivate's portal). */
   providerMessageId: string | null;
   /** Error message if failed */
   error: string | null;
@@ -130,39 +145,32 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
   const recipient = args.to.startsWith("+") ? args.to.slice(1) : args.to;
 
   const requestBody = {
-    // BOTH message fields, same content, on purpose (2026-08-27).
-    //
-    // Mobivate's docs name this field `text`; we have sent `body` since the
-    // integration was written, and messages deliver, so their send path accepts
-    // it. But `shortenUrls: true` (on since 8420c70, 2026-05-04) fires only
-    // SOMETIMES: measured over the 19 Aug capture, AU averaged 1.29 billed parts
-    // per message (mostly shortened) while all 134 delivered NZ messages billed
-    // 2 parts with the full 64-char URL still in Mobivate's own stored text (0
-    // shortened). Another integration on the same account gets `cllk.me` links on
-    // single-sends, so the feature works there. The most likely difference we can
-    // see is this field name: a shortener reading the documented `text` would
-    // never see a body-only payload, while the sender falls back to `body`.
-    //
-    // Populating both is the safe test of that: if they only ever read `body`,
-    // nothing changes; if the shortener wants `text`, it starts firing. Sending
-    // `text` ALONE would risk every SMS if some middleware needs `body`.
-    // Unshortened messages cross the 160-char line and bill double — about 37%
-    // of parts on that capture were avoidable second parts, and NZ is the
-    // priciest lane at EUR 0.11 per delivered message.
-    // REVERT THIS if Mobivate confirms the field is irrelevant and names the
-    // real cause (country, sender ID, or destination domain).
+    // ONE recipient per batch: dispatch decides per call end, so a batch is the
+    // documented shape wrapped around the single text we already send. `reference`
+    // (our sms_messages_v2.id) rides INSIDE the recipient on this endpoint; the
+    // delivery receipt echoes it as <clientReference>, which is how the row is found.
+    recipients: [{ recipient, reference: args.reference || undefined }],
+    // `text` is the documented field on /send/batch. (The 08-27 single-send experiment
+    // of sending `text` AND `body` was a shortener probe on the old path; it ends here.)
     text: args.body,
-    body: args.body,
     // Per-brand originator resolved at the call site (VOZ per-brand SMS); the
     // module-load default keeps pre-per-brand callers behaving exactly as before.
     originator: args.originator ?? MOBIVATE_SENDER_ID,
-    recipient,
+    // The Mobivate campaign name = our run name, so their per-campaign click report
+    // groups like ours. Omitted (not "") when the caller has no name.
+    ...(args.campaignName ? { name: args.campaignName } : {}),
+    // The shortener never fired on NZ single-sends (all 134 delivered NZ messages on the
+    // 19 Aug capture billed 2 parts with the full URL); Mobivate says tracking lives on
+    // the batch path. Measured after deploy: parts per NZ message must drop to 1.
     shortenUrls: true,
-    excludeOptouts: true,
-    reference: args.reference || undefined,
+    // /send/single spells this `excludeOptouts`; /send/batch documents `excludeOptOuts`.
+    excludeOptOuts: true,
+    // The batch path is built for campaigns spread over hours. Ours goes out now;
+    // 0 is stated so a provider-side default can never delay a follow-up text.
+    spreadHours: 0,
   };
 
-  const url = `https://${MOBIVATE_API_HOST}/send/single`;
+  const url = `https://${MOBIVATE_API_HOST}/send/batch`;
 
   try {
     const response = await fetch(url, {
@@ -182,8 +190,9 @@ export async function sendSMS(args: SendSMSArgs): Promise<SendSMSResult> {
 
     const data = await response.json();
 
-    // Working Mobivate API path for this account uses the vortex host and
-    // returns { success: true, record: { id, ... } } on acceptance.
+    // Acceptance is { success: true, record: { id, type: "BatchSMS", recipientCount } }.
+    // record.id is the BATCH id (see SendSMSResult.providerMessageId); the per-message id
+    // arrives only on the delivery receipt.
     const providerMessageId =
       typeof data.record?.id === "string" && data.record.id.length > 0
         ? data.record.id

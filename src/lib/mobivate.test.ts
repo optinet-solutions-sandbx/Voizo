@@ -98,56 +98,114 @@ describe("sendSMS request body", () => {
     vi.resetModules();
   });
 
-  async function captureRequest(body: string) {
+  // Mobivate's documented /send/batch acceptance: ONE id for the whole batch, no per-message ids.
+  const BATCH_ACCEPTED = {
+    success: true,
+    record: { id: "batch-1", type: "BatchSMS", scheduled: "2026-09-04T09:00:00.000Z", recipientCount: 1 },
+  };
+
+  async function captureRequest(
+    body: string,
+    opts: { campaignName?: string; response?: unknown; ok?: boolean; status?: number } = {},
+  ) {
     let captured: Record<string, unknown> | null = null;
     let calledUrl = "";
     globalThis.fetch = (async (url: string, init: { body?: string }) => {
       calledUrl = String(url);
       captured = JSON.parse(String(init?.body ?? "{}"));
       return {
-        ok: true,
-        status: 200,
-        json: async () => ({ success: true, record: { id: "prov-1" } }),
+        ok: opts.ok ?? true,
+        status: opts.status ?? 200,
+        json: async () => opts.response ?? BATCH_ACCEPTED,
       };
     }) as unknown as typeof globalThis.fetch;
     vi.resetModules();
     const { sendSMS } = await import("./mobivate");
-    const result = await sendSMS({ to: "+64211657305", body, reference: "our-row-id" });
+    const result = await sendSMS({
+      to: "+64211657305",
+      body,
+      reference: "our-row-id",
+      ...(opts.campaignName !== undefined ? { campaignName: opts.campaignName } : {}),
+    });
     return { captured: captured as unknown as Record<string, unknown>, calledUrl, result };
   }
 
   const OFFER =
     "Your 20 totally FREE spins await! Deposit $30 with code LUCKY for 300% bonus up to $500. Ends midnight. https://Lucky-even.win/promotions?fast-deposit=modal&bonus=LUCKY STOP? Qwt5.me";
+  const RUN = "Daily Automated Conversion | VOIZO REACTIVATION Campaign - AU (2026-09-04)";
 
-  it("sends the message in BOTH `text` and `body`, byte-identical", () => {
-    // The whole point of the 08-27 change: Mobivate documents `text`, we have
-    // always sent `body`. A drift between the two would text two different things.
+  // 2026-09-04: Mobivate (via Gisela) asked for /send/batch — "send as a campaign" — so their
+  // link tracking and per-campaign click report apply. Dispatch stays one text per call end,
+  // so every batch carries exactly ONE recipient; nothing upstream of sendSMS changes.
+  it("posts to /send/batch with ONE recipient that carries our row id as its reference", () => {
+    return captureRequest(OFFER).then(({ captured, calledUrl }) => {
+      expect(calledUrl).toBe("https://vortex.example.com/send/batch");
+      expect(captured.recipients).toEqual([{ recipient: "64211657305", reference: "our-row-id" }]);
+      // the single-send fields must not linger at the top level: a stray top-level `recipient`
+      // on the batch path is ignored by Mobivate and the text goes nowhere
+      expect(captured.recipient).toBeUndefined();
+      expect(captured.reference).toBeUndefined();
+    });
+  });
+
+  it("the message rides in `text` only — the batch docs name no `body`", () => {
+    // The 08-27 both-fields experiment was a single-send shortener probe. Here `text` is the
+    // documented field and the only one; a `body` would be dead weight or, worse, the one read.
     return captureRequest(OFFER).then(({ captured }) => {
       expect(captured.text).toBe(OFFER);
-      expect(captured.body).toBe(OFFER);
-      expect(captured.text).toBe(captured.body);
+      expect(captured.body).toBeUndefined();
     });
   });
 
-  it("keeps asking for URL shortening and opt-out exclusion", () => {
+  it("keeps URL shortening and opt-out exclusion, in the batch endpoint's own casing", () => {
     return captureRequest(OFFER).then(({ captured }) => {
       expect(captured.shortenUrls).toBe(true);
-      expect(captured.excludeOptouts).toBe(true);
+      // /send/single documents `excludeOptouts`; /send/batch documents `excludeOptOuts`.
+      expect(captured.excludeOptOuts).toBe(true);
+      expect(captured.excludeOptouts).toBeUndefined();
     });
   });
 
-  it("strips the leading + from the recipient and passes originator + reference", () => {
-    return captureRequest(OFFER).then(({ captured, calledUrl }) => {
-      expect(captured.recipient).toBe("64211657305");
+  it("goes out now: spreadHours is 0 explicitly, never left to a campaign default", () => {
+    return captureRequest(OFFER).then(({ captured }) => {
+      expect(captured.spreadHours).toBe(0);
+      expect(captured.scheduleDateTime).toBeUndefined();
+    });
+  });
+
+  it("names the Mobivate campaign after OUR run, so their click report lines up with ours", () => {
+    return captureRequest(OFFER, { campaignName: RUN }).then(({ captured }) => {
+      expect(captured.name).toBe(RUN);
       expect(captured.originator).toBe("Lucky7even");
-      expect(captured.reference).toBe("our-row-id");
-      expect(calledUrl).toBe("https://vortex.example.com/send/single");
     });
   });
 
-  it("returns the provider message id we store on the sms row", () => {
-    return captureRequest(OFFER).then(({ result }) => {
-      expect(result).toEqual({ success: true, providerMessageId: "prov-1", error: null });
+  it("with no run name the `name` field is omitted, not sent as an empty string", () => {
+    return captureRequest(OFFER).then(({ captured }) => {
+      expect("name" in captured).toBe(false);
     });
+  });
+
+  it("returns the batch id as the provider id — the delivery receipt replaces it with the message id", () => {
+    // /send/batch answers with the BATCH's id (type BatchSMS), not a message id. The receipt
+    // route matches our `reference` first and overwrites provider_message_id with Mobivate's
+    // real <deliveryMessageId>, so this value is a placeholder for the ~6s until the receipt lands.
+    return captureRequest(OFFER).then(({ result }) => {
+      expect(result).toEqual({ success: true, providerMessageId: "batch-1", error: null });
+    });
+  });
+
+  it("a 200 with no record id is a failure, never a silent success", () => {
+    return captureRequest(OFFER, { response: { success: true } }).then(({ result }) => {
+      expect(result.success).toBe(false);
+      expect(result.providerMessageId).toBeNull();
+    });
+  });
+
+  it("a non-2xx surfaces Mobivate's message so the sms row records why", () => {
+    return captureRequest(OFFER, { ok: false, status: 400, response: { success: false, message: "originator not allowed" } })
+      .then(({ result }) => {
+        expect(result).toEqual({ success: false, providerMessageId: null, error: "originator not allowed" });
+      });
   });
 });
