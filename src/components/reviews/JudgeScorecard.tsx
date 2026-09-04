@@ -10,6 +10,7 @@ export interface JudgeCalibration {
 
 export function JudgeScorecard({
   judgeEnabled,
+  autoGrading = false,
   calibration,
   scoredCount,
   loading,
@@ -18,6 +19,9 @@ export function JudgeScorecard({
   gradeMsg,
 }: {
   judgeEnabled: boolean;
+  /** Whether the judge also scores on its own every half hour. False = paused, and the
+   *  Score all button is the only way it runs (Jasiel 2026-09-04). */
+  autoGrading?: boolean;
   calibration: JudgeCalibration | null;
   scoredCount: number;
   loading: boolean;
@@ -25,6 +29,9 @@ export function JudgeScorecard({
   gradingAll?: boolean;
   gradeMsg?: string | null;
 }) {
+  // Three states, not two: the judge can be unusable, running on its own, or usable but only
+  // when asked. Collapsing the last two into "ON" is what made a paused judge look broken.
+  const state = !judgeEnabled ? "off" : autoGrading ? "on" : "manual";
   return (
     <section className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
@@ -43,16 +50,26 @@ export function JudgeScorecard({
             </button>
           )}
           <span
+            title={
+              state === "manual"
+                ? "Automatic scoring is paused. The judge runs only when you press Score all."
+                : undefined
+            }
             className={`text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border ${
-              judgeEnabled
+              state === "on"
                 ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
+                : state === "manual"
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                  : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
             }`}
           >
-            {judgeEnabled ? "ON" : "OFF"}
+            {state === "on" ? "ON" : state === "manual" ? "MANUAL" : "OFF"}
           </span>
         </div>
       </div>
+      {state === "manual" && (
+        <p className="text-[11px] text-amber-400 mb-2">Automatic scoring is paused. Score all runs the judge here.</p>
+      )}
       {gradeMsg && <p className="text-[11px] text-[var(--text-3)] mb-2">{gradeMsg}</p>}
       {loading ? (
         <div className="h-5 w-2/3 rounded bg-[var(--bg-elevated)] animate-pulse" />
@@ -63,7 +80,7 @@ export function JudgeScorecard({
         </p>
       ) : !calibration || calibration.n === 0 ? (
         <p className="text-[11px] text-[var(--text-3)]">
-          On · {scoredCount} call{scoredCount === 1 ? "" : "s"} scored. No overlap with your ratings yet. Rate and score
+          {scoredCount} call{scoredCount === 1 ? "" : "s"} scored. No overlap with your ratings yet. Rate and score
           the same calls to populate the gauge.
         </p>
       ) : (

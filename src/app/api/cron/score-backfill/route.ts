@@ -10,6 +10,7 @@ import {
   QA_ROW_CAP,
   QA_CONCURRENCY,
   QA_MAX_SCORES_PER_DAY,
+  QA_JUDGE_AUTO,
 } from "@/lib/qa/qaConfig";
 import crypto from "crypto";
 
@@ -40,6 +41,15 @@ export async function GET(request: NextRequest) {
     console.log("[score-backfill] disabled (QA_JUDGE_ENABLED off or no ANTHROPIC_API_KEY) — no-op");
     await recordHeartbeat(supabaseAdmin, CRON_NAMES.scoreBackfill);
     return NextResponse.json({ disabled: true });
+  }
+
+  // Automatic scoring PAUSED (Jasiel 2026-09-04): the judge stays usable from the Reviews tab,
+  // but it no longer spends on its own. The heartbeat is still recorded — without it the
+  // cron-health alerting would report this job as dead rather than deliberately idle.
+  if (!QA_JUDGE_AUTO) {
+    console.log("[score-backfill] automatic scoring paused (QA_JUDGE_AUTO not set) — no-op");
+    await recordHeartbeat(supabaseAdmin, CRON_NAMES.scoreBackfill);
+    return NextResponse.json({ paused: true });
   }
 
   const jv = judgeVersion(QA_JUDGE_MODEL);

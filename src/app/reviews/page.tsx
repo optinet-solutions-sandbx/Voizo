@@ -40,7 +40,7 @@ const SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
   { key: "leastLabeled", label: "Least labeled" },
   { key: "region", label: "Region" },
 ];
-interface CampaignsResponse { campaigns: ReviewCampaign[]; reviewer: string }
+interface CampaignsResponse { campaigns: ReviewCampaign[]; reviewer: string; autoGrading?: boolean }
 
 export default function ReviewsPage() {
   const [data, setData] = useState<CampaignsResponse | null>(null);
@@ -130,6 +130,17 @@ export default function ReviewsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* The tab says whether the judge is scoring on its own (Jasiel 2026-09-04). An
+              operator who sees no new verdicts should not have to guess why. Absent when it is
+              running, loud only when it is not: quiet when normal. */}
+          {data && data.autoGrading === false && (
+            <span
+              title="The AI judge no longer scores transcripts on a schedule. Open a campaign and press Score all to run it."
+              className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded-full border bg-amber-500/10 text-amber-400 border-amber-500/30"
+            >
+              auto-review paused
+            </span>
+          )}
           {error && (
             <span className="text-[11px] text-amber-400 font-mono inline-flex items-center gap-1">
               <AlertCircle size={11} /> {error}

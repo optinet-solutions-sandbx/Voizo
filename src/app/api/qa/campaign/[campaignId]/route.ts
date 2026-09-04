@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readCalibration, selectCampaignScores } from "@/lib/qaScoreData";
 import { computeCalibration } from "@/lib/qa/qaScoreMath";
 import { judgeVersion } from "@/lib/qa/judgePrompt";
-import { qaJudgeReady, QA_JUDGE_MODEL } from "@/lib/qa/qaConfig";
+import { qaJudgeReady, qaAutoGradingOn, QA_JUDGE_MODEL } from "@/lib/qa/qaConfig";
 
 function sameOrigin(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
@@ -53,5 +53,5 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ campaig
     };
   }
 
-  return NextResponse.json({ judgeEnabled: qaJudgeReady(), judge_version: jv, calibration, scores });
+  return NextResponse.json({ judgeEnabled: qaJudgeReady(), autoGrading: qaAutoGradingOn(), judge_version: jv, calibration, scores });
 }

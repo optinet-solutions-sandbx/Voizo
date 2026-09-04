@@ -4,6 +4,12 @@
 // scored before Maria's PII sign-off). Pure module — no I/O, importable anywhere.
 
 export const QA_JUDGE_ENABLED = process.env.QA_JUDGE_ENABLED === "true";
+// Automatic scoring (the every-30-min score-backfill cron) is PAUSED unless this is set
+// (Jasiel 2026-09-04). Separate from QA_JUDGE_ENABLED on purpose: turning the judge itself off
+// would also disable the on-demand "Score all" button and the per-call grade, and the point of
+// the pause is that a human decides when the judge runs, not that the judge is gone. Default off,
+// like every other switch in this file, so the pause needs no env change to take effect.
+export const QA_JUDGE_AUTO = process.env.QA_JUDGE_AUTO === "true";
 // Provider: "openai" (available now) or "anthropic" (preferred for independence —
 // wired so the later swap is just QA_JUDGE_PROVIDER=anthropic + the key).
 export const QA_JUDGE_PROVIDER = (process.env.QA_JUDGE_PROVIDER || "openai").toLowerCase();
@@ -38,4 +44,10 @@ export const QA_TRANSCRIPT_CHAR_CAP = 6000; // bound a pathological long call be
 export function qaJudgeReady(): boolean {
   if (!QA_JUDGE_ENABLED) return false;
   return QA_JUDGE_PROVIDER === "anthropic" ? ANTHROPIC_API_KEY.length > 0 : OPENAI_API_KEY.length > 0;
+}
+
+/** True only when the judge may score WITHOUT a human asking: the cron's gate. The manual
+ *  routes deliberately do not consult this, so "paused" never means "unusable". */
+export function qaAutoGradingOn(): boolean {
+  return qaJudgeReady() && QA_JUDGE_AUTO;
 }

@@ -26,7 +26,7 @@ interface QueueItem {
   goalReached: boolean | null; transcript: string; audioUrl: string | null; yourLabel: CallLabel | null;
 }
 interface QueueResponse { items: QueueItem[]; total: number; reviewer: string; }
-interface JudgeData { judgeEnabled: boolean; calibration: JudgeCalibration; scores: Record<string, JudgeScore>; }
+interface JudgeData { judgeEnabled: boolean; autoGrading?: boolean; calibration: JudgeCalibration; scores: Record<string, JudgeScore>; }
 
 // Suspense wrapper required by Next.js when a page uses useSearchParams in a
 // statically-prerenderable client component (workers/page.tsx pattern). The inner
@@ -212,6 +212,7 @@ function CampaignReviewPageInner() {
 
       <JudgeScorecard
         judgeEnabled={judge?.judgeEnabled ?? false}
+        autoGrading={judge?.autoGrading ?? false}
         calibration={judge?.calibration ?? null}
         scoredCount={judge ? Object.keys(judge.scores).length : 0}
         loading={loading}

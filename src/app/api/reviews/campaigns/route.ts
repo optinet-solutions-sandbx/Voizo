@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listReviewCampaigns } from "@/lib/labelData";
+import { qaAutoGradingOn } from "@/lib/qa/qaConfig";
 
 /**
  * GET /api/reviews/campaigns?testOnly=true|false
@@ -32,7 +33,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const campaigns = await listReviewCampaigns({ labeledBy: reviewerFrom(), testOnly });
-    return NextResponse.json({ campaigns, reviewer: reviewerFrom() });
+    // autoGrading: whether the judge scores on its own, so the tab can say so (2026-09-04).
+    return NextResponse.json({ campaigns, reviewer: reviewerFrom(), autoGrading: qaAutoGradingOn() });
   } catch (err) {
     console.error("[reviews/campaigns] failed:", err);
     return NextResponse.json({ error: "Failed to load review campaigns" }, { status: 500 });
