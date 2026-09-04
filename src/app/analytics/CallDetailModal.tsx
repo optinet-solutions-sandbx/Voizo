@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { X, Download, VolumeX, Target, Phone, ArrowUpRight, MessageSquare } from "lucide-react";
+import { X, Download, VolumeX, Phone, ArrowUpRight, MessageSquare } from "lucide-react";
 import type { CallRecord } from "@/lib/dashboardAnalytics";
 import type { PlayerRun } from "./playerGrouping";
 import CallTranscript from "@/components/CallTranscript";
@@ -277,15 +277,14 @@ export default function CallDetailModal({ record, runs, playerName, onOpenRun, o
                     <span>{a.status.replace(/_/g, " ") || "—"}</span>
                     {a.durationSeconds != null && (<><span>·</span><span>{a.durationSeconds}s</span></>)}
                   </div>
-                  <Hint content="The system's success flag (goal_reached)">
-                    <span
-                      className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
-                        a.goalReached ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-[var(--bg-elevated)] text-[var(--text-3)] border-[var(--border)]"
-                      }`}
-                    >
-                      <Target size={9} /> goal {a.goalReached ? "true" : "false"}
-                    </span>
-                  </Hint>
+                  {/* NO success flag on an attempt (Jasiel 2026-09-04). It read "goal true" /
+                      "goal false" with the DB column name in the tooltip, and operators could not
+                      act on it. Renaming it to "Positive response" was worse: under the older
+                      mandate the offer SMS went to everyone, voicemails included, so operators
+                      found transcripts where the player disagreed and the record still claimed the
+                      goal. A plain-English label there would assert agreement the transcript
+                      contradicts. The transcript below is the evidence; it needs no verdict on top
+                      of it. Reviews keeps the technical flag. */}
                 </div>
 
                 {a.audioUrl ? (
