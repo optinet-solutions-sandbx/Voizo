@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { freeMaintenanceSlot, patchPhoneAssistant, releaseSlot } from "@/lib/vapi/sipPool";
 import { CRON_NAMES, postSlackAlert, recordHeartbeat } from "@/lib/alerts/slack";
+import { countDueNumbers } from "@/lib/scheduler/dialingCampaigns";
 import crypto from "crypto";
 
 // Heartbeat runs every 30 min (vercel.json crons). Per running campaign we
@@ -16,8 +17,10 @@ export const maxDuration = 30;
  * Vercel Cron job — runs every 30 minutes.
  *
  * Surfaces campaigns that appear "stuck": status='running' but no calls
- * have been created in the last 30 minutes AND there are still pending /
- * pending_retry numbers on the campaign. Common causes:
+ * have been created in the last 30 minutes AND the dialer has DUE work — a
+ * pending number, or a retry whose time has come (countDueNumbers, the dialer's
+ * own eligibility). A retry timer still in the future is a campaign WAITING,
+ * never "stuck" — including the 12h route-refusal deferral. Common causes:
  *   - FreeSWITCH origination silently failing (no error path back to us)
  *   - FreeSWITCH voice-status webhook never firing for the most recent call,
  *     so chainNextCall was never called and the dialer stalled
@@ -26,8 +29,8 @@ export const maxDuration = 30;
  *
  * MVP behavior: detect + log + return a JSON list. No auto-fix. Operator
  * decides whether to pause / resume / investigate. Auto-flipping status
- * is too aggressive given the heuristic could fire on a legitimately-slow
- * campaign (long pending_retry windows, etc.).
+ * is too aggressive: "due but not dialled for 30 minutes" can still be a
+ * transient (a slow originate, a tick that ran out of budget).
  *
  * Pairs with the queue gate (campaign-scheduler + /start endpoint): the
  * gate enforces 1-at-a-time, so a stuck campaign blocks ALL further
@@ -65,7 +68,7 @@ export async function GET(request: NextRequest) {
   // stamp separately so the operator sees both the stall and the retry activity.
   const { data: running, error: runningErr } = await supabaseAdmin
     .from("campaigns_v2")
-    .select("id, name, updated_at, last_swept_at, retry_interval_minutes")
+    .select("id, name, updated_at, last_swept_at, retry_interval_minutes, max_attempts")
     .eq("status", "running");
 
   if (runningErr) {
@@ -108,57 +111,36 @@ export async function GET(request: NextRequest) {
 
     if (recentCallCount && recentCallCount > 0) continue; // active — not stuck
 
-    // Pending numbers remaining?
-    const { count: pendingCount, error: pendErr } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("id", { count: "exact", head: true })
-      .eq("campaign_id", campaignId)
-      .in("outcome", ["pending", "pending_retry"]);
+    // Due work the dialer is NOT doing? "Due" is findNextNumber's own eligibility
+    // (countDueNumbers): pending, or a retry whose time HAS come, under max_attempts.
+    // A retry timer still in the future — 30min normally, 12h after two carrier
+    // refusals (hangupOutcome.ts ROUTE_REFUSAL_DEFER_HOURS) — is a campaign WAITING,
+    // not stuck. The previous heuristic counted every pending_retry and then looked
+    // only 60min AHEAD for a coming retry, so the 12h deferral read as "stuck" for 11
+    // hours and re-alerted every 30 minutes (2026-09-14: 37 SIP-500 casualties across
+    // five children produced ~25 false alarms in one day).
+    // Type-guard max_attempts the way retry_interval_minutes was guarded before: a
+    // null / NaN / string-typed value must not become `.lt("attempt_count", NaN)`.
+    const maxAttemptsRaw = c.max_attempts;
+    const maxAttempts =
+      typeof maxAttemptsRaw === "number" && Number.isFinite(maxAttemptsRaw) && maxAttemptsRaw > 0
+        ? maxAttemptsRaw
+        : 3;
+    const { count: dueCount, error: dueErr } = await countDueNumbers(
+      supabaseAdmin,
+      campaignId,
+      maxAttempts,
+      new Date().toISOString(),
+    );
 
-    if (pendErr) {
-      console.error(`[campaign-heartbeat] pending-count error for ${campaignId}:`, pendErr);
+    if (dueErr) {
+      console.error(`[campaign-heartbeat] due-count error for ${campaignId}:`, dueErr);
+      // Fail-open: an unreadable count is not evidence of a stall (better than a false alarm)
       continue;
     }
 
-    if (!pendingCount || pendingCount === 0) continue; // no work left — just hasn't auto-completed
-
-    // Pending-retry awareness (compliance / noise-reduction):
-    // A campaign whose remaining work is all pending_retry awaiting their next
-    // attempt would be flagged "stuck" by the previous heuristic — but it's
-    // actually HEALTHY (just waiting). Lookahead window MUST be at least the
-    // campaign's retry_interval_minutes; otherwise we false-flag the early
-    // portion of a 90-min wait (heartbeat fires every 30min, retry interval
-    // is 90min — without sizing the lookahead by retry_interval, the first
-    // 60min of every wait would alarm).
-    // Type-guard against schema corruption: the column is INT NOT NULL DEFAULT 90,
-    // but defensive programming for null / NaN / string-typed values means we
-    // guarantee a numeric value before Math.max. Otherwise `Math.max(NaN, 60)`
-    // returns NaN → `new Date(NaN)` → `.toISOString()` throws → entire
-    // heartbeat tick crashes for ALL campaigns.
-    const retryRaw = c.retry_interval_minutes;
-    const retryInterval =
-      typeof retryRaw === "number" && Number.isFinite(retryRaw) && retryRaw > 0
-        ? retryRaw
-        : 90;
-    const lookaheadMin = Math.max(retryInterval, 60);
-    const lookaheadAt = new Date(Date.now() + lookaheadMin * 60 * 1000).toISOString();
-    const { count: imminentRetryCount, error: retryErr } = await supabaseAdmin
-      .from("campaign_numbers_v2")
-      .select("id", { count: "exact", head: true })
-      .eq("campaign_id", campaignId)
-      .eq("outcome", "pending_retry")
-      .lte("next_attempt_at", lookaheadAt);
-
-    if (retryErr) {
-      console.error(`[campaign-heartbeat] retry-count error for ${campaignId}:`, retryErr);
-      // Fail-open: if we can't tell, assume healthy (better than false alarm)
-      continue;
-    }
-
-    if (imminentRetryCount && imminentRetryCount > 0) {
-      // Healthy: a retry will fire within the lookahead window; not stuck
-      continue;
-    }
+    if (!dueCount || dueCount === 0) continue; // nothing due — waiting on timers, or done
+    const pendingCount = dueCount;
 
     // Stuck: running, has pending work, no recent activity, no imminent retries
     stuck.push({
@@ -388,7 +370,7 @@ export async function GET(request: NextRequest) {
   if (stuck.length > 0) {
     const stuckDetails = stuck.map(
       (s) =>
-        `${s.name} (${s.id}) — ${s.pendingNumbers} pending, last updated ${s.lastUpdated}` +
+        `${s.name} (${s.id}) — ${s.pendingNumbers} due (pending, or retry timer passed), last updated ${s.lastUpdated}` +
         (s.lastFireAttempt ? `, last fire attempt ${s.lastFireAttempt}` : ""),
     );
     await postSlackAlert(

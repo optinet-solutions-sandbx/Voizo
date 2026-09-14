@@ -28,3 +28,31 @@ export async function countDialingCampaigns(
     .not("vapi_pool_slot_id", "is", null);
   return { count, error };
 }
+
+/**
+ * Numbers the dialer would fire RIGHT NOW for a campaign — findNextNumber's own
+ * eligibility: outcome pending, or a pending_retry whose next_attempt_at has passed,
+ * and under max_attempts. `nowIso` is a parameter so the callers share one clock per
+ * tick and a test can pin the cutoff.
+ *
+ * Written once for the two watchers that ask "is there work the dialer is not doing?":
+ * campaign-heartbeat's stuck detector and anomalySweep's dial-silence detector. The
+ * heartbeat used to look 60min AHEAD for a coming retry instead, so a number parked by
+ * the 12h route-refusal deferral (hangupOutcome.ts ROUTE_REFUSAL_DEFER_HOURS) read as
+ * "stuck" for 11 hours and re-alerted every 30 minutes — 2026-09-14: 37 SIP-500
+ * casualties across five children produced ~25 false alarms in one day.
+ */
+export async function countDueNumbers(
+  supabase: SupabaseClient,
+  campaignId: string,
+  maxAttempts: number,
+  nowIso: string,
+): Promise<{ count: number | null; error: { message: string } | null }> {
+  const { count, error } = await supabase
+    .from("campaign_numbers_v2")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .lt("attempt_count", maxAttempts)
+    .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${nowIso})`);
+  return { count, error };
+}

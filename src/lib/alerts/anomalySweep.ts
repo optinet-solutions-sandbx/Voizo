@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { postSlackAlert, shouldAlertSpawnFail } from "./slack";
+import { countDueNumbers } from "../scheduler/dialingCampaigns";
 import {
   ANOMALY_ALERT_DEDUPE_MS,
   ANOMALY_WINDOW_MINUTES,
@@ -116,13 +117,15 @@ export async function runAnomalySweep(supabase: SupabaseClient): Promise<void> {
 
         // findNextNumber's own eligibility (dialer.ts): under max_attempts, and either
         // fresh or a retry whose time has come. All-on-timers is a legitimately quiet book.
+        // Shared with campaign-heartbeat's stuck detector (countDueNumbers) so the two
+        // watchers cannot drift on what "due" means.
         const maxAttempts = (k.max_attempts as number | null) ?? 3;
-        const { count: dueNumbers, error: dueErr } = await supabase
-          .from("campaign_numbers_v2")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", k.id as string)
-          .lt("attempt_count", maxAttempts)
-          .or(`outcome.eq.pending,and(outcome.eq.pending_retry,next_attempt_at.lte.${nowIso})`);
+        const { count: dueNumbers, error: dueErr } = await countDueNumbers(
+          supabase,
+          k.id as string,
+          maxAttempts,
+          nowIso,
+        );
         if (dueErr) {
           console.error(`[anomaly-sweep] campaign_numbers_v2 count failed for ${k.id} (skipped):`, dueErr.message);
           continue;
