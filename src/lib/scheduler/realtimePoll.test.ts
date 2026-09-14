@@ -4,6 +4,7 @@ import {
   diffNewMembers,
   duePromotions,
   expectedCountryForTimezone,
+  minutesWaitingInWindow,
   partitionRollover,
   pollRealtimeParent,
   rolloverLeftovers,
@@ -466,5 +467,43 @@ describe("rolloverLeftovers — paginates past the 1000-row clamp", () => {
     expect(closeBatches).toHaveLength(0); // no rows closed — all stay open for the next spawn
     expect(spy).toHaveBeenCalled(); // loud, never silent
     spy.mockRestore();
+  });
+});
+
+// VOZ-520 alert noise (2026-09-14): the "queue has fallen behind" WARN measured a player's
+// wait from ADMISSION, but children spawn at 08:30 local for an 11:00 window and admit
+// players immediately, so at window open the oldest player had "waited" 149-150 min and
+// three lanes alarmed at 23:00Z / 01:00Z the moment their windows opened. Only time spent
+// inside the OPEN window is a queue that has fallen behind. Replays Monday's NZ numbers.
+describe("minutesWaitingInWindow — wait counts only inside the open window", () => {
+  const ADMITTED = "2026-09-13T20:31:00.000Z"; // spawn + admission, 08:31 Auckland
+  const OPEN = "2026-09-13T23:00:00.000Z"; // 11:00 Auckland, the child's start_at
+  const min = (n: number) => n * 60_000;
+
+  it("REPLAYS 23:01Z on 14 Sep: admitted 150 min before the window opened → 1 minute, not 150", () => {
+    expect(minutesWaitingInWindow(ADMITTED, OPEN, Date.parse(OPEN) + min(1))).toBe(1);
+  });
+
+  it("a player admitted AFTER the window opened is measured from admission", () => {
+    const late = "2026-09-13T23:30:00.000Z";
+    expect(minutesWaitingInWindow(late, OPEN, Date.parse(late) + min(15))).toBe(15);
+  });
+
+  it("with no window open time on the child, falls back to admission (the old behaviour): 20:31Z → 23:01Z is 150", () => {
+    expect(minutesWaitingInWindow(ADMITTED, null, Date.parse(OPEN) + min(1))).toBe(150);
+  });
+
+  it("an unparseable window open time is treated as absent, never as NaN (which would silence the alarm)", () => {
+    const m = minutesWaitingInWindow(ADMITTED, "not-a-date", Date.parse(OPEN) + min(1));
+    expect(Number.isFinite(m)).toBe(true);
+    expect(m).toBe(150);
+  });
+
+  it("before the window has opened the wait is not positive, so a `> threshold` check cannot fire", () => {
+    expect(minutesWaitingInWindow(ADMITTED, OPEN, Date.parse(OPEN) - min(60))).toBeLessThanOrEqual(0);
+  });
+
+  it("whole minutes, floored: 14 min 59 s inside the window is 14", () => {
+    expect(minutesWaitingInWindow(ADMITTED, OPEN, Date.parse(OPEN) + min(15) - 1000)).toBe(14);
   });
 });

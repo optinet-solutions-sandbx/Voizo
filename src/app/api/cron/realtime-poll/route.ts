@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { isWithinCallWindow } from "@/lib/dialer";
 import {
   alertChildOnceDeduped,
+  minutesWaitingInWindow,
   pollRealtimeParent,
   type PollSummary,
   type RealtimeParentRow,
@@ -108,7 +109,7 @@ export async function GET(request: NextRequest) {
     // outside calling hours is the normal overnight state, not a fault.
     const { data: child } = await supabaseAdmin
       .from("campaigns_v2")
-      .select("id, status, call_windows, timezone")
+      .select("id, status, call_windows, timezone, start_at")
       .eq("id", summary.childId)
       .single();
     const windows = (child?.call_windows as Array<{ day: string; start: string; end: string }> | null) ?? [];
@@ -126,7 +127,15 @@ export async function GET(request: NextRequest) {
         .limit(1)
         .maybeSingle();
       if (oldest?.created_at) {
-        const waitedMin = Math.floor((now.getTime() - new Date(oldest.created_at as string).getTime()) / 60_000);
+        // Only time INSIDE the open window counts: children spawn at 08:30 local for an
+        // 11:00 window and admit players at once, so a wait measured from admission read
+        // 150 min the moment the window opened (three lanes alarmed at open on 2026-09-14).
+        // start_at is the child's window-open instant; absent → falls back to admission.
+        const waitedMin = minutesWaitingInWindow(
+          oldest.created_at as string,
+          (child.start_at as string | null) ?? null,
+          now.getTime(),
+        );
         if (waitedMin > FALLEN_BEHIND_MINUTES) {
           await alertChildOnceDeduped(
             supabaseAdmin,

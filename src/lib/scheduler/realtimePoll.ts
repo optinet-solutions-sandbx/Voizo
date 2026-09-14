@@ -576,6 +576,30 @@ export async function pollRealtimeParent(
 }
 
 /**
+ * Minutes the oldest waiting player has been queued INSIDE the open call window.
+ *
+ * Children spawn at 08:30 local for an 11:00 window and admit players at once, so a
+ * wait measured from admission reads 150 min the moment the window opens — on
+ * 2026-09-14 three lanes alarmed "fallen behind" at 23:00Z/01:00Z for exactly that
+ * reason, and it only surfaced because VOZ-520 made the spawns land on time. Time
+ * before the window opens is not a queue that has fallen behind, so the clock starts
+ * at max(admission, window open). `windowOpenIso` is the child's start_at; when it is
+ * absent or unparseable the wait falls back to admission (the old behaviour) rather
+ * than becoming NaN, which would silence the alarm for good. Whole minutes, floored;
+ * negative before the window opens, so a `> threshold` check cannot fire early.
+ */
+export function minutesWaitingInWindow(
+  oldestCreatedAtIso: string,
+  windowOpenIso: string | null,
+  nowMs: number,
+): number {
+  const admitted = Date.parse(oldestCreatedAtIso);
+  const open = windowOpenIso ? Date.parse(windowOpenIso) : NaN;
+  const from = Number.isFinite(open) ? Math.max(admitted, open) : admitted;
+  return Math.floor((nowMs - from) / 60_000);
+}
+
+/**
  * Post a per-child Slack WARN at most once per ~6h per kind (a per-tick
  * condition like cap-full or fallen-behind fires every minute otherwise).
  * Shared by the poll (daily_cap) and the cron route (fallen_behind).
