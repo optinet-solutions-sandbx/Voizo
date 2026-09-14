@@ -44,8 +44,9 @@ export const maxDuration = 60;
 // Resume-sweep wall-clock budget. The fairness fix serves ALL idle running
 // campaigns each tick (not just the oldest), so we cap the expensive dials: stop
 // firing resumes once fewer than (BUDGET + SAFETY) ms of the maxDuration tick
-// remain, leaving room for the draft-start fire + recurring branch below. Each
-// fireCall is 8-22s (FS originate); over-budget campaigns resume on the next tick.
+// remain, leaving room for the draft-start fire below. Each fireCall is 8-22s (FS
+// originate); over-budget campaigns resume on the next tick. This budget does NOT
+// protect the recurring spawn — that branch runs BEFORE these fires (VOZ-520).
 const RESUME_FIRE_BUDGET_MS = 25_000;
 const RESUME_SAFETY_MS = 5_000;
 
@@ -363,6 +364,251 @@ export async function GET(request: NextRequest) {
           `[scheduler.smsRetire] retired ${retireIds.length} number(s) → sms_delivered ` +
           `(offer SMS confirmed delivered; retries stopped)`,
         );
+    }
+  }
+
+  // ── Why the spawn branch sits HERE, before the dial fires (VOZ-520, 2026-09-14) ──
+  // Until 2026-09-14 this branch ran LAST in the tick. A resume fire may START while
+  // ≤30s of the tick have elapsed and then BLOCKS until the far end stops ringing
+  // (modesl's bgapi callback fires on BACKGROUND_JOB: 8-22s per ring, ≤2s on a trunk
+  // refusal), while a spawn may only START while ≤25s have elapsed (spawnBudget.ts).
+  // One 22s fire that began at second 5 was already enough to defer the spawn; with
+  // three Canadian campaigns dialling, every tick was saturated and the NZ/AU children
+  // spawned 1-4h late (one FP NZ night never spawned at all). A spawn is ~3 minutes of
+  // work a DAY; the fires run every minute — so the spawn goes first and the fires
+  // absorb the rare ~30s. This also puts the spawn ahead of the queue gate's early
+  // return, which used to end the tick before this branch whenever the gate was full.
+  // Pinned by src/lib/schedulerTickOrder.test.ts.
+  //
+  // `limit` is read by this branch AND by the queue gate below (hoisted from the gate).
+  const limit = parseInt(process.env.CAMPAIGN_CONCURRENCY_LIMIT ?? "3", 10);
+
+  // ── Recurring child-spawn branch ──
+  // For each campaign_type='recurring' parent with status='running', check
+  // whether today's spawn time has arrived and a child hasn't yet been spawned.
+  // The leased budget is refreshed per iteration so we don't over-spawn within
+  // a single tick (an earlier parent in this loop may have just leased one).
+  //
+  // Children are inserted as status='draft' with start_at=today's window open
+  // in the parent's timezone. The existing draft→running flow below picks them
+  // up at window-open time on a later tick. This avoids the resume-sweep
+  // auto-pause collision that would happen if children were created 'running'
+  // before their window.
+  const recurringResults: Array<
+    { parentId: string; parentName: string } & (
+      | SpawnOutcome
+      | { result: "deferred_low_budget" }
+      // Trunk-refusal gate held this parent's spawn. NOT part of SpawnOutcome:
+      // no spawn was attempted, so it is not a spawn outcome.
+      | { result: "skipped_trunk_refusing" }
+    )
+  > = [];
+  // select * (was an explicit 13-column list): the realtime branch (VOZ-132)
+  // needs `realtime` + `daily_cap` off the parent, and * is deploy-order safe —
+  // pre-migration rows simply lack the fields (undefined → non-realtime path).
+  const { data: recurringParents, error: recurringErr } = await supabaseAdmin
+    .from("campaigns_v2")
+    .select("*")
+    .eq("campaign_type", "recurring")
+    .eq("status", "running");
+
+  if (recurringErr) {
+    console.error("[campaign-scheduler] recurring parents query failed:", recurringErr);
+  } else {
+    console.log(`[campaign-scheduler] recurring parents found: ${recurringParents?.length ?? 0}`);
+  }
+
+  if (recurringParents && recurringParents.length > 0) {
+    const vapiKey = process.env.VAPI_PRIVATE_KEY;
+    if (!vapiKey) {
+      console.error("[campaign-scheduler] VAPI_PRIVATE_KEY missing; skipping recurring branch");
+    } else {
+      // ── Trunk-refusal spawn gate ──
+      // The VOZ-278 breaker stops ONE DAY'S CHILD; the parent is untouched and
+      // spawns a fresh one tomorrow. Measured 2026-08-11: 107 dials, 0 connects,
+      // 4 breaker alerts — every day since 08-08. This holds the daily spawn while
+      // the trunk refuses, letting ONE parent through as the recovery probe.
+      //
+      // FAILS OPEN by design (opposite of the VOZ-364 suppression gate): a wrong
+      // REFUSING verdict would stop all calling, which is far worse than the ~90
+      // free rejected dials it saves. Any error ⇒ UNKNOWN ⇒ everyone spawns.
+      //
+      // VOZ-371 (2026-08-14): the queries + fail-open branches moved VERBATIM into
+      // lib/scheduler/trunkGateData.resolveTrunkGate so a test can watch them being
+      // BUILT. Both 08-12 defects (a mutable ranking key, and dials that never
+      // reached the trunk counted as trunk evidence) lived in these queries, not in
+      // the pure functions they feed — and each now has a named regression guard.
+      // The gate is read-only by contract: re-adding a WRITE here is what latched
+      // the dialer at zero calls on 08-12.
+      //
+      // The `as unknown as GateDb` narrows the PostgREST client to the read-verb
+      // slice the gate uses; that surface is what the harness fakes. One cast, one
+      // place, and the live-prod behaviour was diffed against the real client.
+      const { health: trunkHealth, probeParentId } = await resolveTrunkGate(
+        supabaseAdmin as unknown as GateDb,
+        recurringParents.map((p) => ({
+          id: p.id as string,
+          timezone: (p.timezone as string | null) ?? null,
+        })),
+        new Date(),
+      );
+
+      const skippedByTrunkGate: string[] = [];
+
+      for (const parent of recurringParents) {
+        // F11: never START a spawn we can't finish this tick. A hard maxDuration
+        // kill between leaseSlot and the final INSERT/linkSlot would orphan a
+        // billable clone + a leased slot. Defer the rest to the next tick (60s).
+        if (recurringBudgetExhausted(Date.now() - tickStartedAt, maxDuration)) {
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "deferred_low_budget",
+          });
+          break;
+        }
+        // Trunk is refusing and this parent is not today's probe → do not spawn.
+        // Deliberately creates NO child: rolloverLeftovers reads only the MOST
+        // RECENT prior child, so an intervening child would permanently strand
+        // this parent's queued players (realtimePoll.ts:156-178).
+        //
+        // Checked BEFORE the leased-slot count (review 2026-08-14, was after):
+        // a skip needs no budget, so a held parent must not pay a count query —
+        // and, worse, must not trigger the budget_full BREAK below before the
+        // loop ever reaches the probe parent. With rotation the probe is late in
+        // the list ~3 days in 4; on a fully-leased pool the old order lost the
+        // gate's only recovery signal for the day AND left skippedByTrunkGate
+        // empty, so the trunk-gate alert never fired either.
+        if (trunkHealth === "REFUSING" && (parent.id as string) !== probeParentId) {
+          skippedByTrunkGate.push(parent.name as string);
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "skipped_trunk_refusing",
+          });
+          // NO slot release here — REMOVED 2026-08-12, and deliberately not replaced
+          // with a safer guarded version.
+          //
+          // It was the gate's only WRITE, and it is what turned a skipped spawn into a
+          // dead dialer: it cleared vapi_assistant_id / vapi_pool_slot_id / vapi_sip_uri
+          // on what it believed was a prior day's paused child, but which was the child
+          // that had just spawned. Those four campaigns then sat 'running' with no
+          // assistant, so every originate threw before reaching FreeSWITCH, nothing could
+          // connect, and the gate's own recovery condition (a connect) became
+          // unreachable — a latch that no carrier fix or account top-up could clear.
+          //
+          // With the write gone the gate is a pure read-side decision: its worst failure
+          // is dialling LESS than we could have, never dialling nothing, because the
+          // probe child keeps its pointers and a single connect reopens the gate.
+          // The leak it was chasing is small and already owned elsewhere: paused children
+          // hand their slot back at the next real spawn via rolloverLeftovers, the
+          // stuck-slot-watchdog catches the stragglers, and the pool has 20 slots against
+          // 4 campaigns. A slot held for a few days is worth far less than the risk of
+          // stripping a live child.
+          continue;
+        }
+        // Refresh leased count per-iteration so we don't over-spawn this tick.
+        const { count: nowLeased } = await supabaseAdmin
+          .from("vapi_sip_pool")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "leased");
+        const budget = limit - (nowLeased ?? 0);
+        if (budget <= 0) {
+          recurringResults.push({
+            parentId: parent.id as string,
+            parentName: parent.name as string,
+            result: "budget_full",
+          });
+          break;
+        }
+        const outcome = await spawnChildIfDue(
+          supabaseAdmin,
+          vapiKey,
+          parent as unknown as RecurringParent,
+          new Date(),
+          budget,
+        );
+        recurringResults.push({
+          parentId: parent.id as string,
+          parentName: parent.name as string,
+          ...outcome,
+        });
+
+        // A: narrate this spawn to Slack (#voizo-alerts). `spawned` and
+        // `segment_empty_skipped` fire at most once per parent per day (the
+        // per-day idempotency check makes later ticks return already_spawned_today),
+        // so no throttle is needed. `spawn_failed` IS deduped via
+        // recurring_alert_state (a misconfigured parent fails every tick), so a
+        // broken parent posts at most once per ~6h. Transient outcomes
+        // (deferred_low_budget / budget_full / off_week / already_spawned_today /
+        // not_due) are intentionally NOT posted — they would be per-tick noise.
+        const parentTz = parent.timezone as string;
+        if (outcome.result === "spawned") {
+          await postSlackNote("Recurring spawn", [
+            `${parent.name as string}: segment refreshed -> dialing ${outcome.dialCount} player(s) today, ` +
+              `${outcome.windowStart}-${outcome.windowEnd} ${parentTz}.`,
+          ]);
+          // A recovered parent should be able to alert again on a future failure.
+          await supabaseAdmin.from("recurring_alert_state").delete().eq("parent_id", parent.id as string);
+        } else if (outcome.result === "segment_empty_skipped") {
+          await postSlackNote("Recurring spawn", [
+            `${parent.name as string}: segment empty today -> skipped (no worker leased).`,
+          ]);
+        } else if (outcome.result === "spawn_failed") {
+          const { data: alertRow } = await supabaseAdmin
+            .from("recurring_alert_state")
+            .select("last_alerted_at")
+            .eq("parent_id", parent.id as string)
+            .maybeSingle();
+          if (shouldAlertSpawnFail((alertRow?.last_alerted_at as string | null) ?? null, Date.now())) {
+            await postSlackAlert("WARN", "Recurring spawn failed", [
+              `${parent.name as string}: ${outcome.details}`,
+            ]);
+            await supabaseAdmin.from("recurring_alert_state").upsert(
+              {
+                parent_id: parent.id as string,
+                reason: outcome.details,
+                last_alerted_at: new Date().toISOString(),
+              },
+              { onConflict: "parent_id" },
+            );
+          }
+        }
+      }
+
+      // One alert for the whole gate, deduped to once per day via alert_state.
+      // Deliberately NOT one per parent: four breaker alerts a day is exactly the
+      // noise that let the 08-02 outage run four days unnoticed.
+      if (skippedByTrunkGate.length > 0) {
+        const TRUNK_GATE_ALERT_KEY = "trunk_refusing_spawn_gate";
+        const { data: gateState, error: gateStateErr } = await supabaseAdmin
+          .from("alert_state")
+          .select("last_alerted_at")
+          .eq("key", TRUNK_GATE_ALERT_KEY)
+          .maybeSingle();
+        if (gateStateErr) {
+          // Fail-open on the DEDUPE only: a broken dedupe row must not silence a real alert.
+          console.error(
+            "[scheduler.trunkGate] alert_state read failed (alerting anyway):",
+            gateStateErr.message,
+          );
+        }
+        const lastAlertedAt = (gateState?.last_alerted_at as string | null) ?? null;
+        if (gateStateErr || shouldAlertSpawnFail(lastAlertedAt, Date.now(), 24 * 60 * 60 * 1000)) {
+          await postSlackAlert("ALERT", "Trunk refusing — daily spawns held", [
+            `${skippedByTrunkGate.length} recurring campaign(s) did NOT spawn today: ${skippedByTrunkGate.join(", ")}.`,
+            `No call has connected in the last ${TRUNK_WINDOW_HOURS}h despite dialling. Holding spawns stops ~90 refused calls/day.`,
+            `Still probing daily via: ${probeParentId ?? "(none)"} — spawning resumes automatically the moment a call connects.`,
+            "No action needed to recover. To force a full restart, fix the trunk (SquareTalk error 902).",
+          ]);
+          await supabaseAdmin
+            .from("alert_state")
+            .upsert(
+              { key: TRUNK_GATE_ALERT_KEY, last_alerted_at: new Date().toISOString() },
+              { onConflict: "key" },
+            );
+        }
+      }
     }
   }
 
@@ -791,7 +1037,7 @@ export async function GET(request: NextRequest) {
   //
   // Note: this gate fires AFTER the resume sweep above so already-running
   // campaigns can still advance their retries on this tick.
-  const limit = parseInt(process.env.CAMPAIGN_CONCURRENCY_LIMIT ?? "3", 10);
+  // `limit` is declared above the recurring spawn branch (VOZ-520 hoist).
   // H1 (audit 2026-06-01): destructure `error` so a transient Supabase blip
   // can't silently set dialingCount=undefined → (undefined ?? 0) >= limit = false
   // → cron bypasses the concurrency gate. Fail-closed: on count error,
@@ -807,6 +1053,8 @@ export async function GET(request: NextRequest) {
       reason: `dialling-campaign count failed: ${dialingCountErr.message}`,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
+      spawned: recurringResults.filter((r) => r.result === "spawned").length,
+      recurringResults,
       sweepResolved: sweeperResults.length,
       sweeperResults,
     });
@@ -822,6 +1070,8 @@ export async function GET(request: NextRequest) {
       concurrencyLimit: limit,
       resumed: resumeResults.filter((r) => r.result === "resumed").length,
       resumeResults,
+      spawned: recurringResults.filter((r) => r.result === "spawned").length,
+      recurringResults,
       sweepResolved: sweeperResults.length,
       sweeperResults,
     });
@@ -1010,235 +1260,6 @@ export async function GET(request: NextRequest) {
       // eligible number via the resume sweep. Pause-on-failure was redundant
       // once B2 landed and inconsistent with manual-Start behavior.
       results.push({ id: campaignId, name: campaignName, result: "fire_failed" });
-    }
-  }
-
-  // ── Recurring child-spawn branch ──
-  // For each campaign_type='recurring' parent with status='running', check
-  // whether today's spawn time has arrived and a child hasn't yet been spawned.
-  // The leased budget is refreshed per iteration so we don't over-spawn within
-  // a single tick (draft→running above may have just leased one).
-  //
-  // Children are inserted as status='draft' with start_at=today's window open
-  // in the parent's timezone. The existing draft→running flow above picks them
-  // up at window-open time on a later tick. This avoids the resume-sweep
-  // auto-pause collision that would happen if children were created 'running'
-  // before their window.
-  const recurringResults: Array<
-    { parentId: string; parentName: string } & (
-      | SpawnOutcome
-      | { result: "deferred_low_budget" }
-      // Trunk-refusal gate held this parent's spawn. NOT part of SpawnOutcome:
-      // no spawn was attempted, so it is not a spawn outcome.
-      | { result: "skipped_trunk_refusing" }
-    )
-  > = [];
-  // select * (was an explicit 13-column list): the realtime branch (VOZ-132)
-  // needs `realtime` + `daily_cap` off the parent, and * is deploy-order safe —
-  // pre-migration rows simply lack the fields (undefined → non-realtime path).
-  const { data: recurringParents, error: recurringErr } = await supabaseAdmin
-    .from("campaigns_v2")
-    .select("*")
-    .eq("campaign_type", "recurring")
-    .eq("status", "running");
-
-  if (recurringErr) {
-    console.error("[campaign-scheduler] recurring parents query failed:", recurringErr);
-  } else {
-    console.log(`[campaign-scheduler] recurring parents found: ${recurringParents?.length ?? 0}`);
-  }
-
-  if (recurringParents && recurringParents.length > 0) {
-    const vapiKey = process.env.VAPI_PRIVATE_KEY;
-    if (!vapiKey) {
-      console.error("[campaign-scheduler] VAPI_PRIVATE_KEY missing; skipping recurring branch");
-    } else {
-      // ── Trunk-refusal spawn gate ──
-      // The VOZ-278 breaker stops ONE DAY'S CHILD; the parent is untouched and
-      // spawns a fresh one tomorrow. Measured 2026-08-11: 107 dials, 0 connects,
-      // 4 breaker alerts — every day since 08-08. This holds the daily spawn while
-      // the trunk refuses, letting ONE parent through as the recovery probe.
-      //
-      // FAILS OPEN by design (opposite of the VOZ-364 suppression gate): a wrong
-      // REFUSING verdict would stop all calling, which is far worse than the ~90
-      // free rejected dials it saves. Any error ⇒ UNKNOWN ⇒ everyone spawns.
-      //
-      // VOZ-371 (2026-08-14): the queries + fail-open branches moved VERBATIM into
-      // lib/scheduler/trunkGateData.resolveTrunkGate so a test can watch them being
-      // BUILT. Both 08-12 defects (a mutable ranking key, and dials that never
-      // reached the trunk counted as trunk evidence) lived in these queries, not in
-      // the pure functions they feed — and each now has a named regression guard.
-      // The gate is read-only by contract: re-adding a WRITE here is what latched
-      // the dialer at zero calls on 08-12.
-      //
-      // The `as unknown as GateDb` narrows the PostgREST client to the read-verb
-      // slice the gate uses; that surface is what the harness fakes. One cast, one
-      // place, and the live-prod behaviour was diffed against the real client.
-      const { health: trunkHealth, probeParentId } = await resolveTrunkGate(
-        supabaseAdmin as unknown as GateDb,
-        recurringParents.map((p) => ({
-          id: p.id as string,
-          timezone: (p.timezone as string | null) ?? null,
-        })),
-        new Date(),
-      );
-
-      const skippedByTrunkGate: string[] = [];
-
-      for (const parent of recurringParents) {
-        // F11: never START a spawn we can't finish this tick. A hard maxDuration
-        // kill between leaseSlot and the final INSERT/linkSlot would orphan a
-        // billable clone + a leased slot. Defer the rest to the next tick (60s).
-        if (recurringBudgetExhausted(Date.now() - tickStartedAt, maxDuration)) {
-          recurringResults.push({
-            parentId: parent.id as string,
-            parentName: parent.name as string,
-            result: "deferred_low_budget",
-          });
-          break;
-        }
-        // Trunk is refusing and this parent is not today's probe → do not spawn.
-        // Deliberately creates NO child: rolloverLeftovers reads only the MOST
-        // RECENT prior child, so an intervening child would permanently strand
-        // this parent's queued players (realtimePoll.ts:156-178).
-        //
-        // Checked BEFORE the leased-slot count (review 2026-08-14, was after):
-        // a skip needs no budget, so a held parent must not pay a count query —
-        // and, worse, must not trigger the budget_full BREAK below before the
-        // loop ever reaches the probe parent. With rotation the probe is late in
-        // the list ~3 days in 4; on a fully-leased pool the old order lost the
-        // gate's only recovery signal for the day AND left skippedByTrunkGate
-        // empty, so the trunk-gate alert never fired either.
-        if (trunkHealth === "REFUSING" && (parent.id as string) !== probeParentId) {
-          skippedByTrunkGate.push(parent.name as string);
-          recurringResults.push({
-            parentId: parent.id as string,
-            parentName: parent.name as string,
-            result: "skipped_trunk_refusing",
-          });
-          // NO slot release here — REMOVED 2026-08-12, and deliberately not replaced
-          // with a safer guarded version.
-          //
-          // It was the gate's only WRITE, and it is what turned a skipped spawn into a
-          // dead dialer: it cleared vapi_assistant_id / vapi_pool_slot_id / vapi_sip_uri
-          // on what it believed was a prior day's paused child, but which was the child
-          // that had just spawned. Those four campaigns then sat 'running' with no
-          // assistant, so every originate threw before reaching FreeSWITCH, nothing could
-          // connect, and the gate's own recovery condition (a connect) became
-          // unreachable — a latch that no carrier fix or account top-up could clear.
-          //
-          // With the write gone the gate is a pure read-side decision: its worst failure
-          // is dialling LESS than we could have, never dialling nothing, because the
-          // probe child keeps its pointers and a single connect reopens the gate.
-          // The leak it was chasing is small and already owned elsewhere: paused children
-          // hand their slot back at the next real spawn via rolloverLeftovers, the
-          // stuck-slot-watchdog catches the stragglers, and the pool has 20 slots against
-          // 4 campaigns. A slot held for a few days is worth far less than the risk of
-          // stripping a live child.
-          continue;
-        }
-        // Refresh leased count per-iteration so we don't over-spawn this tick.
-        const { count: nowLeased } = await supabaseAdmin
-          .from("vapi_sip_pool")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "leased");
-        const budget = limit - (nowLeased ?? 0);
-        if (budget <= 0) {
-          recurringResults.push({
-            parentId: parent.id as string,
-            parentName: parent.name as string,
-            result: "budget_full",
-          });
-          break;
-        }
-        const outcome = await spawnChildIfDue(
-          supabaseAdmin,
-          vapiKey,
-          parent as unknown as RecurringParent,
-          new Date(),
-          budget,
-        );
-        recurringResults.push({
-          parentId: parent.id as string,
-          parentName: parent.name as string,
-          ...outcome,
-        });
-
-        // A: narrate this spawn to Slack (#voizo-alerts). `spawned` and
-        // `segment_empty_skipped` fire at most once per parent per day (the
-        // per-day idempotency check makes later ticks return already_spawned_today),
-        // so no throttle is needed. `spawn_failed` IS deduped via
-        // recurring_alert_state (a misconfigured parent fails every tick), so a
-        // broken parent posts at most once per ~6h. Transient outcomes
-        // (deferred_low_budget / budget_full / off_week / already_spawned_today /
-        // not_due) are intentionally NOT posted — they would be per-tick noise.
-        const parentTz = parent.timezone as string;
-        if (outcome.result === "spawned") {
-          await postSlackNote("Recurring spawn", [
-            `${parent.name as string}: segment refreshed -> dialing ${outcome.dialCount} player(s) today, ` +
-              `${outcome.windowStart}-${outcome.windowEnd} ${parentTz}.`,
-          ]);
-          // A recovered parent should be able to alert again on a future failure.
-          await supabaseAdmin.from("recurring_alert_state").delete().eq("parent_id", parent.id as string);
-        } else if (outcome.result === "segment_empty_skipped") {
-          await postSlackNote("Recurring spawn", [
-            `${parent.name as string}: segment empty today -> skipped (no worker leased).`,
-          ]);
-        } else if (outcome.result === "spawn_failed") {
-          const { data: alertRow } = await supabaseAdmin
-            .from("recurring_alert_state")
-            .select("last_alerted_at")
-            .eq("parent_id", parent.id as string)
-            .maybeSingle();
-          if (shouldAlertSpawnFail((alertRow?.last_alerted_at as string | null) ?? null, Date.now())) {
-            await postSlackAlert("WARN", "Recurring spawn failed", [
-              `${parent.name as string}: ${outcome.details}`,
-            ]);
-            await supabaseAdmin.from("recurring_alert_state").upsert(
-              {
-                parent_id: parent.id as string,
-                reason: outcome.details,
-                last_alerted_at: new Date().toISOString(),
-              },
-              { onConflict: "parent_id" },
-            );
-          }
-        }
-      }
-
-      // One alert for the whole gate, deduped to once per day via alert_state.
-      // Deliberately NOT one per parent: four breaker alerts a day is exactly the
-      // noise that let the 08-02 outage run four days unnoticed.
-      if (skippedByTrunkGate.length > 0) {
-        const TRUNK_GATE_ALERT_KEY = "trunk_refusing_spawn_gate";
-        const { data: gateState, error: gateStateErr } = await supabaseAdmin
-          .from("alert_state")
-          .select("last_alerted_at")
-          .eq("key", TRUNK_GATE_ALERT_KEY)
-          .maybeSingle();
-        if (gateStateErr) {
-          // Fail-open on the DEDUPE only: a broken dedupe row must not silence a real alert.
-          console.error(
-            "[scheduler.trunkGate] alert_state read failed (alerting anyway):",
-            gateStateErr.message,
-          );
-        }
-        const lastAlertedAt = (gateState?.last_alerted_at as string | null) ?? null;
-        if (gateStateErr || shouldAlertSpawnFail(lastAlertedAt, Date.now(), 24 * 60 * 60 * 1000)) {
-          await postSlackAlert("ALERT", "Trunk refusing — daily spawns held", [
-            `${skippedByTrunkGate.length} recurring campaign(s) did NOT spawn today: ${skippedByTrunkGate.join(", ")}.`,
-            `No call has connected in the last ${TRUNK_WINDOW_HOURS}h despite dialling. Holding spawns stops ~90 refused calls/day.`,
-            `Still probing daily via: ${probeParentId ?? "(none)"} — spawning resumes automatically the moment a call connects.`,
-            "No action needed to recover. To force a full restart, fix the trunk (SquareTalk error 902).",
-          ]);
-          await supabaseAdmin
-            .from("alert_state")
-            .upsert(
-              { key: TRUNK_GATE_ALERT_KEY, last_alerted_at: new Date().toISOString() },
-              { onConflict: "key" },
-            );
-        }
-      }
     }
   }
 
