@@ -22,12 +22,16 @@ describe("VOIZO_SYSTEM_PREFIX — SMS handling rule (#1)", () => {
 
   it("requires the verbal dispatch confirmation", () => {
     expect(VOIZO_SYSTEM_PREFIX).toMatch(/verbally confirm/i);
-    expect(VOIZO_SYSTEM_PREFIX).toContain(`"I'll send you an SMS now"`);
+    expect(VOIZO_SYSTEM_PREFIX).toContain(`"I'll send you a text message now"`);
+    // VOZ-531: Vapi's acronym formatter spells "SMS" as S-M-S before the voice hears it,
+    // so the prefix must never hand the model that word as something to say.
+    expect(VOIZO_SYSTEM_PREFIX).toMatch(/never "SMS"/);
+    expect(VOIZO_SYSTEM_PREFIX).not.toMatch(/send (?:you )?an SMS/);
   });
 
   it("has an explicit objection veto — accept the no, never pressure", () => {
     expect(VOIZO_SYSTEM_PREFIX).toMatch(/objects to being texted/i);
-    expect(VOIZO_SYSTEM_PREFIX).toMatch(/do NOT promise or send an SMS/);
+    expect(VOIZO_SYSTEM_PREFIX).toMatch(/do NOT promise or send a text message/);
     expect(VOIZO_SYSTEM_PREFIX).toMatch(/accept that answer the FIRST/);
     expect(VOIZO_SYSTEM_PREFIX).toMatch(/never pressure/i);
   });
@@ -37,7 +41,7 @@ describe("VOIZO_SYSTEM_PREFIX — SMS handling rule (#1)", () => {
   });
 
   it("rule #1's confirmation phrase is the announce signal the webhook dispatch keys on", () => {
-    const confirmTurn = `AI: I'll send you an SMS now.`;
+    const confirmTurn = `AI: I'll send you a text message now.`;
     // registered_optin mode: the announce alone arms dispatch…
     expect(agentMentionedSms(`${confirmTurn}\nUser: Okay, thanks.`)).toBe(true);
     // …an explicit refusal vetoes it…
