@@ -745,12 +745,41 @@ export async function GET(request: NextRequest) {
       // SIP URI; an alert reading "caller ID appears blocked" would have sent the
       // operator to SquareTalk for a day.
       const preTrunk = breakerRows.every((r) => r.hangup_cause === null);
+      // VOZ-527: release the clone + pool slot on the way out, exactly as the
+      // outside-window block below already does. A breaker pause is terminal for
+      // the day — nothing re-dials this child — so a slot kept here is one the
+      // whole fleet loses until the parent's NEXT spawn runs rolloverLeftovers,
+      // and forever if that parent stops spawning. Measured 2026-09-15: 4 of the
+      // 10 slots in CAMPAIGN_CONCURRENCY_LIMIT were held by dead campaigns (one
+      // since 08-26), and the 4th AU parent hit budget_full at 22:33Z and could
+      // not spawn until 08:01Z. The reclaim path is circular — a spawn frees a
+      // slot and a spawn needs a free slot — so this must not wait for one.
+      const releaseOnPause = pauseReleasesSlot();
+      const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+      const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+      // Mirrors the outside-window block's resultLabel so the cron response says
+      // whether a slot actually came back — the only way to confirm this fix from
+      // the tick's own output rather than by polling vapi_sip_pool.
+      let breakerLabel = "breaker_paused";
       // last_paused_at: every pause writer stamps it (parity with /stop and the
       // window-close paths). Breaker pauses left it NULL — Fortune Play 08-05
       // showed as paused with no timestamp, hiding WHEN the breaker fired.
+      //
+      // The pointers are nulled in the SAME update that pauses, never in a
+      // follow-up write: a row that still claims a slot the pool has handed to
+      // someone else is the 2026-08-12 dead-dialer shape.
+      const breakerPayload: Record<string, unknown> = {
+        status: "paused",
+        last_paused_at: new Date().toISOString(),
+      };
+      if (releaseOnPause) {
+        breakerPayload.vapi_assistant_id = null;
+        breakerPayload.vapi_pool_slot_id = null;
+        breakerPayload.vapi_sip_uri = null;
+      }
       const { data: breakerPaused } = await supabaseAdmin
         .from("campaigns_v2")
-        .update({ status: "paused", last_paused_at: new Date().toISOString() })
+        .update(breakerPayload)
         .eq("id", campaignId)
         .eq("status", "running")
         .select("id");
@@ -773,12 +802,36 @@ export async function GET(request: NextRequest) {
             "Auto-paused to stop ANI reputation burn and player-attempt waste.",
             preTrunk
               ? "No hangup cause on any of them — they never reached FreeSWITCH/SquareTalk. " +
-                "Check this child's assistant + SIP pointers and the originate shim, NOT the caller ID."
+                "Check the originate shim, NOT the caller ID."
               : "Verify the caller ID with the carrier/SquareTalk before un-pausing.",
+            // Only claimed when it actually happened: with PAUSE_RELEASES_SLOT off
+            // nothing is released, and an alert that says otherwise would send an
+            // operator hunting for a slot that is still leased.
+            ...(releaseOnPause
+              ? [
+                  "Its Vapi clone + SIP slot were released on pause (VOZ-527) — null pointers " +
+                    "on this child are expected now, not the fault. /resume re-leases them; a " +
+                    "raw status flip does not.",
+                ]
+              : []),
           ],
         );
+        // Release AFTER the alert: an unexpected throw anywhere in the cleanup
+        // chain must never swallow the operator's only signal that the breaker
+        // fired. The update above has already cleared this row's pointers, so the
+        // worst case here is an orphan lease — which stuck-slot-watchdog detects
+        // by name, unlike today's silent stranded lease which nothing reports.
+        if (releaseOnPause) {
+          const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+            vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+            campaignName,
+            vapiAssistantId: capturedAssistantId,
+            vapiPoolSlotId: capturedSlotId,
+          });
+          if (slotReleased) breakerLabel = "breaker_paused:slot_released";
+        }
       }
-      resumeResults.push({ id: campaignId, name: campaignName, result: "breaker_paused" });
+      resumeResults.push({ id: campaignId, name: campaignName, result: breakerLabel });
       continue;
     }
 
@@ -797,9 +850,26 @@ export async function GET(request: NextRequest) {
       if (spendErr) {
         console.error(`[scheduler.budget] ${campaignName}: spend RPC failed (dialing continues):`, spendErr.message);
       } else if (typeof spend === "number" && spend >= budgetUsd) {
+        // VOZ-527: same release as the breaker above and the window close below.
+        // A budget pause is terminal until an operator raises the cap, so holding
+        // the clone here bills for a worker that will never dial, and holding the
+        // slot shrinks how many lanes can spawn tomorrow.
+        const releaseOnPause = pauseReleasesSlot();
+        const capturedAssistantId = campaign.vapi_assistant_id as string | null;
+        const capturedSlotId = campaign.vapi_pool_slot_id as string | null;
+        let budgetLabel = "budget_paused";
+        const budgetPayload: Record<string, unknown> = {
+          status: "paused",
+          last_paused_at: new Date().toISOString(),
+        };
+        if (releaseOnPause) {
+          budgetPayload.vapi_assistant_id = null;
+          budgetPayload.vapi_pool_slot_id = null;
+          budgetPayload.vapi_sip_uri = null;
+        }
         const { data: budgetPaused } = await supabaseAdmin
           .from("campaigns_v2")
-          .update({ status: "paused", last_paused_at: new Date().toISOString() })
+          .update(budgetPayload)
           .eq("id", campaignId)
           .eq("status", "running")
           .select("id");
@@ -811,9 +881,27 @@ export async function GET(request: NextRequest) {
             `Campaign: ${campaignName} (${campaignId})`,
             `Spend so far: $${spend.toFixed(2)} of $${budgetUsd.toFixed(2)} budget (Vapi measured + OpenAI computed).`,
             "Un-pause to continue dialing, or raise the budget in campaign settings.",
+            // Same rule as the breaker: never claim a release the flag did not make.
+            ...(releaseOnPause
+              ? [
+                  "Its Vapi clone + SIP slot were released on pause (VOZ-527). Raise the " +
+                    "budget then /resume to re-lease them; a raw status flip does not.",
+                ]
+              : []),
           ]);
+          // After the alert, for the same reason as the breaker: a cleanup throw
+          // must not cost the operator the only notice that spend hit the cap.
+          if (releaseOnPause) {
+            const { slotReleased } = await performCampaignVapiCleanup(supabaseAdmin, {
+              vapiKey: process.env.VAPI_PRIVATE_KEY ?? "",
+              campaignName,
+              vapiAssistantId: capturedAssistantId,
+              vapiPoolSlotId: capturedSlotId,
+            });
+            if (slotReleased) budgetLabel = "budget_paused:slot_released";
+          }
         }
-        resumeResults.push({ id: campaignId, name: campaignName, result: "budget_paused" });
+        resumeResults.push({ id: campaignId, name: campaignName, result: budgetLabel });
         continue;
       }
     }
