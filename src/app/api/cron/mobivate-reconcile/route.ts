@@ -92,19 +92,19 @@ export async function GET(request: NextRequest) {
   }
 
   // ── 2. message history ──
-  const history = { records: 0, ours: 0, updated: 0, flipped: { delivered: 0, undelivered: 0, failed: 0 }, unmappedWords: [] as string[], error: null as string | null };
+  const history = { records: 0, ours: 0, originators: [] as string[], unfilterable: 0, updated: 0, flipped: { delivered: 0, undelivered: 0, failed: 0 }, unmappedWords: [] as string[], error: null as string | null };
   try {
-    const recs = await fetchMessageHistory(from, to);
-    history.records = recs.length;
-    const byRef = new Map<string, (typeof recs)[number]>();
-    const byId = new Map<string, (typeof recs)[number]>();
-    for (const r of recs) { if (r.reference) byRef.set(r.reference.toLowerCase(), r); if (r.id) byId.set(r.id.toLowerCase(), r); }
-    // our rows created in the window (padded a day back: Mobivate's day is UTC, ours is created_at)
-    const ours: { id: string; status: string; created_at: string; provider_message_id: string | null }[] = [];
+    // VOZ-534: OUR rows are read FIRST now, because they are what tells us which originators to ask
+    // Mobivate for. Unfiltered, a 4-day window is 179,583 records of the SHARED account (36 pages,
+    // 274-407 s) against maxDuration 300 — measured 2026-09-16, and it had never once finished.
+    // Our own rows in that window: 111. Deriving the list from sender_id rather than hard-coding the
+    // three brands is deliberate: a hard-coded list is exactly how voicemail_autohangup drifted off
+    // for a whole brand three times. A fourth brand starts reconciling the day it first sends.
+    const ours: { id: string; status: string; created_at: string; provider_message_id: string | null; sender_id: string | null }[] = [];
     for (let p = 0; ; p++) {
       const { data, error } = await supabaseAdmin
         .from("sms_messages_v2")
-        .select("id, status, created_at, provider_message_id")
+        .select("id, status, created_at, provider_message_id, sender_id")
         .gte("created_at", `${utcDate(Date.parse(`${from}T00:00:00Z`), -1)}T00:00:00Z`)
         .lte("created_at", `${to}T23:59:59Z`)
         .order("id")
@@ -114,6 +114,42 @@ export async function GET(request: NextRequest) {
       if ((data ?? []).length < READ_PAGE) break;
     }
     history.ours = ours.length;
+
+    // Rows with no sender_id cannot be narrowed to an originator, so they cannot be reconciled by
+    // this path. All 1,853 such rows predate 2026-07-31, so a normal nightly window has none — but
+    // a BACKFILL over older dates would silently under-reconcile, and silence is the failure mode
+    // this whole ticket is about. Surfaced in the response and logged, never swallowed.
+    const originators = [...new Set(ours.map((r) => r.sender_id).filter((x): x is string => !!x))].sort();
+    history.originators = originators;
+    history.unfilterable = ours.filter((r) => !r.sender_id).length;
+    if (history.unfilterable > 0) {
+      console.error(`[mobivate-reconcile] ${history.unfilterable} of ${ours.length} rows have no sender_id and were NOT reconciled (pre-2026-07-31 rows)`);
+    }
+
+    // No rows of ours in the window = nothing to reconcile. Skip the pull entirely rather than page
+    // 179k records of someone else's traffic to discover that.
+    const recs = originators.length ? await fetchMessageHistory(from, to, originators) : [];
+    history.records = recs.length;
+
+    // MUST-BE-POSITIVE CONTROL. An originator Mobivate does not recognise returns a clean, cheerful
+    // 0 — indistinguishable from "nothing to do" — and this job's entire history is of failing
+    // quietly. If we hold rows for a sender in this window, Mobivate must hold at least one too.
+    // Throwing here blocks the heartbeat, which is the point: a reconcile that reconciles nothing
+    // must not report success. Coarse on purpose — MobivateHistoryRecord carries no originator
+    // field, so this catches the whole-pull zero rather than one brand of three going quiet.
+    // ponytail: per-brand attribution needs `originator` on the record; add it if a brand ever
+    // drops out unnoticed.
+    if (originators.length > 0 && recs.length === 0) {
+      throw new Error(
+        `Mobivate history returned 0 records for ${ours.length} of our rows across originators ` +
+          `[${originators.join(", ")}] in ${from}..${to}. An unrecognised originator returns 0, ` +
+          `so this is a filter fault, not an empty night.`,
+      );
+    }
+
+    const byRef = new Map<string, (typeof recs)[number]>();
+    const byId = new Map<string, (typeof recs)[number]>();
+    for (const r of recs) { if (r.reference) byRef.set(r.reference.toLowerCase(), r); if (r.id) byId.set(r.id.toLowerCase(), r); }
     const unmapped = new Set<string>();
     for (const row of ours) {
       const rec = byRef.get(row.id.toLowerCase()) ?? (row.provider_message_id ? byId.get(row.provider_message_id.toLowerCase()) : undefined);
@@ -137,6 +173,6 @@ export async function GET(request: NextRequest) {
 
   if (!dry && !optouts.error && !history.error) await recordHeartbeat(supabaseAdmin, CRON_NAMES.mobivateReconcile);
   const ok = !optouts.error && !history.error;
-  console.log(`[mobivate-reconcile] ${dry ? "DRY " : ""}${from}..${to} optouts=${optouts.pulled}/${optouts.upserted}/-${optouts.deleted} history=${history.records} ours=${history.ours} updated=${history.updated} flipped=${JSON.stringify(history.flipped)}`);
+  console.log(`[mobivate-reconcile] ${dry ? "DRY " : ""}${from}..${to} optouts=${optouts.pulled}/${optouts.upserted}/-${optouts.deleted} history=${history.records} originators=[${history.originators.join(",")}] ours=${history.ours} unfilterable=${history.unfilterable} updated=${history.updated} flipped=${JSON.stringify(history.flipped)}`);
   return NextResponse.json({ ok, dry, window: { from, to }, optouts, history }, { status: ok ? 200 : 500 });
 }
