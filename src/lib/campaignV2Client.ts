@@ -198,6 +198,9 @@ export async function patchCampaignSettings(
     /** VOZ-245: dispatch policy, editable from the always-on drawer. Server parses
      *  it strictly (unknown value = 400, never a silent coercion). */
     smsConsentMode?: SmsConsentMode;
+    /** VOZ-523: hang up on answering machines. Edits the PARENT, so it lands on
+     *  tomorrow's child — recurringSpawn copies the value at spawn. */
+    voicemailAutohangup?: boolean;
   },
 ): Promise<Row> {
   const res = await fetch(`/api/campaigns-v2/${id}`, {

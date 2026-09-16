@@ -210,6 +210,14 @@ export interface WizardState {
    * positive number (decimals allowed) or null by parseBudgetUsd.
    */
   budgetUsdText: string;
+  /**
+   * VOZ-523: end the call when a final customer utterance is conclusively a
+   * voicemail greeting. Defaults ON, matching the campaigns_v2 column default
+   * set by supabase-migration-voicemail-autohangup-default-on.sql (2026-09-11).
+   * This is a BEHAVIOUR switch, not a cost control — measured worth is ~1.8s
+   * per voicemail (VOZ-432). Do not label it as a saving.
+   */
+  voicemailAutohangup: boolean;
 
   // Step 3 — Schedule (Repeat branch)
   recurrencePattern: RecurrencePattern;
@@ -297,6 +305,7 @@ export type SchedulePayload = Partial<
     | "scheduledDate"
     | "goalTargetText"
     | "budgetUsdText"
+    | "voicemailAutohangup"
   >
 >;
 
@@ -459,6 +468,7 @@ export function createInitialState(): WizardState {
     scheduledDate: "",
     goalTargetText: "",
     budgetUsdText: "",
+    voicemailAutohangup: true, // DB column default since 2026-09-11 — the UI must agree
 
     recurrencePattern: defaultRecurrencePattern(new Date(), detectedTz),
     recurrenceErrors: [],
@@ -774,6 +784,16 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
       callDelayMinutes: state.realtime
         ? resolveCallDelay(state.callDelayChoice, state.callDelayCustomText).minutes
         : null,
+      // VOZ-523: conditional key, the house pattern in campaignV2Data.ts. ON is
+      // the DB column default, so leaving the toggle alone sends NOTHING and the
+      // create stays byte-identical to before this control existed — in particular
+      // it does not trip createCampaignV2's `voicemailAutohangup === true` branch,
+      // which PATCHes the fresh Vapi clone's serverMessages (liveCallControl.ts:136
+      // warns that replaces a bare assistant's implicit default set). Only OFF is
+      // written, and only OFF is a real operator decision.
+      // ponytail: reads the DB default as true. If that default ever changes, this
+      // agrees with the toggle's initial value, not with the column — flip both.
+      ...(state.voicemailAutohangup ? {} : { voicemailAutohangup: false }),
       smsLastResortTemplate: composedLastResortTemplate(state),
     };
   }
@@ -826,6 +846,8 @@ export function buildCreateInput(state: WizardState, clone?: CloneResult): Campa
     budgetUsd: parseBudgetUsd(state.budgetUsdText),
     retryIntervalMinutes: state.retryGapMinutes,
     maxAttempts: state.maxTries,
+    // VOZ-523: see the recurring branch above — only OFF is written.
+    ...(state.voicemailAutohangup ? {} : { voicemailAutohangup: false }),
     smsLastResortTemplate: composedLastResortTemplate(state),
   };
 }

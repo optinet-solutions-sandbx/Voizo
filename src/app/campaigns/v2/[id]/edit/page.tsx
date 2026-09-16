@@ -62,6 +62,10 @@ interface Draft {
    *  operator shouldn't have to infer a setting from an empty box. */
   lastResortEnabled: boolean;
   lastResortText: string;
+  /** VOZ-523: the voicemail auto-hangup flag had no control on any screen, so it
+   *  drifted OFF three times. Edits the PARENT — today's already-spawned child
+   *  keeps the value it was born with (recurringSpawn copies it at spawn). */
+  voicemailAutohangup: boolean;
 }
 
 function draftFromRow(row: Row): Draft {
@@ -87,6 +91,10 @@ function draftFromRow(row: Row): Draft {
     // feature is on (drawer parity, VOZ-249).
     lastResortEnabled: ((row.sms_last_resort_template as string) ?? "").trim().length > 0,
     lastResortText: (row.sms_last_resort_template as string) ?? "",
+    // Absent column (code ahead of the migration) reads as ON, matching the DB
+    // default set 2026-09-11 — never as OFF, which would show every operator the
+    // wrong state and write the wrong value back on the next save.
+    voicemailAutohangup: (row.voicemail_autohangup as boolean | null) ?? true,
   };
 }
 
@@ -275,6 +283,7 @@ export default function EditAlwaysOnCampaignPage() {
       maxAttempts: draft.maxTries,
       dailyCap: capNumber,
       goalTarget: goalNumber,
+      voicemailAutohangup: draft.voicemailAutohangup,
       ...(isRealtime ? { callDelayMinutes: delay.minutes } : {}),
       // SMS consent mode + last-resort template — pure tested helper
       // (campaignV2Shared.buildSmsConsentPatch): mode only when changed
@@ -463,6 +472,26 @@ export default function EditAlwaysOnCampaignPage() {
                 </p>
               </div>
             )}
+
+            {/* VOZ-523. Behaviour switch, not a cost control — VOZ-432 measured
+                ~1.8s per voicemail, so no saving is claimed here. */}
+            <div className="sm:col-span-2 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-[var(--text-2)]">
+                  Hang up on answering machines
+                </div>
+                <p className="text-[11px] text-[var(--text-3)] leading-relaxed mt-1">
+                  End the call as soon as the agent is sure it reached a voicemail greeting.
+                  Off means the agent talks to the machine until the recording stops.
+                  Applies from tomorrow&apos;s run.
+                </p>
+              </div>
+              <Toggle
+                on={draft.voicemailAutohangup}
+                label="Hang up on answering machines"
+                onChange={(v) => setDraft({ ...draft, voicemailAutohangup: v })}
+              />
+            </div>
           </div>
         </Section>
 
