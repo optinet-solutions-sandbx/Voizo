@@ -23,8 +23,7 @@ import { supabaseAdmin } from "@/lib/supabaseServer";
 import { processEndOfCall } from "@/lib/webhooks/processEndOfCall";
 import { handleWebhook, type VapiMessage } from "@/lib/scriptEngine/handleWebhook";
 import { decideScriptSeed, type CampaignScriptRow } from "@/lib/scriptEngine/resolveScript";
-import { cleanFirstName } from "@/lib/playerName";
-import { parsePhoneList } from "@/lib/campaignV2Shared";
+import { cleanFirstName, customerE164Candidates } from "@/lib/playerName";
 import { getKillableVoicemailUtterance, resolveControlUrl, endCallViaControlUrl } from "@/lib/vapi/liveCallControl";
 
 // The engine can hold the line a while (speaking lock + classification + inject).
@@ -57,31 +56,36 @@ export const maxDuration = 60;
 /**
  * Greet-by-name Ramp 2 (2026-07-17): resolve the callee's spoken first name
  * for lab_call_flow_state.variables. Primary key = the campaign contact row
- * matching the call's customer number; backstop = the campaign's single
- * in_progress number (campaigns dial one number at a time — used only when
- * EXACTLY one row is mid-flight, since SIP caller-id may not carry the player).
- * Hygiene via cleanFirstName; any doubt → null → the nameless greeting.
+ * whose phone_e164 is one of the candidates Vapi's `call.customer` yields
+ * (customerE164Candidates — VOZ-539: AU/NZ SIP legs carry SquareTalk's routing
+ * prefix and no customer.number, so a single exact match never fired outside
+ * CA). An exact hit IS the callee, named or not — no guessing past it.
+ * Backstop = the campaign's single in_progress number, used only when EXACTLY
+ * one row is mid-flight; that condition is why NZ seeded 100% on a quiet night
+ * and 5% on a busy one. Hygiene via cleanFirstName; any doubt → null → the
+ * nameless greeting.
  */
 async function playerVariables(
   campaignId: string,
-  customerNumber: string | null,
+  customer: unknown,
 ): Promise<Record<string, string> | null> {
   try {
     let displayName: string | null = null;
-    // Normalize whatever Vapi/SIP reports ("61402294427", "sip:+61...", spaces)
-    // to the same E.164 the rows store — an exact-string eq would silently miss
-    // (review finding 2026-07-17). Unparseable → rely on the backstop below.
-    const e164 = customerNumber ? (parsePhoneList(customerNumber)[0] ?? null) : null;
-    if (e164) {
+    let matched = false;
+    const candidates = customerE164Candidates(customer);
+    if (candidates.length) {
       const { data } = await supabaseAdmin
         .from("campaign_numbers_v2")
         .select("display_name")
         .eq("campaign_id", campaignId)
-        .eq("phone_e164", e164)
-        .maybeSingle();
-      displayName = (data?.display_name as string | null) ?? null;
+        .in("phone_e164", candidates)
+        .limit(2);
+      if (data && data.length === 1) {
+        matched = true;
+        displayName = (data[0].display_name as string | null) ?? null;
+      }
     }
-    if (!displayName) {
+    if (!matched) {
       const { data } = await supabaseAdmin
         .from("campaign_numbers_v2")
         .select("display_name")
@@ -100,7 +104,7 @@ async function playerVariables(
 async function resolveScriptForCall(
   vapiCallId: string,
   assistantId: string | null,
-  customerNumber: string | null,
+  customer: unknown,
 ): Promise<void> {
   try {
     const { data: existing } = await supabaseAdmin
@@ -118,7 +122,12 @@ async function resolveScriptForCall(
         .eq("vapi_assistant_id", assistantId);
       const decision = decideScriptSeed((camps ?? []) as CampaignScriptRow[]);
       if (decision.kind === "seed") {
-        const vars = await playerVariables(decision.campaignId, customerNumber);
+        const vars = await playerVariables(decision.campaignId, customer);
+        // ponytail: this upsert replaces `variables` wholesale, so a slow
+        // concurrent first-turn seed landing after the engine's first persist
+        // drops __stack (pre-existing on CA since July; now every lane seeds a
+        // name). Harmless while the opener leaves the stack empty — move to a
+        // jsonb-merge RPC if a script ever enters a sub-workflow within ~3s.
         await supabaseAdmin
           .from("lab_call_flow_state")
           .upsert(
@@ -276,14 +285,14 @@ export async function POST(request: NextRequest) {
   if (type === "transcript" || type === "speech-update" || type === "status-update" || type === "tool-calls") {
     const callId = message.call?.id;
     if (callId) {
-      // Customer number rides the RAW payload (the shared VapiMessage type
-      // doesn't model it) — used to key the greet-by-name variables seed.
+      // Customer identity rides the RAW payload (the shared VapiMessage type
+      // doesn't model it) — keys the greet-by-name variables seed. Pass the
+      // whole object: on AU/NZ legs the number lives only in customer.sipUri,
+      // behind a carrier prefix, never in customer.number (VOZ-539).
       const rawCall = (body.message as Record<string, unknown> | undefined)?.call as
         | Record<string, unknown>
         | undefined;
-      const customer = rawCall?.customer as Record<string, unknown> | undefined;
-      const customerNumber = typeof customer?.number === "string" ? customer.number : null;
-      await resolveScriptForCall(callId, message.call?.assistantId ?? null, customerNumber);
+      await resolveScriptForCall(callId, message.call?.assistantId ?? null, rawCall?.customer);
     }
     return handleWebhook(message);
   }
