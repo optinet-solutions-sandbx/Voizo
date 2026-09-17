@@ -61,7 +61,7 @@ export interface CampaignV2CreateInput {
   source?: string; // 'production' (default) | 'ghost_portal'. Segregates internal GhostPortal runs from client analytics/list.
   goalTarget?: number | null; // Optional target number of successful outcomes (e.g. deposits) for this campaign; rendered as X / Y in the performance report. Positive integer or null. Maps to campaigns_v2.goal_target.
   budgetUsd?: number | null; // Optional hard spend cap in USD (budget guardrail 2026-08-04): the scheduler auto-pauses the campaign when SUM(vapi_cost_usd + openai_cost_usd) reaches it. Positive number or null. Maps to campaigns_v2.budget_usd.
-  voicemailAutohangup?: boolean; // Opt-in (2026-07-07): kill calls via Live Call Control when a final customer utterance is conclusively voicemail. Maps to campaigns_v2.voicemail_autohangup (default false). No wizard UI yet — trial campaigns set it via API/SQL.
+  voicemailAutohangup?: boolean; // Kill calls via Live Call Control when a final customer utterance is conclusively voicemail. Maps to campaigns_v2.voicemail_autohangup, whose DB default is TRUE since 2026-09-11. The wizard toggle (VOZ-523, Step 3) sends this key ONLY to turn it OFF — absent means "use the DB default", which is also what every pre-VOZ-523 caller did.
   retryIntervalMinutes?: number; // Operator retry gap (VOZ-132 §7): 30 | 60 | 90. Absent/invalid → DB default 90.
   maxAttempts?: number; // Operator max tries per player: integer 2–5. Absent/invalid → DB default 3.
   dailyCap?: number | null; // Realtime cost brake: most players added per day. Positive integer; realtime campaigns only.

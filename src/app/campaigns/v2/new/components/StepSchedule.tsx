@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 
 import { RecurrenceEditor } from "@/components/RecurrenceEditor";
+import Toggle from "@/components/ui/Toggle";
 
 import {
   DAYS, getCallingHours, TIMEZONE_OPTIONS,
@@ -273,6 +274,29 @@ export default function StepSchedule({ state, dispatch }: Props) {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* VOZ-523: the flag existed since 2026-07-07 with no control anywhere, so
+            it drifted OFF three times and each recovery was a one-off script. It is
+            a behaviour switch, NOT a cost control — deliberately no saving claimed
+            here (VOZ-432 measured ~1.8s per voicemail). */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <span className="text-xs font-medium text-[var(--text-2)]">
+              Hang up on answering machines
+            </span>
+            <p className="text-[11px] text-[var(--text-3)] leading-snug mt-1">
+              End the call as soon as the agent is sure it reached a voicemail greeting.
+              Off means the agent talks to the machine until the recording stops.
+            </p>
+          </div>
+          <Toggle
+            on={state.voicemailAutohangup}
+            label="Hang up on answering machines"
+            onChange={(v) =>
+              dispatch({ type: "SET_SCHEDULE_FIELDS", payload: { voicemailAutohangup: v } })
+            }
+          />
         </div>
 
         {/* Call delay (realtime only): how long a fresh sign-up waits before

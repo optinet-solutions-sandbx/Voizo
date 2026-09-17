@@ -92,6 +92,7 @@ export async function PATCH(
     goalTarget?: unknown;
     smsTemplate?: unknown;
     smsConsentMode?: unknown;
+    voicemailAutohangup?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -150,6 +151,22 @@ export async function PATCH(
       );
     }
     update.sms_consent_mode = mode;
+  }
+
+  // Voicemail auto-hangup (VOZ-523). Strict like smsConsentMode above: only a
+  // real boolean is accepted, because every other value has a wrong-but-plausible
+  // coercion. `"false"` and `0` are truthy/falsy in opposite directions depending
+  // on where you coerce them, and this flag decides whether the agent keeps
+  // talking to an answering machine — so an ambiguous payload is a 400, never a
+  // guess. Absent key = field untouched (the drawer does not send it).
+  if (body.voicemailAutohangup !== undefined) {
+    if (typeof body.voicemailAutohangup !== "boolean") {
+      return NextResponse.json(
+        { error: "voicemailAutohangup must be true or false." },
+        { status: 400 },
+      );
+    }
+    update.voicemail_autohangup = body.voicemailAutohangup;
   }
 
   if (typeof body.smsLastResortTemplate === "string") {
