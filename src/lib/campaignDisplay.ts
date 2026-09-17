@@ -80,12 +80,41 @@ export const DEFAULT_BRAND_WORKSPACE = "lucky7even";
 // from its label) so a newly-configured brand is never blank on the dashboard —
 // add a line only when its marketing spelling differs (e.g. "spinsup" → "SpinsUp").
 // Since 2026-09-03 this catalog is also the brand SWITCHER's list: a brand missing here still
-// renders in mixed views but cannot be chosen on its own. Roosterbet keeps the spelling the
-// fallback already produced, so no existing label moved.
+// renders in mixed views but cannot be chosen on its own.
+// 2026-09-17: the CRM team's remaining seven brands added with their credentials (spinjo,
+// rollero, playmojo, rocketspin, spinsup, luckyvibe, luckyo). Every spelling is the workspace
+// name Customer.io itself shows, so each brand's glyph comes out as the prefix the CRM team
+// already puts on that brand's CIO campaigns (L7_ FP_ RB_ SJ_ RO_ PM_ RS_ SU_ LV_) —
+// "Roosterbet" moved to "RoosterBet" for that reason, the only existing label that changed.
+// Luckyo is the exception: its workspace is still empty, so it has no campaign prefix yet.
 const BRAND_NAMES: Record<string, string> = {
   lucky7even: "Lucky7even",
   fortuneplay: "Fortune Play",
-  roosterbet: "Roosterbet",
+  roosterbet: "RoosterBet",
+  spinjo: "SpinJo",
+  rollero: "Rollero",
+  playmojo: "Play Mojo",
+  rocketspin: "Rocket Spin",
+  spinsup: "SpinsUp",
+  luckyvibe: "Lucky Vibe",
+  luckyo: "Luckyo",
+};
+
+// Glyph background per brand. Same keys as BRAND_NAMES on purpose: one catalog, so a new brand
+// cannot be listed in the switcher with no colour of its own (brandScope.test.ts fails if a key
+// here goes missing). Hues are spread around the wheel so ten glyphs stay tellable apart at 24px;
+// the glyph is never the only signal — the brand name sits next to it in every row.
+export const BRAND_GLYPH_BG: Record<string, string> = {
+  lucky7even: "linear-gradient(145deg,#2fb673,#1f8d57)", // green
+  fortuneplay: "linear-gradient(145deg,#8b6cf0,#6a4bd0)", // purple
+  roosterbet: "linear-gradient(145deg,#e2564b,#b5352c)", // red
+  spinjo: "linear-gradient(145deg,#22a7c4,#157d94)", // cyan
+  rollero: "linear-gradient(145deg,#ef8b35,#c2661a)", // orange
+  playmojo: "linear-gradient(145deg,#ec5fa4,#c03a7d)", // pink
+  rocketspin: "linear-gradient(145deg,#4f7bf0,#2f55c4)", // blue
+  spinsup: "linear-gradient(145deg,#b4871a,#8a6410)", // gold
+  luckyvibe: "linear-gradient(145deg,#7fa32e,#5f7d1e)", // lime
+  luckyo: "linear-gradient(145deg,#9a6b45,#73492c)", // copper
 };
 
 /** Display name for a campaign's brand. null/blank → the default brand. */
@@ -113,13 +142,19 @@ export function brandKey(workspace: string | null | undefined): string {
 export const BRAND_WORKSPACES: readonly string[] = Object.keys(BRAND_NAMES);
 
 /** Two-letter glyph for a brand name: initials of two words ("Fortune Play" → FP), else the
- *  first letter and first digit ("Lucky7even" → L7), else the first two letters. */
+ *  first letter plus an interior capital ("SpinJo" → SJ), else the first digit ("Lucky7even" →
+ *  L7), else the first two letters ("Rollero" → RO). */
 export function brandGlyph(label: string): string {
   const words = label.trim().split(/\s+/).filter(Boolean);
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
   const w = words[0] ?? "";
   if (!w) return "?";
-  return (w[0] + (w.match(/\d/)?.[0] ?? w[1] ?? "")).toUpperCase();
+  // One word: an interior capital is the brand's own word break ("SpinJo" → SJ,
+  // "RoosterBet" → RB), else the first digit ("Lucky7even" → L7), else the second
+  // letter ("Rollero" → RO). Without the capital rule RoosterBet and Rollero both
+  // read "RO" — brandScope.test.ts fails on exactly that.
+  const interiorCap = w.slice(1).match(/[A-Z]/)?.[0];
+  return (w[0] + (interiorCap ?? w.match(/\d/)?.[0] ?? w[1] ?? "")).toUpperCase();
 }
 
 // Compact, DISTINGUISHING label for legends / breakdowns where many same-offer campaigns
@@ -202,7 +237,9 @@ export function campaignGroupHeaderLabels(parents: LabelableCampaign[]): Map<str
   return new Map(
     [...base].map(([id, label]) => {
       const b = brandOf.get(id)!;
-      return [id, label.includes(b) ? label : `${label} · ${b}`] as const;
+      // Case-insensitive: the brand's spelling in a CIO campaign name ("… | Roosterbet") need not
+      // match the catalog's ("RoosterBet"), and a mismatch would print the brand twice.
+      return [id, label.toLowerCase().includes(b.toLowerCase()) ? label : `${label} · ${b}`] as const;
     }),
   );
 }

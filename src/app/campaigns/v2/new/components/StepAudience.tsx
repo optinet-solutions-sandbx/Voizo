@@ -10,6 +10,7 @@ import {
   detectAudienceCountry,
 } from "@/lib/audienceCountry";
 import SegmentImporter, { DEFAULT_WS } from "@/components/SegmentImporter";
+import { brandLabel } from "@/lib/campaignDisplay";
 import VoizoSegmentImporter from "@/components/VoizoSegmentImporter";
 
 import {
@@ -164,7 +165,7 @@ export default function StepAudience({ state, dispatch, duplicateSkipped, dialId
                     <span className="text-[var(--text-3)]">
                       {" "}· id {state.segmentId}
                       {/* brand shown only when it's not the default workspace (operator-legible) */}
-                      {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${state.cioWorkspace}` : ""}
+                      {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${brandLabel(state.cioWorkspace)}` : ""}
                       {" "}· {parsedNumbers.length} number{parsedNumbers.length === 1 ? "" : "s"}
                     </span>
                   </span>

@@ -8,6 +8,7 @@ import {
 import { parsePhoneList } from "@/lib/campaignV2Shared";
 import { countryLabel, detectAudienceCountry } from "@/lib/audienceCountry";
 import { DEFAULT_WS } from "@/components/SegmentImporter";
+import { brandLabel } from "@/lib/campaignDisplay";
 
 import {
   DAYS, getCallingHours, SHORTENED_URL_LENGTH, smsSegmentCount, TIMEZONE_OPTIONS,
@@ -105,7 +106,7 @@ export default function StepReview({ state, dispatch, dialIdentities }: Props) {
                   {state.segmentName}
                   <span className="text-[var(--text-3)] ml-1.5">
                     · id {state.segmentId}
-                    {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${state.cioWorkspace}` : ""}
+                    {state.cioWorkspace && state.cioWorkspace !== DEFAULT_WS ? ` · brand ${brandLabel(state.cioWorkspace)}` : ""}
                   </span>
                 </>
               ) : parsedNumbers.length > 0 ? (

@@ -23,6 +23,14 @@ describe("brandLabel (VOZ-216 — which brand is this campaign?)", () => {
   it("maps the configured brands to their operator-facing names", () => {
     expect(brandLabel("lucky7even")).toBe("Lucky7even");
     expect(brandLabel("fortuneplay")).toBe("Fortune Play");
+    expect(brandLabel("roosterbet")).toBe("RoosterBet");
+    expect(brandLabel("spinjo")).toBe("SpinJo");
+    expect(brandLabel("rollero")).toBe("Rollero");
+    expect(brandLabel("playmojo")).toBe("Play Mojo");
+    expect(brandLabel("rocketspin")).toBe("Rocket Spin");
+    expect(brandLabel("spinsup")).toBe("SpinsUp");
+    expect(brandLabel("luckyvibe")).toBe("Lucky Vibe");
+    expect(brandLabel("luckyo")).toBe("Luckyo");
   });
 
   it("treats NULL/blank as the default brand (pre-VOZ-198 rows)", () => {
@@ -32,7 +40,9 @@ describe("brandLabel (VOZ-216 — which brand is this campaign?)", () => {
   });
 
   it("renders an unmapped future brand instead of going blank", () => {
-    expect(brandLabel("roosterbet")).toBe("Roosterbet");
+    // A workspace not in the catalog (the account also holds partner workspaces Voizo never
+    // dials, e.g. "Rooster Partners"): title-cased, never blank.
+    expect(brandLabel("roosterpartners")).toBe("Roosterpartners");
     expect(brandLabel(" FortunePlay ")).toBe("Fortune Play"); // trimmed + case-insensitive lookup
   });
 });
@@ -273,6 +283,15 @@ describe("campaignGroupHeaderLabels", () => {
     const m = campaignGroupHeaderLabels([p("1", L7, "lucky7even"), p("2", FP, "fortuneplay")]);
     expect(m.get("1")).toBe("Australia · RND REG YESTERDAY · Lucky7even");
     expect(m.get("2")).toBe("Australia · RND REG YESTERDAY · Fortune Play");
+  });
+
+  // The catalog spells it "RoosterBet"; Customer.io campaign names in the wild spell it
+  // "Roosterbet". A case-sensitive containment test would append the brand a second time.
+  it("does not repeat a brand the name already carries in another casing", () => {
+    const RB = "Daily Automated Conversion | VOIZO RND REG YESTERDAY AU | Roosterbet";
+    const m = campaignGroupHeaderLabels([p("1", L7, "lucky7even"), p("2", RB, "roosterbet")]);
+    expect(m.get("2")).toBe("Australia · RND REG YESTERDAY · Roosterbet");
+    expect(m.get("2")!.match(/roosterbet/gi)).toHaveLength(1); // not "· Roosterbet · RoosterBet"
   });
 
   it("adds no brand at all when only one brand is in scope — that would be noise", () => {

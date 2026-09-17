@@ -6,6 +6,7 @@ import StyledSelect from "@/components/StyledSelect";
 import { usePinnedSegments } from "@/lib/pinnedSegments";
 import { parseJsonBody } from "@/lib/jsonBody";
 import { nameByE164 } from "@/lib/campaignV2Shared";
+import { brandLabel } from "@/lib/campaignDisplay";
 import { fetchAllSegmentMembers } from "@/lib/segmentMemberPager";
 
 /** Mirrors CIO_DEFAULT_WORKSPACE in src/lib/customerio.ts (server-only module —
@@ -549,7 +550,7 @@ export default function SegmentImporter({ onImport, singleSelectOnly = false, wo
                       size="sm"
                       value={activeWs || availableWs[0]}
                       onChange={(v) => setActiveWs(v)}
-                      options={availableWs.map((w) => ({ value: w, label: w }))}
+                      options={availableWs.map((w) => ({ value: w, label: brandLabel(w) }))}
                     />
                   </div>
                 </div>

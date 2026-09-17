@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import {
-  PhoneOff, BookOpen, LayoutDashboard, Sun, Moon, Globe2,
+  PhoneOff, BookOpen, LayoutDashboard, Sun, Moon, Globe2, Check,
   Activity, Users, PanelLeftClose, PanelLeftOpen, ClipboardCheck, Megaphone, Workflow, FlaskConical,
 } from "lucide-react";
 import { useTheme } from "@/lib/themeContext";
 import { ALL_BRANDS, setBrandScope, useBrandScope } from "@/lib/brandScope";
-import { BRAND_WORKSPACES, brandGlyph, brandLabel } from "@/lib/campaignDisplay";
+import { BRAND_GLYPH_BG, BRAND_WORKSPACES, brandGlyph, brandLabel } from "@/lib/campaignDisplay";
 import NotificationBell from "@/components/NotificationBell";
 // Animated sidebar nav icons (lucide-animated.com, motion-powered). These run
 // only on the desktop nav; the mobile bottom nav reuses the same animated icons.
@@ -130,32 +130,100 @@ function NavRow({ item, isActive, collapsed }: { item: NavItem; isActive: boolea
   );
 }
 
-// Brand glyph backgrounds (mockup): one per brand, a neutral one for "All brands" and any
-// brand not listed here.
-const GLYPH_BG: Record<string, string> = {
-  lucky7even: "linear-gradient(145deg,#2fb673,#1f8d57)",
-  fortuneplay: "linear-gradient(145deg,#8b6cf0,#6a4bd0)",
-  [ALL_BRANDS]: "linear-gradient(145deg,#4a5160,#353b47)",
-};
+// "All brands" is a scope reset, not a brand, so it gets the neutral — which is also the fallback
+// for any workspace with no colour of its own. The per-brand hues live beside the names in
+// campaignDisplay.ts (BRAND_GLYPH_BG), one catalog instead of two that can drift apart.
+const NEUTRAL_GLYPH_BG = "linear-gradient(145deg,#4a5160,#353b47)";
 
 // Brand switcher (dashboard mockup, ported 2026-09-03): the page-level brand scope, at the top of
 // the sidebar where the mockup put it. "All brands" is offered first but is not the default.
+//
+// The menu is an ATTACHED PANEL (2026-09-17, ten brands): it drops out of the header at the
+// sidebar's full width and sits flush under the header's own bottom border, so it reads as the
+// header opening rather than a card floating over the nav. The header is the positioned
+// ancestor (see SidebarContent) — this root is deliberately not `relative`.
+// ponytail: hand-rolled like StyledSelect; promote both to radix-ui DropdownMenu if a third menu appears.
 function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
   const brand = useBrandScope();
   const [open, setOpen] = useState(false);
+  const reduce = useReducedMotion();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const label = brand === ALL_BRANDS ? "All brands" : brandLabel(brand);
-  const choices: [string, string, string][] = [
-    [ALL_BRANDS, "All brands", "AB"],
-    ...BRAND_WORKSPACES.map((ws): [string, string, string] => [ws, brandLabel(ws), brandGlyph(brandLabel(ws))]),
-  ];
+  const brands = BRAND_WORKSPACES.map((ws) => [ws, brandLabel(ws), brandGlyph(brandLabel(ws))] as const);
+  // A collapsed rail is 64px wide with no room for the panel. DERIVED, not synced in an effect:
+  // setState inside an effect is a react-hooks/set-state-in-effect error and costs a second render.
+  const menuOpen = open && !collapsed;
+
+  // Opening moves focus to the current choice so the arrow keys start from it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const rows = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []);
+    (rows.find((r) => r.getAttribute("aria-checked") === "true") ?? rows[0])?.focus();
+  }, [menuOpen]);
+
+  const close = () => { setOpen(false); triggerRef.current?.focus(); };
+  const choose = (key: string) => { setBrandScope(key); close(); };
+
+  // Escape closes; ↑/↓/Home/End move between rows and wrap. Focus on the trigger counts as
+  // "before the first row", so ↓ enters at the top and ↑ at the bottom.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Closed: ↑/↓ open the menu, the standard menu-button behaviour.
+    if (!menuOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); setOpen(true); }
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); close(); return; }
+    const rows = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []);
+    if (rows.length === 0) return;
+    const i = rows.indexOf(document.activeElement as HTMLButtonElement);
+    let next: number;
+    switch (e.key) {
+      case "ArrowDown": next = i + 1; break;
+      case "ArrowUp": next = i < 0 ? rows.length - 1 : i - 1; break;
+      case "Home": next = 0; break;
+      case "End": next = rows.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    rows[(next + rows.length) % rows.length].focus();
+  };
+
+  const row = (key: string, name: string, glyph: string) => {
+    const selected = key === brand;
+    return (
+      <button
+        key={key || "all"}
+        type="button"
+        role="menuitemradio"
+        aria-checked={selected}
+        onClick={() => choose(key)}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-left outline-none transition-colors hover:bg-[var(--bg-hover)] focus-visible:bg-[var(--bg-hover)] ${
+          selected ? "text-[var(--text-1)]" : "text-[var(--text-2)] hover:text-[var(--text-1)] focus-visible:text-[var(--text-1)]"
+        }`}
+      >
+        <span className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold shrink-0" style={{ background: BRAND_GLYPH_BG[key] ?? NEUTRAL_GLYPH_BG }}>{glyph}</span>
+        <span className="flex-1 truncate">{name}</span>
+        {selected && <Check size={13} strokeWidth={2.5} aria-hidden className="shrink-0 text-primary" />}
+      </button>
+    );
+  };
+
   return (
     // The VOIZO block IS the switcher (Jasiel 2026-09-03): the brand sits where "DIALER" was, and
     // the block opens the brand menu. The logo mark stays the V for now.
-    <div className="relative min-w-0">
+    <div
+      className="min-w-0"
+      onKeyDown={onKeyDown}
+      // Tab out of the panel and the menu would otherwise stay open with its full-screen click
+      // catcher swallowing the next click anywhere on the page.
+      onBlurCapture={(e) => { if (open && !e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
+    >
       <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menuOpen}
         aria-label={`Brand: ${label}`}
         title={collapsed ? label : undefined}
         onClick={() => setOpen((o) => !o)}
@@ -173,27 +241,31 @@ function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
               <span className="font-bold text-[var(--text-1)] text-sm">VOIZO</span>
               <span className="text-[10px] tracking-wide text-[var(--text-3)] mt-0.5 truncate group-hover:text-[var(--text-2)] transition-colors">{label}</span>
             </div>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-[var(--text-3)] transition-transform ${menuOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
           </>
         )}
       </button>
-      {open && (
+      {menuOpen && (
         <>
-          <button type="button" aria-label="Close brand menu" onClick={() => setOpen(false)} className="fixed inset-0 z-40 cursor-default" />
-          <div role="menu" className="absolute left-0 top-full mt-1.5 z-50 min-w-[180px] rounded-lg border border-[var(--border-2)] bg-[var(--bg-card)] shadow-xl p-1">
-            {choices.map(([key, name, g]) => (
-              <button
-                key={key || "all"}
-                type="button"
-                role="menuitemradio"
-                aria-checked={key === brand}
-                onClick={() => { setBrandScope(key); setOpen(false); }}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] text-left hover:bg-[var(--bg-hover)] ${key === brand ? "text-[var(--text-1)] bg-[var(--bg-elevated)]" : "text-[var(--text-2)]"}`}
-              >
-                <span className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold shrink-0" style={{ background: GLYPH_BG[key] ?? GLYPH_BG[ALL_BRANDS] }}>{g}</span>
-                {name}
-              </button>
-            ))}
+          <button type="button" tabIndex={-1} aria-label="Close brand menu" onClick={close} className="fixed inset-0 z-40 cursor-default" />
+          <div
+            ref={panelRef}
+            role="menu"
+            aria-label="Brand"
+            // max-h is a safety net, not the design: at a normal window height the whole list
+            // fits and nothing scrolls. It only engages on a short/zoomed viewport, where the
+            // aside's own overflow-hidden would otherwise cut the last brands off unreachably.
+            className={`absolute left-0 right-0 top-full mt-px z-50 max-h-[calc(100vh-5rem)] overflow-y-auto rounded-b-xl border-b border-[var(--border)] bg-[var(--bg-card)] shadow-xl shadow-black/30 p-1 ${
+              reduce ? "" : "animate-in fade-in slide-in-from-top-1 duration-150"
+            }`}
+          >
+            {/* Every brand is listed, no scrolling (Jasiel 2026-09-17: rows sliding under a pinned
+                "All brands" read as a defect). Eleven rows are ~410px.
+                ponytail: fixed list; re-add max-h + overflow-y-auto if the catalog passes ~14. */}
+            {row(ALL_BRANDS, "All brands", "AB")}
+            {/* "All brands" is a scope reset, not a brand — the rule keeps it apart from the list. */}
+            <div role="separator" className="my-1 h-px bg-[var(--border)]" />
+            {brands.map(([ws, name, glyph]) => row(ws, name, glyph))}
           </div>
         </>
       )}
@@ -205,7 +277,8 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
   const pathname = usePathname();
   return (
     <div className="flex flex-col h-full">
-      <div className={`flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
+      {/* `relative`: the brand menu is positioned against this header so it spans the sidebar. */}
+      <div className={`relative flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
         <BrandSwitcher collapsed={collapsed} />
         {/* The panel toggle (Gemini's mechanism): collapse to an icon rail, or pin it open. A
             collapsed rail peeks open on hover, and this button shows in the peek to pin it back. */}
@@ -294,9 +367,14 @@ export default function Sidebar() {
   // the collapsed default → no hydration mismatch; React then swaps in the localStorage value).
   const locked = useSyncExternalStore(subscribeLock, getLockSnapshot, getLockServerSnapshot);
   const [hovered, setHovered] = useState(false);
+  // KEYBOARD focus inside the rail peeks it open the same way hover does — otherwise the brand
+  // menu (and every label) is unreachable without a mouse while the rail is collapsed.
+  // :focus-visible is the whole point: a plain mouse click also focuses the button it hits, and
+  // counting that as "peek" left the rail stuck open after clicking its own collapse toggle.
+  const [focused, setFocused] = useState(false);
   // `locked` now reads "collapsed by choice" (the toggle in the header). Expanded by default on
-  // every page; a collapsed rail peeks open while hovered.
-  const collapsed = locked && !hovered;
+  // every page; a collapsed rail peeks open while hovered or focused.
+  const collapsed = locked && !hovered && !focused;
 
   return (
     <>
@@ -305,6 +383,8 @@ export default function Sidebar() {
       <aside
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onFocusCapture={(e) => { if (e.target instanceof HTMLElement && e.target.matches(":focus-visible")) setFocused(true); }}
+        onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}
         className="hidden md:flex bg-[var(--bg-sidebar)] border-r border-[var(--border)] flex-col h-screen overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(.2,.7,.2,1)]"
         style={{ width: collapsed ? 64 : 200 }}
       >
