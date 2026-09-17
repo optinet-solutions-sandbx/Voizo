@@ -264,7 +264,7 @@ function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
                 ponytail: fixed list; re-add max-h + overflow-y-auto if the catalog passes ~14. */}
             {row(ALL_BRANDS, "All brands", "AB")}
             {/* "All brands" is a scope reset, not a brand — the rule keeps it apart from the list. */}
-            <div role="separator" className="my-1 h-px bg-[var(--border)]" />
+            <hr className="my-1 h-px border-0 bg-[var(--border)]" />
             {brands.map(([ws, name, glyph]) => row(ws, name, glyph))}
           </div>
         </>
