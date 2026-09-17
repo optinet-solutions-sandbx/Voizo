@@ -11,6 +11,7 @@ import { useTheme } from "@/lib/themeContext";
 import { ALL_BRANDS, setBrandScope, useBrandScope } from "@/lib/brandScope";
 import { BRAND_GLYPH_BG, BRAND_WORKSPACES, brandGlyph, brandLabel } from "@/lib/campaignDisplay";
 import NotificationBell from "@/components/NotificationBell";
+import { APP_CHROME_H } from "@/components/Header";
 // Animated sidebar nav icons (lucide-animated.com, motion-powered). These run
 // only on the desktop nav; the mobile bottom nav reuses the same animated icons.
 import { useReducedMotion } from "motion/react";
@@ -230,7 +231,9 @@ function BrandSwitcher({ collapsed }: { collapsed: boolean }) {
         className={`group flex items-center rounded-lg transition-colors ${collapsed ? "flex-col gap-1" : "gap-3 pr-1 text-left"}`}
       >
         <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+          // 40px, not 44: the header is pinned to the top bar's 57px, and 44 left the mark
+          // crowding the divider.
+          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
           style={{ background: "linear-gradient(145deg,#4d90f0,#3a6fd0)", boxShadow: "0 2px 10px rgba(77,144,240,.35)" }}
         >
           <span className="text-white text-base font-bold">V</span>
@@ -277,8 +280,10 @@ function SidebarContent({ collapsed, locked, setLocked }: { collapsed: boolean; 
   const pathname = usePathname();
   return (
     <div className="flex flex-col h-full">
-      {/* `relative`: the brand menu is positioned against this header so it spans the sidebar. */}
-      <div className={`relative flex items-center px-3 py-3 border-b border-[var(--border)] ${collapsed ? "justify-center flex-col gap-1" : "justify-between gap-2"}`}>
+      {/* `relative`: the brand menu is positioned against this header so it spans the sidebar.
+          APP_CHROME_H keeps this exactly as tall as the app's top bar, so the two bottom borders
+          read as one line instead of a step at the sidebar's edge. */}
+      <div className={`relative flex items-center px-3 ${APP_CHROME_H} border-b border-[var(--border)] ${collapsed ? "justify-center" : "justify-between gap-2"}`}>
         <BrandSwitcher collapsed={collapsed} />
         {/* The panel toggle (Gemini's mechanism): collapse to an icon rail, or pin it open. A
             collapsed rail peeks open on hover, and this button shows in the peek to pin it back. */}

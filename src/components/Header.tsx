@@ -33,13 +33,21 @@ function titleFor(pathname: string): string {
   return "Dashboard";
 }
 
+/**
+ * Height of the app's top chrome, shared with the sidebar's own header so their bottom borders
+ * form ONE unbroken line across the viewport. They drifted apart before this existed (top bar 57px,
+ * sidebar header 69px from padding plus a 44px logo), and the step was visible on every page.
+ * A literal class string, so Tailwind's scanner still sees `h-[57px]` and generates it.
+ */
+export const APP_CHROME_H = "h-[57px]";
+
 export default function Header() {
   const pathname = usePathname();
   const pageTitle = titleFor(pathname);
   const action = primaryActionFor(pathname);
 
   return (
-    <header className="hidden md:flex items-center gap-4 px-6 h-[57px] bg-[var(--bg-sidebar)] border-b border-[var(--border)] flex-shrink-0">
+    <header className={`hidden md:flex items-center gap-4 px-6 ${APP_CHROME_H} bg-[var(--bg-sidebar)] border-b border-[var(--border)] flex-shrink-0`}>
       <h1 className="text-sm font-semibold text-[var(--text-1)] shrink-0">{pageTitle}</h1>
 
       <div className="flex-1 flex justify-center">

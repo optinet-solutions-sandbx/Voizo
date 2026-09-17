@@ -19,6 +19,13 @@ import { formatCampaign } from "./campaignDisplay";
 export type LaneState = "collapse" | "idle" | "thin" | "ok";
 export const LANE_RANK: Record<LaneState, number> = { collapse: 0, idle: 1, thin: 2, ok: 3 };
 export const LANE_LABEL: Record<LaneState, string> = { collapse: "collapse", idle: "did not dial", thin: "too few to judge", ok: "ok" };
+/** Pill text. Every verdict has to fit ONE fixed-width chip so a row of lanes reads as a column of
+ *  identical badges — "too few to judge" was long enough to overflow its own card. The full
+ *  sentence above is still shown, on hover. */
+export const LANE_SHORT: Record<LaneState, string> = { collapse: "collapse", idle: "no dials", thin: "too few", ok: "ok" };
+/** A lane worth looking at now: broken, or silent when it should be dialling. "Too few to judge"
+ *  and "ok" are not problems. Drives the strip's "problems only" filter. */
+export const LANE_IS_PROBLEM: Record<LaneState, boolean> = { collapse: true, idle: true, thin: false, ok: false };
 
 export interface LaneHealthRow {
   key: string; // `${brandKey}|${country}`
