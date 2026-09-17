@@ -5,6 +5,7 @@ import {
   CRON_STALENESS_THRESHOLD_SECONDS,
   postSlackAlert,
   recordHeartbeat,
+  shouldAlertSpawnFail,
   type CronName,
 } from "../../../../lib/alerts/slack";
 import crypto from "crypto";
@@ -12,6 +13,17 @@ import crypto from "crypto";
 // Read-only SELECT + at most one Slack POST + one heartbeat UPSERT. Well
 // under the 30s budget; matches the watchdog/backfill cron pattern.
 export const maxDuration = 30;
+
+/**
+ * Dedupe window for the `missing` (never-succeeded) bucket. 24h matches the
+ * trunk-gate precedent in campaign-scheduler: long enough that a cron blocked
+ * on something slow (a DNS change, a parser fix) costs one line a day rather
+ * than 24, short enough that it is still on the board every morning.
+ */
+const MISSING_ALERT_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+/** alert_state key for the never-succeeded alert about one cron. */
+const missingAlertKey = (name: CronName) => `cron_missing:${name}`;
 
 /**
  * GET /api/cron/alerts-hourly
@@ -166,23 +178,95 @@ export async function GET(request: NextRequest) {
   // one cadence. Both buckets now WARN, in ONE post, so a stale cron can no
   // longer mask a never-succeeded one. [[loud-over-silent-skips]]
   const unhealthy = [...stale, ...missing];
-  if (unhealthy.length > 0) {
-    const details = unhealthy.map((s) =>
+
+  // ── Dedupe the `missing` bucket, and ONLY that bucket ──
+  // "Never succeeded" is a state that does not self-clear: the cron stays
+  // missing until someone fixes it, so the alert above would repeat every tick
+  // for as long as that takes. On 2026-09-17 two crons were in that state at
+  // once (daily-snapshot blocked on DNS, mobivate-reconcile on parser defects)
+  // — 24 identical messages a day, indefinitely, in the one channel whose job
+  // is to make the NEXT silent cron death visible. An alarm nobody can silence
+  // is an alarm everybody mutes, which is how this route went blind the first
+  // time. `stale` is deliberately NOT deduped: it is a different failure class
+  // (a cron that worked and then stopped), it self-clears on recovery, and its
+  // hourly cadence is pre-existing accepted behaviour.
+  //
+  // Keyed per cron, so muting one broken cron can never mute the next one to
+  // break. Fail OPEN on the read, mirroring the trunk-gate precedent: a broken
+  // dedupe row must not silence a real alert.
+  //
+  // The explicit `stateErr ||` below is belt-and-braces, verified redundant by
+  // mutation on 2026-09-17: a failed PostgREST read also returns data=null, so
+  // shouldAlertSpawnFail(null) already returns true and the alert goes out. It
+  // is kept because it states the intent, and because the behaviour IS guarded
+  // — mutating this loop to `if (stateErr) continue` fails the fail-open test.
+  // ponytail: one SELECT per MISSING cron, not one batched .in() — N is the
+  // number of broken crons (<=11 today, and exactly 0 on a healthy tick, so a
+  // normal hour pays nothing). Batch it if CRON_NAMES ever grows large.
+  const missingToPost: CronStatus[] = [];
+  let dedupeReadFailures = 0;
+  for (const s of missing) {
+    const key = missingAlertKey(s.name);
+    const { data: state, error: stateErr } = await supabaseAdmin
+      .from("alert_state")
+      .select("last_alerted_at")
+      .eq("key", key)
+      .maybeSingle();
+    if (stateErr) {
+      dedupeReadFailures += 1;
+      console.error(
+        `[alerts-hourly] alert_state read failed for ${key} (alerting anyway): ${stateErr.message}`,
+      );
+    }
+    const lastAlertedAt = (state?.last_alerted_at as string | null) ?? null;
+    if (stateErr || shouldAlertSpawnFail(lastAlertedAt, Date.now(), MISSING_ALERT_DEDUPE_MS)) {
+      missingToPost.push(s);
+    }
+  }
+
+  const toPost = [...stale, ...missingToPost];
+  if (toPost.length > 0) {
+    const details = toPost.map((s) =>
       s.state === "stale"
         ? `${s.name}: ${s.seconds_since}s since last success (threshold ${s.threshold_seconds}s)`
         : s.last_success_at === null
           ? `${s.name}: NEVER succeeded — no heartbeat row (threshold ${s.threshold_seconds}s)`
           : `${s.name}: unusable last_success_at="${s.last_success_at}" (threshold ${s.threshold_seconds}s)`,
     );
-    await postSlackAlert(
+    const accepted = await postSlackAlert(
       "WARN",
-      `${unhealthy.length} cron${unhealthy.length === 1 ? "" : "s"} unhealthy`,
+      `${toPost.length} cron${toPost.length === 1 ? "" : "s"} unhealthy`,
       details,
     );
+    // Stamp only what Slack actually took. Stamping a post that was dropped
+    // (webhook down, non-2xx) would swallow the alert for a whole window — the
+    // same silent-failure class this route exists to remove. Stricter than the
+    // trunk-gate precedent, which stamps unconditionally.
+    if (accepted) {
+      const nowIso = new Date().toISOString();
+      for (const s of missingToPost) {
+        const { error: stampErr } = await supabaseAdmin
+          .from("alert_state")
+          .upsert({ key: missingAlertKey(s.name), last_alerted_at: nowIso }, { onConflict: "key" });
+        if (stampErr) {
+          console.error(
+            `[alerts-hourly] alert_state stamp failed for ${missingAlertKey(s.name)}: ${stampErr.message}`,
+          );
+        }
+      }
+    }
   }
 
-  // Structured summary log for grep / dashboards.
-  const summaryLog = `[alerts-hourly] healthy=${healthy.length} stale=${stale.length} missing=${missing.length}`;
+  // The dedupe gates the Slack POST alone. Everything below still reports every
+  // unhealthy cron, so a quiet channel never means a lying API.
+  const missingSuppressed = missing.length - missingToPost.length;
+
+  // Structured summary log for grep / dashboards. `missing_suppressed` is the
+  // count that was unhealthy but inside its dedupe window, so a silent hour is
+  // still greppable as a deliberate mute rather than looking like a clean tick.
+  const summaryLog =
+    `[alerts-hourly] healthy=${healthy.length} stale=${stale.length} missing=${missing.length} ` +
+    `missing_suppressed=${missingSuppressed} dedupe_read_failures=${dedupeReadFailures}`;
   if (unhealthy.length > 0) {
     console.warn(summaryLog);
   } else {
@@ -198,6 +282,7 @@ export async function GET(request: NextRequest) {
       healthy: healthy.length,
       stale: stale.length,
       missing: missing.length,
+      missing_suppressed: missingSuppressed,
     },
   });
 }

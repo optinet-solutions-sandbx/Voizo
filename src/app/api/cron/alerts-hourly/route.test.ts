@@ -41,10 +41,51 @@ function rows(omit: CronName[] = [], overrides: Row[] = []): Row[] {
   ];
 }
 
+/** Fake `alert_state` contents for the current test, keyed by `key`. */
+let alertStateRows: Record<string, string> = {};
+/** When set, every alert_state READ fails with this error (fail-open probe). */
+let alertStateReadError: { message: string } | null = null;
+/** Every alert_state upsert the route performed this test, in order. */
+let alertStateUpserts: { key: string; last_alerted_at: string }[] = [];
+
+/**
+ * Mock both tables the route touches. `cron_heartbeats` answers the
+ * select().in() the classifier uses; `alert_state` answers the
+ * select().eq().maybeSingle() + upsert() the dedupe uses. Dispatching on the
+ * table NAME (rather than one shared shape) is what keeps a wrong-table call
+ * visible instead of silently returning heartbeat rows to the dedupe.
+ */
 function mockHeartbeats(data: Row[]) {
-  (supabaseAdmin.from as ReturnType<typeof vi.fn>).mockReturnValue({
-    select: () => ({ in: async () => ({ data, error: null }) }),
+  alertStateRows = {};
+  alertStateReadError = null;
+  alertStateUpserts = [];
+  (supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
+    if (table === "alert_state") {
+      return {
+        select: () => ({
+          eq: (_col: string, key: string) => ({
+            maybeSingle: async () =>
+              alertStateReadError
+                ? { data: null, error: alertStateReadError }
+                : {
+                    data: alertStateRows[key] ? { last_alerted_at: alertStateRows[key] } : null,
+                    error: null,
+                  },
+          }),
+        }),
+        upsert: async (row: { key: string; last_alerted_at: string }) => {
+          alertStateUpserts.push(row);
+          return { error: null };
+        },
+      };
+    }
+    return { select: () => ({ in: async () => ({ data, error: null }) }) };
   });
+}
+
+/** Pretend we already alerted about `cronName` at `lastAlertedAtIso`. */
+function setAlertedAt(cronName: string, lastAlertedAtIso: string) {
+  alertStateRows[`cron_missing:${cronName}`] = lastAlertedAtIso;
 }
 
 function req(): NextRequest {
@@ -125,5 +166,117 @@ describe("GET /api/cron/alerts-hourly — a cron that has NEVER succeeded must a
 
     expect(postSlackAlert).not.toHaveBeenCalled();
     expect((await res.json()).severity).toBe("OK");
+  });
+});
+
+// 2026-09-17. Part 2 made a never-succeeded cron WARN, but this route has no
+// dedupe, so a cron that is BORN broken (the exact case Part 2 exists for) posts
+// every tick — 24 identical messages a day, indefinitely, because nothing about
+// "never succeeded" self-clears. On the day this shipped, TWO crons were in that
+// state (daily-snapshot blocked on DNS, mobivate-reconcile on parser defects), so
+// the channel that is supposed to catch the NEXT silent cron death would have been
+// the loudest thing in it. An alarm nobody can silence is an alarm everybody mutes.
+//
+// The dedupe is deliberately scoped to the `missing` bucket only, keyed per cron
+// in alert_state, and it gates the Slack POST alone: the JSON response and the
+// summary log keep naming every unhealthy cron. Dedupe hides the notification,
+// never the diagnosis.
+describe("GET /api/cron/alerts-hourly — the never-succeeded alert dedupes per cron", () => {
+  const snapshot = CRON_NAMES.dailySnapshot;
+
+  it("stays quiet on the next tick for a cron already alerted about inside the window", async () => {
+    mockHeartbeats(rows([snapshot]));
+    setAlertedAt(snapshot, iso(60 * 60)); // alerted 1h ago
+
+    const res = await GET(req());
+
+    expect(postSlackAlert).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+  });
+
+  it("posts again once the dedupe window has passed", async () => {
+    mockHeartbeats(rows([snapshot]));
+    setAlertedAt(snapshot, iso(25 * 60 * 60)); // 25h ago, window is 24h
+
+    await GET(req());
+
+    expect(posted()).not.toBeNull();
+    expect(posted()!.text).toContain(snapshot);
+  });
+
+  // The failure mode that would make this change WORSE than no dedupe: muting one
+  // broken cron must never mute the next one to break.
+  it("a newly missing cron still alerts while a different one is inside its window", async () => {
+    mockHeartbeats(rows([snapshot, CRON_NAMES.goldenReplay]));
+    setAlertedAt(snapshot, iso(60 * 60));
+
+    await GET(req());
+
+    expect(posted()).not.toBeNull();
+    expect(posted()!.text).toContain(CRON_NAMES.goldenReplay);
+    expect(posted()!.text).not.toContain(snapshot);
+  });
+
+  // Mirrors the trunk-gate precedent in campaign-scheduler: fail OPEN on the
+  // dedupe read, because a broken dedupe row must not silence a real alert.
+  it("alerts anyway when the dedupe read fails", async () => {
+    mockHeartbeats(rows([snapshot]));
+    alertStateReadError = { message: "connect ETIMEDOUT" };
+
+    await GET(req());
+
+    expect(posted()).not.toBeNull();
+    expect(posted()!.text).toContain(snapshot);
+  });
+
+  // Regression guard: `stale` is a DIFFERENT failure class (a cron that worked and
+  // then stopped) and its hourly alerting is pre-existing, accepted behaviour. This
+  // change must not quiet it, not even when a same-named dedupe key exists.
+  it("never dedupes the stale bucket", async () => {
+    const scheduler = CRON_NAMES.scheduler;
+    mockHeartbeats(
+      rows([scheduler], [
+        { name: scheduler, last_success_at: iso(CRON_STALENESS_THRESHOLD_SECONDS[scheduler] + 60) },
+      ]),
+    );
+    setAlertedAt(scheduler, iso(60)); // alerted a minute ago — stale must speak anyway
+
+    await GET(req());
+
+    expect(posted()).not.toBeNull();
+    expect(posted()!.text).toContain(scheduler);
+  });
+
+  it("keeps the JSON diagnosis truthful while Slack is muted", async () => {
+    mockHeartbeats(rows([snapshot]));
+    setAlertedAt(snapshot, iso(60 * 60));
+
+    const body = await (await GET(req())).json();
+
+    expect(postSlackAlert).not.toHaveBeenCalled();
+    expect(body.severity).toBe("WARN");
+    expect(body.summary.missing).toBe(1);
+    expect(body.summary.missing_suppressed).toBe(1);
+  });
+
+  it("stamps the dedupe key after Slack accepted the post", async () => {
+    mockHeartbeats(rows([snapshot]));
+
+    await GET(req());
+
+    expect(alertStateUpserts.map((u) => u.key)).toEqual([`cron_missing:${snapshot}`]);
+  });
+
+  // Stricter than the trunk-gate precedent, which stamps unconditionally. Stamping
+  // a post Slack never accepted would swallow the alert for a full window — the
+  // same silent-failure class this whole ticket exists to remove.
+  it("does not stamp when the Slack post failed, so the next tick retries", async () => {
+    (postSlackAlert as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
+    mockHeartbeats(rows([snapshot]));
+
+    await GET(req());
+
+    expect(postSlackAlert).toHaveBeenCalled();
+    expect(alertStateUpserts).toHaveLength(0);
   });
 });
